@@ -1,124 +1,67 @@
 #lang racket
 ;; CIS531 Fall '25 -- Project 1
 (require racket/cmdline)
+(require "irs.rkt") ;; Definition of languages / IRs used in P1 (READ!)
+
 (provide compile)
 
-
 ;; The compiler is designed in passes, which go:
-;;   - Source language (R1)
-;;   - Intermediate representation (C0)
-;;   - Target (x86)
-
-;; We document these IRs here, along with their semantics, by writing
-;; interpreters for them.
-
-;;
-;; Source language
-;;
-
-;; The R1 language--the source language which will be the input to
-;; your project.
-(define (R1-exp? e)
-  (match e
-    [(? fixnum? n) #t]
-    [`(read) #t]    
-    [`(- ,(? R1-exp? e)) #t]
-    [`(+ ,(? R1-exp? e0) ,(? R1-exp? e1)) #t]
-    [(? symbol? var) #t]
-    [`(let ([,(? symbol? x) ,(? R1-exp? e)]) ,(? R1-exp? e-body)) #t]
-    [_ #f]))
-
-;; An R1 program is an R1 expression wrapped with some information
-(define (R1? e)
-  (match e
-    [`(program ,info ,(? R1-exp? exp)) #t]
-    [_ #f]))
-
-;; An interpreter for R1
-(define (interp-R1 e)
-  (define (interp e env)
-    (match e
-      [(? fixnum? n) n]
-      [`(read) (read)]    
-      [`(- ,(? R1-exp? e)) (- (interp e env))]
-      [`(+ ,(? R1-exp? e0) ,(? R1-exp? e1)) (+ (interp e0 env) (interp e1 env))]
-      [(? symbol? var) (hash-ref env var)]
-      [`(let ([,(? symbol? x) ,(? R1-exp? e)]) ,(? R1-exp? e-body))
-       (interp e-body (hash-set env x (interp e env)))]))
-  (match e
-    [`(program ,info ,e)
-     (interp e (hash))]))
-
-;;
-;; Target language: x86
-;;
-(define label? symbol?)
-(define (reg? r)
-  (set-member? (set 'rsp 'rbp 'rax 'rbx 'rcx 'rdx 'rsi 'rdi
-                    'r8 'r9 'r10 'r11 'r12 'r13 'r14 'r15)))
-
-(define (arg? arg)
-  (match arg
-    [`(int ,(? fixnum? i)) #t]
-    [`(reg ,(? reg?)) #t]
-    [`(deref ,(? reg?) ,(? fixnum? i)) #t]
-    [_ #f]))
-
-(define (instr? i)
-   (match i
-     [`(addq (,(? arg? src) ,(? arg? dst))) #t]
-     [`(subq (,(? arg? src) ,(? arg? dst))) #t]
-     [`(negq (,(? arg? srcdst))) #t]
-     [`(movq (,(? arg? src) ,(? arg? dst))) #t]
-     [`(pushq (,(? arg? src))) #t]
-     [`(popq (,(? arg? dst))) #t]
-     [`(callq ,(? label? l) ,(? nonnegative-integer? num-args)) #t]
-     ['(retq) #t]
-     ['(leave) #t]
-     [_ #f]))
-
-;; A block has some metadata and a list of instructions
-(define (block? b) 
-  (match b
-    [`(block ,info (,(? instr? instrs) ...)) #t]
-    [_ #f]))
-
-;; An x86-64 program has some metadata and a dictionary (hash) mapping
-;; labels to blocks
-(define (x86-int? p)
-  (match p
-    [`(program ,info ,h)
-     (and (hash? h) (andmap label? (hash-keys h)) (andmap block? (hash-values h)))]
-    [_ #f]))
+;; --> R1? -- Source program
+;; |
+;; +-> unique-source-tree? -- every bound identifier is written exactly once
+;; |
+;; +-> anf-program? -- A-Normal form (flattening nested expressions)
+;; |
+;; +-> c0-program? -- The C0 IR: blocks of sequences of commands (assignments)
+;; |
+;; +-> locals-program? -- Uncovering local variables
+;; |
+;; +-> instr-program? -- Translate commands into x86 instructions
+;; |
+;; +-> homes-assigned-program? -- Assign variables to stack locations
+;; |
+;; +-> patched-program? -- Patch up problematic double-indirect moves
+;; |
+;; +-> x86-64? -- The final x86-program
+;; |
+;; +-> string? -- Rendered as a string so we can print it to a file
 
 ;; adds the prelude and conclusion to each of the functions in the program
 (define (prelude-and-conclusion p)
-  (define (align16 n)
-    (bitwise-and (+ n 15)     ; add 0xF so any remainder pushes into next block
-                 (bitwise-not 15)))  ; clear the low four bits
+  ;; ensure the stack is aligned
+  (define (align8 n)
+    (bitwise-and (+ n 8)
+                 (bitwise-not 8)))  ; clear the low four bits
   (match p
     [`(program ,locals ,blocks)
-     (define space-needed (align16 (* -1 (apply min (hash-values locals)))))
+     (define space-needed (align8 (- (apply min (hash-values locals)))))
      (define start-block (hash-ref blocks '_main))
      (define new-start-block
        `((pushq (reg rbp))
          (movq (reg rsp) (reg rbp))
          (subq (imm ,space-needed) (reg rsp))
          ,@start-block
+         ;; move result into %rdi and print_int64 it
+         (movq (reg rax) (reg rdi))
+         (callq _print_int64 0)
+         ;; 0 return value (to the terminal/system) into %rax
+         (movq (imm 0) (reg rax))
+         ;; reinstate stored %rbp
          (leave)
+         ;; transfer back to caller
          (retq)))
      ;; to build a new block, insert the prelude / conclusion
      `(program ,locals ,(hash '_main new-start-block))]))
 
-;; walks over instructions and replaces invalid movqs, where both 
-;; operands are indirects (offsets of %rax). In x86_64, we *cannot* 
-;; have both arguments in registers, so 
+;; walks over instructions and replaces invalid movqs, where both
+;; operands are indirects (offsets of %rax). In x86_64, we *cannot*
+;; have both arguments in registers, so
 (define (patch-instructions p)
   (define (patch-tail block)
     (match block
       ['() '()]
       ;; first move into %rax, then move %rax into i1(%r1)
-      [`((movq (deref (reg ,r0) ,i0) (deref (reg ,r1) ,i1)) ,rest ...) 
+      [`((movq (deref (reg ,r0) ,i0) (deref (reg ,r1) ,i1)) ,rest ...)
        `((movq (deref (reg ,r0) ,i0) (reg rax))
          (movq (reg rax) (deref (reg ,r1) ,i1))
          ,@(patch-tail rest))]
@@ -128,30 +71,31 @@
     [`(program ,info ,blocks)
      `(program ,info ,(hash '_main (patch-tail (hash-ref blocks '_main))))]))
 
+;; Take variables into either the stack/registers
 (define (assign-homes p)
   (match-define `(program ,info ,blocks) p)
   (define var->stackloc
     (let ([l (set->list info)])
-          (foldl (lambda (v i h) (hash-set h v (* -4 i))) (hash) l (range 1 (add1 (length l))))))
+      (foldl (lambda (v i h) (hash-set h v (* -8 i))) (hash) l (range 1 (add1 (length l))))))
   ;; map (var x) to its home (an offset of rbp)
   (define (home a)
     (match a
       [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
       [_ a]))
-  ;; traverse each instruction in the block to replace (var x) with 
-  ;; the appropriate stack position. Note: this will leave some 
-  ;; instructions 
+  ;; traverse each instruction in the block to replace (var x) with
+  ;; the appropriate stack position. Note: this will leave some
+  ;; instructions
   (define (h block)
     (match block
       ['() '()]
       [`((movq ,a0 ,a1) ,rest ...)
-        `((movq ,(home a0) ,(home a1)) ,@(h rest))]
+       `((movq ,(home a0) ,(home a1)) ,@(h rest))]
       [`((addq ,a0 ,a1) ,rest ...)
-        `((addq ,(home a0) ,(home a1)) ,@(h rest))]
+       `((addq ,(home a0) ,(home a1)) ,@(h rest))]
       [`((negq ,a) ,rest ...)
        `((negq ,(home a)) ,@(h rest))]
       [`(,instr0 ,rest ...)
-        `(,instr0 ,@(h rest))]))
+       `(,instr0 ,@(h rest))]))
   `(program ,var->stackloc ,(hash '_main (h (hash-ref blocks '_main)))))
 
 ;; The output of this pass is almost x86, but there will still be an
@@ -275,6 +219,7 @@
      ;; empty info
      `(program () ,(rename exp (hash)))]))
 
+;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
   (define (render-op op)
     (match op
@@ -284,30 +229,32 @@
   (define (render-instr instr)
     (pretty-print instr)
     (match instr
-     [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
-     [`(subq ,src ,dst) (format "subq ~a, ~a" (render-op src) (render-op dst))]
-     [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
-     [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op src) (render-op dst))]
-     [`(pushq ,src) (format "pushq ~a" (render-op src))]
-     [`(popq ,dst) (format "popq ~a" (render-op dst))]
-     [`(callq ,(? label? l) ,(? nonnegative-integer? num-args))
-      (format "call ~a" (symbol->string l))]
-     ['(retq) "ret"]
-     ['(leave) "leave"]))
+      [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
+      [`(subq ,src ,dst) (format "subq ~a, ~a" (render-op src) (render-op dst))]
+      [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
+      [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op src) (render-op dst))]
+      [`(pushq ,src) (format "pushq ~a" (render-op src))]
+      [`(popq ,dst) (format "popq ~a" (render-op dst))]
+      [`(callq ,(? label? l) ,(? nonnegative-integer? num-args))
+       (format "call ~a" (symbol->string l))]
+      ['(retq) "ret"]
+      ['(leave) "leave"]))
   (define (render-block block name)
     (apply string-append
            (cons (format "~a:\n" name)
                  (map (λ (instr) (format "    ~a\n" (render-instr instr))) block))))
   (match p
     [`(program ,info ,blocks)
-     (string-append 
+     (string-append
       ".globl _main\n"
       ".extern _read_int64\n"
+      ".extern _print_int64\n"
       (render-block (hash-ref blocks '_main) "_main"))]))
 
 ;; Generate a x86-64 GAS (as a string) given x86-64 assembly
+#;
 (define (compile source-tree)
-  (define unique-source-tree (uniqueify source-tree)) 
+  (define unique-source-tree (uniqueify source-tree))
   (displayln "-> unique")
   (pretty-print unique-source-tree)
   (define normalized-source-tree (anf-convert unique-source-tree))
@@ -332,3 +279,145 @@
   (displayln "-> prelude-and-conclusion")
   (pretty-print prelude-conclusion)
   (dump-x86-64 prelude-conclusion))
+
+;; Testing facilities
+
+;; Run a single pass, with an input satisfying some input predicate
+;; and an output satisfying some output predicate. Return the value of
+;; `(pass input)`.
+;; 
+;; If `golden-output` is provided, then `interp-output` (an
+;; interpreter for the output IR) must be provided, too.
+(define (run-pass-expect pass pass-name input input-pred output-pred
+                         [golden-input #f]
+                         [golden-output #f] [interp-output #f])
+  (define output-equal? equal?) ;; for now, just use equal? for output comparison
+  (define output (pass input))
+  (define h (hash 'input (pretty-format input) 
+                  'pass-name pass-name
+                  'satisfies-input-predicate (input-pred input)
+                  'satisfies-output-predicate (output-pred output)
+                  'golden-input (pretty-format golden-input)
+                  'pretty-output (if (string? output) output (pretty-format output))
+                  'output output))
+  (if golden-output
+      (let* ([evaled-golden (interp-output golden-output)]
+             [evaled-user (interp-output output)]
+             [output-matches (output-equal? evaled-user evaled-golden)])
+        (hash-set (hash-set (hash-set (hash-set h 'golden-output golden-output)
+                            'evaled-golden (pretty-format evaled-golden))
+                            'evaled-user evaled-user)
+                  'correct
+                  output-matches))
+      ;; 
+      h))
+
+(define (yesno x)
+  (if x "✅" "❌"))
+
+(define (pass-output->stdout h)
+  (when (hash-ref h 'golden-input #f)
+      (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
+  (displayln "Input:")
+  (displayln (hash-ref h 'output))
+  (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
+  (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
+  (displayln (hash-ref h 'pretty-output))
+  (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
+  (when (hash-ref h 'golden-output #f)
+    (displayln (format "Golden (instructor-provided) output:\n~a" (hash-ref h 'golden-input)))
+    (displayln (format "Evaluation of golden output: ~a" (hash-ref h 'evaled-golden)))
+    (displayln (format "Evaluation of your output: ~a" (hash-ref h 'evaled-user)))
+    (displayln (format "Yours correct? ~a" (yesno (hash-ref h 'correct))))))
+
+(define (trace->stdout trace)
+  (define (print-summary trace)
+    (displayln "\nSummary of passes run:\n\n")
+    (for ([elt trace])
+      (displayln (format "~a: Input (~a) Output (~a)"
+                         (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
+                         (yesno (hash-ref elt 'satisfies-input-predicate))
+                         (yesno (hash-ref elt 'satisfies-output-predicate))))))
+  (for ([elt trace])
+    (pass-output->stdout elt))
+  (print-summary trace))
+
+;; This function `run-chain` is a very general iterator function which
+;; walks over a list of passes, while simultaneously (a) checking
+;; input/output predicates for each pass, (b) checking consistency
+;; with "golden" inputs and outputs. Golden inputs / outputs are
+;; instructor-provided inputs / outputs which will be validated by the
+;; test scripts.
+;; 
+;; The function accepts the following inputs:
+;;  - The input source tree
+;;  - A list of passes
+;;  - A list of pass names for each pass
+;;  - A list of input and output predicates for each pass
+;;  - A list of golden inputs (one for each pass), possibly #f--see notes
+;;  - A list of golden outputs (one for each pass), possibly #f--see notes
+;;  - A list of interpreters which interpret the output of each pass
+;; 
+;; The function then produces a trace of each pass, which may be
+;; rendered to screen, written to file, etc.
+(define (run-chain source-tree passes pass-names input-predicates output-predicates
+                   golden-inputs golden-outputs interpreters)
+  (let loop ([passes      passes]
+             [names       pass-names]
+             [in-preds    input-predicates]
+             [out-preds   output-predicates]
+             [gold-ins    golden-inputs]
+             [gold-outs   golden-outputs]
+             [interps     interpreters]
+             [input       source-tree]
+             [trace       '()])
+    (if (null? passes)
+        (reverse trace)
+        (let* ([pass       (car passes)]
+               [pass-name  (car names)]
+               [in-pred    (car in-preds)]
+               [out-pred   (car out-preds)]
+               [gold-in    (car gold-ins)]
+               [gold-out   (car gold-outs)]
+               [interp     (car interps)]
+               [h          (run-pass-expect pass pass-name input
+                                            in-pred out-pred
+                                            gold-in gold-out interp)]
+               [next-input (pass input)])
+          (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
+                (cdr gold-ins) (cdr gold-outs) (cdr interps)
+                next-input (cons h trace))))))
+
+;; Run each of the passes in sequence
+(define (compile source-tree [verbose #f] [golden-inputs #f] [golden-outputs #f])
+  ;; all of these defines used for verbose mode (to record each pass
+  ;; and print its value)
+  (define passes (list uniqueify anf-convert explicate-control uncover-locals
+                       select-instructions assign-homes patch-instructions
+                       prelude-and-conclusion dump-x86-64))
+  (define pass-names (list "uniqueify" "anf-convert" "explicate-control" "uncover-locals"
+                           "select-instructions" "assign-homes" "patch-instructions"
+                           "prelude-and-conclusion" "render-x86"))
+  (define input-predicates
+    (list R1? unique-source-tree? anf-program? c0-program? locals-program?
+          instr-program? homes-assigned-program? patched-program?
+          x86-64?))
+  (define output-predicates
+    (list unique-source-tree? anf-program? c0-program? locals-program?
+          instr-program? homes-assigned-program? patched-program? x86-64?
+          string?)) 
+  (define goldens-in (if golden-inputs golden-inputs (make-list (length passes) #f)))
+  (define goldens-out (if golden-outputs golden-outputs (make-list (length passes) #f)))
+  (define interpreters (make-list (length passes) #f))
+  (let ([trace (run-chain source-tree
+                          passes
+                          pass-names
+                          input-predicates
+                          output-predicates
+                          goldens-in
+                          goldens-out
+                          interpreters)])
+    (when verbose
+      (trace->stdout trace))
+    (hash-ref (last trace) 'output)))
+

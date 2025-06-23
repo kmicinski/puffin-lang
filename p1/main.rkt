@@ -19,18 +19,25 @@
 (define file-path
   (command-line #:args (filename) filename))
 
-(define (run-compiler input-tree)
-  (displayln "Compiling using compiler.rkt -> x86_64")
-  (define output-assembly (compile input-tree))
-  ;; write the output file
-  (with-output-to-file (asm-file) #:exists 'replace
-    (λ () (displayln output-assembly)))
+(define (run-compiler source-tree)
+  (displayln "Compiling using compile.rkt -> x86_64")
+  (define output-string (compile source-tree (verbose-mode)))
+  (with-output-to-file (asm-file)
+    (λ () (let ([output-text output-string])
+            (displayln output-text)))
+    #:exists 'replace)
   ;; Assemble the output file
   (displayln "Assembling file to executable...")
   (execute-get-output (format "clang -target x86_64-apple-darwin -c ~a -o ~a " (asm-file) (object-file)))
   (execute-get-output (format "clang -target x86_64-apple-darwin -c ~a -o ~a " (runtime-file) (runtime-object-file)))
   (execute-get-output (format "clang -target x86_64-apple-darwin ~a ~a -o ~a" (object-file) (runtime-object-file) (executable-file)))
   (displayln (format "Executable now at ~a" (executable-file))))
+
+;; Run a single test. Need:
+;; - test name (string?)
+;; - test file (string?)
+;; - to-ir (which-ir?)
+;; - golden-output (output file)
 
 (define (main)
   (define source-tree (with-input-from-file file-path read))
