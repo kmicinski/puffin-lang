@@ -3,7 +3,8 @@
 (require racket/cmdline)
 (require "irs.rkt") ;; Definition of languages / IRs used in P1 (READ!)
 
-(provide compile)
+(provide compile
+         compile-verbose)
 
 ;; The compiler is designed in passes, which go:
 ;; --> R1? -- Source program
@@ -388,8 +389,8 @@
                 (cdr gold-ins) (cdr gold-outs) (cdr interps)
                 next-input (cons h trace))))))
 
-;; Run each of the passes in sequence
-(define (compile source-tree [verbose #f] [golden-inputs #f] [golden-outputs #f])
+;; Run each of the passes in sequence, building a chain of passes
+(define (compile-verbose source-tree [golden-inputs #f] [golden-outputs #f])
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
   (define passes (list uniqueify anf-convert explicate-control uncover-locals
@@ -417,7 +418,10 @@
                           goldens-in
                           goldens-out
                           interpreters)])
-    (when verbose
-      (trace->stdout trace))
-    (hash-ref (last trace) 'output)))
+    (trace->stdout trace)
+    trace))
+
+;; A thin wrapper around compile-verbose
+(define (compile source-tree [verbose #f] [golden-inputs #f] [golden-outputs #f])
+  (hash-ref (last (compile-verbose source-tree golden-inputs golden-outputs)) 'output))
 
