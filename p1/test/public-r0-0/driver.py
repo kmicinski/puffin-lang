@@ -36,8 +36,8 @@ except:
 
 # stdout comparison with expected.txt here
 try:
-        open('output', 'rb') as file:
-	output = file.read()
+	with open('output', 'rb') as output:
+		output = file.read()
 	if answer == output:
 		passtest('')
 	else:
