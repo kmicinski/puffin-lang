@@ -73,22 +73,21 @@
 
 (define (anf-rhs? rhs)
   (match rhs
-    [`(read)                      #t]
-    [`(- ,a)                      (atom? a)]
-    [`(+ ,a0 ,a1)                 (and (atom? a0) (atom? a1))]
-    [(? atom?)                    #t]
-    [_                            #f]))
+    [`(read)                          #t]
+    [`(- ,(? atom? a))                #t]
+    [`(+ ,(? atom? a0) ,(? atom? a1)) #t]
+    [(? atom?)                        #t]
+    [_                                #f]))
 
 (define (anf-exp? e)
   (match e
-    [(? atom?)                                   #t]
-    [`(let ([,(? symbol?) ,rhs]) ,body)          (and (anf-rhs? rhs)
-                                                      (anf-exp? body))]
-    [_                                           #f]))
+    [(? atom?)                                           #t]
+    [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?)) #t]
+    [_                                                   #f]))
 
 (define (anf-program? p)
   (match p
-    [`(program () ,e) (anf-exp? e)]
+    [`(program () ,(? anf-exp? e)) #t]
     [_                #f]))
 
 ;; ---------------------------------------------------------------------
@@ -143,6 +142,7 @@
     [`(pushq ,(? operand/vars? op))                          #t]
     [`(popq ,(? operand/vars? op))                           #t]
     [`(callq ,(? symbol?) ,(? integer?))                     #t]
+    [`(retq)                                                 #t]
     [_                                                       #f]))
 
 (define (instr-program? p)      ; after select-instructions
@@ -166,6 +166,7 @@
     [`(pushq ,(? operand/homes? op))                         #t]
     [`(popq ,(? operand/homes? op))                          #t]  
     [`(callq ,(? symbol?) ,(? integer?))                     #t]
+    [`(retq)                                                 #t]
     [_                                                       #f]))
 
 (define (homes-assigned-program? p)
@@ -205,6 +206,8 @@
           (let* ([b  (hash-ref blocks '_main)]
                  [hd (first b)]
                  [tl (last  b)])
+            (pretty-print hd)
+            (pretty-print tl)
             (and (equal? hd '(pushq (reg rbp)))
                  (equal? tl '(retq))))]
          [_ #f])))

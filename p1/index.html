@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Compiler-IR Playground</title>
+
+    <!-- ▸ Vue 3 global build -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+    <!-- ▸ Monaco loader (≈50 kB gzip) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    <script>
+      /* Tell require.js where to find Monaco’s core files */
+      require.config({
+	  paths: {
+	      vs: "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs"
+	  }
+      });
+    </script>
+
+    <style>
+      :root {
+	  --border:#c8c8c8;
+	  --bg:#fafafa;
+	  --pad:8px;
+	  --runbar-h:38px;
+	  font-family: system-ui, sans-serif;
+      }
+      html,body,#app{height:100%;margin:0}
+      #app{
+	  display:grid;
+	  grid-template-columns:1fr 1fr 1fr;
+      }
+      .editor-pane{border-right:1px solid var(--border);position:relative}
+      .runbar{
+	  position:absolute;top:0;left:0;right:0;
+	  height:var(--runbar-h);
+	  display:flex;gap:8px;align-items:center;
+	  padding:0 var(--pad);
+	  background:#f3f3f3;border-bottom:1px solid var(--border);
+      }
+      .runbar input{flex:1 1 auto;height:26px;padding:0 6px}
+      #editor{position:absolute;top:var(--runbar-h);bottom:0;left:0;right:0}
+      .pass-pane{overflow-y:auto;padding:var(--pad)}
+      .pass-box{
+	  border:1px solid var(--border);
+	  background:var(--bg);
+	  padding:var(--pad);
+	  margin-bottom:var(--pad);
+	  white-space:pre-wrap;
+	  font-family:monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- ▸ LEFT PANE: Monaco -->
+      <div class="editor-pane">
+	<div class="runbar">
+	  <input v-model="serverUrl" placeholder="http://localhost:8000/">
+	  <button @click="evaluate">Run ▶︎</button>
+	</div>
+	<div id="editor"></div>
+      </div>
+
+      <!-- ▸ CENTER PANE: student output -->
+      <div class="pass-pane">
+	<template v-if="passes.length">
+	  <div v-for="p in passes" :key="p.pass" class="pass-box">
+            <strong>{{p.pass-name}}</strong>
+            <div>{{p}}</div>
+	  </div>
+	</template>
+	<p v-else style="color:#666">No output yet — click <span style="font-weight:bold">Run</span>.</p>
+      </div>
+
+      <!-- ▸ RIGHT PANE: instructor output (currently duplicates) -->
+      <div class="pass-pane">
+	<template v-if="instructor.length">
+	  <div v-for="p in instructor" :key="'instr-'+p.pass" class="pass-box">
+            <strong>{{p.pass}}</strong>
+            <div>{{p.code}}</div>
+	  </div>
+	</template>
+	<p v-else style="color:#666">Instructor pane (empty).</p>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref } = Vue;
+
+      createApp({
+	  setup(){
+	      /* reactive state */
+	      const serverUrl = ref("http://localhost:8000/");
+	      const passes     = ref([]);       // student run
+	      const instructor = ref([]);       // instructor run (placeholder)
+
+	      let editor;   // Monaco instance
+
+	      function evaluate(){
+		  if(!serverUrl.value){ alert("Set the server URL first."); return; }
+		  const code = editor.getValue();
+		  fetch(serverUrl.value.replace(/\/$/,''), {
+		      method:"POST",
+		      headers:{ "Content-Type":"text/plain" },
+		      body:code
+		  })
+		      .then(r => r.json())
+		      .then(list => {
+			  console.log(list);
+			  /* Expected shape: [{pass:"uniqueify", code:"..."}, …] */
+			  passes.value = list;
+			  instructor.value = structuredClone(list); // same for now
+		      })
+		      .catch(e => alert("Request failed: " + e));
+	      }
+
+	      /* Spin up Monaco once its loader finishes */
+	      require(["vs/editor/editor.main"], () => {
+		  editor = monaco.editor.create(
+		      document.getElementById("editor"),
+		      {
+			  value: "; enter Scheme/Racket source here\n",
+			  language: "scheme",
+			  theme: "vs-dark",
+			  automaticLayout: true
+		      }
+		  );
+	      });
+
+	      return { serverUrl, passes, instructor, evaluate };
+	  }
+      }).mount("#app");
+    </script>
+  </body>
+</html>

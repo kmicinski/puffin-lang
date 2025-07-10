@@ -1,52 +1,54 @@
 #lang racket
-(require web-server/servlet
-         web-server/servlet-env
-         web-server/dispatch
-         racket/pretty
-         json
-         "compile.rkt")        ; <-- your solution
+(require 
+ "irs.rkt"
+ "compile.rkt"
+ web-server/servlet
+ web-server/servlet-env
+ web-server/http
+ json) 
 
-;; -------------------------------------------------------------------
-;; Helpers
-;; -------------------------------------------------------------------
+(define index-page (file->string "./index.html"))
+ 
+(define (index _req)
+  (response/full
+   200                                  ; status
+   #"OK"                                ; message
+   (current-seconds)                    ; date
+   #"text/html; charset=utf-8"          ; MIME type
+   (list (header #"Content-Type" #"text/html; charset=utf-8"))
+   (list (string->bytes/utf-8 index-page)))) ; body
 
-(define (sexpr->string x)
-  (pretty-format x #:mode 'write))
+(define (upload req)
+  (define raw (request-post-data/raw req))
+  (unless raw (error 'upload "POST had no plain-text body"))
+  (define sexpr (read (open-input-string (bytes->string/utf-8 raw))))
+  (define response
+    (if (R1? sexpr)
+        ;; valid program, compile it
+        (compile-verbose sexpr)
+        '(error "Input does not match R1? (see irs.rkt)"))) 
+  (pretty-print response)
+  (response/full
+   200 #"OK" (current-seconds)
+   #"application/json"
+   (list (header #"Content-Type" #"application/json"))
+   (list (jsexpr->bytes response))))
 
-(define (maybe-load-golden pass-name)
-  (define path (build-path "golden" (format "~a.sexp" pass-name)))
-  (and (file-exists? path)
-       (call-with-input-file path read)))
+;; GET /  —— single-page app
+(define (start req)
+  (define method (request-method req))
+  (define uri    (url->string (request-uri req)))
+  (cond [(and (equal? method #"POST") (string=? uri "/"))  ; we post to "/"
+         (upload req)]
+        [else
+         (index  req)]))
 
-;; -------------------------------------------------------------------
-;; HTTP handlers
-;; -------------------------------------------------------------------
+(module+ main
+  (serve/servlet start
+                 #:servlet-path "/"
+                 #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
+                 #:launch-browser? #t
+                 #:port 8000))
 
-(define (->json-response jsexpr)
-  (response
-   200 #"OK" (current-seconds) #"application/json"
-   '() (list (jsexpr->bytes jsexpr))))
 
-(define (dispatch req)
-  (define path (url-path (request-uri req)))
-  (match path
-    [(list "api" "compile")
-     (define src-bytes (request-post-data/raw req))
-     (define src-str   (bytes->string/utf-8 src-bytes))
-     (define src-sexp  (with-input-from-string src-str read))
-     (->json-response (hash 'passes (run-all-passes src-sexp)))]
-    [else (next-dispatcher)]))
 
-;; -------------------------------------------------------------------
-;; Launch the server
-;; -------------------------------------------------------------------
-
-(serve/servlet
- dispatch
- #:launch-browser? #f
- #:listen-ip       #f          ; 0.0.0.0  if you want remote access
- #:port            8080
- #:stateless?      #t
- #:extra-files-paths (list (build-path (current-directory) "public")))
-
-;; Visit:  http://localhost:8080/  (serves the SPA below)

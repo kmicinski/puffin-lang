@@ -35,12 +35,13 @@
                  (bitwise-not 8)))  ; clear the low four bits
   (match p
     [`(program ,locals ,blocks)
-     (define space-needed (align8 (- (apply min (hash-values locals)))))
+     ;; negative number, added to %rsp
+     (define space-needed (align8 (apply min (hash-values locals))))
      (define start-block (hash-ref blocks '_main))
      (define new-start-block
        `((pushq (reg rbp))
          (movq (reg rsp) (reg rbp))
-         (subq (imm ,space-needed) (reg rsp))
+         (addq (imm ,space-needed) (reg rsp))
          ,@start-block
          ;; move result into %rdi and print_int64 it
          (movq (reg rax) (reg rdi))
@@ -48,7 +49,8 @@
          ;; 0 return value (to the terminal/system) into %rax
          (movq (imm 0) (reg rax))
          ;; reinstate stored %rbp
-         (leave)
+         (movq (reg rbp) (reg rsp))
+         (popq (reg rbp))
          ;; transfer back to caller
          (retq)))
      ;; to build a new block, insert the prelude / conclusion
@@ -231,7 +233,6 @@
     (pretty-print instr)
     (match instr
       [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
-      [`(subq ,src ,dst) (format "subq ~a, ~a" (render-op src) (render-op dst))]
       [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
       [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op src) (render-op dst))]
       [`(pushq ,src) (format "pushq ~a" (render-op src))]
