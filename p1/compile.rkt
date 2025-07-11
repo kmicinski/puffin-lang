@@ -3,11 +3,17 @@
 ;;
 ;; CIS531 Fall '25 -- Project 1
 ;;
-
-(require racket/cmdline)
 (require "irs.rkt") ;; Definition of languages / IRs used in P1 (READ!)
 
-(provide (all-defined-out)) ;; expose everything for testing
+(provide uniqueify
+         anf-convert
+         explicate-control
+         uncover-locals
+         select-instructions
+         assign-homes
+         patch-instructions
+         prelude-and-conclusion
+         dump-x86-64)
 
 ;; The compiler is designed in passes, which go:
 ;; --> R1? -- Source program
@@ -255,34 +261,3 @@
       ".extern _read_int64\n"
       ".extern _print_int64\n"
       (render-block (hash-ref blocks '_main) "_main"))]))
-
-;; Generate a x86-64 GAS (as a string) given x86-64 assembly
-#;
-(define (compile source-tree)
-  (define unique-source-tree (uniqueify source-tree))
-  (displayln "-> unique")
-  (pretty-print unique-source-tree)
-  (define normalized-source-tree (anf-convert unique-source-tree))
-  (displayln "-> normalized")
-  (pretty-print normalized-source-tree)
-  (define explicit-control (explicate-control normalized-source-tree))
-  (displayln "-> explicit control")
-  (pretty-print explicit-control)
-  (define uncovered-locals (uncover-locals explicit-control))
-  (displayln "-> uncovered-locals")
-  (pretty-print uncovered-locals)
-  (define select-instr (select-instructions uncovered-locals))
-  (displayln "-> select-instructions")
-  (pretty-print select-instr)
-  (define assigned-homes (assign-homes select-instr))
-  (displayln "-> assign-homes")
-  (pretty-print assigned-homes)
-  (define patched-instructions (patch-instructions assigned-homes))
-  (displayln "-> patch-instructions")
-  (pretty-print patched-instructions)
-  (define prelude-conclusion (prelude-and-conclusion patched-instructions))
-  (displayln "-> prelude-and-conclusion")
-  (pretty-print prelude-conclusion)
-  (dump-x86-64 prelude-conclusion))
-
-

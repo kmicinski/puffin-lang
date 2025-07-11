@@ -1,33 +1,78 @@
 #lang racket
-;; Main compiler entrypoint, handles things like calls to the
-;; compiler, linker, etc.
+
+;; Please do not change (or at least, ask before you do)
+
+;; This file contains code to plug each pass of the compiler together
+;; and record each intermediate output. The goal is to be able to log
+;; and expose this intermediate output for the purposes of debugging,
+;; testing, etc. You do not necessarily need to understand this file,
+;; though I do recommend reading it to understand how grading and
+;; debugging work.
 (require racket/system) ; not strictly needed in #lang racket, but explicit is fine
 (require "irs.rkt")
 (require "compile.rkt")
+
+;; Information specific to the project
+(define passes (list uniqueify anf-convert explicate-control uncover-locals
+                     select-instructions assign-homes patch-instructions
+                     prelude-and-conclusion dump-x86-64))
+
+(define pass-names (list "uniqueify" "anf-convert" "explicate-control" "uncover-locals"
+                         "select-instructions" "assign-homes" "patch-instructions"
+                         "prelude-and-conclusion" "render-x86"))
+
+(define (pass-name->extension name)
+  (match name
+    ["uniqueify" ".uniq"]
+    ["anf-convert" ".anf"] 
+    ["explicate-control" ".c0"]
+    ["uncover-locals" ".c0-lcl"]
+    ["select-instructions" ".instrs"]
+    ["assign-homes" ".homes"]
+    ["patch-instructions" ".patched"]
+    ["prelude-and-conclusion" ".prelude"]
+    ["render-x86" ".S"]))
+
+(define input-predicates
+  (list R1? unique-source-tree? anf-program? c0-program? locals-program?
+        instr-program? homes-assigned-program? patched-program?
+        x86-64?))
+
+(define output-predicates
+  (list unique-source-tree? anf-program? c0-program? locals-program?
+        instr-program? homes-assigned-program? patched-program? x86-64?
+        string?)) 
 
 (define asm-file (make-parameter "./output.s"))
 (define object-file (make-parameter "./output.o"))
 (define executable-file (make-parameter "./output"))
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
+(define write-outputs-mode (make-parameter #f))
 (define verbose-mode (make-parameter #t))
+(define produce-binary-mode (make-parameter #t))
 
+;; Execute a command and get an output
 (define (execute-get-output cmd)
   (displayln (format "Executing `~a`." cmd))
   (with-output-to-string (λ () 
                            (system cmd))))
 
+;; Parse the command line
 (define file-path
-  (command-line #:args (filename) filename))
-
+  (command-line 
+   #:once-each
+   [("-o" "--output") "Write outputs of each IR to out.X and out.X.interp"
+                      (write-outputs-mode #t)]
+   #:args (filename) filename))
 
 ;; 
 ;; Testing facilities
 ;;
 
-;; Run a single pass, with an input satisfying some input predicate
-;; and an output satisfying some output predicate. Return the value of
-;; `(pass input)`.
+;; Run a single compiler pass, with an input satisfying some input
+;; predicate and an output satisfying some output predicate. Return
+;; the value of `(pass input)`.
 ;; 
 ;; If `golden-output` is provided, then `interp-output` (an
 ;; interpreter for the output IR) must be provided, too.
@@ -55,9 +100,9 @@
       ;; 
       h))
 
-(define (yesno x)
-  (if x "✅" "❌"))
+(define (yesno x) (if x "✅" "❌"))
 
+;; Write a pass output to stdout
 (define (pass-output->stdout h)
   (when (hash-ref h 'golden-input #f)
       (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
@@ -73,6 +118,7 @@
     (displayln (format "Evaluation of your output: ~a" (hash-ref h 'evaled-user)))
     (displayln (format "Yours correct? ~a" (yesno (hash-ref h 'correct))))))
 
+;; Write a whole trace to stdout
 (define (trace->stdout trace)
   (define (print-summary trace)
     (displayln "\nSummary of passes run:\n\n")
@@ -84,6 +130,14 @@
   (for ([elt trace])
     (pass-output->stdout elt))
   (print-summary trace))
+
+;; Walk over a trace and write each pass to a file tree 
+(define (trace->file-tree trace)
+  (for ([trace-element trace])
+    (define extension (pass-name->extension (hash-ref trace-element 'pass-name)))
+    (with-output-to-file (format "intermediate-outputs/compilation~a" extension)
+      (λ () (pretty-print (hash-ref trace-element 'output)))
+      #:exists 'replace)))
 
 ;; This function `run-chain` is a very general iterator function which
 ;; walks over a list of passes, while simultaneously (a) checking
@@ -135,20 +189,6 @@
 (define (compile-verbose source-tree [golden-inputs #f] [golden-outputs #f])
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
-  (define passes (list uniqueify anf-convert explicate-control uncover-locals
-                       select-instructions assign-homes patch-instructions
-                       prelude-and-conclusion dump-x86-64))
-  (define pass-names (list "uniqueify" "anf-convert" "explicate-control" "uncover-locals"
-                           "select-instructions" "assign-homes" "patch-instructions"
-                           "prelude-and-conclusion" "render-x86"))
-  (define input-predicates
-    (list R1? unique-source-tree? anf-program? c0-program? locals-program?
-          instr-program? homes-assigned-program? patched-program?
-          x86-64?))
-  (define output-predicates
-    (list unique-source-tree? anf-program? c0-program? locals-program?
-          instr-program? homes-assigned-program? patched-program? x86-64?
-          string?)) 
   (define goldens-in (if golden-inputs golden-inputs (make-list (length passes) #f)))
   (define goldens-out (if golden-outputs golden-outputs (make-list (length passes) #f)))
   (define interpreters (make-list (length passes) #f))
@@ -161,10 +201,13 @@
                           goldens-out
                           interpreters)])
     (trace->stdout trace)
+    (when (write-outputs-mode)
+      (trace->file-tree trace))
     trace))
 
-
-(define (run-compiler source-tree)
+;; Run the system-level assembler/linker to produce a binary
+;; executable
+(define (run-assembler-linker source-tree)
   ;; A thin wrapper around compile-verbose
   (define (compile source-tree [verbose #f] [golden-inputs #f] [golden-outputs #f])
     (hash-ref (last (compile-verbose source-tree golden-inputs golden-outputs)) 'output))
@@ -181,14 +224,11 @@
   (execute-get-output (format "clang -target x86_64-apple-darwin ~a ~a -o ~a" (object-file) (runtime-object-file) (executable-file)))
   (displayln (format "Executable now at ~a" (executable-file))))
 
-;; Run a single test. Need:
-;; - test name (string?)
-;; - test file (string?)
-;; - to-ir (which-ir?)
-;; - golden-output (output file)
-
+;; Main entrypoint
 (define (main)
   (define source-tree (with-input-from-file file-path read))
-  (run-compiler source-tree))
+  ;; Run the system-level assembler/linker to produce a binary
+  (when (produce-binary-mode)
+    (run-assembler-linker source-tree)))
 
 (main)
