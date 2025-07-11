@@ -67,8 +67,15 @@
       <div class="pass-pane">
 	<template v-if="passes.length">
 	  <div v-for="p in passes" :key="p.pass" class="pass-box">
-            <strong>{{p.pass-name}}</strong>
-            <div>{{p}}</div>
+            <strong>{{p['pass-name']}}</strong><br/>
+	    Input:
+            <div>{{p.input}}</div>
+	    Output:
+            <div>{{p['pretty-output']}}</div>
+	    Satisfies input predicate:
+            <div>{{p['satisfies-input-predicate']}}</div>
+	    Satisfies output predicate:
+            <div>{{p['satisfies-output-predicate']}}</div>
 	  </div>
 	</template>
 	<p v-else style="color:#666">No output yet — click <span style="font-weight:bold">Run</span>.</p>

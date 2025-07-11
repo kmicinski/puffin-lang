@@ -2,6 +2,7 @@
 (require 
  "irs.rkt"
  "compile.rkt"
+ "main.rkt"
  web-server/servlet
  web-server/servlet-env
  web-server/http

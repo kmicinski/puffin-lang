@@ -8,9 +8,15 @@
 ;; testing, etc. You do not necessarily need to understand this file,
 ;; though I do recommend reading it to understand how grading and
 ;; debugging work.
-(require racket/system) ; not strictly needed in #lang racket, but explicit is fine
+(require racket/system)
+(require json)
 (require "irs.rkt")
 (require "compile.rkt")
+
+;; For hosting the debug server
+(require web-server/servlet
+         web-server/servlet-env
+         web-server/http)
 
 ;; Information specific to the project
 (define passes (list uniqueify anf-convert explicate-control uncover-locals
@@ -49,7 +55,10 @@
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
 (define write-outputs-mode (make-parameter #f))
+(define write-json-mode (make-parameter #t))
+(define write-stdout-mode (make-parameter #t))
 (define verbose-mode (make-parameter #t))
+(define debug-server-mode (make-parameter #f))
 (define produce-binary-mode (make-parameter #t))
 
 ;; Execute a command and get an output
@@ -62,12 +71,16 @@
 (define file-path
   (command-line 
    #:once-each
+   [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
+                      (debug-server-mode #t)
+                      (write-outputs-mode #f) ;; doesn't work well with web server
+                      ]
    [("-o" "--output") "Write outputs of each IR to out.X and out.X.interp"
                       (write-outputs-mode #t)]
    #:args (filename) filename))
 
 ;; 
-;; Testing facilities
+;; Testing / debugging facilities
 ;;
 
 ;; Run a single compiler pass, with an input satisfying some input
@@ -139,6 +152,12 @@
       (λ () (pretty-print (hash-ref trace-element 'output)))
       #:exists 'replace)))
 
+;; Walk over a trace and write it to a JSON expression
+(define (trace->jsexpr trace)
+  (map (λ (trace-element)
+         (hash-set trace-element 'output (pretty-format (hash-ref trace-element 'output))))
+       trace))
+
 ;; This function `run-chain` is a very general iterator function which
 ;; walks over a list of passes, while simultaneously (a) checking
 ;; input/output predicates for each pass, (b) checking consistency
@@ -200,7 +219,13 @@
                           goldens-in
                           goldens-out
                           interpreters)])
-    (trace->stdout trace)
+    (when (write-stdout-mode)
+      (trace->stdout trace))
+    (when (write-json-mode)
+      (with-output-to-file "compilation.json"
+        (λ () (write-json (trace->jsexpr trace)))
+        #:exists 'replace))
+    #;
     (when (write-outputs-mode)
       (trace->file-tree trace))
     trace))
@@ -224,11 +249,62 @@
   (execute-get-output (format "clang -target x86_64-apple-darwin ~a ~a -o ~a" (object-file) (runtime-object-file) (executable-file)))
   (displayln (format "Executable now at ~a" (executable-file))))
 
+;; 
+;; Debug server infrastructure
+;;
+
+(define index-page (file->string "./index.html")) ;; our frontend code (JS)
+ 
+(define (index _req)
+  (response/full
+   200                                  ; status
+   #"OK"                                ; message
+   (current-seconds)                    ; date
+   #"text/html; charset=utf-8"          ; MIME type
+   (list (header #"Content-Type" #"text/html; charset=utf-8"))
+   (list (string->bytes/utf-8 index-page)))) ; body
+
+(define (upload req)
+  (define raw (request-post-data/raw req))
+  (unless raw (error 'upload "POST had no plain-text body"))
+  (define sexpr (read (open-input-string (bytes->string/utf-8 raw))))
+  (define response
+    (if (R1? sexpr)
+        ;; valid program, compile it
+        (let ([compilation-trace (compile-verbose sexpr)])
+          (trace->jsexpr compilation-trace))
+        (hasheq "error" "Input does not match R1? (see irs.rkt)"))) 
+  (response/full
+   200 #"OK" (current-seconds)
+   #"application/json"
+   (list (header #"Content-Type" #"application/json"))
+   (list (jsexpr->bytes response))))
+
+;; Entrypoint handler for the debug server
+(define (start req)
+  (define method (request-method req))
+  (define uri    (url->string (request-uri req)))
+  (cond [(and (equal? method #"POST") (string=? uri "/"))  ; we post to "/"
+         (upload req)]
+        ;; Serve the index page to any other request
+        [else
+         (displayln "here")
+         (index  req)]))
+
+;;
 ;; Main entrypoint
+;;
 (define (main)
+  (when (debug-server-mode)
+    (serve/servlet start
+                 #:servlet-path "/"
+                 #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
+                 #:launch-browser? #t
+                 #:port 8000))
   (define source-tree (with-input-from-file file-path read))
   ;; Run the system-level assembler/linker to produce a binary
   (when (produce-binary-mode)
     (run-assembler-linker source-tree)))
 
 (main)
+
