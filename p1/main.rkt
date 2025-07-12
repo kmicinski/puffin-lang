@@ -49,17 +49,23 @@
         instr-program? homes-assigned-program? patched-program? x86-64?
         string?)) 
 
+(define-runtime-path here-dir ".")         ; path to folder containing this file
+
 (define asm-file (make-parameter "./output.s"))
 (define object-file (make-parameter "./output.o"))
 (define executable-file (make-parameter "./output"))
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
-(define write-outputs-mode (make-parameter #f))
+(define run-test-mode (make-parameter #f))
 (define write-json-mode (make-parameter #t))
 (define write-stdout-mode (make-parameter #t))
-(define verbose-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))
 (define produce-binary-mode (make-parameter #t))
+(define scheme-files (make-parameter (build-path here-dir "example-programs")))
+(define input-files (make-parameter #f))
+(define output-files (make-parameter #f))
+(define intermediate-ir (make-parameter #f))
+(define test-mode (make-parameter "native"))
 
 ;; Execute a command and get an output
 (define (execute-get-output cmd)
@@ -71,47 +77,40 @@
 (define file-path
   (command-line 
    #:once-each
+   [("-t" "--run-test") "Run a test"
+                        (run-test-mode #t)]
    [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
                       (debug-server-mode #t)
                       (write-outputs-mode #f) ;; doesn't work well with web server
                       ]
    [("-o" "--output") "Write outputs of each IR to out.X and out.X.interp"
                       (write-outputs-mode #t)]
+   [("-i" "--inputs") i "Provide a list of comma-separated input files for testing"
+                      (input-files (string-split i ","))]
+   [("-g" "--goldens") g "Provide a list of golden (answer) outputs"
+                       (output-files (string-split g ","))]
+   [("-m" "--mode") mode "Set the test mode (anf, c0, instrs, native)"
+                    (test-mode mode)]
+   [("--use-intermediate-ir") ir "Use an instructor-provided intermediate IR"
+                              (intermediate-ir ir)]
    #:args (filename) filename))
 
 ;; 
 ;; Testing / debugging facilities
 ;;
+;; racket main.rkt example-programs/r0-2.scm -i example-inputs/1.in,example-inputs/1.in
 
 ;; Run a single compiler pass, with an input satisfying some input
 ;; predicate and an output satisfying some output predicate. Return
 ;; the value of `(pass input)`.
-;; 
-;; If `golden-output` is provided, then `interp-output` (an
-;; interpreter for the output IR) must be provided, too.
-(define (run-pass-expect pass pass-name input input-pred output-pred
-                         [golden-input #f]
-                         [golden-output #f] [interp-output #f])
-  (define output-equal? equal?) ;; for now, just use equal? for output comparison
+(define (run-pass-expect pass pass-name input input-pred output-pred)
   (define output (pass input))
-  (define h (hash 'input (pretty-format input) 
+  (hash 'input (pretty-format input)
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
                   'satisfies-output-predicate (output-pred output)
-                  'golden-input (pretty-format golden-input)
                   'pretty-output (if (string? output) output (pretty-format output))
                   'output output))
-  (if golden-output
-      (let* ([evaled-golden (interp-output golden-output)]
-             [evaled-user (interp-output output)]
-             [output-matches (output-equal? evaled-user evaled-golden)])
-        (hash-set (hash-set (hash-set (hash-set h 'golden-output golden-output)
-                            'evaled-golden (pretty-format evaled-golden))
-                            'evaled-user evaled-user)
-                  'correct
-                  output-matches))
-      ;; 
-      h))
 
 (define (yesno x) (if x "✅" "❌"))
 
@@ -170,21 +169,14 @@
 ;;  - A list of passes
 ;;  - A list of pass names for each pass
 ;;  - A list of input and output predicates for each pass
-;;  - A list of golden inputs (one for each pass), possibly #f--see notes
-;;  - A list of golden outputs (one for each pass), possibly #f--see notes
-;;  - A list of interpreters which interpret the output of each pass
 ;; 
 ;; The function then produces a trace of each pass, which may be
 ;; rendered to screen, written to file, etc.
-(define (run-chain source-tree passes pass-names input-predicates output-predicates
-                   golden-inputs golden-outputs interpreters)
+(define (run-chain source-tree passes pass-names input-predicates output-predicates)
   (let loop ([passes      passes]
              [names       pass-names]
              [in-preds    input-predicates]
              [out-preds   output-predicates]
-             [gold-ins    golden-inputs]
-             [gold-outs   golden-outputs]
-             [interps     interpreters]
              [input       source-tree]
              [trace       '()])
     (if (null? passes)
@@ -193,66 +185,150 @@
                [pass-name  (car names)]
                [in-pred    (car in-preds)]
                [out-pred   (car out-preds)]
-               [gold-in    (car gold-ins)]
-               [gold-out   (car gold-outs)]
-               [interp     (car interps)]
                [h          (run-pass-expect pass pass-name input
-                                            in-pred out-pred
-                                            gold-in gold-out interp)]
+                                            in-pred out-pred)]
                [next-input (pass input)])
           (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
-                (cdr gold-ins) (cdr gold-outs) (cdr interps)
                 next-input (cons h trace))))))
 
 ;; Run each of the passes in sequence, building a chain of passes
-(define (compile-verbose source-tree [golden-inputs #f] [golden-outputs #f])
+(define (compile-verbose source-tree)
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
-  (define goldens-in (if golden-inputs golden-inputs (make-list (length passes) #f)))
-  (define goldens-out (if golden-outputs golden-outputs (make-list (length passes) #f)))
-  (define interpreters (make-list (length passes) #f))
   (let ([trace (run-chain source-tree
                           passes
                           pass-names
                           input-predicates
-                          output-predicates
-                          goldens-in
-                          goldens-out
-                          interpreters)])
+                          output-predicates)])
     (when (write-stdout-mode)
       (trace->stdout trace))
     (when (write-json-mode)
       (with-output-to-file "compilation.json"
         (λ () (write-json (trace->jsexpr trace)))
         #:exists 'replace))
-    #;
-    (when (write-outputs-mode)
-      (trace->file-tree trace))
     trace))
 
-;; Run the system-level assembler/linker to produce a binary
-;; executable
+(define (test-ir-range* start-pass-name
+                        end-pass-name
+                        source-tree
+                        interpreter                 ; (IR × input → output)
+                        input-streams               ; listof (listof integer)
+                        expected-streams)           ; same length as above
+  (unless (= (length input-streams) (length expected-streams))
+    (error 'test-ir-range*
+           "input-streams and expected-streams must be the same length"))
+
+  ;; --- slice -----------------------------------------------------------------
+  (define start-idx (index-of pass-names start-pass-name))
+  (define end-idx   (index-of pass-names end-pass-name))
+  (unless (and start-idx end-idx (<= start-idx end-idx))
+    (error 'test-ir-range*
+           "Bad pass names/order: ~a → ~a" start-pass-name end-pass-name))
+
+  (define slice-len (+ 1 (- end-idx start-idx)))
+  (define passes*    (take (list-tail passes             start-idx) slice-len))
+  (define names*     (take (list-tail pass-names         start-idx) slice-len))
+  (define in-preds*  (take (list-tail input-predicates   start-idx) slice-len))
+  (define out-preds* (take (list-tail output-predicates  start-idx) slice-len))
+
+  ;; --- compile once ----------------------------------------------------------
+  (define trace
+    (run-chain source-tree passes* names* in-preds* out-preds*))
+  (define final-ir (hash-ref (last trace) 'output))
+
+  ;; --- run every test case ---------------------------------------------------
+  (define results
+    (for/list ([in   input-streams]
+               [exp  expected-streams]
+               [idx  (in-naturals 0)])
+      (define act (interpreter final-ir in))
+      (define ok? (equal? act exp))
+      (displayln
+       (format "Case ~a:\n  input     = ~a\n  expected  = ~a\n  actual    = ~a\n  result    = ~a\n"
+               idx in exp act (if ok? "✅ ok" "❌ mismatch")))
+      (hash 'case      idx
+            'input     in
+            'expected  exp
+            'actual    act
+            'correct?  ok?)))
+
+  (hash 'trace        trace
+        'cases        results
+        'all-correct? (andmap (λ (h) (hash-ref h 'correct?)) results)))
+
+;; 
+;; Code to compile / link on the host machine
+;;
+(define (target-triple os arch)
+  ;; Only add -target when we *must* cross-compile; otherwise rely on
+  ;; clang’s normal “host triple” detection.
+  (match* (os arch)
+    [('macosx 'aarch64)  "arm64-apple-darwin"]
+    [('macosx 'x86_64)   "x86_64-apple-darwin"]
+    [('unix   'x86_64)   "x86_64-pc-linux-gnu"]
+    [(_       _)         ""]))
+
+(define (flag-list->string flags)
+  (string-join (filter (λ (s) (not (string=? s ""))) flags) " "))
+
+;; Generate a binary
 (define (run-assembler-linker source-tree)
-  ;; A thin wrapper around compile-verbose
-  (define (compile source-tree [verbose #f] [golden-inputs #f] [golden-outputs #f])
-    (hash-ref (last (compile-verbose source-tree golden-inputs golden-outputs)) 'output))
-  (displayln "Compiling using compile.rkt -> x86_64")
-  (define output-string (compile source-tree (verbose-mode)))
+  (displayln "Compiling IR (compile.rkt) …")
+  (define asm-text
+    (hash-ref (last (compile-verbose source-tree)) 'output))
   (with-output-to-file (asm-file)
-    (λ () (let ([output-text output-string])
-            (displayln output-text)))
-    #:exists 'replace)
-  ;; Assemble the output file
-  (displayln "Assembling file to executable...")
-  (execute-get-output (format "clang -target x86_64-apple-darwin -c ~a -o ~a " (asm-file) (object-file)))
-  (execute-get-output (format "clang -target x86_64-apple-darwin -c ~a -o ~a " (runtime-file) (runtime-object-file)))
-  (execute-get-output (format "clang -target x86_64-apple-darwin ~a ~a -o ~a" (object-file) (runtime-object-file) (executable-file)))
-  (displayln (format "Executable now at ~a" (executable-file))))
+    #:exists 'replace
+    (λ () (displayln asm-text)))
+  ;; Choose host-specific settings
+  (define os    (host-os))
+  (define arch  (host-arch))
+  (define tgt   (target-triple os arch))
+  (define entry (entry-symbol os))
+  (define cc    (or (getenv "CC") "clang"))
+  (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
+  (define common-cc-flags  "-Wall -O2")
+  ;; Some Linux distros default to PIE binaries; disable if your
+  ;; hand-written assembly has its own _start and no PIC support.
+  (define linux-extra      (if (eq? os 'unix) "-no-pie" ""))
+  (displayln (format "→ Host: ~a/~a  Target: ~a  Entry: ~a"
+                     os arch (if (string=? tgt "") "default" tgt) entry))
+  ;; —– 3. Assemble & link —–––––––––––––––––––––––––––––––––––––
+  (define assemble-cmd
+    (string-append cc " "
+                   (flag-list->string (list target-flag common-cc-flags))
+                   " -c " (asm-file) " -o " (object-file)))
+
+  (define assemble-runtime-cmd
+    (string-append cc " "
+                   (flag-list->string (list target-flag common-cc-flags))
+                   " -c " (runtime-file) " -o " (runtime-object-file)))
+
+  (define link-cmd
+    (string-append cc " "
+                   (flag-list->string
+                    (list target-flag common-cc-flags linux-extra))
+                   " " (object-file) " " (runtime-object-file)
+                   " -o " (executable-file)))
+  ;; Execute each command
+  (for ([cmd (list assemble-cmd assemble-runtime-cmd link-cmd)])
+    (displayln cmd)
+    (void (system cmd)))
+  (displayln (format "✔ Executable produced at: ~a" (executable-file))))
+
+(define test-modes
+  (hash
+   "anf"        `(mode-config "uniqueify"           "anf-convert"        ,interp-anf)
+   "c0"         (mode-config "explicate-control"   "uncover-locals"     ,interp-c0)
+   "pseudo-x86" (mode-config "select-instructions" "patch-instructions" interp-px86  px86-tests)
+   "x86-64"     (mode-config #f                   #f                   #f           native-tests))) ; handled specially
+
+;; Run a rest and return its value, either 'pass or 'fail, print results to stdout
+(define (toplevel-execute-test)
+  )
 
 ;; 
 ;; Debug server infrastructure
 ;;
-
 (define index-page (file->string "./index.html")) ;; our frontend code (JS)
  
 (define (index _req)
@@ -295,16 +371,25 @@
 ;; Main entrypoint
 ;;
 (define (main)
-  (when (debug-server-mode)
-    (serve/servlet start
-                 #:servlet-path "/"
-                 #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
-                 #:launch-browser? #t
-                 #:port 8000))
   (define source-tree (with-input-from-file file-path read))
-  ;; Run the system-level assembler/linker to produce a binary
+  (cond
+    ;; Start a debug server
+    [(debug-server-mode)
+     (serve/servlet start
+                    #:servlet-path "/"
+                    #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
+                    #:launch-browser? #t
+                    #:port 8000)]
+    ;; Run a test
+    [(run-test-)]
+)
   (when (produce-binary-mode)
     (run-assembler-linker source-tree)))
 
 (main)
+
+
+
+
+
 

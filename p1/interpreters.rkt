@@ -2,16 +2,10 @@
 
 ;; Interpreters for each IR in irs.rkt – rewritten to use `cons` (pairs/lists)
 ;; instead of multiple values.
-
-(require racket/match
-         (only-in racket/hash make-hasheq hash-ref!))
 (require "irs.rkt")
+(require "compile.rkt")
 
 (provide (all-defined-out))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Helpers
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;; Consume one integer from the #:input list, returning a pair
 ;;   (cons read-value remaining-input)
@@ -105,36 +99,16 @@
 ;;
 ;; 6–9 -- (Pseudo-)x86-64
 ;;
-
-;; Registers and memory are modelled using mutable hash tables.
-;;   * reg : symbol  → integer
-;;   * mem : integer → integer  (address‑indexed, arbitrary units)
-
-(define (x86-state? state)
-  (match state
-    [`(,insrs ,regs ,mem ,input)
-     (and 
-      (list? instrs) (andmap instr/vars? instrs)
-      (hash? regs) (andmap symbol? (hash-keys regs)) (andmap integer? (hash-keys regs))
-      (hash? mem) (andmap integer? (hash-keys mem)) (andmap integer? (hash-keys mem))
-      (list? input) (andmap integer? input))]))
-
-;; ---------- operand helpers ----------
-
-(define (operand-value op reg mem)
-  (match op
-    [`(imm ,n)                n]
-    [`(reg ,r)                (hash-ref reg r 0)]
-    [`(deref (reg ,r) ,off)   (hash-ref mem (+ (hash-ref reg r 0) off) 0)]
-    [`(var ,x)                (hash-ref reg x 0)]))  ; during select‑instructions stage
-
-(define (store-operand dst v reg mem)
-  (match dst
-    [`(reg ,r)                (hash-set reg r v)]
-    [`(deref (reg ,r) ,off)   (hash-set mem (+ (hash-ref reg r 0) off) v)]
-    [`(var ,x)                (hash-set reg x v)]
-    [_                        (error 'interpret "operand not assignable: ~a" dst)]))
-
+(define (interpret-instr p)
+  (define (interp-instrs instrs regs)
+    (match instrs
+      ['() ]
+)
+)
+  (match p
+    [`(program ,_ ,blocks)
+     (interp-instrs (hash-ref blocks ))
+]))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

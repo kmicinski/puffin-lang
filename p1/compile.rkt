@@ -5,15 +5,25 @@
 ;;
 (require "irs.rkt") ;; Definition of languages / IRs used in P1 (READ!)
 
-(provide uniqueify
-         anf-convert
-         explicate-control
-         uncover-locals
-         select-instructions
-         assign-homes
-         patch-instructions
-         prelude-and-conclusion
-         dump-x86-64)
+(provide 
+ host-os
+ host-arch
+ entry-symbol
+ uniqueify
+ anf-convert
+ explicate-control
+ uncover-locals
+ select-instructions
+ assign-homes
+ patch-instructions
+ prelude-and-conclusion
+ dump-x86-64)
+
+;; Necessary boilerplate to support Linux / OSX compatability
+(define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)
+(define (host-arch)    (system-type 'machine))  ; 'x86_64, 'aarch64, ...
+(define (entry-symbol)
+  (if (eq? (host-os) 'macosx) '_main 'main))
 
 ;; The compiler is designed in passes, which go:
 ;; --> R1? -- Source program
@@ -46,7 +56,7 @@
     [`(program ,locals ,blocks)
      ;; negative number, added to %rsp
      (define space-needed (align8 (apply min (hash-values locals))))
-     (define start-block (hash-ref blocks '_main))
+     (define start-block (hash-ref blocks (entry-symbol)))
      (define new-start-block
        `((pushq (reg rbp))
          (movq (reg rsp) (reg rbp))
@@ -63,7 +73,7 @@
          ;; transfer back to caller
          (retq)))
      ;; to build a new block, insert the prelude / conclusion
-     `(program ,locals ,(hash '_main new-start-block))]))
+     `(program ,locals ,(hash (entry-symbol) new-start-block))]))
 
 ;; walks over instructions and replaces invalid movqs, where both
 ;; operands are indirects (offsets of %rax). In x86_64, we *cannot*
@@ -81,7 +91,7 @@
        `(,instr ,@(patch-tail rest))]))
   (match p
     [`(program ,info ,blocks)
-     `(program ,info ,(hash '_main (patch-tail (hash-ref blocks '_main))))]))
+     `(program ,info ,(hash (entry-symbol) (patch-tail (hash-ref blocks (entry-symbol)))))]))
 
 ;; Take variables into either the stack/registers
 (define (assign-homes p)
@@ -108,7 +118,7 @@
        `((negq ,(home a)) ,@(h rest))]
       [`(,instr0 ,rest ...)
        `(,instr0 ,@(h rest))]))
-  `(program ,var->stackloc ,(hash '_main (h (hash-ref blocks '_main)))))
+  `(program ,var->stackloc ,(hash (entry-symbol) (h (hash-ref blocks (entry-symbol))))))
 
 ;; The output of this pass is almost x86, but there will still be an
 ;; issue: we won't be using *registers*, we'll keep using variables
@@ -152,7 +162,7 @@
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
     [`(program ,info ,h)
-     `(program ,info ,(hash '_main (c0->block (hash-ref h '_main))))]))
+     `(program ,info ,(hash (entry-symbol) (c0->block (hash-ref h (entry-symbol)))))]))
 
 (define (uncover-locals p)
   (define (h seq)
@@ -162,7 +172,7 @@
        (set-add (h rest) x0)]))
   (match p
     [`(program () ,e)
-     `(program ,(h (hash-ref e '_main)) ,e)]))
+     `(program ,(h (hash-ref e (entry-symbol))) ,e)]))
 
 ;; Convert p (in ANF) to  C-style IR consisting consisting of labeled blocks
 (define (explicate-control p)
@@ -183,7 +193,7 @@
        `(return ,a)]))
   (match p
     [`(program ,info ,anf)
-     `(program ,info ,(hash '_main (expr->seq anf)))]))
+     `(program ,info ,(hash (entry-symbol) (expr->seq anf)))]))
 
 (define (anf-convert p)
   (define (convert-expr e k)
@@ -260,4 +270,4 @@
       ".globl _main\n"
       ".extern _read_int64\n"
       ".extern _print_int64\n"
-      (render-block (hash-ref blocks '_main) "_main"))]))
+      (render-block (hash-ref blocks (entry-symbol)) "_main"))]))

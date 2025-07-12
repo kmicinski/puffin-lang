@@ -36,6 +36,41 @@ simple language:
     [_ #f]))
 ```
 
+# Testcases and our testing methodology
 
+In this project, we evaluate the following passes
 
+- [ ] ANF conversion, via `interp-anf`
+- [ ] Explicate control (conversion to C0)
+- [ ] Conversion to pseudo-x86 (passes 6-9)
+- [ ] Compilation to x86-64, linking, and testing the real binary
+
+There are a number of example programs in the `example-programs`
+subdirectory. There are also a number of example inputs in
+`example-inputs/`. Each of these inputs is a text file with an integer
+on each line: the integer is fed into the program, and unused inputs
+are discarded (if a program never calls `(read)`, no inputs are
+consumed).
+
+This gives us a large set of things to test: 
+
+[1, isolation] we can test passes in isolation (e.g., the conversion
+to ANF) by using an instructor-provided input and running just your
+specific functions. This avoids cumulative error, where an error in a
+previous pass prevents a later pass from working. We call these tests
+"isolation" tests, because they isolate a single pass and call your
+code with instructor-provided inputs. The downside of this approach is
+that it does not stress the end-to-end completeness of your compiler.
+
+[2, compilation] By contrast, we can imagine running your whole
+compiler, generating a binary, and running that binary against the
+input stream (directing it to stdin), and we expect that the result is
+that we get an output (stream) matching an expected "golden"
+(instructor-provided) output. We call these "compilation" tests.
+
+[3, consistency] Does each pass produce an equivalent value, when we
+interpret its output?
+
+[4, adheres to predicte?] Does the output of each pass adhere to the
+predicates in `irs.rkt`?
 
