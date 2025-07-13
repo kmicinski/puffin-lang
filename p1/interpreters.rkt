@@ -154,7 +154,7 @@
         (define v (car in))
         (step rst (write-op '(reg rax) v st) (cdr in)) ]
        ['print_int64
-        (match-define `(,regs ,_ ,_ ,_) st)
+        (displayln (read-op '(reg rax) st)) ;; print to the screen
         (step rst st in)]
        [_ (error 'interp-instrs "unknown call ~a" lbl)])]
     [_ (error 'interp-instrs "unknown instruction")]))

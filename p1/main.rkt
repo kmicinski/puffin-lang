@@ -48,17 +48,25 @@
 ;; predicate and an output satisfying some output predicate. Return
 ;; the value of `(pass input)`.
 (define (run-pass-expect pass pass-name input input-pred output-pred [interp (lambda (x _) x)] [input-stream #f])
+  ;; Run the pass
   (define output (pass input))
+  ;; helper: take a thunk and run it, get its return value and any stdout
+  (define (run/capture thunk)
+    (define out (open-output-string))
+    (define v (parameterize ([current-output-port out]) (thunk)))
+    (cons v (get-output-string out)))
+  ;; Build an object of metadata 
   (define h (hash 'input (pretty-format input)
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
                   'satisfies-output-predicate (output-pred output)
                   'pretty-output (if (string? output) output (pretty-format output))
                   'output output))
-  ;; Run the interpreter--the identity interpreter (discards input) if none provided
-  (let ([interpreted-value
-             (interp (hash-ref h 'output) input-stream)])
-    (hash-set h 'interp interpreted-value)))
+  ;; Run the interpreter--the identity interpreter (discards input) is
+  ;; used as a default parameter if none is provided
+  (match (run/capture (λ () (interp (hash-ref h 'output) input-stream)))
+    [(cons v stdout)
+     (hash-set (hash-set h 'interp v) 'stdout stdout)]))
 
 ;; Generate a pretty emoji for the terminal
 (define (yesno x) (if x "✅" "❌"))
@@ -85,13 +93,18 @@
         ;; Lookup the interpretation
         (match (hash-ref elt 'interp 'none)
           ['none         "<Not run>"]
-          [(? string? s) "<string>"]
+          [(? string?)   "<string>"]
           [x     x]))
-      (displayln (format "~a: Input (~a) Output (~a) Evaluation: ~a" 
+      (define maybe-stdout
+        (match (hash-ref elt 'stdout "")
+          ["" ""]
+          [x  (format "stdout: \"~a\"" (string-trim x))]))
+      (displayln (format "~a: Input (~a) Output (~a) Evaluation: ~a ~a" 
                          (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
                          (yesno (hash-ref elt 'satisfies-input-predicate))
                          (yesno (hash-ref elt 'satisfies-output-predicate))
-                         evals-to))))
+                         evals-to
+                         maybe-stdout))))
   (for ([elt trace])
     (pass-output->stdout elt))
   (print-summary trace))
