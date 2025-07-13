@@ -1,14 +1,11 @@
 #lang racket
 
-;;
-;; CIS531 Fall '25 -- Project 1
-;;
-(require "irs.rkt") ;; Definition of languages / IRs used in P1 (READ!)
+;; CIS531 Fall '25 Project 1
+;; Compiling LVar -> x86-64
+(require "irs.rkt") ;; Definition of each IR (please read)
+(require "system.rkt") ;; System-specific details
 
 (provide 
- host-os
- host-arch
- entry-symbol
  uniqueify
  anf-convert
  explicate-control
@@ -18,12 +15,6 @@
  patch-instructions
  prelude-and-conclusion
  dump-x86-64)
-
-;; Necessary boilerplate to support Linux / OSX compatability
-(define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)
-(define (host-arch)    (system-type 'machine))  ; 'x86_64, 'aarch64, ...
-(define (entry-symbol)
-  (if (eq? (host-os) 'macosx) '_main 'main))
 
 ;; The compiler is designed in passes, which go:
 ;; --> R1? -- Source program
@@ -139,7 +130,7 @@
         ;; make a call to read (0 arguments), then move the result
         ;; into the corresponding variable
         [`(seq (assign ,x (read)) ,rest)
-         `((callq _read_int64 0)
+         `((callq _read_int64 0)                   ;;; XXX BUG HERE!?
            (movq (reg rax) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x ,(? fixnum? n)) ,rest)
@@ -249,7 +240,6 @@
       [`(reg ,x) (format "%~a" (symbol->string x))]
       [`(deref (reg ,reg) ,i) (format "~a(%~a)" i (symbol->string reg))]))
   (define (render-instr instr)
-    (pretty-print instr)
     (match instr
       [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
       [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
@@ -267,7 +257,7 @@
   (match p
     [`(program ,info ,blocks)
      (string-append
-      ".globl _main\n"
+      (format ".globl ~a\n" (entry-symbol))
       ".extern _read_int64\n"
       ".extern _print_int64\n"
       (render-block (hash-ref blocks (entry-symbol)) "_main"))]))

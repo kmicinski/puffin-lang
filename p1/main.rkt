@@ -30,7 +30,7 @@
         `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
         `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
         `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
-        `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 (λ (s #:input [in '()]) s))))
+        `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,(λ (s _) s))))
 
 ;; Make each column available
 (match-define (list passes
@@ -47,7 +47,7 @@
 ;; Run a single compiler pass, with an input satisfying some input
 ;; predicate and an output satisfying some output predicate. Return
 ;; the value of `(pass input)`.
-(define (run-pass-expect pass pass-name input input-pred output-pred [interp #f] [input-stream #f])
+(define (run-pass-expect pass pass-name input input-pred output-pred [interp (lambda (x _) x)] [input-stream #f])
   (define output (pass input))
   (define h (hash 'input (pretty-format input)
                   'pass-name pass-name
@@ -55,10 +55,12 @@
                   'satisfies-output-predicate (output-pred output)
                   'pretty-output (if (string? output) output (pretty-format output))
                   'output output))
-  (if interp
-      (hash-set h 'interp (interp (hash-ref h 'output) input-stream))
-      h))
+  ;; Run the interpreter--the identity interpreter (discards input) if none provided
+  (let ([interpreted-value
+             (interp (hash-ref h 'output) input-stream)])
+    (hash-set h 'interp interpreted-value)))
 
+;; Generate a pretty emoji for the terminal
 (define (yesno x) (if x "✅" "❌"))
 
 ;; Write a pass output to stdout
@@ -71,21 +73,25 @@
   (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
   (displayln (hash-ref h 'pretty-output))
   (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
-  (when (hash-ref h 'golden-output #f)
-    (displayln (format "Golden (instructor-provided) output:\n~a" (hash-ref h 'golden-input)))
-    (displayln (format "Evaluation of golden output: ~a" (hash-ref h 'evaled-golden)))
-    (displayln (format "Evaluation of your output: ~a" (hash-ref h 'evaled-user)))
-    (displayln (format "Yours correct? ~a" (yesno (hash-ref h 'correct))))))
+  (displayln "Evaluation of your output:")
+  (pretty-print (hash-ref h 'interp)))
 
 ;; Write a whole trace to stdout
 (define (trace->stdout trace)
   (define (print-summary trace)
     (displayln "\nSummary of passes run:\n\n")
     (for ([elt trace])
-      (displayln (format "~a: Input (~a) Output (~a)"
+      (define evals-to
+        ;; Lookup the interpretation
+        (match (hash-ref elt 'interp 'none)
+          ['none         "<Not run>"]
+          [(? string? s) "<string>"]
+          [x     x]))
+      (displayln (format "~a: Input (~a) Output (~a) Evaluation: ~a" 
                          (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
                          (yesno (hash-ref elt 'satisfies-input-predicate))
-                         (yesno (hash-ref elt 'satisfies-output-predicate))))))
+                         (yesno (hash-ref elt 'satisfies-output-predicate))
+                         evals-to))))
   (for ([elt trace])
     (pass-output->stdout elt))
   (print-summary trace))
@@ -195,9 +201,9 @@
     (λ () (displayln asm-text)))
   ;; Choose host-specific settings
   (define os    (host-os))
-  (define arch  (host-arch))
+  (define arch  'x86_64)   ;; Target x86_64
   (define tgt   (target-triple os arch))
-  (define entry (entry-symbol os))
+  (define entry (entry-symbol))
   (define cc    (or (getenv "CC") "clang"))
   (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
   (define common-cc-flags  "-Wall -O2")
@@ -281,8 +287,6 @@
                     #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
                     #:launch-browser? #t
                     #:port 8000)]
-    ;; Run a test
-    #;[(run-test-)]
     [else
      ;; Else, build the binary
      (run-assembler-linker source-tree)]))

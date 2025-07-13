@@ -129,7 +129,7 @@
 (define (step instrs st in)
   (match instrs
     ['() (read-op '(reg rax) st)] ;; supports earlier IRs which don't retq
-    [`(retq) (read-op '(reg rax) st)]
+    [`((retq) . ,_) (read-op '(reg rax) st)]
     [`((movq ,src ,dst) . ,rst) 
      (step rst (write-op dst (read-op src st) st) in)]
     [`((addq ,src ,dst) . ,rst)
