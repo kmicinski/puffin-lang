@@ -3,6 +3,7 @@
 ;; Interpreters for each IR in irs.rkt – rewritten to use `cons` (pairs/lists)
 ;; instead of multiple values.
 (require "irs.rkt")
+(require "system.rkt")
 (require "compile.rkt")
 
 (provide (all-defined-out))
@@ -17,7 +18,6 @@
 ;;
 ;; 1 & 2 – raw / unique R1
 ;; 
-
 (define (eval-R1-exp e env in)
   (match e
     [(? fixnum? n)                            (cons n in)]
@@ -34,11 +34,11 @@
                                                    [(cons v in*) (eval-R1-exp body (hash-set env x v) in*)])]
     [_                                        (error 'interpret "malformed R1 expression: ~a" e)]))
 
-(define (interpret-R1 p #:input [in '()])
+(define (interpret-R1 p [in '()])
   (define exp (match p
                 [`(program ,e)      e]
                 [`(program () ,e)   e]))
-  (define res (eval-R1-exp exp (make-hash) in))
+  (define res (eval-R1-exp exp (hash) in))
   (car res))
 
 ;;
@@ -66,9 +66,9 @@
                                             [(cons v in*) (eval-anf-exp body (hash-set env x v) in*)])]
     [_                                   (error 'interpret "bad ANF exp ~a" e)]))
 
-(define (interpret-anf p #:input [in '()])
+(define (interpret-anf p [in '()])
   (match-define `(program () ,body) p)
-  (define res (eval-anf-exp body (make-hash) in))
+  (define res (eval-anf-exp body (hash) in))
   (car res))
 
 ;;
@@ -92,37 +92,91 @@
                                            [(cons v in*) (exec-seq rest (hash-set env x v) in*)])]
     [_                                    (error 'interpret "bad C0 seq ~a" s)]))
 
-(define (interpret-c0 p #:input [in '()])
+(define (interpret-c0 p [in '()])
   (match-define `(program ,_ ,blocks) p)
-  (car (exec-seq (hash-ref blocks '_main) (make-hash) in)))
+  (car (exec-seq (hash-ref blocks '_main) (hash) in)))
 
 ;;
-;; 6–9 -- (Pseudo-)x86-64
+;; Passes 6–9 -- (Pseudo-)x86-64, this interpreter works on each
 ;;
-(define (interpret-instr p)
-  (define (interp-instrs instrs regs)
-    (match instrs
-      ['() ]
-)
-)
-  (match p
+
+;; Interpreter state is `(,regs ,vars ,mem ,stack)
+(define (read-op op st)
+  (match-define `(,regs ,vars ,mem ,stack) st)
+  (match op
+    [`(imm ,n)                    n]
+    [`(reg ,r)                    (hash-ref regs r 0)]
+    [`(var ,x)                    (hash-ref vars x)]
+    [`(deref (reg ,r) ,off)
+     (if (eq? r 'rbp)
+         (hash-ref mem off)
+         (error 'interp-instrs "bad deref ~a" op))]))
+
+(define (write-op op v st)
+  (match-define `(,regs ,vars ,mem ,stack) st)
+  (match op
+    [`(reg ,r)                    `(,(hash-set regs r v) ,vars ,mem ,stack)]
+    [`(var ,x)                    `(,regs ,(hash-set vars x v) ,mem ,stack)]
+    [`(deref (reg ,r) ,off)
+     (if (eq? r 'rbp)
+         `(,regs ,vars ,(hash-set mem off v) ,stack)
+         (error 'interp-instrs "bad deref ~a" op))]
+    [_ (error 'interp-instrs "cannot write to ~a" op)]))
+
+;; Tail-recursive step function, which walks through each of the
+;; instructions, maintaining a state. Here, I also track an explicit
+;; state; I make in (the input list) another parameter for consistency
+(define (step instrs st in)
+  (match instrs
+    ['() (read-op '(reg rax) st)] ;; supports earlier IRs which don't retq
+    [`(retq) (read-op '(reg rax) st)]
+    [`((movq ,src ,dst) . ,rst) 
+     (step rst (write-op dst (read-op src st) st) in)]
+    [`((addq ,src ,dst) . ,rst)
+     (define sum (+ (read-op dst st) (read-op src st)))
+     (step rst (write-op dst sum st) in)]
+    [`((negq ,op) . ,rst)
+     (step rst (write-op op (- (read-op op st)) st) in)]
+    [`((pushq ,src) . ,rst)
+     (match-define `(,regs ,vars ,mem ,stack) st)
+     (step rst `(,regs ,vars ,mem ,(cons (read-op src st) stack)) in)]
+    [`((popq ,dst) . ,rst)
+     (match-define `(,regs ,vars ,mem ,stack) st)
+     (match stack
+       ['() (error 'interp-instrs "pop from empty stack")]
+       [`(,top . ,rest)
+        (define st* (write-op dst top st))
+        (match-define `(,regs* ,vars* ,mem* ,_) st*)
+        (step rst `(,regs* ,vars* ,mem* ,rest) in)])]
+    [`((callq ,lbl ,_) . ,rst)
+     (match (linuxify lbl) 
+       ['read_int64
+        (define v (car in))
+        (step rst (write-op '(reg rax) v st) (cdr in)) ]
+       ['print_int64
+        (match-define `(,regs ,_ ,_ ,_) st)
+        (step rst st in)]
+       [_ (error 'interp-instrs "unknown call ~a" lbl)])]
+    [_ (error 'interp-instrs "unknown instruction")]))
+
+(define (interpret-instr prog [in '()])
+  (match prog
     [`(program ,_ ,blocks)
-     (interp-instrs (hash-ref blocks ))
-]))
-
+     (define instrs (hash-ref blocks (entry-symbol)))
+     (define init-state `(,(hash) ,(hash) ,(hash) ()))
+     (step instrs init-state in)]))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Master dispatcher
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(define (interpret p #:input [in '()])
-  (cond [(R1? p)                                (interpret-R1 p #:input in)]
-        [(unique-source-tree? p)                (interpret-R1 p #:input in)]
-        [(anf-program? p)                       (interpret-anf p #:input in)]
-        [(c0-program? p)                        (interpret-c0 p #:input in)]
-        [(locals-program? p)                    (interpret-c0 p #:input in)]
-        [(instr-program? p)                     (interpret-instr p #:input in)]
-        [(homes-assigned-program? p)            (interpret-instr p #:input in)]
-        [(patched-program? p)                   (interpret-instr p #:input in)]
-        [(x86-64? p)                            (interpret-instr p #:input in)]
+(define (interpret p [in '()])
+  (cond [(R1? p)                                (interpret-R1 p in)]
+        [(unique-source-tree? p)                (interpret-R1 p in)]
+        [(anf-program? p)                       (interpret-anf p in)]
+        [(c0-program? p)                        (interpret-c0 p in)]
+        [(locals-program? p)                    (interpret-c0 p in)]
+        [(instr-program? p)                     (interpret-instr p in)]
+        [(homes-assigned-program? p)            (interpret-instr p in)]
+        [(x86-64? p)                            (interpret-instr p in)]
         [else (error 'interpret "unknown IR kind")]))

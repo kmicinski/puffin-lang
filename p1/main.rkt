@@ -8,109 +8,56 @@
 ;; testing, etc. You do not necessarily need to understand this file,
 ;; though I do recommend reading it to understand how grading and
 ;; debugging work.
-(require racket/system)
 (require json)
+(require "system.rkt") ;; list of passes, system-relevant details, etc.
 (require "irs.rkt")
 (require "compile.rkt")
+(require "interpreters.rkt")
 
 ;; For hosting the debug server
 (require web-server/servlet
          web-server/servlet-env
          web-server/http)
 
-;; Information specific to the project
-(define passes (list uniqueify anf-convert explicate-control uncover-locals
-                     select-instructions assign-homes patch-instructions
-                     prelude-and-conclusion dump-x86-64))
+;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
+;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
+(define all-passes
+  (list `(,uniqueify              "uniqueify"           ,R1?                       ,unique-source-tree?     ,interpret-R1)
+        `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
+        `(,explicate-control      "explicate-control"   ,anf-program?              ,c0-program?             ,interpret-c0)
+        `(,uncover-locals         "uncover-locals"      ,c0-program?               ,locals-program?         ,interpret-c0)
+        `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
+        `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
+        `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
+        `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
+        `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 (λ (s #:input [in '()]) s))))
 
-(define pass-names (list "uniqueify" "anf-convert" "explicate-control" "uncover-locals"
-                         "select-instructions" "assign-homes" "patch-instructions"
-                         "prelude-and-conclusion" "render-x86"))
-
-(define (pass-name->extension name)
-  (match name
-    ["uniqueify" ".uniq"]
-    ["anf-convert" ".anf"] 
-    ["explicate-control" ".c0"]
-    ["uncover-locals" ".c0-lcl"]
-    ["select-instructions" ".instrs"]
-    ["assign-homes" ".homes"]
-    ["patch-instructions" ".patched"]
-    ["prelude-and-conclusion" ".prelude"]
-    ["render-x86" ".S"]))
-
-(define input-predicates
-  (list R1? unique-source-tree? anf-program? c0-program? locals-program?
-        instr-program? homes-assigned-program? patched-program?
-        x86-64?))
-
-(define output-predicates
-  (list unique-source-tree? anf-program? c0-program? locals-program?
-        instr-program? homes-assigned-program? patched-program? x86-64?
-        string?)) 
-
-(define-runtime-path here-dir ".")         ; path to folder containing this file
-
-(define asm-file (make-parameter "./output.s"))
-(define object-file (make-parameter "./output.o"))
-(define executable-file (make-parameter "./output"))
-(define runtime-file (make-parameter "./runtime.c"))
-(define runtime-object-file (make-parameter "./runtime.o"))
-(define run-test-mode (make-parameter #f))
-(define write-json-mode (make-parameter #t))
-(define write-stdout-mode (make-parameter #t))
-(define debug-server-mode (make-parameter #f))
-(define produce-binary-mode (make-parameter #t))
-(define scheme-files (make-parameter (build-path here-dir "example-programs")))
-(define input-files (make-parameter #f))
-(define output-files (make-parameter #f))
-(define intermediate-ir (make-parameter #f))
-(define test-mode (make-parameter "native"))
-
-;; Execute a command and get an output
-(define (execute-get-output cmd)
-  (displayln (format "Executing `~a`." cmd))
-  (with-output-to-string (λ () 
-                           (system cmd))))
-
-;; Parse the command line
-(define file-path
-  (command-line 
-   #:once-each
-   [("-t" "--run-test") "Run a test"
-                        (run-test-mode #t)]
-   [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
-                      (debug-server-mode #t)
-                      (write-outputs-mode #f) ;; doesn't work well with web server
-                      ]
-   [("-o" "--output") "Write outputs of each IR to out.X and out.X.interp"
-                      (write-outputs-mode #t)]
-   [("-i" "--inputs") i "Provide a list of comma-separated input files for testing"
-                      (input-files (string-split i ","))]
-   [("-g" "--goldens") g "Provide a list of golden (answer) outputs"
-                       (output-files (string-split g ","))]
-   [("-m" "--mode") mode "Set the test mode (anf, c0, instrs, native)"
-                    (test-mode mode)]
-   [("--use-intermediate-ir") ir "Use an instructor-provided intermediate IR"
-                              (intermediate-ir ir)]
-   #:args (filename) filename))
+;; Make each column available
+(match-define (list passes
+                    pass-names
+                    input-predicates
+                    output-predicates
+                    interpreters)
+  (apply map list all-passes))
 
 ;; 
 ;; Testing / debugging facilities
 ;;
-;; racket main.rkt example-programs/r0-2.scm -i example-inputs/1.in,example-inputs/1.in
 
 ;; Run a single compiler pass, with an input satisfying some input
 ;; predicate and an output satisfying some output predicate. Return
 ;; the value of `(pass input)`.
-(define (run-pass-expect pass pass-name input input-pred output-pred)
+(define (run-pass-expect pass pass-name input input-pred output-pred [interp #f] [input-stream #f])
   (define output (pass input))
-  (hash 'input (pretty-format input)
+  (define h (hash 'input (pretty-format input)
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
                   'satisfies-output-predicate (output-pred output)
                   'pretty-output (if (string? output) output (pretty-format output))
                   'output output))
+  (if interp
+      (hash-set h 'interp (interp (hash-ref h 'output) input-stream))
+      h))
 
 (define (yesno x) (if x "✅" "❌"))
 
@@ -146,7 +93,7 @@
 ;; Walk over a trace and write each pass to a file tree 
 (define (trace->file-tree trace)
   (for ([trace-element trace])
-    (define extension (pass-name->extension (hash-ref trace-element 'pass-name)))
+    (define extension (hash-ref trace-element 'pass-name))
     (with-output-to-file (format "intermediate-outputs/compilation~a" extension)
       (λ () (pretty-print (hash-ref trace-element 'output)))
       #:exists 'replace)))
@@ -172,12 +119,13 @@
 ;; 
 ;; The function then produces a trace of each pass, which may be
 ;; rendered to screen, written to file, etc.
-(define (run-chain source-tree passes pass-names input-predicates output-predicates)
+(define (run-chain source-tree passes pass-names input-predicates output-predicates interps input-stream)
   (let loop ([passes      passes]
              [names       pass-names]
              [in-preds    input-predicates]
              [out-preds   output-predicates]
              [input       source-tree]
+             [interps     interps]
              [trace       '()])
     (if (null? passes)
         (reverse trace)
@@ -185,76 +133,42 @@
                [pass-name  (car names)]
                [in-pred    (car in-preds)]
                [out-pred   (car out-preds)]
+               [interp     (car interps)]
                [h          (run-pass-expect pass pass-name input
-                                            in-pred out-pred)]
+                                            in-pred out-pred interp input-stream)]
                [next-input (pass input)])
           (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
-                next-input (cons h trace))))))
+                next-input (cdr interps) (cons h trace))))))
 
 ;; Run each of the passes in sequence, building a chain of passes
 (define (compile-verbose source-tree)
+  ;; return either #f (error) or a cons cell (range)
+  (define (get-pass-range start-name end-name)
+    (define start-idx (index-of pass-names start-name string=?))
+    (define end-idx   (index-of pass-names end-name   string=?))
+    (and start-idx end-idx (<= start-idx end-idx) (cons start-idx end-idx)))
+  (define (slice-list lst range)
+    (match-define (cons start end) range)
+    (take (drop lst start) (add1 (- end start))))
+  (define our-range (get-pass-range start-pass end-pass))
+  (unless our-range ;; #f is invalid
+    (error (format "Bad start/end pass range name (chose from {~a})" (string-join pass-names " "))))
+  (define our-input-stream
+    (if (input-file) 
+         (map string->number (file->lines (input-file)))
+         (range 100)))
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
   (let ([trace (run-chain source-tree
-                          passes
-                          pass-names
-                          input-predicates
-                          output-predicates)])
+                          (slice-list passes our-range)
+                          (slice-list pass-names our-range)
+                          (slice-list input-predicates our-range)
+                          (slice-list output-predicates our-range)
+                          (slice-list interpreters our-range)
+                          our-input-stream)])
     (when (write-stdout-mode)
       (trace->stdout trace))
-    (when (write-json-mode)
-      (with-output-to-file "compilation.json"
-        (λ () (write-json (trace->jsexpr trace)))
-        #:exists 'replace))
     trace))
-
-(define (test-ir-range* start-pass-name
-                        end-pass-name
-                        source-tree
-                        interpreter                 ; (IR × input → output)
-                        input-streams               ; listof (listof integer)
-                        expected-streams)           ; same length as above
-  (unless (= (length input-streams) (length expected-streams))
-    (error 'test-ir-range*
-           "input-streams and expected-streams must be the same length"))
-
-  ;; --- slice -----------------------------------------------------------------
-  (define start-idx (index-of pass-names start-pass-name))
-  (define end-idx   (index-of pass-names end-pass-name))
-  (unless (and start-idx end-idx (<= start-idx end-idx))
-    (error 'test-ir-range*
-           "Bad pass names/order: ~a → ~a" start-pass-name end-pass-name))
-
-  (define slice-len (+ 1 (- end-idx start-idx)))
-  (define passes*    (take (list-tail passes             start-idx) slice-len))
-  (define names*     (take (list-tail pass-names         start-idx) slice-len))
-  (define in-preds*  (take (list-tail input-predicates   start-idx) slice-len))
-  (define out-preds* (take (list-tail output-predicates  start-idx) slice-len))
-
-  ;; --- compile once ----------------------------------------------------------
-  (define trace
-    (run-chain source-tree passes* names* in-preds* out-preds*))
-  (define final-ir (hash-ref (last trace) 'output))
-
-  ;; --- run every test case ---------------------------------------------------
-  (define results
-    (for/list ([in   input-streams]
-               [exp  expected-streams]
-               [idx  (in-naturals 0)])
-      (define act (interpreter final-ir in))
-      (define ok? (equal? act exp))
-      (displayln
-       (format "Case ~a:\n  input     = ~a\n  expected  = ~a\n  actual    = ~a\n  result    = ~a\n"
-               idx in exp act (if ok? "✅ ok" "❌ mismatch")))
-      (hash 'case      idx
-            'input     in
-            'expected  exp
-            'actual    act
-            'correct?  ok?)))
-
-  (hash 'trace        trace
-        'cases        results
-        'all-correct? (andmap (λ (h) (hash-ref h 'correct?)) results)))
 
 ;; 
 ;; Code to compile / link on the host machine
@@ -311,20 +225,8 @@
                    " -o " (executable-file)))
   ;; Execute each command
   (for ([cmd (list assemble-cmd assemble-runtime-cmd link-cmd)])
-    (displayln cmd)
-    (void (system cmd)))
+    (execute-get-output cmd))
   (displayln (format "✔ Executable produced at: ~a" (executable-file))))
-
-(define test-modes
-  (hash
-   "anf"        `(mode-config "uniqueify"           "anf-convert"        ,interp-anf)
-   "c0"         (mode-config "explicate-control"   "uncover-locals"     ,interp-c0)
-   "pseudo-x86" (mode-config "select-instructions" "patch-instructions" interp-px86  px86-tests)
-   "x86-64"     (mode-config #f                   #f                   #f           native-tests))) ; handled specially
-
-;; Run a rest and return its value, either 'pass or 'fail, print results to stdout
-(define (toplevel-execute-test)
-  )
 
 ;; 
 ;; Debug server infrastructure
@@ -364,7 +266,6 @@
          (upload req)]
         ;; Serve the index page to any other request
         [else
-         (displayln "here")
          (index  req)]))
 
 ;;
@@ -381,15 +282,21 @@
                     #:launch-browser? #t
                     #:port 8000)]
     ;; Run a test
-    [(run-test-)]
-)
-  (when (produce-binary-mode)
-    (run-assembler-linker source-tree)))
+    #;[(run-test-)]
+    [else
+     ;; Else, build the binary
+     (run-assembler-linker source-tree)]))
+
+;; Parse the command line
+(define file-path
+  (command-line 
+   #:once-each
+   [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
+                            (debug-server-mode #t)]
+   [("-s" "--start-pass") pass "Start at pass <pass>"
+                          (start-pass pass)]
+   [("-e" "--end-pass") pass "End at pass <pass>"
+                          (end-pass pass)]
+   #:args (filename) filename))
 
 (main)
-
-
-
-
-
-
