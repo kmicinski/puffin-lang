@@ -13,13 +13,14 @@
 (define mode (make-parameter "native"))
 (define in-files (make-parameter ""))
 (define goldens (make-parameter ""))
+(define tests-dir (make-parameter "./test-programs/"))
 
 (define prog-file
   (command-line
    #:once-each
    [("-m" "--mode") m "Run tests in mode <m>" (mode m)]
-   [("-i" "--in") files "Comma-separated list of input files"
-                  (in-files files)]
+   [("-i" "--in")   input "Comma-separated list of input files"
+                    (in-files input)]
    [("-g" "--gld") files "Comma-separated list of golden (output) files"
                    (goldens files)]
    #:args (file) file))
@@ -30,7 +31,6 @@
    "frontend"    (list "uniqueify"          "anf-convert"       anf-program?          interpret-anf)
    "middleend"   (list "explicate-control"  "uncover-locals"    locals-program?       interpret-c0)
    "backend"     (list "select-instructions" "patch-instructions" patched-program?    interpret-instr)
-   "consistency" #f
    "native"      #f))
 
 (define mode-entry
@@ -55,10 +55,7 @@
 (define (file->ints p)
   (map string->number (file->lines (string-trim p))))
 
-(define inputs
-  (if (null? (input-paths))
-      (list (range 100))
-      (map file->ints (input-paths))))
+(define inputs (map file->ints (input-paths)))
 
 (define (run-native-test infile golden)
   (define (yesno b?) (if b? "✅" "❌"))
@@ -94,9 +91,56 @@
            (yesno match?)))
   (if match? 'passed 'failed))
 
+;; assume compile.rkt is correct
+;; For each...
+;; - file in test-programs/
+;;   - possible testing mode
+;;     - possible input files (specified via --in)
+;;       -> Generate a golden input
+;;       -> Write (to stdout) a call to this script that compares with that golden
+(define (generate-goldens)
+  (define base-path "goldens")
+  (define (input-files) (directory-list "./input-files/"))
+  (for ([tp (in-list (directory-list (tests-dir)))])
+    (define test-program (path->string tp))
+    (define program (with-input-from-file (format "test-programs/~a" test-program) read))
+    (define program-name
+      ;; assume suffix of .scm
+      (substring test-program 0 (- (string-length test-program) 4))) 
+    (for ([mode (hash-keys modes)])
+      (for ([if (input-files)])
+        (define input-file (path->string if))
+        (displayln (format "~a, ~a, ~a" test-program mode input-file))
+        ;; compile the program and get a trace
+        (define trace
+          (parameterize ([current-output-port (current-output-port)])
+            (run-assembler-linker program)))
+        (for ([elt trace])
+          (define astfile (format "~a/~a_~a_~a.ast"
+                                  base-path
+                                  program-name
+                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (hash-ref elt 'pass-name)))
+          (define interp (format "~a/~a_~a_~a.interp"
+                                  base-path
+                                  program-name
+                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (hash-ref elt 'pass-name)))
+          (define stdout (format "~a/~a_~a_~a.stdout"
+                                  base-path
+                                  program-name
+                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (hash-ref elt 'pass-name)))
+          (with-output-to-file astfile (λ () (pretty-print (hash-ref elt 'output))) #:exists 'replace)
+          (with-output-to-file interp (λ () (displayln (hash-ref elt 'interp))) #:exists 'replace)
+          (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout))) #:exists 'replace))))))
+
 ;; ───── execute tests ─────
 (define (tests)
   (cond
+    [(equal? (mode) "gengoldens")
+     ;; intended for instructor use
+     (generate-goldens)]
     [(equal? (mode) "native")
      ;; run the full compiler once
      (displayln "Compiling silently... Program:")
@@ -112,7 +156,6 @@
      (displayln (input-paths))
      (for ([infile (input-paths)]
            [golden (string-split (goldens) ",")])
-       (displayln infile)
        ;; run the test
        (run-native-test infile golden))]
     [else
@@ -126,10 +169,3 @@
          (displayln (format "stdout: \"~a\"" (string-trim stdout)))))]))
 
 (module+ main (tests))
-
-
-
-
-
-
-
