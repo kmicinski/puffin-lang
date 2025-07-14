@@ -4,7 +4,6 @@
 ;; instead of multiple values.
 (require "irs.rkt")
 (require "system.rkt")
-(require "compile.rkt")
 
 (provide (all-defined-out))
 
@@ -14,6 +13,8 @@
   (unless (pair? in)
     (error 'interpret "input exhausted for (read) / _read_int64"))
   (cons (car in) (cdr in)))
+
+(define (display-return v) (displayln v) v)
 
 ;;
 ;; 1 & 2 – raw / unique R1
@@ -39,7 +40,7 @@
                 [`(program ,e)      e]
                 [`(program () ,e)   e]))
   (define res (eval-R1-exp exp (hash) in))
-  (car res))
+  (display-return (car res)))
 
 ;;
 ;; 3 – ANF
@@ -69,7 +70,7 @@
 (define (interpret-anf p [in '()])
   (match-define `(program () ,body) p)
   (define res (eval-anf-exp body (hash) in))
-  (car res))
+  (display-return (car res)))
 
 ;;
 ;; 4 & 5 – C0  (explicated control) + locals‑uncovered
@@ -94,7 +95,7 @@
 
 (define (interpret-c0 p [in '()])
   (match-define `(program ,_ ,blocks) p)
-  (car (exec-seq (hash-ref blocks '_main) (hash) in)))
+  (display-return (car (exec-seq (hash-ref blocks '_main) (hash) in))))
 
 ;;
 ;; Passes 6–9 -- (Pseudo-)x86-64, this interpreter works on each
@@ -165,6 +166,9 @@
      (define instrs (hash-ref blocks (entry-symbol)))
      (define init-state `(,(hash) ,(hash) ,(hash) ()))
      (step instrs init-state in)]))
+
+(define (dummy-interp-x86-64 s i) 
+  "x86-64 code not interpreted, skipping interpreter for this pass--test by running binary")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Master dispatcher

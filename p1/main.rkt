@@ -30,7 +30,7 @@
         `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
         `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
         `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
-        `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,(λ (s _) s))))
+        `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,dummy-interp-x86-64)))
 
 ;; Make each column available
 (match-define (list passes
@@ -87,7 +87,7 @@
 ;; Write a whole trace to stdout
 (define (trace->stdout trace)
   (define (print-summary trace)
-    (displayln "\nSummary of passes run:\n\n")
+    (displayln "\nSummary of passes run:\n")
     (for ([elt trace])
       (define evals-to
         ;; Lookup the interpretation
@@ -206,9 +206,10 @@
 
 ;; Generate a binary
 (define (run-assembler-linker source-tree)
-  (displayln "Compiling IR (compile.rkt) …")
+  (displayln "Compiling IR (using *your* compile.rkt) …")
   (define asm-text
     (hash-ref (last (compile-verbose source-tree)) 'output))
+  (displayln "🏗️ Now building a binary... 🏗️ ")
   (with-output-to-file (asm-file)
     #:exists 'replace
     (λ () (displayln asm-text)))
