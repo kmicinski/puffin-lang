@@ -49,3 +49,9 @@
   (displayln (format "Executing `~a`." cmd))
   (with-output-to-string (λ () 
                            (system cmd))))
+
+;; Get a thunk's output alongside its stdout
+(define (run/capture thunk)
+  (define out (open-output-string))
+  (define v (parameterize ([current-output-port out]) (thunk)))
+  (cons v (get-output-string out)))

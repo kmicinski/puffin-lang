@@ -2,6 +2,8 @@
 
 ;; Please do not change (or at least, ask before you do)
 
+(provide (all-defined-out)) ;; for test.rkt
+
 ;; This file contains code to plug each pass of the compiler together
 ;; and record each intermediate output. The goal is to be able to log
 ;; and expose this intermediate output for the purposes of debugging,
@@ -50,11 +52,6 @@
 (define (run-pass-expect pass pass-name input input-pred output-pred [interp (lambda (x _) x)] [input-stream #f])
   ;; Run the pass
   (define output (pass input))
-  ;; helper: take a thunk and run it, get its return value and any stdout
-  (define (run/capture thunk)
-    (define out (open-output-string))
-    (define v (parameterize ([current-output-port out]) (thunk)))
-    (cons v (get-output-string out)))
   ;; Build an object of metadata 
   (define h (hash 'input (pretty-format input)
                   'pass-name pass-name
@@ -64,7 +61,7 @@
                   'output output))
   ;; Run the interpreter--the identity interpreter (discards input) is
   ;; used as a default parameter if none is provided
-  (match (run/capture (λ () (interp (hash-ref h 'output) input-stream)))
+  (match (run/capture (λ () (interp (hash-ref h 'output) input-stream))) ;; see system.rkt
     [(cons v stdout)
      (hash-set (hash-set h 'interp v) 'stdout stdout)]))
 
@@ -204,29 +201,33 @@
 (define (flag-list->string flags)
   (string-join (filter (λ (s) (not (string=? s ""))) flags) " "))
 
-;; Generate a binary
+;; Generate a binary (delete any stale executable first, then verify its creation)
 (define (run-assembler-linker source-tree)
   (displayln "Compiling IR (using *your* compile.rkt) …")
-  (define asm-text
-    (hash-ref (last (compile-verbose source-tree)) 'output))
-  (displayln "🏗️ Now building a binary... 🏗️ ")
-  (with-output-to-file (asm-file)
-    #:exists 'replace
+  (define trace    (compile-verbose source-tree))
+  (define asm-text (hash-ref (last trace) 'output))
+
+  ;; (a) ensure we start clean
+  (when (file-exists? (executable-file))
+    (delete-file (executable-file)))
+
+  (displayln "🏗️ Now building a binary... 🏗️")
+  (with-output-to-file (asm-file) #:exists 'replace
     (λ () (displayln asm-text)))
-  ;; Choose host-specific settings
-  (define os    (host-os))
-  (define arch  'x86_64)   ;; Target x86_64
-  (define tgt   (target-triple os arch))
-  (define entry (entry-symbol))
-  (define cc    (or (getenv "CC") "clang"))
+
+  ;; host-specific settings
+  (define os   (host-os))
+  (define arch 'x86_64)
+  (define tgt  (target-triple os arch))
+  (define cc   (or (getenv "CC") "clang"))
   (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
   (define common-cc-flags  "-Wall -O2")
-  ;; Some Linux distros default to PIE binaries; disable if your
-  ;; hand-written assembly has its own _start and no PIC support.
-  (define linux-extra      (if (eq? os 'unix) "-no-pie" ""))
+
+  (define linux-extra (if (eq? os 'unix) "-no-pie" ""))
+
   (displayln (format "→ Host: ~a/~a  Target: ~a  Entry: ~a"
-                     os arch (if (string=? tgt "") "default" tgt) entry))
-  ;; —– 3. Assemble & link —–––––––––––––––––––––––––––––––––––––
+                     os arch (if (string=? tgt "") "default" tgt) (entry-symbol)))
+  ;; assemble & link
   (define assemble-cmd
     (string-append cc " "
                    (flag-list->string (list target-flag common-cc-flags))
@@ -243,10 +244,16 @@
                     (list target-flag common-cc-flags linux-extra))
                    " " (object-file) " " (runtime-object-file)
                    " -o " (executable-file)))
-  ;; Execute each command
-  (for ([cmd (list assemble-cmd assemble-runtime-cmd link-cmd)])
-    (execute-get-output cmd))
-  (displayln (format "✔ Executable produced at: ~a" (executable-file))))
+  (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
+    (match cmds
+      ['() (error 'run-assembler-linker "linker failed: ~a not produced" (executable-file))]
+      [(cons cmd rest)
+       (execute-get-output cmd)
+       (if (file-exists? (executable-file))
+           (begin
+             (displayln (format "✔ Executable produced at: ~a" (executable-file)))
+             trace)
+           (loop rest))])))
 
 ;; 
 ;; Debug server infrastructure
@@ -292,6 +299,16 @@
 ;; Main entrypoint
 ;;
 (define (main)
+  (define file-path
+    (command-line
+     #:once-each
+     [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
+                              (debug-server-mode #t)]
+     [("-s" "--start-pass") pass "Start at pass <pass>"
+                            (start-pass pass)]
+     [("-e" "--end-pass") pass "End at pass <pass>"
+                          (end-pass pass)]
+     #:args (filename) filename))
   (define source-tree (with-input-from-file file-path read))
   (cond
     ;; Start a debug server
@@ -303,18 +320,9 @@
                     #:port 8000)]
     [else
      ;; Else, build the binary
-     (run-assembler-linker source-tree)]))
+     (run-assembler-linker source-tree)
+     (displayln "Done!")]))
 
 ;; Parse the command line
-(define file-path
-  (command-line 
-   #:once-each
-   [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
-                            (debug-server-mode #t)]
-   [("-s" "--start-pass") pass "Start at pass <pass>"
-                          (start-pass pass)]
-   [("-e" "--end-pass") pass "End at pass <pass>"
-                          (end-pass pass)]
-   #:args (filename) filename))
-
-(main)
+(module+ main
+  (main))

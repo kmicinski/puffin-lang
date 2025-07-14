@@ -74,3 +74,8 @@ interpret its output?
 [4, adheres to predicte?] Does the output of each pass adhere to the
 predicates in `irs.rkt`?
 
+
+
+# Using test.rkt
+
+racket test.rkt r0-0.scm --in input-files/1.in,input-files/2.in,input-files/3.in --out goldens/r0-0-1.out,goldens/r0-0-1.out,goldens/r0-0-1.out
