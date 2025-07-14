@@ -99,6 +99,7 @@
       (define maybe-stdout
         (match (hash-ref elt 'stdout "")
           ["" ""]
+          [(? list? x) (format "stdout: \"~a\"" (string-trim (first x)))]
           [x  (format "stdout: \"~a\"" (string-trim x))]))
       (displayln (format "~a: Input (~a) Output (~a) Evaluation: ~a ~a" 
                          (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
@@ -157,8 +158,11 @@
                [h          (run-pass-expect pass pass-name input
                                             in-pred out-pred interp input-stream)]
                [next-input (pass input)])
-          (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
-                next-input (cdr interps) (cons h trace))))))
+          (pretty-print h)
+          (if (hash-has-key? h 'error)
+              h
+              (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
+                next-input (cdr interps) (cons h trace)))))))
 
 ;; Run each of the passes in sequence, building a chain of passes
 (define (compile-verbose source-tree)
