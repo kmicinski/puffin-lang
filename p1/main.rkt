@@ -52,7 +52,7 @@
 (define (run-pass-expect pass pass-name input input-pred output-pred [interp (lambda (x _) x)] [input-stream #f])
   ;; Run the pass
   (define output (pass input))
-  ;; Build an object of metadata 
+  ;; Build an object of metadata
   (define h (hash 'input (pretty-format input)
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
@@ -61,9 +61,13 @@
                   'output output))
   ;; Run the interpreter--the identity interpreter (discards input) is
   ;; used as a default parameter if none is provided
-  (match (run/capture (λ () (interp (hash-ref h 'output) input-stream))) ;; see system.rkt
+  (match
+      ;; see system.rkt
+      (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
+        (run/capture (λ () (interp (hash-ref h 'output) input-stream))))
     [(cons v stdout)
-     (hash-set (hash-set h 'interp v) 'stdout stdout)]))
+     (hash-set (hash-set h 'interp v) 'stdout stdout)]
+    [`(error ,e) (hash-set h 'error e)]))
 
 ;; Generate a pretty emoji for the terminal
 (define (yesno x) (if x "✅" "❌"))

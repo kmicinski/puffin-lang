@@ -1,1 +1,1 @@
-(let ([a 1]) a)
+(program (let ([a 1]) a))

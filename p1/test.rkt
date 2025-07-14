@@ -23,7 +23,7 @@
                     (in-files input)]
    [("-g" "--gld") files "Comma-separated list of golden (output) files"
                    (goldens files)]
-   #:args (file) file))
+   #:args rest-args (if (empty? rest-args) 'no-file (first rest-args))))
 
 ;; ───── mode → metadata ─────
 (define modes
@@ -43,7 +43,7 @@
   (end-pass   ep))
 
 ;; ───── load & validate program ─────
-(define program (with-input-from-file prog-file read))
+(define program (if (equal? prog-file 'no-file) 'no-file (with-input-from-file prog-file read)))
 
 (when (and mode-entry (not (equal? mode "native")))
   (match-define (list _ _ pred _) mode-entry)
@@ -84,7 +84,7 @@
   (define match? (string=? program-out golden-out))
   ;; ── pretty console report ─────────────────────────────────────────────
   (displayln
-   (format "Test type: native, Input: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a"
+   (format "\r\tTest type: native, Input: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a                         "
            (string-join (map number->string (take input-nums 3)) ", ")
            program-out
            golden-out
@@ -101,6 +101,8 @@
 (define (generate-goldens)
   (define base-path "goldens")
   (define (input-files) (directory-list "./input-files/"))
+  (define n 1)
+  (define total (* (length (directory-list (tests-dir))) (length (hash-keys modes)) (length (input-files))))
   (for ([tp (in-list (directory-list (tests-dir)))])
     (define test-program (path->string tp))
     (define program (with-input-from-file (format "test-programs/~a" test-program) read))
@@ -110,10 +112,11 @@
     (for ([mode (hash-keys modes)])
       (for ([if (input-files)])
         (define input-file (path->string if))
-        (displayln (format "~a, ~a, ~a" test-program mode input-file))
+        (printf (format "\r\tGenerating test [~a/~a]: ~a, ~a, ~a" n total test-program mode input-file))
+        (set! n (add1 n))
         ;; compile the program and get a trace
         (define trace
-          (parameterize ([current-output-port (current-output-port)])
+          (parameterize ([current-output-port (open-output-nowhere)])
             (run-assembler-linker program)))
         (for ([elt trace])
           (define astfile (format "~a/~a_~a_~a.ast"
