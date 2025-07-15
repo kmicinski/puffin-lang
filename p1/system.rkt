@@ -20,7 +20,7 @@
 (define end-pass (make-parameter "render-x86"))  ;; synced with main.rkt
 (define write-stdout-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))
-(define verbose-mode (make-parameter #f))
+(define verbose-mode (make-parameter #t))
 (define intermediate-ir (make-parameter #f))
 (define test-mode (make-parameter "native"))
 (define input-file (make-parameter #f))

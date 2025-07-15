@@ -267,6 +267,7 @@
                            (list target-flag common-cc-flags linux-extra))
                           " " (object-file) " " (runtime-object-file)
                           " -o " (executable-file)))
+         (with-handlers ([exn:fail? (λ (e) (void))]) (delete-file (executable-file)))
          ;; execute each command
          (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
            (match cmds

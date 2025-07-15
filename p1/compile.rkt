@@ -46,7 +46,7 @@
   (match p
     [`(program ,locals ,blocks)
      ;; negative number, added to %rsp
-     (define space-needed (align8 (apply min (hash-values locals))))
+     (define space-needed (- (align8 (- (apply min (hash-values locals))))))
      (define start-block (hash-ref blocks (entry-symbol)))
      (define new-start-block
        `((pushq (reg rbp))
