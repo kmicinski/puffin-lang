@@ -54,6 +54,7 @@
   (define output (pass input))
   ;; Build an object of metadata
   (define h (hash 'input (pretty-format input)
+                  'orig-input input
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
                   'satisfies-output-predicate (output-pred output)
@@ -191,7 +192,7 @@
   (define (slice-list lst range)
     (match-define (cons start end) range)
     (take (drop lst start) (add1 (- end start))))
-  (define our-range (get-pass-range start-pass end-pass))
+  (define our-range (get-pass-range (start-pass) (end-pass)))
   (unless our-range ;; #f is invalid
     (error (format "Bad start/end pass range name (chose from {~a})" (string-join pass-names " "))))
   (define our-input-stream
@@ -235,12 +236,11 @@
   ;; last pass generated output
   (if (and (equal? (last pass-names) (hash-ref (last trace) 'pass-name  "unknown"))
            ((last output-predicates) (hash-ref (last trace) 'output)))
-      ;; write file
       ((λ ()
          (define asm-text (hash-ref (last trace) 'output))
          ;; (a) ensure we start clean
          (with-output-to-file (asm-file) #:exists 'replace
-           (λ () (displayln (hash-ref (last trace) 'output))))
+           (λ () (displayln asm-text)))
          (displayln "🏗️ Now building a binary... 🏗️")
          ;; host-specific settings
          (define os   (host-os))

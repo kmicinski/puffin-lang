@@ -16,8 +16,8 @@
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
 (define run-test-mode (make-parameter #f))
-(define start-pass "uniqueify") ;; synced with main.rkt
-(define end-pass "render-x86")  ;; synced with main.rkt
+(define start-pass (make-parameter "uniqueify")) ;; synced with main.rkt
+(define end-pass (make-parameter "render-x86"))  ;; synced with main.rkt
 (define write-stdout-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))
 (define verbose-mode (make-parameter #f))

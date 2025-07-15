@@ -2,11 +2,10 @@
 (require racket/match
          racket/string
          racket/port
-         json
+         racket/pretty
          "main.rkt"
          "system.rkt"
          "irs.rkt"
-         "compile.rkt"
          "interpreters.rkt")
 
 ;; ───── command-line parsing ─────
@@ -15,6 +14,7 @@
 (define goldens (make-parameter ""))
 (define tests-dir (make-parameter "./test-programs/"))
 (define verbose-mode (make-parameter #f))
+(define repro-file (make-parameter "./repro.sh"))
 
 (define prog-file
   (command-line
@@ -31,27 +31,15 @@
 ;; ───── mode → metadata ─────
 (define modes
   (hash
-   "frontend"    (list "uniqueify"          "anf-convert"       anf-program?          interpret-anf)
-   "middleend"   (list "explicate-control"  "uncover-locals"    locals-program?       interpret-c0)
-   "backend"     (list "select-instructions" "patch-instructions" patched-program?    interpret-instr)
-   "native"      #f))
+   "frontend"    (list "uniqueify"           "anf-convert"        R1?              interpret-anf)
+   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c0)
+   "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
+   "native"      (list "select-instructions"  "render-x86"        string?          dummy-interp-x86-64)))
 
-(define mode-entry
-  (hash-ref modes mode (λ () #f)))
-
-;; ───── set pass range parameters (first 3 modes) ─────
-(when mode-entry
-  (match-define (list sp ep _ _) mode-entry)
-  (start-pass sp)
-  (end-pass   ep))
+(define mode-entry (hash-ref modes (mode) #f))
 
 ;; ───── load & validate program ─────
 (define program (if (equal? prog-file 'no-file) 'no-file (with-input-from-file prog-file read)))
-
-(when (and mode-entry (not (equal? mode "native")))
-  (match-define (list _ _ pred _) mode-entry)
-  (unless (pred program)
-    (error 'test (format "program does not satisfy predicate for mode ~a" mode))))
 
 (define (input-paths) (string-split (in-files) ","))
 
@@ -103,7 +91,7 @@
 ;;       -> Write (to stdout) a call to this script that compares with that golden
 (define (generate-goldens)
   (define base-path "goldens")
-  (define (input-files) (directory-list "./input-files/"))
+  (define (input-files) (map (λ (x) (format "./input-files/~a" x)) (directory-list "./input-files/")))
   (define n 1)
   (define total (* (length (directory-list (tests-dir))) (length (hash-keys modes)) (length (input-files))))
   (for ([tp (in-list (directory-list (tests-dir)))])
@@ -113,31 +101,62 @@
       ;; assume suffix of .scm
       (substring test-program 0 (- (string-length test-program) 4))) 
     (for ([mode (hash-keys modes)])
-      (for ([if (input-files)])
-        (define input-file (path->string if))
-        (printf (format "\r\tGenerating test [~a/~a]: ~a, ~a, ~a" n total test-program mode input-file))
+      (for ([cur-input-file (input-files)])
+        (printf (format "\r\tGenerating test [~a/~a]: ~a, ~a, ~a                                        " n total test-program mode cur-input-file))
+        ;; lookup the number from the file, assume files named X.in
+        (define (number x) (substring x (- (string-length x) 4) (- (string-length x) 3)))
+
+        ;; The relevant AST file will be written, predict what it is and emit it so we can reproduce this
+        (define relevant-ast-file
+          (if (equal? mode "native")
+              test-program
+              (format "~a/~a_~a_~a.in-ast"
+                      base-path
+                      program-name
+                      (number cur-input-file)
+                      (first (hash-ref modes mode)))))
+        (define relevant-golden
+          (format "~a/~a_~a_~a.stdout"
+                  base-path
+                  program-name
+                  (number cur-input-file)
+                  (first pass-names)))
+        (define repro
+          (format "racket test.rkt -m ~a -i ~a -g ~a ~a" mode cur-input-file relevant-golden relevant-ast-file))
+        (with-output-to-file (repro-file)
+          (λ ()
+            (displayln repro))
+          #:exists 'append)
         (set! n (add1 n))
         ;; compile the program and get a trace
         (define trace
-          (parameterize ([current-output-port (open-output-nowhere)])
+          (parameterize ([current-output-port (open-output-nowhere)]
+                         [input-file          cur-input-file])
             (run-assembler-linker program)))
+        ;; write each IR level
         (for ([elt trace])
-          (define astfile (format "~a/~a_~a_~a.ast"
+          (define infile (format "~a/~a_~a_~a.in-ast"
                                   base-path
                                   program-name
-                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (number cur-input-file)
+                                  (hash-ref elt 'pass-name)))
+          (define astfile (format "~a/~a_~a_~a.out-ast"
+                                  base-path
+                                  program-name
+                                  (number cur-input-file)
                                   (hash-ref elt 'pass-name)))
           (define interp (format "~a/~a_~a_~a.interp"
                                   base-path
                                   program-name
-                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (number cur-input-file)
                                   (hash-ref elt 'pass-name)))
           (define stdout (format "~a/~a_~a_~a.stdout"
                                   base-path
                                   program-name
-                                  (substring input-file 0 (- (string-length input-file) 3))
+                                  (number cur-input-file)
                                   (hash-ref elt 'pass-name)))
-          (with-output-to-file astfile (λ () (pretty-print (hash-ref elt 'output))) #:exists 'replace)
+          (with-output-to-file infile (λ () (write (hash-ref elt 'orig-input))) #:exists 'replace)
+          (with-output-to-file astfile (λ () (write (hash-ref elt 'output))) #:exists 'replace)
           (with-output-to-file interp (λ () (displayln (hash-ref elt 'interp))) #:exists 'replace)
           (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout))) #:exists 'replace))))))
 
@@ -150,9 +169,10 @@
     [(equal? (mode) "native")
      ;; run the full compiler once
      (displayln "Compiling silently... Program:")
-     (pretty-print program)
      (define trace
-       (parameterize ([current-output-port (open-output-nowhere)])
+       (parameterize ([current-output-port (open-output-nowhere)]
+                      [start-pass (first  (hash-ref modes (mode)))]
+                      [end-pass   (second (hash-ref modes (mode)))])
          (run-assembler-linker program)))
      (unless (file-exists? (executable-file))
        (error 'run-one-native-test
@@ -165,13 +185,27 @@
        ;; run the test
        (run-native-test infile golden))]
     [else
-     (match-define (list _ _ _ interp) mode-entry)
-     (for ([in inputs] [idx (in-naturals 1)])
-       (define-values (val stdout)
-         (run/capture (λ () (interp program in))))
-       (displayln (format "Test ~a — input: ~a" idx in))
-       (displayln (format "⇒ result: ~a" val))
-       (unless (equal? "" stdout)
-         (displayln (format "stdout: \"~a\"" (string-trim stdout)))))]))
+     (match-define (list start-pass-name end-pass-name entry-pred out-interp) mode-entry)
+     ;; Compare each output to each golden
+     (for ([in-file (input-paths)]
+           [golden (map file->string (string-split (goldens) ","))] 
+           [idx (in-naturals 1)])
+       (displayln "Compiling silently (for this input)...")
+       (define ints (file->ints in-file))
+       (define trace
+         (parameterize ([current-output-port (open-output-nowhere)]
+                        [start-pass (first  (hash-ref modes (mode)))]
+                        [end-pass   (second (hash-ref modes (mode)))]
+                        [input-file in-file])
+           (run-assembler-linker program)))
+       (match-define (cons val stdout)
+         (run/capture (λ () (out-interp (hash-ref (last trace) 'output) ints))))
+       (displayln (format "Test — input: ~a ..."
+                          (string-join (map (λ (x) (format "~a" x)) (take ints 3))  ",")))
+       (displayln (format "⇒ result: ~a stdout: ~a" val (pretty-format stdout)))
+       (define matches? (equal? (string-trim stdout) (string-trim golden)))
+       (displayln (format "Test passes? ~a ~a"
+                          (yesno matches?)
+                          (if matches? "" (format "expected ~a" golden)))))]))
 
 (module+ main (tests))
