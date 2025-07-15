@@ -14,6 +14,7 @@
 (define in-files (make-parameter ""))
 (define goldens (make-parameter ""))
 (define tests-dir (make-parameter "./test-programs/"))
+(define verbose-mode (make-parameter #f))
 
 (define prog-file
   (command-line
@@ -23,6 +24,8 @@
                     (in-files input)]
    [("-g" "--gld") files "Comma-separated list of golden (output) files"
                    (goldens files)]
+   [("-v" "--verbose") "Verbose mode"
+                       (verbose-mode #t)]
    #:args rest-args (if (empty? rest-args) 'no-file (first rest-args))))
 
 ;; ───── mode → metadata ─────

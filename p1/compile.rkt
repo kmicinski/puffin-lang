@@ -137,7 +137,7 @@
          `((movq (imm ,n) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x ,(? symbol? y)) ,rest)
-         `((movq (var ,x) (var ,y))
+         `((movq (var ,y) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x (- ,a)) ,rest)
          `((movq ,(h-atom a) (reg rax))

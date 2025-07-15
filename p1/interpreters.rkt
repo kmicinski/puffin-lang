@@ -85,17 +85,17 @@
     [`(+ ,a0 ,a1)                         (cons (+ (atom-val a0 env) (atom-val a1 env)) in)]
     [_                                    (error 'interpret "bad C0 rhs ~a" rhs)]))
 
-(define (exec-seq s env in)
+(define (exec-tail s env in)
   (match s
     [`(return ,a)                         (cons (atom-val a env) in)]
     [`(seq (assign ,(? symbol? x) ,rhs) ,rest)
                                          (match (rhs-val rhs env in)
-                                           [(cons v in*) (exec-seq rest (hash-set env x v) in*)])]
+                                           [(cons v in*) (exec-tail rest (hash-set env x v) in*)])]
     [_                                    (error 'interpret "bad C0 seq ~a" s)]))
 
 (define (interpret-c0 p [in '()])
   (match-define `(program ,_ ,blocks) p)
-  (display-return (car (exec-seq (hash-ref blocks '_main) (hash) in))))
+  (display-return (car (exec-tail (hash-ref blocks '_main) (hash) in))))
 
 ;;
 ;; Passes 6–9 -- (Pseudo-)x86-64, this interpreter works on each
