@@ -127,20 +127,29 @@
 ;; Tail-recursive step function, which walks through each of the
 ;; instructions, maintaining a state. Here, I also track an explicit
 ;; state; I make in (the input list) another parameter for consistency
-(define (step instrs st in)
+
+
+;; This is a hack: I use out? to detect if we have printed to the
+;; screen yet--this lets us handle both IRs (if we haven't printed yet
+;; at the end, we print %rax).
+(define out? #f)
+
+;; This tail-recursive function walks through a list of instructions,
+;; starting in an input state and with some input state
+(define (interp-tail instrs st in)
   (match instrs
     ['() (read-op '(reg rax) st)] ;; supports earlier IRs which don't retq
     [`((retq) . ,_) (read-op '(reg rax) st)]
     [`((movq ,src ,dst) . ,rst) 
-     (step rst (write-op dst (read-op src st) st) in)]
+     (interp-tail rst (write-op dst (read-op src st) st) in)]
     [`((addq ,src ,dst) . ,rst)
      (define sum (+ (read-op dst st) (read-op src st)))
-     (step rst (write-op dst sum st) in)]
+     (interp-tail rst (write-op dst sum st) in)]
     [`((negq ,op) . ,rst)
-     (step rst (write-op op (- (read-op op st)) st) in)]
+     (interp-tail rst (write-op op (- (read-op op st)) st) in)]
     [`((pushq ,src) . ,rst)
      (match-define `(,regs ,vars ,mem ,stack) st)
-     (step rst `(,regs ,vars ,mem ,(cons (read-op src st) stack)) in)]
+     (interp-tail rst `(,regs ,vars ,mem ,(cons (read-op src st) stack)) in)]
     [`((popq ,dst) . ,rst)
      (match-define `(,regs ,vars ,mem ,stack) st)
      (match stack
@@ -148,24 +157,27 @@
        [`(,top . ,rest)
         (define st* (write-op dst top st))
         (match-define `(,regs* ,vars* ,mem* ,_) st*)
-        (step rst `(,regs* ,vars* ,mem* ,rest) in)])]
+        (interp-tail rst `(,regs* ,vars* ,mem* ,rest) in)])]
     [`((callq ,lbl ,_) . ,rst)
      (match (linuxify lbl) 
        ['read_int64
         (define v (car in))
-        (step rst (write-op '(reg rax) v st) (cdr in)) ]
+        (interp-tail rst (write-op '(reg rax) v st) (cdr in)) ]
        ['print_int64
         (displayln (read-op '(reg rax) st)) ;; print to the screen
-        (step rst st in)]
+        (set! out? #t)
+        (interp-tail rst st in)]
        [_ (error 'interp-instrs "unknown call ~a" lbl)])]
     [_ (error 'interp-instrs "unknown instruction")]))
 
 (define (interpret-instr prog [in '()])
+  (set! out? #f)
   (match prog
     [`(program ,_ ,blocks)
      (define instrs (hash-ref blocks (entry-symbol)))
      (define init-state `(,(hash) ,(hash) ,(hash) ()))
-     (step instrs init-state in)]))
+     (define result (interp-tail instrs init-state in))
+     (if out? result (begin (displayln result) result))]))
 
 (define (dummy-interp-x86-64 s i) 
   "x86-64 code not interpreted, skipping interpreter for this pass--test by running binary")

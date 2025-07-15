@@ -65,25 +65,30 @@
       ;; see system.rkt
       (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
         (run/capture (λ () (interp (hash-ref h 'output) input-stream))))
+    [`(error ,e) (hash-set h 'interp (format "💥💥💥 Evaluation error 💥💥💥: ~a" e))]
     [(cons v stdout)
-     (hash-set (hash-set h 'interp v) 'stdout stdout)]
-    [`(error ,e) (hash-set h 'error e)]))
+     (hash-set (hash-set h 'interp v) 'stdout stdout)]))
 
 ;; Generate a pretty emoji for the terminal
 (define (yesno x) (if x "✅" "❌"))
 
 ;; Write a pass output to stdout
 (define (pass-output->stdout h)
-  (when (hash-ref h 'golden-input #f)
-      (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
-  (displayln "Input:")
-  (displayln (hash-ref h 'output))
-  (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
-  (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
-  (displayln (hash-ref h 'pretty-output))
-  (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
-  (displayln "Evaluation of your output:")
-  (pretty-print (hash-ref h 'interp)))
+  (if (hash-has-key? h 'error)
+      (begin
+        (displayln "💥💥💥 This pass crashed!!! 💥💥💥")
+        (displayln (hash-ref h 'error)))
+      (begin
+        (when (hash-ref h 'golden-input #f)
+          (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
+        (displayln "Input:")
+        (displayln (hash-ref h 'output))
+        (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
+        (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
+        (displayln (hash-ref h 'pretty-output))
+        (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
+        (displayln "Evaluation of your output:")
+        (displayln (hash-ref h 'interp "<none>")))))
 
 ;; Write a whole trace to stdout
 (define (trace->stdout trace)
@@ -101,14 +106,27 @@
           ["" ""]
           [(? list? x) (format "stdout: \"~a\"" (string-trim (first x)))]
           [x  (format "stdout: \"~a\"" (string-trim x))]))
-      (displayln (format "~a: Input (~a) Output (~a) Evaluation: ~a ~a" 
-                         (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
-                         (yesno (hash-ref elt 'satisfies-input-predicate))
-                         (yesno (hash-ref elt 'satisfies-output-predicate))
-                         evals-to
-                         maybe-stdout))))
-  (for ([elt trace])
-    (pass-output->stdout elt))
+      (if (hash-has-key? elt 'error)
+          (displayln (format "~a: 💥💥💥 This pass crashed!!! 💥💥💥" 
+                             (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)))
+          (displayln (format "~a: Input (~a) Output (~a) Evaluation~a: ~a ~a" 
+                             (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
+                             (yesno (hash-ref elt 'satisfies-input-predicate))
+                             (yesno (hash-ref elt 'satisfies-output-predicate))
+                             (if (hash-has-key? elt 'error) " (❌)" "")
+                             evals-to
+                             maybe-stdout))))
+    (define all-stdouts (map (λ (x) (hash-ref x 'stdout))
+                             (filter (λ (e) (and (hash-has-key? e 'stdout)
+                                                 (not (equal? "" (hash-ref e 'stdout)))))
+                                     trace)))
+    (define consistent-across-passes?
+      (or (null? all-stdouts)
+          (andmap (λ (x) (equal? x (car all-stdouts))) (cdr all-stdouts))))
+    (displayln (format "Consistent across passes? ~a" (yesno consistent-across-passes?))))
+  (for/list ([elt trace])
+    (when (verbose-mode)
+      (pass-output->stdout elt)))
   (print-summary trace))
 
 ;; Walk over a trace and write each pass to a file tree 
@@ -158,9 +176,8 @@
                [h          (run-pass-expect pass pass-name input
                                             in-pred out-pred interp input-stream)]
                [next-input (pass input)])
-          (pretty-print h)
           (if (hash-has-key? h 'error)
-              h
+              (reverse (cons h trace))
               (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
                 next-input (cdr interps) (cons h trace)))))))
 
@@ -212,56 +229,58 @@
 ;; Generate a binary (delete any stale executable first, then verify its creation)
 (define (run-assembler-linker source-tree)
   (displayln "Compiling IR (using *your* compile.rkt) …")
+  ;; delete the ASM file so we can detect if it got generated
+  (when (file-exists? (asm-file)) (delete-file (asm-file)))
   (define trace    (compile-verbose source-tree))
-  (define asm-text (hash-ref (last trace) 'output))
-
-  ;; (a) ensure we start clean
-  (when (file-exists? (executable-file))
-    (delete-file (executable-file)))
-
-  (displayln "🏗️ Now building a binary... 🏗️")
-  (with-output-to-file (asm-file) #:exists 'replace
-    (λ () (displayln asm-text)))
-
-  ;; host-specific settings
-  (define os   (host-os))
-  (define arch 'x86_64)
-  (define tgt  (target-triple os arch))
-  (define cc   (or (getenv "CC") "clang"))
-  (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
-  (define common-cc-flags  "-Wall -O2")
-
-  (define linux-extra (if (eq? os 'unix) "-no-pie" ""))
-
-  (displayln (format "→ Host: ~a/~a  Target: ~a  Entry: ~a"
-                     os arch (if (string=? tgt "") "default" tgt) (entry-symbol)))
-  ;; assemble & link
-  (define assemble-cmd
-    (string-append cc " "
-                   (flag-list->string (list target-flag common-cc-flags))
-                   " -c " (asm-file) " -o " (object-file)))
-
-  (define assemble-runtime-cmd
-    (string-append cc " "
-                   (flag-list->string (list target-flag common-cc-flags))
-                   " -c " (runtime-file) " -o " (runtime-object-file)))
-
-  (define link-cmd
-    (string-append cc " "
-                   (flag-list->string
-                    (list target-flag common-cc-flags linux-extra))
-                   " " (object-file) " " (runtime-object-file)
-                   " -o " (executable-file)))
-  (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
-    (match cmds
-      ['() (error 'run-assembler-linker "linker failed: ~a not produced" (executable-file))]
-      [(cons cmd rest)
-       (execute-get-output cmd)
-       (if (file-exists? (executable-file))
-           (begin
-             (displayln (format "✔ Executable produced at: ~a" (executable-file)))
-             trace)
-           (loop rest))])))
+  ;; last pass generated output
+  (if (and (equal? (last pass-names) (hash-ref (last trace) 'pass-name  "unknown"))
+           ((last output-predicates) (hash-ref (last trace) 'output)))
+      ;; write file
+      ((λ ()
+         (define asm-text (hash-ref (last trace) 'output))
+         ;; (a) ensure we start clean
+         (with-output-to-file (asm-file) #:exists 'replace
+           (λ () (displayln (hash-ref (last trace) 'output))))
+         (displayln "🏗️ Now building a binary... 🏗️")
+         ;; host-specific settings
+         (define os   (host-os))
+         (define arch 'x86_64)
+         (define tgt  (target-triple os arch))
+         (define cc   (or (getenv "CC") "clang"))
+         (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
+         (define common-cc-flags  "-Wall -O2")
+         (define linux-extra (if (eq? os 'unix) "-no-pie" ""))
+         (displayln (format "→ Host: ~a/~a  Target: ~a  Entry: ~a"
+                            os arch (if (string=? tgt "") "default" tgt) (entry-symbol)))
+         ;; assemble & link
+         (define assemble-cmd
+           (string-append cc " "
+                          (flag-list->string (list target-flag common-cc-flags))
+                          " -c " (asm-file) " -o " (object-file)))
+         (define assemble-runtime-cmd
+           (string-append cc " "
+                          (flag-list->string (list target-flag common-cc-flags))
+                          " -c " (runtime-file) " -o " (runtime-object-file)))
+         (define link-cmd
+           (string-append cc " "
+                          (flag-list->string
+                           (list target-flag common-cc-flags linux-extra))
+                          " " (object-file) " " (runtime-object-file)
+                          " -o " (executable-file)))
+         ;; execute each command
+         (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
+           (match cmds
+             ['() (displayln "❌ Linker failed: ~a not produced" (executable-file))]
+             [(cons cmd rest)
+              (execute-get-output cmd)
+              (if (file-exists? (executable-file))
+                  (begin
+                    (displayln (format "✔ Executable produced at: ~a" (executable-file)))
+                    trace)
+                  (loop rest))]))))
+      (begin
+        (displayln "❌ Compiler did not terminate successfully, skipping assembly/linking... ❌")
+        trace)))
 
 ;; 
 ;; Debug server infrastructure
@@ -271,7 +290,7 @@
 (define (index _req)
   (response/full
    200                                  ; status
-   #"OK"                                ; message
+   #"OK"                                ; message 
    (current-seconds)                    ; date
    #"text/html; charset=utf-8"          ; MIME type
    (list (header #"Content-Type" #"text/html; charset=utf-8"))
