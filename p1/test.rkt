@@ -3,6 +3,7 @@
          racket/string
          racket/port
          racket/pretty
+         racket/serialize
          "main.rkt"
          "system.rkt"
          "irs.rkt"
@@ -34,12 +35,9 @@
    "frontend"    (list "uniqueify"           "anf-convert"        R1?              interpret-anf)
    "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c0)
    "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
-   "native"      (list "select-instructions"  "render-x86"        string?          dummy-interp-x86-64)))
+   "native"      (list "uniqueify"           "render-x86"         string?          dummy-interp-x86-64)))
 
 (define mode-entry (hash-ref modes (mode) #f))
-
-;; ───── load & validate program ─────
-(define program (if (equal? prog-file 'no-file) 'no-file (with-input-from-file prog-file read)))
 
 (define (input-paths) (string-split (in-files) ","))
 
@@ -75,7 +73,7 @@
   (define match? (string=? program-out golden-out))
   ;; ── pretty console report ─────────────────────────────────────────────
   (displayln
-   (format "\r\tTest type: native, Input: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a                         "
+   (format "\r\tInput: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a                         "
            (string-join (map number->string (take input-nums 3)) ", ")
            program-out
            golden-out
@@ -109,7 +107,7 @@
         ;; The relevant AST file will be written, predict what it is and emit it so we can reproduce this
         (define relevant-ast-file
           (if (equal? mode "native")
-              test-program
+              (format "test-programs/~a"  test-program) 
               (format "~a/~a_~a_~a.in-ast"
                       base-path
                       program-name
@@ -155,8 +153,8 @@
                                   program-name
                                   (number cur-input-file)
                                   (hash-ref elt 'pass-name)))
-          (with-output-to-file infile (λ () (write (hash-ref elt 'orig-input))) #:exists 'replace)
-          (with-output-to-file astfile (λ () (write (hash-ref elt 'output))) #:exists 'replace)
+          (with-output-to-file infile  (λ () (write (serialize (hash-ref elt 'orig-input)))) #:exists 'replace)
+          (with-output-to-file astfile (λ () (write (serialize (hash-ref elt 'output))))     #:exists 'replace)
           (with-output-to-file interp (λ () (displayln (hash-ref elt 'interp))) #:exists 'replace)
           (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout))) #:exists 'replace))))))
 
@@ -168,7 +166,8 @@
      (generate-goldens)]
     [(equal? (mode) "native")
      ;; run the full compiler once
-     (displayln "Compiling silently... Program:")
+     (define program (with-input-from-file prog-file read))
+     (displayln "Compiling silently...")
      (define trace
        (parameterize ([current-output-port (open-output-nowhere)]
                       [start-pass (first  (hash-ref modes (mode)))]
@@ -192,6 +191,7 @@
            [idx (in-naturals 1)])
        (displayln "Compiling silently (for this input)...")
        (define ints (file->ints in-file))
+       (define program (with-input-from-file prog-file (λ () (deserialize (read)))))
        (define trace
          (parameterize ([current-output-port (open-output-nowhere)]
                         [start-pass (first  (hash-ref modes (mode)))]
