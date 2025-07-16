@@ -21,26 +21,5 @@ preparefile('./test.rkt')
 
 # run test file
 runcmdsafe('rm ./output')
-b_stdout, b_stderr, b_exitcode = runcmdsafe(f"cd ../..; racket test.rkt -mode json {os.getcwd()}/testdata.cfg")
-
-
-# convert stdout bytes to utf-8
-stdout = ""
-stderr = ""
-try:
-	stdout = b_stdout.decode('utf-8')
-	stderr = b_stderr.decode('utf-8')
-except:
-	pass
-
-
-# stdout comparison with expected.txt here
-try:
-	with open('output', 'rb') as output:
-		output = file.read()
-	if answer == output:
-		passtest('')
-	else:
-		failtest(stdout+"\n\n"+stderr)
-except FileNotFoundError:
-	failtest(stdout+"\n\n"+stderr)
+b_stdout, b_stderr, b_exitcode = runcmdsafe(f"cd ../..; racket test.rkt -m json {os.getcwd()}/testdata.cfg")
+print(b_stdout.decode('utf-8'))

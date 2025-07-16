@@ -67,12 +67,12 @@
   (define golden-out  (path->trimmed-string golden))
   (define match? (string=? (string-trim program-out) (string-trim golden-out)))
   ;; ── pretty console report ─────────────────────────────────────────────
-  (displayln
-   (format "\r\tInput: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a                         "
-           (string-join (map number->string (take input-nums 3)) ", ")
-           program-out
-           golden-out
-           (yesno match?)))
+  (define report (format "\r\tInput: (~a, ...),  Your output: ~a,  Golden output: ~a Matches golden? ~a                         "
+                         (string-join (map number->string (take input-nums 3)) ", ")
+                         program-out
+                         golden-out
+                         (yesno match?)))
+  (displayln report)
   (if match? 'passed 'failed))
 
 ;; Run a test with a specific mode, input file, input-paths
@@ -93,11 +93,12 @@
               "Executable ~a not found; did the build fail?"
               (executable-file)))
      (displayln (format "Executable ~a found, running native tests..." (executable-file)))
-     (displayln input-paths)
+     (define all-passed? #t)
      (for ([infile (string-split input-paths ",")]
            [golden (string-split goldens ",")])
        ;; run the test
-       (run-native-test infile golden))]
+       (set! all-passed? (and all-passed? (equal? 'passed (run-native-test infile golden)))))
+     (if all-passed? 'passed 'failed)]
     [_ ;; interpreted test
      (match-define (list start-pass-name end-pass-name entry-pred out-interp)
                    (hash-ref modes mode #f))
@@ -168,7 +169,7 @@
                   (first pass-names)))
         (define repro
           (format "racket test.rkt -m ~a -i ~a -g ~a ~a" mode cur-input-file relevant-golden relevant-ast-file))
-        (define repro-list (list mode cur-input-file relevant-golden relevant-ast-file)) 
+        (define repro-list (list mode relevant-ast-file cur-input-file relevant-golden)) 
         ;; create a folder encoding the testcase in the test/
         ;; subdirectory move all the files over from
         ;; canonical-testcase/ to this new subdirectory. Then write a
@@ -227,7 +228,6 @@
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg
      (match cfg
        [(list mode prog-file input-files goldens)
-        (run-test mode prog-file input-files goldens)
         ;; run testcase...
         (match (run/capture (λ () (run-test mode prog-file input-files goldens)))
           [(cons 'passed stdout) (displayln (jsexpr->string (hash 'status "passed" 'message stdout)))]
