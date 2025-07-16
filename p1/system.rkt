@@ -2,13 +2,10 @@
 
 ;; Please do not change (or at least, ask before you do)
 
-;; This file contains passes, parameters, and system-specific details
+;; This file contains parameters and system-specific details
 
 (provide (all-defined-out))
-(require racket/runtime-path)
 (require racket/system)
-
-(define-runtime-path here-dir ".")         ; path to folder containing this file
 
 (define asm-file (make-parameter "./output.s"))
 (define object-file (make-parameter "./output.o"))
@@ -54,5 +51,8 @@
 ;; Get a thunk's output alongside its stdout
 (define (run/capture thunk)
   (define out (open-output-string))
-  (define v (parameterize ([current-output-port out]) (thunk)))
-  (cons v (get-output-string out)))
+  (define err (open-output-string))
+  (define v (parameterize ([current-output-port out] [current-error-port err]) (thunk)))
+  (cons v (string-append (get-output-string out) (if (equal? (get-output-string error) "")
+                                                     ""
+                                                     (format " stderr: ~a" (get-output-string error))))))

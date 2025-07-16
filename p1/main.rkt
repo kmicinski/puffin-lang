@@ -286,8 +286,6 @@
 ;; 
 ;; Debug server infrastructure
 ;;
-(define index-page (file->string "./index.html")) ;; our frontend code (JS)
- 
 (define (index _req)
   (response/full
    200                                  ; status
@@ -295,7 +293,7 @@
    (current-seconds)                    ; date
    #"text/html; charset=utf-8"          ; MIME type
    (list (header #"Content-Type" #"text/html; charset=utf-8"))
-   (list (string->bytes/utf-8 index-page)))) ; body
+   (list (string->bytes/utf-8 (file->string "./index.html"))))) ; body
 
 (define (upload req)
   (define raw (request-post-data/raw req))
