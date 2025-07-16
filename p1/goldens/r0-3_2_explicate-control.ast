@@ -1,0 +1,11 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign read7189 (read))
+          (seq
+           (assign read7190 (read))
+           (seq
+            (assign g7191 (- read7190))
+            (seq (assign |+7192| (+ read7189 g7191)) (return |+7192|))))))))

@@ -1,0 +1,16 @@
+(list
+ 'program
+ (set 'read7197 'read7198 'g7199 '|+7200|)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read7197))
+          (callq _read_int64 0)
+          (movq (reg rax) (var read7198))
+          (movq (var read7198) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g7199))
+          (movq (var read7197) (reg rax))
+          (addq (var g7199) (reg rax))
+          (movq (reg rax) (var |+7200|))
+          (movq (var |+7200|) (reg rax))))))

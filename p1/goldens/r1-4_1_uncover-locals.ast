@@ -1,0 +1,24 @@
+(list
+ 'program
+ (set 'b 'a 'read8088 '|+8089| '|+8091| '|+8092| 'n 'sum 'g8090)
+ '#hash((_main
+         .
+         (seq
+          (assign read8088 (read))
+          (seq
+           (assign n read8088)
+           (seq
+            (assign a 0)
+            (seq
+             (assign b 1)
+             (seq
+              (assign |+8089| (+ a b))
+              (seq
+               (assign sum |+8089|)
+               (seq
+                (assign g8090 (- n))
+                (seq
+                 (assign |+8091| (+ sum g8090))
+                 (seq
+                  (assign |+8092| (+ n |+8091|))
+                  (return |+8092|)))))))))))))
