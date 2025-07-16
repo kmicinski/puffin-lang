@@ -22,6 +22,8 @@
 (define test-mode (make-parameter "native"))
 (define input-file (make-parameter #f))
 
+(define (yesno b?) (if b? "✅" "❌")) ;; pretty terminal output
+
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)
 (define (host-arch)    (system-type 'machine))  ; 'x86_64, 'aarch64, ...
 (define (entry-symbol)
@@ -53,6 +55,6 @@
   (define out (open-output-string))
   (define err (open-output-string))
   (define v (parameterize ([current-output-port out] [current-error-port err]) (thunk)))
-  (cons v (string-append (get-output-string out) (if (equal? (get-output-string error) "")
+  (cons v (string-append (get-output-string out) (if (equal? (get-output-string err) "")
                                                      ""
                                                      (format " stderr: ~a" (get-output-string error))))))

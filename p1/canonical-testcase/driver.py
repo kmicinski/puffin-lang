@@ -21,7 +21,7 @@ preparefile('./test.rkt')
 
 # run test file
 runcmdsafe('rm ./output')
-b_stdout, b_stderr, b_exitcode = runcmdsafe(f"cd ../..; racket test.rkt -mode json {os.getcwd()}/")
+b_stdout, b_stderr, b_exitcode = runcmdsafe(f"cd ../..; racket test.rkt -mode json {os.getcwd()}/testdata.cfg")
 
 
 # convert stdout bytes to utf-8

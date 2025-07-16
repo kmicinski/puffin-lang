@@ -1,4 +1,5 @@
 #lang racket
+
 (require racket/match
          racket/string
          racket/port
@@ -45,7 +46,6 @@
   (map string->number (file->lines p)))
 
 (define (run-native-test infile golden)
-  (define (yesno b?) (if b? "✅" "❌"))
   (define (path->trimmed-string p) (file->string p))
   (define (read-input-list p)
     (map string->number
@@ -218,11 +218,10 @@
           (with-output-to-file infile  (λ () (write (serialize (hash-ref elt 'orig-input)))) #:exists 'replace)
           (with-output-to-file astfile (λ () (write (serialize (hash-ref elt 'output))))     #:exists 'replace)
           (with-output-to-file interp (λ () (displayln (hash-ref elt 'interp))) #:exists 'replace)
-          (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout))) #:exists 'replace))))))
+          (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout ""))) #:exists 'replace))))))
 
 ;; ───── execute tests ─────
 (define (tests)
-
   (cond
     [(equal? (mode) "json") ;; JSON mode is used by the autograder
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg

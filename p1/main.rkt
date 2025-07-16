@@ -70,9 +70,6 @@
     [(cons v stdout)
      (hash-set (hash-set h 'interp v) 'stdout stdout)]))
 
-;; Generate a pretty emoji for the terminal
-(define (yesno x) (if x "✅" "❌"))
-
 ;; Write a pass output to stdout
 (define (pass-output->stdout h)
   (if (hash-has-key? h 'error)
