@@ -46,7 +46,9 @@
   (match p
     [`(program ,locals ,blocks)
      ;; negative number, added to %rsp
-     (define space-needed (- (align8 (- (apply min (hash-values locals))))))
+     (define space-needed (if (empty? (hash-values locals))
+                              0
+                              (- (align8 (- (apply min (hash-values locals)))))))
      (define start-block (hash-ref blocks (entry-symbol)))
      (define new-start-block
        `((pushq (reg rbp))
@@ -55,7 +57,7 @@
          ,@start-block
          ;; move result into %rdi and print_int64 it
          (movq (reg rax) (reg rdi))
-         (callq _print_int64 0)
+         (callq ,(rt-sym 'print_int64) 0)
          ;; 0 return value (to the terminal/system) into %rax
          (movq (imm 0) (reg rax))
          ;; reinstate stored %rbp
@@ -130,7 +132,7 @@
         ;; make a call to read (0 arguments), then move the result
         ;; into the corresponding variable
         [`(seq (assign ,x (read)) ,rest)
-         `((callq _read_int64 0)                   ;;; XXX BUG HERE!?
+         `((callq ,(rt-sym 'read_int64) 0)
            (movq (reg rax) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x ,(? fixnum? n)) ,rest)
@@ -258,6 +260,5 @@
     [`(program ,info ,blocks)
      (string-append
       (format ".globl ~a\n" (entry-symbol))
-      ".extern _read_int64\n"
-      ".extern _print_int64\n"
-      (render-block (hash-ref blocks (entry-symbol)) "_main"))]))
+      (runtime-function-externs)
+      (render-block (hash-ref blocks (entry-symbol)) (entry-symbol)))]))

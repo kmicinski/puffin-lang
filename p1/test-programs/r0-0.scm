@@ -1,1 +1,1 @@
-(program (read))
+(program 42)

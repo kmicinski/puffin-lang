@@ -29,6 +29,17 @@
 (define (entry-symbol)
   (if (eq? (host-os) 'macosx) '_main 'main))
 
+;; Turn a string into its "runtime symbol" version: on OSX, names need
+;; to be prefixed with _, but not on Linux.
+(define (rt-sym s)
+  (if (equal? (host-os) 'macosx)
+      (macify s)
+      (linuxify s)))
+
+(define (runtime-function-externs)
+  (define l '(read_int64 print_int64))
+  (apply string-append (map (λ (x) (format ".extern ~a\n" (symbol->string (rt-sym x)))) l)))
+
 (define (macify s)
   (define str (symbol->string s))
   (if (and (positive? (string-length str))
