@@ -1,0 +1,6 @@
+push 3
+push 4
+add
+push 2
+mul
+print

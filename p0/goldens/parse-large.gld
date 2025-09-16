@@ -1,0 +1,1 @@
+(program read (push 3) mul read (push 2) mul neg add read (push 5) mul add read neg add read add print)

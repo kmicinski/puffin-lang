@@ -1,6 +1,6 @@
 #include "runtime.h"
 
 int main(int argc, char **argv) {
-    print_int64(((5 + 3) + (- (2 + read_int64()))));
+  print_int64((23 + read_int64()));
 }
 

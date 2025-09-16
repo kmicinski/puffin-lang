@@ -1,0 +1,1 @@
+(print ((read) + 7) * ((read) - 4))

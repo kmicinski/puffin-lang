@@ -1,7 +1,7 @@
 #lang racket
 
 ;; Compiler from R0 to C
-(require "../interpreters/interp-r0.rkt")
+;;(require "../interpreters/interp-r0.rkt")
 
 (define (r0->c r0)
   (define (translate-expr e)
