@@ -1,7 +1,9 @@
 #lang racket
 
 (require "stack-machine.rkt")
+(require json)
 
+(define json-mode (make-parameter #f))
 (define mode (make-parameter #f))
 (define input-file (make-parameter #f))
 (define golden (make-parameter #f))
@@ -50,6 +52,18 @@
   (for/list ([p (in-directory dir)]
              #:when (file-exists? p))
     p))
+
+;; Abstract output to account for possible dumping to JSON
+
+(define (pass message)
+  (if (json-mode)
+      (jsexpr->string (hash 'status "passed" 'message message))
+      (displayln "✅ PASSED")))
+
+(define (fail message)
+  (if (json-mode)
+      (jsexpr->string (hash 'status "failed" 'message message))
+      (displayln message)))
 
 ;; Main entrypoint, run a test
 (define (tests)
@@ -117,13 +131,13 @@
      (let ([p (parse-stackprog (file->lines prog-file))]
            [gold (with-input-from-file (golden) read)])
        (if (equal? gold p)
-           (displayln "✅ PASSED -- matches golden")
-           (begin
-             (displayln "❌ FAILED -- does not match golden")
-             (displayln "You said the answer was:")
-             (pretty-print p)
-             (displayln "But this is wrong. The answer is:")
-             (pretty-print gold))))]
+           (pass "✅ PASSED -- matches golden")
+           (fail
+            (string-append "❌ FAILED -- does not match golden\n"
+                           "You said the answer was:\n"
+                           (pretty-format p)
+                           "But this is wrong. The answer is:\n"
+                           (pretty-print gold)))))]
 
     ;;
     ;; Interp tests 
@@ -141,10 +155,11 @@
         (define output (map string->number (string-split (test-interp-cmds p (input-file)))))
         ;; and golden output
         (define golden-output (map string->number (file->lines (golden))))
-        (displayln (format "Your output stream: ~a\tGolden output stream:~a" (pretty-format output) (pretty-format golden-output)))
         (if (equal? output golden-output)
-            (displayln "✅ PASSED")
-            (displayln "FAILED"))])]
+            (pass "✅ PASSED")
+            (fail (string-append (format "Your output stream: ~a\tGolden output stream:~a"
+                                         (pretty-format output)
+                                         (pretty-format golden-output)))))])]
     
     ;;
     ;; Compile infix -> .sp mode
@@ -152,20 +167,20 @@
     [(equal? (mode) "translate-infix")
      (displayln (format "[test: translate-infix] Parsing stackprog ~a, Input file: ~a, Golden: ~a" prog-file (input-file) (golden)))
      ;; Write a tester for your translator--see README.md
-     (displayln "Translating program...")
      (define p (infix->program (file->string prog-file)))
-     (unless (program? p)
-       (displayln "ERROR: translated program does *not* satisfiy program?\nThe offending program is: ~a"
-                  (pretty-format p)))
+     ;; Prepend an error if fails predicate
+     (define pre 
+       (if (program? p)
+           ""
+           (pretty-format "ERROR: translated program does *not* satisfiy program?\nThe offending program is: ~a\n" p))) 
      (match p
        [`(program ,cmds ...)
         ;; get the program's output
         (define output (map string->number (string-split (test-interp-cmds p (input-file)))))
         ;; and golden output
         (define golden-out (with-input-from-file (golden) (λ () (for/list ([l (in-lines)]) (string->number l)))))
-        (displayln (format "Your output stream: ~a\tGolden output stream:~a" (pretty-format output) (pretty-format golden-out)))
         (if (equal? output golden-out)
-            (displayln "✅ PASSED")
-            (displayln "FAILED"))])]))
+            (pass "✅ PASSED")
+            (fail (format "~aYour output stream: ~a\tGolden output stream:~a" pre (pretty-format output) (pretty-format golden-out))))])]))
 
 (module+ main (tests))
