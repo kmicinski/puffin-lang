@@ -5,7 +5,7 @@
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
 
-(provide 
+(provide
  uniqueify
  anf-convert
  explicate-control
@@ -57,7 +57,7 @@
          ,@start-block
          ;; move result into %rdi and print_int64 it
          (movq (reg rax) (reg rdi))
-         (callq ,(rt-sym 'print_int64) 0)
+         (callq print_int64 0)
          ;; 0 return value (to the terminal/system) into %rax
          (movq (imm 0) (reg rax))
          ;; reinstate stored %rbp
@@ -132,7 +132,7 @@
         ;; make a call to read (0 arguments), then move the result
         ;; into the corresponding variable
         [`(seq (assign ,x (read)) ,rest)
-         `((callq ,(rt-sym 'read_int64) 0)
+         `((callq read_int64 0)
            (movq (reg rax) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x ,(? fixnum? n)) ,rest)
@@ -249,7 +249,8 @@
       [`(pushq ,src) (format "pushq ~a" (render-op src))]
       [`(popq ,dst) (format "popq ~a" (render-op dst))]
       [`(callq ,(? label? l) ,(? nonnegative-integer? num-args))
-       (format "call ~a" (symbol->string l))]
+       ;; must call rt-sym here!
+       (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
       ['(leave) "leave"]))
   (define (render-block block name)
@@ -259,6 +260,10 @@
   (match p
     [`(program ,info ,blocks)
      (string-append
-      (format ".globl ~a\n" (entry-symbol))
+      ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
+      (format ".globl ~a\n" (rt-sym (entry-symbol)))
+      ;; include these for sure
       (runtime-function-externs)
-      (render-block (hash-ref blocks (entry-symbol)) (entry-symbol)))]))
+      (render-block (hash-ref blocks (entry-symbol)) (rt-sym (entry-symbol)))
+      ".section .note.GNU-stack,\"\",@progbits\n")]))
+

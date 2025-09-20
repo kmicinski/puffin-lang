@@ -1,1 +1,1 @@
-((3) 0 () 0 () () (c program c () c (h - (equal) (_main c seq c (q assign x 2) c (c seq c (c assign c (su . "x7285") q x) c (c seq c (c assign c (su . "x7286") c (su . "x7285")) c (c return c (su . "x7286"))))))))
+((3) 0 () 0 () () (c program c () c (h - (equal) (main c seq c (q assign x 2) c (c seq c (c assign c (su . "x7257") q x) c (c seq c (c assign c (su . "x7258") c (su . "x7257")) c (c return c (su . "x7258"))))))))

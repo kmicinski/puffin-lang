@@ -74,8 +74,18 @@ interpret its output?
 [4, adheres to predicte?] Does the output of each pass adhere to the
 predicates in `irs.rkt`?
 
-
-
 # Using test.rkt
 
-racket test.rkt r0-0.scm --in input-files/1.in,input-files/2.in,input-files/3.in --out goldens/r0-0-1.out,goldens/r0-0-1.out,goldens/r0-0-1.out
+The file `test.rkt` is the top-level entrypoint for the testing
+infrastructure. It can be run in one of four modes: frontend,
+middleend, backend, and native. The basic idea is this: if various
+passes of your compiler are broken, we want to be a bit
+forgiving--thus, our tests attempt to isolate specific parts of your
+infrastructure.
+
+```
+# Middle-end test, with the input stream (not program) at 1.in, using r0-0_1_explicate-control.in-ast as the input
+racket test.rkt -m middleend -i ./input-files/1.in -g goldens/r0-0_1_uniqueify.stdout goldens/r0-0_1_explicate-control.in-ast
+
+racket test.rkt -m backend -i ./input-files/1.in -g goldens/r0-0_1_uniqueify.stdout goldens/r0-0_1_select-instructions.in-ast
+```

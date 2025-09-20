@@ -1,1 +1,1 @@
-((3) 1 (((lib "racket/private/set-types.rkt") . deserialize-info:immutable-custom-set-v0)) 0 () () (c program c (0 #f (h - (equal) ((su . "read6590") . #t))) c (h - (equal) (_main c (q callq _read_int64 0) c (c movq c (q reg rax) c (c var c (su . "read6590"))) c (c movq c (c var c (su . "read6590")) q (reg rax))))))
+((3) 1 (((lib "racket/private/set-types.rkt") . deserialize-info:immutable-custom-set-v0)) 0 () () (c program c (0 #f (h - (equal))) c (h - (equal) (main q (movq (imm 42) (reg rax))))))

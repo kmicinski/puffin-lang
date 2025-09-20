@@ -2,7 +2,8 @@
 
 ;; Please do not change (or at least, ask before you do)
 
-;; This file contains parameters and system-specific details
+;; This file abstracts common flags and abstracts around ABI-level
+;; details.
 
 (provide (all-defined-out))
 (require racket/system)
@@ -22,12 +23,12 @@
 (define test-mode (make-parameter "native"))
 (define input-file (make-parameter #f))
 
-(define (yesno b?) (if b? "✅" "❌")) ;; pretty terminal output
+(define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)
 (define (host-arch)    (system-type 'machine))  ; 'x86_64, 'aarch64, ...
-(define (entry-symbol)
-  (if (eq? (host-os) 'macosx) '_main 'main))
+
+(define (entry-symbol) 'main)
 
 ;; Turn a string into its "runtime symbol" version: on OSX, names need
 ;; to be prefixed with _, but not on Linux.
@@ -36,6 +37,7 @@
       (macify s)
       (linuxify s)))
 
+;; have to include these extern definitions at the top of the file 
 (define (runtime-function-externs)
   (define l '(read_int64 print_int64))
   (apply string-append (map (λ (x) (format ".extern ~a\n" (symbol->string (rt-sym x)))) l)))
@@ -68,4 +70,4 @@
   (define v (parameterize ([current-output-port out] [current-error-port err]) (thunk)))
   (cons v (string-append (get-output-string out) (if (equal? (get-output-string err) "")
                                                      ""
-                                                     (format " stderr: ~a" (get-output-string error))))))
+                                                     (format " stderr: ~a" (get-output-string err))))))

@@ -66,7 +66,7 @@
       ;; see system.rkt
       (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
         (run/capture (λ () (interp (hash-ref h 'output) input-stream))))
-    [`(error ,e) (hash-set h 'interp (format "💥💥💥 Evaluation error 💥💥💥: ~a" e))]
+    [`(error ,e) (hash-set h 'interp (format "!!! Evaluation error !!!: ~a" e))]
     [(cons v stdout)
      (hash-set (hash-set h 'interp v) 'stdout stdout)]))
 
@@ -74,7 +74,7 @@
 (define (pass-output->stdout h)
   (if (hash-has-key? h 'error)
       (begin
-        (displayln "💥💥💥 This pass crashed!!! 💥💥💥")
+        (displayln "!!! This pass crashed!!! !!!")
         (displayln (hash-ref h 'error)))
       (begin
         (when (hash-ref h 'golden-input #f)
@@ -105,13 +105,13 @@
           [(? list? x) (format "stdout: \"~a\"" (string-trim (first x)))]
           [x  (format "stdout: \"~a\"" (string-trim x))]))
       (if (hash-has-key? elt 'error)
-          (displayln (format "~a: 💥💥💥 This pass crashed!!! 💥💥💥" 
+          (displayln (format "~a: !!! This pass crashed !!! " 
                              (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)))
           (displayln (format "~a: Input (~a) Output (~a) Evaluation~a: ~a ~a" 
                              (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
                              (yesno (hash-ref elt 'satisfies-input-predicate))
                              (yesno (hash-ref elt 'satisfies-output-predicate))
-                             (if (hash-has-key? elt 'error) " (❌)" "")
+                             (if (hash-has-key? elt 'error) " (Error!)" "")
                              evals-to
                              maybe-stdout))))
     (define all-stdouts (map (λ (x) (hash-ref x 'stdout))
@@ -225,6 +225,9 @@
   (string-join (filter (λ (s) (not (string=? s ""))) flags) " "))
 
 ;; Generate a binary (delete any stale executable first, then verify its creation)
+;; 
+;; Returns either the trace or `(err ,trace) to indicate a trace that
+;; failed in some fashion.
 (define (run-assembler-linker source-tree)
   (displayln "Compiling IR (using *your* compile.rkt) …")
   ;; delete the ASM file so we can detect if it got generated
@@ -268,17 +271,21 @@
          ;; execute each command
          (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
            (match cmds
-             ['() (displayln "❌ Linker failed: ~a not produced" (executable-file))]
+             ['() 
+              ;; got to end of cmds, no executable...
+              (begin (displayln (format "Error! Linker failed: ~a not produced" (executable-file)))
+                     `(err ,trace))]
              [(cons cmd rest)
               (execute-get-output cmd)
               (if (file-exists? (executable-file))
                   (begin
-                    (displayln (format "✔ Executable produced at: ~a" (executable-file)))
+                    (displayln (format "Success! Executable produced at: ~a" (executable-file)))
                     trace)
                   (loop rest))]))))
       (begin
-        (displayln "❌ Compiler did not terminate successfully, skipping assembly/linking... ❌")
-        trace)))
+        (displayln "Skipping assembly/linking (either no assembly or intentionally skipped)...")
+        (pretty-print trace)
+        `(err ,trace))))
 
 ;; 
 ;; Debug server infrastructure

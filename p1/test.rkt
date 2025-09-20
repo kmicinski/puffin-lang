@@ -78,55 +78,64 @@
 ;; Run a test with a specific mode, input file, input-paths
 ;; (comma-separated list), and goldens. 
 ;; -> {'passed, 'failed}
+;; Note: the output printed by run-test is captured by
+;; run/capture
 (define (run-test mode prog-file input-paths goldens)
-  (match mode
-    ["native"
-     (define program (with-input-from-file prog-file read))
-     (displayln "Compiling silently...")
-     (define trace
-       (parameterize ([current-output-port (open-output-nowhere)]
-                      [start-pass (first  (hash-ref modes mode))]
-                      [end-pass   (second (hash-ref modes mode))])
-         (run-assembler-linker program)))
-     (unless (file-exists? (executable-file))
-       (error 'run-one-native-test
-              "Executable ~a not found; did the build fail?"
-              (executable-file)))
-     (displayln (format "Executable ~a found, running native tests..." (executable-file)))
-     (define all-passed? #t)
-     (for ([infile (string-split input-paths ",")]
-           [golden (string-split goldens ",")])
-       ;; run the test
-       (set! all-passed? (and all-passed? (equal? 'passed (run-native-test infile golden)))))
-     (if all-passed? 'passed 'failed)]
-    [_ ;; interpreted test
-     (match-define (list start-pass-name end-pass-name entry-pred out-interp)
-                   (hash-ref modes mode #f))
-     (define passed #t)
-     ;; Compare each output to each golden
-     (for ([in-file (string-split input-paths ",")]
-           [golden (map file->string (string-split goldens ","))] 
-           [idx (in-naturals 1)])
-       (displayln "Compiling silently (for this input)...")
-       (define ints (file->ints in-file))
-       (define program (with-input-from-file prog-file (λ () (deserialize (read)))))
-       (define trace
-         (parameterize ([current-output-port (open-output-nowhere)]
-                        [start-pass (first  (hash-ref modes mode))]
-                        [end-pass   (second (hash-ref modes mode))]
-                        [input-file in-file])
-           (run-assembler-linker program)))
-       (match-define (cons val stdout)
-         (run/capture (λ () (out-interp (hash-ref (last trace) 'output) ints))))
-       (displayln (format "Test — input: ~a ..."
-                          (string-join (map (λ (x) (format "~a" x)) (take ints 3))  ",")))
-       (displayln (format "⇒ result: ~a stdout: ~a" val (pretty-format stdout)))
-       (define matches? (equal? (string-trim stdout) (string-trim golden)))
-       (set! passed (and passed matches?))
-       (displayln (format "Test passes? ~a ~a"
-                          (yesno matches?)
-                          (if matches? "" (format "expected ~a" golden)))))
-     (if passed 'passed 'failed)]))
+  (call/cc
+   (lambda (return)
+     (match mode
+       ["native"
+        (define program (with-input-from-file prog-file read))
+        (displayln "Compiling...")
+        (define output-string (open-output-string))
+        (define trace
+          (parameterize (;;[current-output-port output-string]
+                         [start-pass (first  (hash-ref modes mode))]
+                         [end-pass   (second (hash-ref modes mode))])
+            (match (run-assembler-linker program)
+              [`(err ,trace)
+               ;;(displayln (get-output-string output-string))
+               (return 'failed)]
+              ;; succes
+              [trace trace])))
+        (unless (file-exists? (executable-file))
+          (error (format "Executable ~a not found; did the build fail?" (executable-file))))
+        (displayln (format "Executable ~a found, running native tests..." (executable-file)))
+        (define all-passed? #t)
+        (for ([infile (string-split input-paths ",")]
+              [golden (string-split goldens ",")])
+          ;; run the test
+          (set! all-passed? (and all-passed? (equal? 'passed (run-native-test infile golden)))))
+        (if all-passed? 'passed 'failed)]
+       [_ ;; one of "frontend", "middleend" or "backend"
+        (match-define (list start-pass-name end-pass-name entry-pred out-interp)
+          (hash-ref modes mode #f))
+        (define passed #t)
+        ;; Compare each output to each golden
+        (for ([in-file (string-split input-paths ",")]
+              [golden (map file->string (string-split goldens ","))]
+              [idx (in-naturals 1)])
+          (displayln "Compiling...")
+          (define ints (file->ints in-file))
+          (define program (with-input-from-file prog-file (λ () (deserialize (read)))))
+          (define output-string (open-output-string))
+          (define trace
+            (parameterize (;;[current-output-port output-string]
+                           [start-pass (first  (hash-ref modes mode))]
+                           [end-pass   (second (hash-ref modes mode))]
+                           [input-file in-file])
+              (compile-verbose program)))
+          (match-define (cons val stdout)
+            (run/capture (λ () (out-interp (hash-ref (last trace) 'output) ints))))
+          (displayln (format "Test — input: ~a ..."
+                             (string-join (map (λ (x) (format "~a" x)) (take ints 3))  ",")))
+          (displayln (format "⇒ result: ~a stdout: ~a" val (pretty-format stdout)))
+          (define matches? (equal? (string-trim stdout) (string-trim golden)))
+          (set! passed (and passed matches?))
+          (displayln (format "Test passes? ~a ~a"
+                             (yesno matches?)
+                             (if matches? "" (format "expected ~a" golden)))))
+        (if passed 'passed 'failed)]))))
 
 ;; assume compile.rkt is correct
 ;; For each...
@@ -230,8 +239,9 @@
        [(list mode prog-file input-files goldens)
         ;; run testcase...
         (match (run/capture (λ () (run-test mode prog-file input-files goldens)))
-          [(cons 'passed stdout) (displayln (jsexpr->string (hash 'status "passed" 'message stdout)))]
-          [(cons 'failed stdout) (displayln (jsexpr->string (hash 'status "failed" 'message stdout)))])]
+          [(cons 'passed stdout) (display (jsexpr->string (hash 'status "passed" 'message stdout)))]
+          [(cons 'failed stdout) (display (jsexpr->string (hash 'status "failed" 'message stdout)))]
+          [_ (display (jsexpr->string (hash 'status "failed" 'message "")))])]
        [_ (error "Bad configuration file, contact your instructor.")])]
     [(equal? (mode) "gengoldens")
      ;; intended for instructor use

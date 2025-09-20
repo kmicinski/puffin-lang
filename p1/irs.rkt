@@ -1,5 +1,7 @@
 #lang racket
 
+(require "system.rkt")
+
 ;; 
 ;; This file provides detailed documentation of each of the IRs used
 ;; in the project.
@@ -114,8 +116,8 @@
   (match p
     [`(program ,info ,blocks)
      (and (hash? blocks)
-          (hash-has-key? blocks '_main)
-          (c0-seq? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (c0-seq? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -149,8 +151,8 @@
   (match p
     [`(program ,info ,blocks)
      (and (set? info)
-          (hash-has-key? blocks '_main)
-          (andmap instr/vars? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (andmap instr/vars? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -173,8 +175,8 @@
   (match p
     [`(program ,var->loc ,blocks)
      (and (hash? var->loc)
-          (hash-has-key? blocks '_main)
-          (andmap instr/homes? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (andmap instr/homes? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -192,7 +194,7 @@
   (and (homes-assigned-program? p)
        (match p
          [`(program ,_ ,blocks)
-          (andmap patched-instr? (hash-ref blocks '_main))]
+          (andmap patched-instr? (hash-ref blocks (entry-symbol)))]
          [_ #f])))
 
 ;; ---------------------------------------------------------------------
@@ -203,7 +205,7 @@
   (and (patched-program? p)
        (match p
          [`(program ,_ ,blocks)
-          (let* ([b  (hash-ref blocks '_main)]
+          (let* ([b  (hash-ref blocks (entry-symbol))]
                  [hd (first b)]
                  [tl (last  b)])
             (pretty-print hd)
