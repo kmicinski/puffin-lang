@@ -60,6 +60,7 @@
 (define (execute-get-output cmd)
   (define args (string-split cmd))
   ;; Start subprocess with pipes for stdout+stderr
+  (displayln cmd)
   (define-values (sp out in err)
     (apply subprocess #f #f #f (car args) (cdr args)))
   (subprocess-wait sp)

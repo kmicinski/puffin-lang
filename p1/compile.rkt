@@ -264,6 +264,5 @@
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
       ;; include these for sure
       (runtime-function-externs)
-      (render-block (hash-ref blocks (entry-symbol)) (rt-sym (entry-symbol)))
-      ".section .note.GNU-stack,\"\",@progbits\n")]))
+      (render-block (hash-ref blocks (entry-symbol)) (rt-sym (entry-symbol))))]))
 
