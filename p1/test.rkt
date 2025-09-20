@@ -129,7 +129,7 @@
             (run/capture (λ () (out-interp (hash-ref (last trace) 'output) ints))))
           (displayln (format "Test — input: ~a ..."
                              (string-join (map (λ (x) (format "~a" x)) (take ints 3))  ",")))
-          (displayln (format "⇒ result: ~a stdout: ~a" val (pretty-format stdout)))
+          (displayln (format "=> result: ~a stdout: ~a" val (pretty-format stdout)))
           (define matches? (equal? (string-trim stdout) (string-trim golden)))
           (set! passed (and passed matches?))
           (displayln (format "Test passes? ~a ~a"

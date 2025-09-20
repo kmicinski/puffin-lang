@@ -250,7 +250,7 @@
          (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
          (define common-cc-flags  "-Wall -O2")
          (define linux-extra (if (eq? os 'unix) "-no-pie" ""))
-         (displayln (format "→ Host: ~a/~a  Target: ~a  Entry: ~a"
+         (displayln (format "-> Host: ~a/~a  Target: ~a  Entry: ~a"
                             os arch (if (string=? tgt "") "default" tgt) (entry-symbol)))
          ;; assemble & link
          (define assemble-cmd
