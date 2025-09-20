@@ -246,7 +246,7 @@
          (define os   (host-os))
          (define arch 'x86_64)
          (define tgt  (target-triple os arch))
-         (define cc   (or (getenv "CC") "clang"))
+         (define cc   (or (getenv "CC") "/usr/bin/clang"))
          (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
          (define common-cc-flags  "-Wall -O2")
          (define linux-extra (if (eq? os 'unix) "-no-pie" ""))

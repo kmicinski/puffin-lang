@@ -57,11 +57,18 @@
          (string->symbol (substring str 1))]
         [else s]))
 
-;; Execute a command and get an output
 (define (execute-get-output cmd)
-  (displayln (format "Executing `~a`." cmd))
-  (with-output-to-string (λ () 
-                           (system cmd))))
+  (define args (string-split cmd))
+  ;; Start subprocess with pipes for stdout+stderr
+  (define-values (sp out in err)
+    (apply subprocess #f #f #f (car args) (cdr args)))
+  (subprocess-wait sp)
+  (define out-str (if out (port->string out) ""))
+  (define err-str (if err (port->string err) ""))
+  (when out (close-input-port out))
+  (when in  (close-output-port in))
+  (when err (close-input-port err))
+  (string-append out-str err-str))
 
 ;; Get a thunk's output alongside its stdout
 (define (run/capture thunk)
