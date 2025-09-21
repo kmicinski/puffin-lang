@@ -10,16 +10,10 @@
 ;; testing, etc. You do not necessarily need to understand this file,
 ;; though I do recommend reading it to understand how grading and
 ;; debugging work.
-(require json)
 (require "system.rkt") ;; list of passes, system-relevant details, etc.
 (require "irs.rkt")
 (require "compile.rkt")
 (require "interpreters.rkt")
-
-;; For hosting the debug server
-(require web-server/servlet
-         web-server/servlet-env
-         web-server/http)
 
 ;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
 ;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
@@ -42,7 +36,7 @@
                     interpreters)
   (apply map list all-passes))
 
-;; 
+;;
 ;; Testing / debugging facilities
 ;;
 
@@ -105,9 +99,9 @@
           [(? list? x) (format "stdout: \"~a\"" (string-trim (first x)))]
           [x  (format "stdout: \"~a\"" (string-trim x))]))
       (if (hash-has-key? elt 'error)
-          (displayln (format "~a: !!! This pass crashed !!! " 
+          (displayln (format "~a: !!! This pass crashed !!! "
                              (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)))
-          (displayln (format "~a: Input (~a) Output (~a) Evaluation~a: ~a ~a" 
+          (displayln (format "~a: Input (~a) Output (~a) Evaluation~a: ~a ~a"
                              (~a (hash-ref elt 'pass-name) #:align 'left  #:width 30)
                              (yesno (hash-ref elt 'satisfies-input-predicate))
                              (yesno (hash-ref elt 'satisfies-output-predicate))
@@ -127,7 +121,7 @@
       (pass-output->stdout elt)))
   (print-summary trace))
 
-;; Walk over a trace and write each pass to a file tree 
+;; Walk over a trace and write each pass to a file tree
 (define (trace->file-tree trace)
   (for ([trace-element trace])
     (define extension (hash-ref trace-element 'pass-name))
@@ -138,7 +132,10 @@
 ;; Walk over a trace and write it to a JSON expression
 (define (trace->jsexpr trace)
   (map (λ (trace-element)
-         (hash-set trace-element 'output (pretty-format (hash-ref trace-element 'output))))
+         (foldl (lambda (k a) (let ([v (hash-ref trace-element k)])
+                                (if (string? v) a (hash-set a k (pretty-format v)))))
+                trace-element
+                (hash-keys trace-element)))
        trace))
 
 ;; This function `run-chain` is a very general iterator function which
@@ -147,13 +144,13 @@
 ;; with "golden" inputs and outputs. Golden inputs / outputs are
 ;; instructor-provided inputs / outputs which will be validated by the
 ;; test scripts.
-;; 
+;;
 ;; The function accepts the following inputs:
 ;;  - The input source tree
 ;;  - A list of passes
 ;;  - A list of pass names for each pass
 ;;  - A list of input and output predicates for each pass
-;; 
+;;
 ;; The function then produces a trace of each pass, which may be
 ;; rendered to screen, written to file, etc.
 (define (run-chain source-tree passes pass-names input-predicates output-predicates interps input-stream)
@@ -177,7 +174,7 @@
           (if (hash-has-key? h 'error)
               (reverse (cons h trace))
               (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
-                next-input (cdr interps) (cons h trace)))))))
+                    next-input (cdr interps) (cons h trace)))))))
 
 ;; Run each of the passes in sequence, building a chain of passes
 (define (compile-verbose source-tree)
@@ -193,9 +190,9 @@
   (unless our-range ;; #f is invalid
     (error (format "Bad start/end pass range name (chose from {~a})" (string-join pass-names " "))))
   (define our-input-stream
-    (if (input-file) 
-         (map string->number (file->lines (input-file)))
-         (range 100)))
+    (if (input-file)
+        (map string->number (file->lines (input-file)))
+        (range 100)))
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
   (let ([trace (run-chain source-tree
@@ -209,7 +206,7 @@
       (trace->stdout trace))
     trace))
 
-;; 
+;;
 ;; Code to compile / link on the host machine
 ;;
 (define (target-triple os arch)
@@ -225,7 +222,7 @@
   (string-join (filter (λ (s) (not (string=? s ""))) flags) " "))
 
 ;; Generate a binary (delete any stale executable first, then verify its creation)
-;; 
+;;
 ;; Returns either the trace or `(err ,trace) to indicate a trace that
 ;; failed in some fashion.
 (define (run-assembler-linker source-tree)
@@ -271,7 +268,7 @@
          ;; execute each command
          (let loop ([cmds (list assemble-cmd assemble-runtime-cmd link-cmd)])
            (match cmds
-             ['() 
+             ['()
               ;; got to end of cmds, no executable...
               (begin (displayln (format "Error! Linker failed: ~a not produced" (executable-file)))
                      `(err ,trace))]
@@ -287,71 +284,26 @@
         (pretty-print trace)
         `(err ,trace))))
 
-;; 
-;; Debug server infrastructure
-;;
-(define (index _req)
-  (response/full
-   200                                  ; status
-   #"OK"                                ; message 
-   (current-seconds)                    ; date
-   #"text/html; charset=utf-8"          ; MIME type
-   (list (header #"Content-Type" #"text/html; charset=utf-8"))
-   (list (string->bytes/utf-8 (file->string "./index.html"))))) ; body
-
-(define (upload req)
-  (define raw (request-post-data/raw req))
-  (unless raw (error 'upload "POST had no plain-text body"))
-  (define sexpr (read (open-input-string (bytes->string/utf-8 raw))))
-  (define response
-    (if (R1? sexpr)
-        ;; valid program, compile it
-        (let ([compilation-trace (compile-verbose sexpr)])
-          (trace->jsexpr compilation-trace))
-        (hasheq "error" "Input does not match R1? (see irs.rkt)"))) 
-  (response/full
-   200 #"OK" (current-seconds)
-   #"application/json"
-   (list (header #"Content-Type" #"application/json"))
-   (list (jsexpr->bytes response))))
-
-;; Entrypoint handler for the debug server
-(define (start req)
-  (define method (request-method req))
-  (define uri    (url->string (request-uri req)))
-  (cond [(and (equal? method #"POST") (string=? uri "/"))  ; we post to "/"
-         (upload req)]
-        ;; Serve the index page to any other request
-        [else
-         (index  req)]))
 
 ;;
 ;; Main entrypoint
 ;;
 (define (main)
-  (define file-path
+  (define file-name 
     (command-line
-     #:once-each
-     [("-d" "--debug-server") "Run a debug server, which lets you see the results of each pass"
-                              (debug-server-mode #t)]
-     [("-s" "--start-pass") pass "Start at pass <pass>"
-                            (start-pass pass)]
-     [("-e" "--end-pass") pass "End at pass <pass>"
-                          (end-pass pass)]
-     #:args (filename) filename))
-  (define source-tree (with-input-from-file file-path read))
-  (cond
-    ;; Start a debug server
-    [(debug-server-mode)
-     (serve/servlet start
-                    #:servlet-path "/"
-                    #:servlet-regexp #rx""   ; accept *any* path, incl. /upload
-                    #:launch-browser? #t
-                    #:port 8000)]
-    [else
-     ;; Else, build the binary
-     (run-assembler-linker source-tree)
-     (displayln "Done!")]))
+  #:once-each
+  [("-s" "--start-pass") pass "Start at pass <pass>"
+   (start-pass pass)]
+  [("-e" "--end-pass") pass "End at pass <pass>"
+   (end-pass pass)]
+  #:args leftover
+  (match leftover
+    ['()        (error 'main "expected a <filename>")]    
+    [(list f)   f]
+    [_          (error 'main "expected at most one <filename>")])))
+  ;; run the assembler / linker
+  (define source-tree (with-input-from-file file-name read))
+  (run-assembler-linker source-tree))
 
 ;; Parse the command line
 (module+ main
