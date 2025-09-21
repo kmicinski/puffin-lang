@@ -1,4 +1,4 @@
-# Project 1: LVar → x86-64
+# Project 2: LVar → x86-64
 
 This project is inspired by *Essentials of Compilation* (EoC), but the
 code here is a from-scratch reimplementation with some simplifications
@@ -6,10 +6,11 @@ to keep the workload reasonable and to make grading/debugging
 clearer. Where behavior differs from the book, **this README is the
 source of truth** for expectations, file names, and command lines.
 
-You will compile a tiny expression language for straight-line
+You will compile a tiny expression language (R1) for straight-line
 arithmetic with `let`-bindings and `read` into x86-64 assembly, then
 produce a real binary and test it on actual inputs. Essentially,
-programs in our language are sequences of reads/writes.
+programs in our language are sequences of reads, ultimately printing
+one final output.
 
 ## Contents
 
@@ -78,11 +79,9 @@ The compiler consists of a number of passes. Please do not get
 overwhelmed: each of these passes is going to be very small, and each
 have a specific, isolated behavior that will allow us to explain the
 specific stages of compilation. Additionally, as the code is compiled,
-it is translated into an increasinglly-lower-level IR. For the
-compiler to be correct, we want that p = compile(p) for all programs
-p. However, what does it mean for two programs to be equal? We can't
-compare them just by their equality (plenty of syntactically-distinct
-functions are equal), so we have to *run* them on input/output pairs.
+it is translated into an increasinglly-lower-level IR.
+
+You will implement the following passes:
 
 1. `uniqueify` → ensures every bound identifier is unique  
    Input: `R1?` → Output: `unique-source-tree?` → Interp: `interpret-R1`
@@ -112,7 +111,8 @@ check this).
 
 - Predicates (`irs.rkt`): Each pass has a precise predicate (e.g.,
   `anf-program?`, `c0-program?`, etc.). Tests check both input and
-  output predicates at every step to catch malformed IR early.
+  output predicates at every step to catch malformed IR early. You
+  should read and understand each predicate.
 
 - Interpreters (`interpreters.rkt`): For many stages we run the
   interpreter over your IR to check semantic consistency—different IRs
@@ -120,30 +120,11 @@ check this).
   reports whether outputs match and whether stdout across passes is
   consistent. Please do not modify this file.
 
-## System knobs (ABI, toolchain, files)
-
-
-Produced files (see `system.rkt` for exact names/paths):
-
-- **IMPORTANT**: To ensure your code is portable across Linux/Mach
-  ABIs, our intermediate IRs work with "symbols" rather than labels,
-  and (during the last pass, `dump-x86`) we specialize labels to
-  Mach/Linux. To do this, you should use the helper function `(rt-sym
-  symbol)` which produces "_symbol" on Mac and "symbol" as required by
-  the ABI.
-- Output assembly: `./output.s`
-- Objects: `./output.o` and `./runtime.o`
-- Binary: `./a.out`
-- Assembler/Linker: Clang by default. Override with `CC=/path/to/clang` if needed.
-- Runtime linkage: `runtime.c` is compiled and linked in. The renderer emits externs for runtime symbols.
-- Linux linking uses `-no-pie` for simple non-PIE linking.
-
 ## How to Compile and Run
 
 To directly compile a single file using `main.rkt`:
 
     racket main.rkt test-programs/<prog>.scm
-
 
 The compiler dumps a long summary of the work done at each pass, and
 ultimately yielding a program `./output` which it compiles using
@@ -166,7 +147,7 @@ kkmicins@lcs-QVR7XH2QGR p1 % ./output
 42
 ```
 
-Here, I invoked `main.rkt` and passing it a single file, one of the
+Here, I invoked `main.rkt` and passed it a single file, one of the
 files in `test-programs`. This is by far the easiest way to *begin*
 your work on this project. My advice to you is to start with the
 simplest programs in `test-programs`, get them to compile, and then
@@ -179,13 +160,37 @@ require you to type inputs into the console. For example, `(print
 can use redirection (e.g., `output <input-files/1.in`) to input them
 from a file.
 
+## Common Tricky Systems Issues
+
+Systems-specific code is in `system.rkt`, which you should (hopefully)
+have to use minimally, as my starter files give a good amount of help
+here.
+
+- **IMPORTANT**: ensure 16-byte stack alignment _before_ calls (System
+  V / macOS both require it).
+- **IMPORTANT**: To ensure your code is portable across Linux/Mach
+  ABIs, our intermediate IRs work with "symbols" rather than labels,
+  and (during the last pass, `dump-x86`) we specialize labels to
+  Mach/Linux. To do this, you should use the helper function `(rt-sym
+  symbol)` which produces "_symbol" on Mac and "symbol" as required by
+  the ABI.
+- Output assembly: `./output.s`
+- Objects: `./output.o` and `./runtime.o`
+- Binary: `./a.out`
+- Assembler/Linker: Clang by default. Override with `CC=/path/to/clang` if needed.
+- Runtime linkage: `runtime.c` is compiled and linked in. The renderer emits externs for runtime symbols.
+- Linux linking uses `-no-pie` for simple non-PIE linking.
+
 ## Debug server
 
 There is a debug server, which (if you can get it to work) offers the
 ability to interactively visualize the output of each pass of the
-requisite input in your language. 
+requisite input in your language.
 
-    racket main.rkt --debug-server test-programs/<prog>.scm
+    racket debug-server.rkt
+
+You can either type programs, or you can (hopefully) select from a set
+of programs. 
 
 ## Testing infrastructure
 
@@ -239,21 +244,6 @@ How goldens are organized:
 
 The instructor has a `gengoldens` mode to regenerate these. Students do not need it.
 
-## Debugging & Developer Tools
-
-- `-v` flag prints per-pass summaries (predicate checks, evaluation consistency, stdout).
-- Build one program directly:
-
-      racket main.rkt test-programs/r0-0_1.scm
-
-- Restrict the pass window:
-
-      racket main.rkt --start-pass uniqueify --end-pass render-x86 test-programs/r0-0_1.scm
-
-- Debug server (serves `index.html`, POST program to `/` returns JSON trace):
-
-      racket main.rkt --debug-server test-programs/r0-0_1.scm
-
 ## Common Errors & Fixes
 
 - “Satisfies output predicate: no”
@@ -287,15 +277,6 @@ The instructor has a `gengoldens` mode to regenerate these. Students do not need
     pass emits assembly and the assembler/linker stage succeeds.
 
 
-## Grading rubric (high level)
-
-In total, there are 50 tests, drawn randomly from a set of ~150.
-
-- Correctness (semantic): Interpreters agree across passes; native outputs match goldens.
-- Well-formed IR: All predicate checks pass at every stage.
-- Code quality: Clear, organized pass implementations without platform-specific hacks.
-- Edge cases: `read`, nested `let`, negative values, chained `+`, multiple inputs.
-
 ## FAQ
 
 - Do I need register allocation?
@@ -315,30 +296,6 @@ In total, there are 50 tests, drawn randomly from a set of ~150.
     numbers from the `.in` file to your program’s stdin. Your stdout
     must match the golden.
 
-## Quick reference
+## Autograder Tests
 
-
-Middleend:
-
-    racket test.rkt -m middleend -i ./input-files/1.in \
-      -g goldens/<prog>_1_uniqueify.stdout,goldens/<prog>_1_explicate-control.in-ast \
-      test-programs/<prog>.scm
-
-Backend:
-
-    racket test.rkt -m backend -i ./input-files/1.in \
-      -g goldens/<prog>_1_uniqueify.stdout,goldens/<prog>_1_select-instructions.in-ast \
-      test-programs/<prog>.scm
-
-Native:
-
-    racket test.rkt -m native -i ./input-files/1.in \
-      -g goldens/<prog>_1_uniqueify.stdout \
-      test-programs/<prog>.scm
-
-
-
-
-
-
-
+The autograder tests can be run using `tester.py`. 

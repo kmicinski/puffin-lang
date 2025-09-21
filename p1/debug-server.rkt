@@ -1,5 +1,7 @@
 #lang racket
 
+;; A debugging server which uses index.html and Vue.js to help
+;; interactively debug programs.
 (require "main.rkt")
 (require "system.rkt") ;; list of passes, system-relevant details, etc.
 (require "irs.rkt")
@@ -31,27 +33,47 @@
    (list (header #"Content-Type" #"text/html; charset=utf-8"))
    (list (string->bytes/utf-8 (file->string ix)))))
 
+;; helper: parse comma/space-separated ints
+(define (string->ints s)
+  (for/list ([tok (in-list (filter (λ (t) (positive? (string-length t)))
+                                   (regexp-split #px"[\\s,]+" s)))])
+    (string->number tok)))
+
+;; compiles a user-uploaded file
 (define (upload req)
   (define raw (request-post-data/raw req))
   (unless raw (error 'upload "POST had no plain-text body"))
-  (define sexpr (read (open-input-string (bytes->string/utf-8 raw))))
+  ;; content-type (may be #f)
+  (define ctype
+    (let ([h (headers-assq* #"content-type" (request-headers/raw req))])
+      (and h (bytes->string/utf-8 (header-value h)))))
+  (define j (bytes->jsexpr raw))
+  (define prog-str (hash-ref j 'programSource (lambda () (error "no source..."))))
+  (define sexpr (read (open-input-string prog-str)))
+  (define inputs (hash-ref j 'input))
+  ;; careful: avoid name clash with parameter input-file
+  (define rel-input-file (hash-ref j 'inputFile ""))
+  (define no-input-file? (equal? rel-input-file ""))
+  (define input-file-path (and (not no-input-file?) (build-path HERE rel-input-file)))
+  ;; (if necessary), build a temporary file to feed in as input
+  (define temp-input-path
+    (and no-input-file?
+         (let ([p (make-temporary-file "tmp-debug-~a.in")])
+           (with-output-to-file p
+             (λ () (for-each (λ (n) (displayln n)) inputs))
+             #:exists 'replace)
+           p)))
   (define response
     (if (R1? sexpr)
-        ;; valid program, compile it
-        (let ([compilation-trace (compile-verbose sexpr)])
-          (trace->jsexpr compilation-trace))
+        (parameterize ([input-file (if no-input-file? temp-input-path input-file-path)])
+          (let ([trace (compile-verbose sexpr)]) ; inputs may be #f
+            (trace->jsexpr trace)))
         (hasheq 'error "Input does not match R1? (see irs.rkt)")))
-  (pretty-print response)
   (response/full
    200 #"OK" (current-seconds)
    #"application/json"
    (list (header #"Content-Type" #"application/json"))
    (list (jsexpr->bytes response))))
-
-
-;; Small helpers
-(define (read-serialized p)
-  (with-input-from-file p (λ () (deserialize (read)))))
 
 (define (read-trim p)
   (string-trim (file->string p)))
@@ -65,7 +87,6 @@
   (match (regexp-match #px"^(.*)_native_(\\d+)$" name)
     [(list _ prog n)
      (define cfg (build-path dir "testdata.cfg"))
-     (pretty-print (with-input-from-file cfg read)) 
      (and (file-exists? cfg)
           (let* ([cfgv (with-input-from-file cfg read)]
                  [mode (list-ref cfgv 0)]
@@ -91,32 +112,49 @@
                 #f))))
 
 (define (golden-trace program number)
-  (define (b fmt-pass) (format "~a_~a_~a" program number fmt-pass))
-  (define (golden-path base ext)
-    (build-path "goldens" (string-append base "." ext)))
+  (define (directory fmt-pass) (format "~a_~a_~a" program number fmt-pass))
 
-  ;; Try to read an s-expression; if it fails, return #f.
   (define (read-sexpr/safe p)
     (with-handlers ([exn:fail? (λ (_) #f)])
-      (call-with-input-file p (λ (in)
-        (define v (read in))
-        (if (eof-object? v) #f v)))))
+      (call-with-input-file p
+        (λ (in)
+          (define v (read in))
+          (if (eof-object? v) #f v)))))
 
-  ;; Read an AST file (prefer *.out-ast, fallback to *.ast).
+  (define (read-deser/safe p)
+    (with-handlers ([exn:fail? (λ (_) #f)])
+      (call-with-input-file p
+        (λ (in)
+          (define v (read in))
+          (if (eof-object? v) #f (deserialize v))))))
+
+  ;; Correctly build: HERE/goldens/<base>.<suffix>
+  (define (golden-path base suffix)
+    (build-path HERE "goldens" (format "~a.~a" base suffix)))
+
+  ;; Prefer deserialized value; fall back to raw text for old files.
   (define (read-ast-pretty base)
     (define out-ast-p (golden-path base "out-ast"))
     (define ast-p     (golden-path base "ast"))
     (cond
       [(file-exists? out-ast-p)
-       (define v (read-sexpr/safe out-ast-p))
-       (if v (safe-pretty v) (read-trim out-ast-p))]
+       (define vd (read-deser/safe out-ast-p))
+       (cond
+         [vd (safe-pretty vd)]
+         [else
+          (define vs (read-sexpr/safe out-ast-p))
+          (if vs (safe-pretty vs) (read-trim out-ast-p))])]
       [(file-exists? ast-p)
-       (define v (read-sexpr/safe ast-p))
-       (if v (safe-pretty v) (read-trim ast-p))]
+       (define vd (read-deser/safe ast-p))
+       (cond
+         [vd (safe-pretty vd)]
+         [else
+          (define vs (read-sexpr/safe ast-p))
+          (if vs (safe-pretty vs) (read-trim ast-p))])]
       [else "<missing>"]))
 
   (for/list ([p (in-list pass-names)])
-    (define base     (b p))
+    (define base     (directory p))
     (define stdout-p (golden-path base "stdout"))
     (define interp-p (golden-path base "interp"))
     (hash
@@ -124,6 +162,7 @@
       'pretty-output (read-ast-pretty base)
       'stdout        (if (file-exists? stdout-p) (read-trim stdout-p) "")
       'interp        (if (file-exists? interp-p) (read-trim interp-p) "<none>"))))
+
 
 ;; GET /tests -> brief list with enough to populate the UI (and preload program)
 (define (handle-tests _req)
@@ -134,6 +173,8 @@
             'number    (hash-ref it 'number)
             'progFile  (hash-ref it 'progFile)
             'inputFile (hash-ref it 'inputFile)
+            'inputs    (map string->number
+                                      (file->lines (build-path HERE (hash-ref it 'inputFile))))
             'golden    (hash-ref it 'goldenFile)
             'programSource (file->string (build-path HERE (hash-ref it 'progFile))))))
   (response/full
@@ -151,7 +192,6 @@
   (match (regexp-match #px"^(.*)_native_(\\d+)$" id)
     [(list _ prog n)
      (define trace (golden-trace prog n))
-     (pretty-print trace)
      (response/full
       200 #"OK" (current-seconds) #"application/json"
       (list (header #"Content-Type" #"application/json"))
@@ -167,7 +207,7 @@
      (match (map path/param-path path)
        [(list "tests")            (handle-tests req)]
        [(list "golden-trace")     (handle-golden-trace req)]
-       [_                            (index req)])]))
+       [_                         (index req)])]))
 
 ;; start server mounted at "/"
 (define (run-server)
@@ -175,7 +215,7 @@
    app
    #:servlet-path "/"
    #:servlet-regexp #rx""
-   #:launch-browser? #t
+   #:launch-browser? #f
    #:port 8000))
 
 (module+ main

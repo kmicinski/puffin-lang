@@ -232,6 +232,9 @@
 
 ;; ───── execute tests ─────
 (define (tests)
+  (unless (equal? (mode) "gengoldens")
+    (displayln "Error: must provide (at least) an input file (last argument to test.rkt); see README.md for instructions.")
+    (exit 1))
   (cond
     [(equal? (mode) "json") ;; JSON mode is used by the autograder
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg
