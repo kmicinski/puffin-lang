@@ -232,16 +232,14 @@
 
 ;; ───── execute tests ─────
 (define (tests)
-  (unless (equal? (mode) "gengoldens")
-    (displayln "Error: must provide (at least) an input file (last argument to test.rkt); see README.md for instructions.")
-    (exit 1))
   (cond
     [(equal? (mode) "json") ;; JSON mode is used by the autograder
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg
      (match cfg
        [(list mode prog-file input-files goldens)
         ;; run testcase...
-        (match (run/capture (λ () (run-test mode prog-file input-files goldens)))
+        (match (with-handlers ([exn:fail? (λ (e) (cons 'failed (exn-message e)))])
+                 (run/capture (λ () (run-test mode prog-file input-files goldens))))
           [(cons 'passed stdout) (display (jsexpr->string (hash 'status "passed" 'message stdout)))]
           [(cons 'failed stdout) (display (jsexpr->string (hash 'status "failed" 'message stdout)))]
           [_ (display (jsexpr->string (hash 'status "failed" 'message "")))])]

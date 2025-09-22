@@ -45,7 +45,8 @@
 ;; the value of `(pass input)`.
 (define (run-pass-expect pass pass-name input input-pred output-pred [interp (lambda (x _) x)] [input-stream #f])
   ;; Run the pass
-  (define output (pass input))
+  (define output (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
+                   (pass input)))
   ;; Build an object of metadata
   (define h (hash 'input (pretty-format input)
                   'orig-input input
