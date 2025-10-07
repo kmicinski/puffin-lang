@@ -1,0 +1,1 @@
+((3) 1 (((lib "racket/private/set-types.rkt") . deserialize-info:immutable-custom-set-v0)) 0 () () (c program c (0 #f (h - (equal) ((su . "x5897") . #t) ((su . "x5898") . #t) (x . #t))) c (h - (equal) (main c seq c (q assign x 2) c (c seq c (c assign c (su . "x5897") q x) c (c seq c (c assign c (su . "x5898") c (su . "x5897")) c (c return c (su . "x5898"))))))))

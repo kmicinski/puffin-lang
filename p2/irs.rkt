@@ -1,5 +1,7 @@
 #lang racket
 
+(require "system.rkt")
+
 ;; 
 ;; This file provides detailed documentation of each of the IRs used
 ;; in the project.
@@ -23,27 +25,39 @@
 ;;
 
 ;; ---------------------------------------------------------------------
-;; 1.  Raw R1 program (before uniqueify)
+;; 1.  Raw R2 program (before uniqueify)
 ;; ---------------------------------------------------------------------
 
-(define (R1-exp? e)
+(define (cmp? cmp)
+  (match cmp
+    ['eq? '< '<= '> '>=]))
+
+(define (R2-exp? e)
   (match e
+    [#t #t] ;; boolean constant #t -- new
+    [#f #t] ;; boolean constant #f -- new (notice the RHS is #t, not #f!)
     [(? fixnum? n) #t]
     [`(read) #t]
-    [`(- ,(? R1-exp? e)) #t]
-    [`(+ ,(? R1-exp? e0) ,(? R1-exp? e1)) #t]
+    [`(- ,(? R2-exp? e)) #t]
+    [`(- ,(? R2-exp? e0) ,(? R2-exp? e)1) #t] ;; new
+    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1))  #t] ;; new
+    [`(or ,(? R2-exp? e0) ,(? R2-exp? e1)) #t] ;; new
+    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f)) #t] ;; new
+    [`(not ,(? R2-exp? e1)) #t] ;; new
+    [`(,(? cmp? cmp) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t] ;; new
     [(? symbol? var) #t]
-    [`(let ([,(? symbol? x) ,(? R1-exp? e)]) ,(? R1-exp? e-body)) #t]
+    [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
     [_ #f]))
 
-;; An R1 program is an R1 expression
-(define (R1? e)
+;; An R2 program is an R2 expression wrapped in '(program ...)
+(define (R2? e)
   (match e
-    [`(program ,(? R1-exp? exp)) #t]
+    [`(program ,(? R2-exp? exp)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 2.  Unique R1 (after uniqueify)
+;; 2.  Unique R2 (after uniqueify)
 ;;     – every bound identifier is written exactly once
 ;; ---------------------------------------------------------------------
 
@@ -62,7 +76,7 @@
       [_                                  #f]))
   (match p
     [`(program () ,e)
-     (and (R1-exp? e)
+     (and (R2-exp? e)
           (set? (walk e (set)))           ; walk returns a set when OK
           )]
     [_ #f]))
@@ -114,8 +128,8 @@
   (match p
     [`(program ,info ,blocks)
      (and (hash? blocks)
-          (hash-has-key? blocks '_main)
-          (c0-seq? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (c0-seq? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -149,8 +163,8 @@
   (match p
     [`(program ,info ,blocks)
      (and (set? info)
-          (hash-has-key? blocks '_main)
-          (andmap instr/vars? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (andmap instr/vars? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -173,8 +187,8 @@
   (match p
     [`(program ,var->loc ,blocks)
      (and (hash? var->loc)
-          (hash-has-key? blocks '_main)
-          (andmap instr/homes? (hash-ref blocks '_main)))]
+          (hash-has-key? blocks (entry-symbol))
+          (andmap instr/homes? (hash-ref blocks (entry-symbol))))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -192,7 +206,7 @@
   (and (homes-assigned-program? p)
        (match p
          [`(program ,_ ,blocks)
-          (andmap patched-instr? (hash-ref blocks '_main))]
+          (andmap patched-instr? (hash-ref blocks (entry-symbol)))]
          [_ #f])))
 
 ;; ---------------------------------------------------------------------
@@ -203,7 +217,7 @@
   (and (patched-program? p)
        (match p
          [`(program ,_ ,blocks)
-          (let* ([b  (hash-ref blocks '_main)]
+          (let* ([b  (hash-ref blocks (entry-symbol))]
                  [hd (first b)]
                  [tl (last  b)])
             (pretty-print hd)

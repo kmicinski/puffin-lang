@@ -13,7 +13,6 @@
 import os, sys, subprocess, json, argparse, signal
 from subprocess import Popen, PIPE, STDOUT, TimeoutExpired
 
-
 #####################
 # Start Test Utilities
 #####################
@@ -23,13 +22,10 @@ def preparefile(file):
 
 def runcmdsafe(binfile):
     b_stdout, b_stderr, b_exitcode = runcmd(binfile)
-
     return b_stdout, b_stderr, b_exitcode
 
 def runcmd(cmd):
     stdout, stderr, process = None, None, None
-    if os.name != 'nt':
-        cmd = "exec " + cmd
     with Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT) as process:
         try:
             stdout, stderr = process.communicate(timeout=30)
@@ -40,7 +36,6 @@ def runcmd(cmd):
                 process.kill()
                 exit()
     return stdout, stderr, process.returncode
-
 
 def assertequals(expected, actual):
     if expected == actual:

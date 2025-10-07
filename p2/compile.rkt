@@ -5,7 +5,7 @@
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
 
-(provide 
+(provide
  uniqueify
  anf-convert
  explicate-control
@@ -17,7 +17,11 @@
  dump-x86-64)
 
 ;; The compiler is designed in passes, which go:
-;; --> R1? -- Source program
+;; --> R2? -- Source program
+;; |
+;; +-> typed-R2? -- Type-annotated program
+;; | 
+;; +-> shrunk-R2? -- Shrunken R2 (removes several forms)
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
@@ -46,7 +50,9 @@
   (match p
     [`(program ,locals ,blocks)
      ;; negative number, added to %rsp
-     (define space-needed (- (align8 (- (apply min (hash-values locals))))))
+     (define space-needed (if (empty? (hash-values locals))
+                              0
+                              (- (align8 (- (apply min (hash-values locals)))))))
      (define start-block (hash-ref blocks (entry-symbol)))
      (define new-start-block
        `((pushq (reg rbp))
@@ -55,7 +61,7 @@
          ,@start-block
          ;; move result into %rdi and print_int64 it
          (movq (reg rax) (reg rdi))
-         (callq _print_int64 0)
+         (callq print_int64 0)
          ;; 0 return value (to the terminal/system) into %rax
          (movq (imm 0) (reg rax))
          ;; reinstate stored %rbp
@@ -130,7 +136,7 @@
         ;; make a call to read (0 arguments), then move the result
         ;; into the corresponding variable
         [`(seq (assign ,x (read)) ,rest)
-         `((callq _read_int64 0)                   ;;; XXX BUG HERE!?
+         `((callq read_int64 0)
            (movq (reg rax) (var ,x))
            ,@(h rest))]
         [`(seq (assign ,x ,(? fixnum? n)) ,rest)
@@ -205,6 +211,13 @@
                                      (λ (a1)
                                        (let ([x (gensym '+)])
                                          `(let ([,x (+ ,a0 ,a1)]) ,(k x)))))))]
+      [`(if ,e0 ,e1 ,e2)
+       (convert-expr
+        e0
+        (λ (x-g)
+          ()
+)
+]
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
@@ -232,6 +245,30 @@
      ;; empty info
      `(program () ,(rename exp (hash)))]))
 
+(define (shrink p)
+  (define (h e)
+    (match e 
+      ;; base cases
+      [(? symbol?) e]
+      [(? number?) e]
+      [#t #t]
+      [#f #f]
+      [`(read) '(read)]
+      [`(+ ,e0 ,e1) `(+ ,(h e0) ,(h e1))]
+      [`(- ,e0 ,e1) `(+ ,(h e0) (- ,(h e1)))]
+      [`(- ,e) `(- ,(h e))]
+      [`(and ,e0 ,e1) `(if ,(h e0) ,(h e1) #f)]
+      [`(or ,e0 ,e1) `(if ,(h e0) #t ,(h e1))]
+      [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
+      [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
+      [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
+      [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]
+      [(list es ...) (map h es)]))
+  (match p
+    [`(program ,exp)
+     ;; empty info
+     `(program () ,(h exp))]))
+
 ;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
   (define (render-op op)
@@ -247,7 +284,8 @@
       [`(pushq ,src) (format "pushq ~a" (render-op src))]
       [`(popq ,dst) (format "popq ~a" (render-op dst))]
       [`(callq ,(? label? l) ,(? nonnegative-integer? num-args))
-       (format "call ~a" (symbol->string l))]
+       ;; must call rt-sym here!
+       (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
       ['(leave) "leave"]))
   (define (render-block block name)
@@ -257,7 +295,9 @@
   (match p
     [`(program ,info ,blocks)
      (string-append
-      (format ".globl ~a\n" (entry-symbol))
-      ".extern _read_int64\n"
-      ".extern _print_int64\n"
-      (render-block (hash-ref blocks (entry-symbol)) "_main"))]))
+      ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
+      (format ".globl ~a\n" (rt-sym (entry-symbol)))
+      ;; include these for sure
+      (runtime-function-externs)
+      (render-block (hash-ref blocks (entry-symbol)) (rt-sym (entry-symbol))))]))
+

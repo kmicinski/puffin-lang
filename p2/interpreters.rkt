@@ -95,7 +95,7 @@
 
 (define (interpret-c0 p [in '()])
   (match-define `(program ,_ ,blocks) p)
-  (display-return (car (exec-tail (hash-ref blocks '_main) (hash) in))))
+  (display-return (car (exec-tail (hash-ref blocks (entry-symbol)) (hash) in))))
 
 ;;
 ;; Passes 6–9 -- (Pseudo-)x86-64, this interpreter works on each

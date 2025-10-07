@@ -1,0 +1,13 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign |+7100| (+ 5 3))
+          (seq
+           (assign read7101 (read))
+           (seq
+            (assign |+7102| (+ 2 read7101))
+            (seq
+             (assign g7103 (- |+7102|))
+             (seq (assign |+7104| (+ |+7100| g7103)) (return |+7104|)))))))))
