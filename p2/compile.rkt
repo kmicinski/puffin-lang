@@ -173,24 +173,38 @@
 
 ;; Convert p (in ANF) to  C-style IR consisting consisting of labeled blocks
 (define (explicate-control p)
+  ;; merge two hashes, assume no common keys
+  (define (merge h0 h1)
+    (foldl (λ (k0) (hash-set h1 k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
   (define (atom? a) (or (fixnum? a) (symbol? a)))
-  (define (expr->seq e)
+  ;; basic idea: return a hash which maps blocks to a label name
+  (define (expr->blocks e current-block)
+    ;; extend a basic block by prefixing it with an instruction
+    ;; (prefix-w-instruction (hash 'main (return 1)) 'main (assign x 1))
+    ;; => (hash 'main (seq (assign x 1) (return 1)))
+    (define (extend h label instruction)
+      (hash-set h label `(seq ,instruction ,(hash-ref h label))))
     (match e
       [`(let ([,x ,(? fixnum? n)]) ,e+)
-       `(seq (assign ,x ,n) ,(expr->seq e+))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,n))]
       [`(let ([,x ,(? symbol? y)]) ,e+)
-       `(seq (assign ,x ,y) ,(expr->seq e+))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,y))]
       [`(let ([,x (read)]) ,e+)
-       `(seq (assign ,x (read)) ,(expr->seq e+))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (read)))]
       [`(let ([,x (- ,a)]) ,e+)
-       `(seq (assign ,x (- ,a)) ,(expr->seq e+))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (- ,a)))]
       [`(let ([,x (+ ,a0 ,a1)]) ,e+)
-       `(seq (assign ,x (+ ,a0 ,a1)) ,(expr->seq e+))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (+ ,a0 ,a1)))]
       [(? atom? a)
-       `(return ,a)]))
+       (hash current-block `(return ,a))]
+      [`(if ,a ,e1 ,e2)
+       (define l0 (gensym 'lab))
+       (define l1 (gensym 'lab))
+       (define h (merge (expr->blocks e1 l0) (expr->blocks e2 l1)))
+       (hash-set h current-block `(if (eq? a 0) (goto ,l0) (goto ,l1)))]))
   (match p
     [`(program ,info ,anf)
-     `(program ,info ,(hash (entry-symbol) (expr->seq anf)))]))
+     `(program ,info ,(expr->blocks anf (entry-symbol)))]))
 
 (define (anf-convert p)
   (define (convert-expr e k)
@@ -204,6 +218,13 @@
                              (lambda (atom)
                                (let ([x (gensym)])
                                  `(let ([,x (- ,atom)]) ,(k x)))))]
+      [`(,(? cmp? c) ,e0 ,e1)
+       (convert-expr e0
+                     (λ (a0)
+                       (convert-expr e1
+                                     (λ (a1)
+                                       (define x (gensym))
+                                       `(let ([,x (,c ,a0 ,a1)]) ,(k x))))))]
       [`(+ ,e0 ,e1)
        (convert-expr e0
                      (λ (a0)
@@ -231,6 +252,7 @@
       [`(- ,e+) `(- ,(rename e+ assignment))]
       [`(+ ,e0 ,e1) `(+ ,(rename e0 assignment) ,(rename e1 assignment))]
       [(? symbol? x) (hash-ref assignment x x)]
+      [`(if ,e0 ,e1 ,e2) `(if ,(rename e0 assignment) ,(rename e1 assignment))]
       [`(let ([,x ,e]) ,e-b)
        (if (hash-has-key? assignment x)
            (let* ([x+ (gensym x)]
@@ -243,6 +265,8 @@
      ;; empty info
      `(program () ,(rename exp (hash)))]))
 
+;; Takes p and...
+;; 
 (define (shrink p)
   (define (h e)
     (match e 
@@ -266,6 +290,12 @@
     [`(program ,exp)
      ;; empty info
      `(program () ,(h exp))]))
+
+;; Typechecks p, 
+#;
+(define (typecheck p)
+  ()
+  )
 
 ;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
@@ -298,4 +328,8 @@
       ;; include these for sure
       (runtime-function-externs)
       (render-block (hash-ref blocks (entry-symbol)) (rt-sym (entry-symbol))))]))
+
+(define XXX
+  (explicate-control
+   (anf-convert '(program ()  (let ([a (+ 1 (read))]) (if (eq? a 0) (let ([x (if (< a 2) 3 (+ 1 (- 2)))]) (> x 1)) 3))))))
 
