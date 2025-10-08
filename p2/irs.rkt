@@ -13,13 +13,14 @@
 (provide (all-defined-out))
 
 ;; Helpers
-(define (atom? a)           (or (fixnum? a)         (symbol? a)))
-(define (imm?  op)          (match op [`(imm ,n)    (fixnum? n)] [_ #f]))
-(define (reg?  op)          (match op [`(reg ,r)    (symbol? r)] [_ #f]))
-(define (var?  op)          (match op [`(var ,x)    (symbol? x)] [_ #f]))
+(define (atom?  a)          (or (fixnum? a)         (symbol? a)))
+(define (imm?   op)         (match op [`(imm ,n)    (fixnum? n)] [_ #f]))
+(define (byte-reg?  op)     (match op [`(byte-reg ,r)    (symbol? r)] [_ #f]))
+(define (reg?   op)         (match op [`(reg ,r)    (symbol? r)] [_ #f]))
+(define (var?   op)         (match op [`(var ,x)    (symbol? x)] [_ #f]))
+(define (cc?    op)         (member op '(e l le g ge)))
 (define (deref? op)         (match op [`(deref (reg ,r) ,i) (and (symbol? r) (integer? i))] [_ #f]))
 (define (label? l)          (symbol? l))
-
 ;;
 ;; Source language
 ;;
@@ -28,9 +29,9 @@
 ;; 1.  Raw R2 program (before uniqueify)
 ;; ---------------------------------------------------------------------
 
+;; comparators
 (define (cmp? cmp)
-  (match cmp
-    ['eq? '< '<= '> '>=]))
+  (member cmp '(eq? < <= > >=)))
 
 (define (R2-exp? e)
   (match e
@@ -97,6 +98,7 @@
   (match e
     [(? atom?)                                           #t]
     [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?)) #t]
+    [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))    #t]
     [_                                                   #f]))
 
 (define (anf-program? p)
@@ -105,31 +107,41 @@
     [_                #f]))
 
 ;; ---------------------------------------------------------------------
-;; 4.  C0 / explicated control (after explicate-control)
+;; 4.  C1 / explicated control (after explicate-control)
 ;; ---------------------------------------------------------------------
 
-(define (c0-rhs? rhs)
-  (match rhs
-    [(? fixnum?)         #t]
-    [(? symbol?)         #t]
-    ['(read)             #t]
-    [`(- ,a)             (atom? a)]
-    [`(+ ,a0 ,a1)        (and (atom? a0) (atom? a1))]
-    [_                   #f]))
+(define (c1-cmp? cmp) (member cmp '(eq? <)))
 
-(define (c0-seq? s)
+
+(define (c1-rhs? rhs)
+  (match rhs
+    [(? fixnum?)              #t]
+    [(? symbol?)              #t]
+    ['(read)                  #t]
+    [`(- ,a)                  (atom? a)]
+    [`(+ ,a0 ,a1)             (and (atom? a0) (atom? a1))]
+    [`(not ,a)                (atom? a)]
+    [`(,(? c1-cmp?) ,a0 ,a1)  (and (atom? a0) (atom? a1))]
+    [_                        #f]))
+
+(define (c1-tail? s)
   (match s
     [`(return ,a)                                   (atom? a)]
-    [`(seq (assign ,(? symbol?) ,rhs) ,rest)        (and (c0-rhs? rhs)
-                                                         (c0-seq? rest))]
+    [`(seq (assign ,(? symbol?) ,rhs) ,rest)        (and (c1-rhs? rhs)
+                                                         (c1-tail? rest))]
+    [`(if (,(? c1-cmp?) ,(? atom?) ,(? atom?))
+          (goto ,(? label? l-t))
+          (goto ,(? label? l-f)))                   #t]
+    [`(goto ,(? label?))                            #t]
     [_                                              #f]))
 
-(define (c0-program? p)
+(define (c1-program? p)
   (match p
     [`(program ,info ,blocks)
      (and (hash? blocks)
           (hash-has-key? blocks (entry-symbol))
-          (c0-seq? (hash-ref blocks (entry-symbol))))]
+          (andmap label? (hash-keys blocks))
+          (andmap (λ (x) (c1-tail? (hash-ref blocks x))) (hash-keys blocks)))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -140,23 +152,32 @@
   (match p
     [`(program ,locals ,blocks)
      (and (set? locals)
-          (c0-program? `(program () ,blocks)))]
+          (c1-program? `(program () ,blocks)))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
 ;; 6.  Instruction selection (var-operands still present)
 ;; ---------------------------------------------------------------------
-(define (operand/vars? op)  (or (imm? op) (reg? op) (var?  op)))
+(define (operand/vars? op)  (or (imm? op) (reg? op) (var?  op) (byte-reg? op)))
+
+
 
 (define (instr/vars? i)
   (match i
     [`(movq ,(? operand/vars? src) ,(? operand/vars? dst))   #t]
+    [`(movzbq ,(? operand/vars? src) ,(? operand/vars? dst)) #t]
     [`(addq ,(? operand/vars? src) ,(? operand/vars? dst))   #t]
     [`(negq ,(? operand/vars? op))                           #t]
     [`(pushq ,(? operand/vars? op))                          #t]
     [`(popq ,(? operand/vars? op))                           #t]
     [`(callq ,(? symbol?) ,(? integer?))                     #t]
     [`(retq)                                                 #t]
+    [`(xorq ,(? operand/vars?) ,(? operand/vars?))           #t]
+    [`(cmpq ,(? operand/vars?) ,(? operand/vars?))           #t]
+    [`(set  ,(? cc?) ,(? operand/vars?))                     #t]
+    [`(jmp ,(? label?))                                      #t]
+    [`(jmp-if ,(? cc?) ,(? label?))                          #t]
+    [`(label ,(? label?))                                    #t]
     [_                                                       #f]))
 
 (define (instr-program? p)      ; after select-instructions

@@ -214,10 +214,8 @@
       [`(if ,e0 ,e1 ,e2)
        (convert-expr
         e0
-        (λ (x-g)
-          ()
-)
-]
+        (λ (a-g)
+          `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
