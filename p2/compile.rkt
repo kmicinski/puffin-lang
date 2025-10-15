@@ -184,6 +184,11 @@
     ;; => (hash 'main (seq (assign x 1) (return 1)))
     (define (extend h label instruction)
       (hash-set h label `(seq ,instruction ,(hash-ref h label))))
+    (define (extend-list h label instruction-list)
+      (foldr (λ (next-instr acc)
+               `(seq ,next-instr ,acc))
+             (hash-ref h label)
+             instruction-list))
     (match e
       [`(let ([,x ,(? fixnum? n)]) ,e+)
        (extend (expr->blocks e+ current-block) current-block `(assign ,x ,n))]
@@ -195,6 +200,11 @@
        (extend (expr->blocks e+ current-block) current-block `(assign ,x (- ,a)))]
       [`(let ([,x (+ ,a0 ,a1)]) ,e+)
        (extend (expr->blocks e+ current-block) current-block `(assign ,x (+ ,a0 ,a1)))]
+      [`(let ([,x (< ,a0 ,a1)]) ,e+)
+       (extend-list (expr->blocks e+ current-block)
+                    current-block
+                    `((cmp ,a1 ,a0) (set l (byte-register al)) (movzbq (byte-register al) ,x)))]
+      [`(let ([,x (eq? ,a ,b)
       [(? atom? a)
        (hash current-block `(return ,a))]
       [`(if ,a ,e1 ,e2)
@@ -331,5 +341,6 @@
 
 (define XXX
   (explicate-control
-   (anf-convert '(program ()  (let ([a (+ 1 (read))]) (if (eq? a 0) (let ([x (if (< a 2) 3 (+ 1 (- 2)))]) (> x 1)) 3))))))
+   (anf-convert
+    (shrink '(program  (let ([a (+ 1 (read))]) (if (eq? a 0) (let ([x (if (< a 2) 3 (+ 1 (- 2)))]) (> x 1)) 3)))))))
 
