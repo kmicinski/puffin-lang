@@ -204,7 +204,10 @@
        (extend-list (expr->blocks e+ current-block)
                     current-block
                     `((cmp ,a1 ,a0) (set l (byte-register al)) (movzbq (byte-register al) ,x)))]
-      [`(let ([,x (eq? ,a ,b)
+      [`(let ([,x (eq? ,a ,b)]) ,e+)
+       (extend-list (expr->blocks e+ current-block)
+                    current-block
+                    `((cmp ,a ,b) (set l (byte-register al)) (movzbq (byte-register al) ,x)))]
       [(? atom? a)
        (hash current-block `(return ,a))]
       [`(if ,a ,e1 ,e2)
