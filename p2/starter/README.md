@@ -1,0 +1,319 @@
+# Project 2: LIf / R2 → x86-64
+
+This project is inspired by *Essentials of Compilation* (EoC), but the
+code here is a from-scratch reimplementation with some simplifications
+to keep the workload reasonable and to make grading/debugging
+clearer. Where behavior differs from the book, **this README is the
+source of truth** for expectations, file names, and command lines.
+
+You will compile a tiny expression language (**R2 / LIf**) with
+integers, booleans, `let`, arithmetic, conditionals, and comparisons
+into x86-64 assembly, then produce a real binary and test it on actual
+inputs. The power of this language is (roughly) decision diagrams (and
+functions on) finite input streams. 
+
+This README file contains some specific tips which I hope you will
+read, including debugging tips and some project-specific
+instructions. Please read the whole README file and be prepared to
+discuss it in office hours, email, and class.
+
+## Input Language (R2 / LIf)
+
+R2 extends the straight-line arithmetic core with booleans and simple
+conditionals. It includes integers, booleans, variables, `let`, unary
+minus, addition, logical operators, comparisons, and a zero-argument
+`(read)` primitive that consumes one integer from stdin at runtime.
+
+Before shrinking, the surface language allows `and`, `or`, `not`,
+`if`, and the comparators `eq?`, `<`, `<=`, `>`, `>=`. The `shrink`
+pass reduces this set to `eq?` and `<`, removes binary minus, and
+desugars `and`/`or`.
+
+```racket
+;; Core (pre-shrink) expressions and programs (abridged)
+(define (cmp? cmp) (member cmp '(eq? < <= > >=)))
+(define (R2-exp? e)
+  (match e
+    [#t #t]
+    [#f #t]
+    [(? fixnum? n) #t]
+    [`(read) #t]
+    [`(- ,(? R2-exp? e)) #t]                           ; unary minus
+    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(or  ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(not ,(? R2-exp? e)) #t]
+    [`(,(? cmp? c) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(if ,(? R2-exp? g) ,(? R2-exp? t) ,(? R2-exp? f)) #t]
+    [(? symbol? var) #t]
+    [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
+    [_ #f]))
+
+(define (R2? e)
+  (match e
+    [`(program ,(? R2-exp? exp)) #t]
+    [_ #f]))
+```
+
+Programs on disk are s-expressions, e.g.:
+
+```racket
+(program
+  (let ([a (+ 1 (read))])
+    (if (<= a 0)
+        (let ([x (if (< a 2) 3 (+ 1 (- 2)))])
+          (> x 1))
+        3)))
+```
+
+## Repository Layout
+
+- `compile.rkt` – Your pass implementations. You will edit functions provided here.
+  -> This is the *only* file you will edit! The rest are read-only
+- `irs.rkt` – IR definitions and predicates like `anf-program?`, `c1-program?`, etc. (see also typed/shrunk variants)
+- `interpreters.rkt` – Reference interpreters for several IRs (used by tests and for your own debugging).
+- `system.rkt` – System/ABI configuration, pass names, runtime filenames, output paths, etc.
+- `main.rkt` – Driver that runs all passes, can build a binary, and can launch a debug server.
+- `test.rkt` – Test harness. Runs isolation tests or end-to-end native tests depending on `-m` mode.
+- `runtime.c` – Minimal runtime (`read_int64`, `print_int64`, etc.).
+- `test-programs/` – Example programs (`.scm`).
+- `input-files/` – Input streams for programs (lines of integers).
+- `goldens/` – Instructor goldens (IR snapshots, interpreter outputs, and stdout baselines).
+
+Please do not rename files or directories (grading infra depends on them).
+
+## The Compiler Pipeline (passes)
+
+The compiler consists of a number of passes. Please do not get
+overwhelmed: each of these passes is going to be very small, and each
+has a specific, isolated behavior that will allow us to explain the
+specific stages of compilation. Additionally, as the code is compiled,
+it is translated into an increasingly-lower-level IR.
+
+You will implement the following passes:
+
+1. `typecheck` → assign R2 types (`Int`, `Bool`) or raise `'type-error`
+   Input: `R2?` → Output: `R2?` → Interp: `interpret-R2`
+2. `shrink` → remove binary `-`, `and`/`or`, and `<=, >, >=` (desugar to `eq?`/`<`)  
+   Input: `R2?` → Output: `shrunk-R2?` → Interp: `interpret-R2`
+3. `uniqueify` → ensure each bound identifier is written exactly once  
+   Input: `shrunk-R2?` → Output: `unique-source-tree?` → Interp: `interpret-R2`
+4. `anf-convert` → ANF conversion (introduce temps; maintain booleans/comparisons)  
+   Input: `unique-source-tree?` → Output: `anf-program?` → Interp: `interpret-anf`
+5. `explicate-control` → ANF → **C1** (blocks with `(seq (assign …) …)`, `if`/`goto`)  
+   Input: `anf-program?` → Output: `c1-program?` → Interp: `interpret-c1`
+6. `uncover-locals` → collect locals for stack layout  
+   Input: `c1-program?` → Output: `locals-program?` → Interp: `interpret-c1`
+7. `select-instructions` → C1 → pseudo-x86 (vars, `cmpq`, `set e|l`, `jmp-if e|l`)  
+   Input: `locals-program?` → Output: `instr-program?` → Interp: `interpret-instr`
+8. `assign-homes` → map `(var x)` → `(deref (reg rbp) n)`  
+   Input: `instr-program?` → Output: `homes-assigned-program?` → Interp: `interpret-instr`
+9. `patch-instructions` → fix illegal memory↔memory moves and related cases  
+   Input: `homes-assigned-program?` → Output: `patched-program?` → Interp: `interpret-instr`
+10. `prelude-and-conclusion` → prologue, print result, return 0  
+    Input: `patched-program?` → Output: `x86-64?` → Interp: `interpret-instr`
+11. `dump-x86-64` → render assembly text  
+    Input: `x86-64?` → Output: `string?` → Interp: `dummy-interp-x86-64`
+
+**What you implement**: All passes in `compile.rkt` are scaffolded.
+Your job is to produce outputs that satisfy each predicate in
+`irs.rkt` and that remain semantically equivalent (the interpreters
+check this).
+
+## IR Predicates and Interpreters
+
+- **Predicates** (`irs.rkt`): Each pass has a precise predicate (e.g.,
+  `anf-program?`, `c1-program?`, etc.). Tests check both input and
+  output predicates at every step to catch malformed IR early. You
+  should read and understand each predicate.
+
+- **Interpreters** (`interpreters.rkt`): For many stages we run the
+  interpreter over your IR to check semantic consistency—different IRs
+  must compute the same result on the same input stream. The harness
+  reports whether outputs match and whether stdout across passes is
+  consistent. Please do not modify this file.
+
+## How to Compile and Run
+
+To directly compile a single file using `main.rkt`:
+
+```
+racket main.rkt test-programs/<prog>.scm
+```
+
+The compiler dumps a long summary of the work done at each pass, and
+ultimately yields a program `./output` which it compiles using
+system-specific infrastructure (works on Linux/Mac).
+
+Example:
+
+```
+$ racket main.rkt test-programs/example.scm
+Compiling IR (using *your* compile.rkt) …
+'(pushq (reg rbp))
+...
+🏗️ Now building a binary... 🏗️
+-> Host: macosx/x86_64  Target: x86_64-apple-darwin  Entry: main
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./output.s -o ./output.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./runtime.c -o ./runtime.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 ./output.o ./runtime.o -o ./output
+Success! Executable produced at: ./output
+Done!
+$ ./output
+42
+```
+
+Programs that `(read)` input will prompt or consume stdin. You can use
+input redirection:  
+`./output < input-files/1.in`
+
+## Debugging Guide
+
+This is a tricky project, and it is really important that you lean
+into a debugging methodology that works for you. Let me share with you
+some advice I used when I was writing the compiler myself.
+
+- First, I started by writing a single manual test in the top-level of
+  `compile.rkt`, so that I could easily just sit at the command line
+  (or Dr. Racket) and run `compile.rkt` (with no command-line
+  arguments) and see if the test would pass. At the early stages of
+  debugging, this is an excellent strategy, since it means
+  fully-pushbutton test. For example, I had (appended to
+  `compile.rkt`) something like:
+
+```
+(displayln ;; or pretty-print 
+ (dump-x86-64
+  (prelude-and-conclusion
+   (patch-instructions
+    (assign-homes
+     (select-instructions
+      (uncover-locals
+       (explicate-control
+        (anf-convert
+         (uniqueify
+          (shrink
+           (typecheck '(program (let ([a (read)])
+                                  (let ([b (read)]) (if (or (> a b) (eq? (+ b 1) 0))
+                                                        (+ a b)
+                                                        (- b a)))))))))))))))))
+```
+
+- I started with a fairly large test in my case--since I was merely
+  adding forms not present in my previous implementation. In this
+  case, I would often be hitting match failures--this is a *good*
+  thing, it allows me to trace down exactly where I need to add match
+  cases and handle new behavior. Of course, the issue is that I also
+  need to mix that with thinking holistically about the specs of each
+  IR.
+
+- After I thought I had each pass of the compiler working, I started
+  switching over to `main.rkt`, which will run all passes of the
+  compiler and will report their outputs. I also needed to write the
+  interpreters (you do not), and so I debugged some of those using
+  `main.rkt`.
+
+- Last, once things are acutally working, I used `test.rkt`, which I
+  adjusted to account for the possibility of expected type errors in
+  malformed inputs.
+
+- My advice to you is similar: start with something where you can
+  press "Run" (or continually reinvoke `racket compile.rkt`). It will
+  facilitate rapid testing, and it is really important to build some
+  skill and intuition for how to accomplish that exercise.
+
+- Remember, debugging is a key concept that you are practicing in this
+  class.
+
+## Tricky Parts of this Project
+
+**BE CAREFUL** of the following:
+
+- In the event of a type error, raise `(error (type-error-tag) "Error here...")`
+
+- In the previous implementation, we had only a single block, and
+  `prelude-and-conclusion` sandwiched the generated code between code
+  to set up the function and code to print the value and exit the
+  function. In this case, that will not work so well. Instead, I
+  recommend the following approach: in the `select-instructions` pass,
+  assume the existence of a special block named `conclusion`, which
+  assumes the return value (to be printed) is in `%rax`, and jump to
+  that label. Then, in `prelude-and-conclusion`, add this label to the
+  program with the right code to print the value of `%rax`. 
+
+- On Mac OSX, you need to prefix labels for functions, meaning `_main`
+  instead of `main`. To facilitate this, I provide a function `(rt-sym
+  s)`, which converts a symbol to a system-specific variant (based on
+  the OS). However, you only need to worry about this for labels that
+  correspond to exported *function* entrypoints, not other labels that
+  are internal to the program (e.g., the target of a jump, or even
+  `conclusion`). This is important, because you don't want to call
+  `(rt-sym ...)` until the *very last pass* (it is ugly to make the
+  previous passes OSX/Linux-specific). The issue is this: if you
+  naively rename every label from `foo` to `_foo`, then you also need
+  to ensure that you clean up jumps so that instead of jumping to
+  `foo`, they go to `_foo`. In my implementation, I handled this as
+  follows: I simply used `(rt-sym ...)` on the `(entry-symbol)` (i.e.,
+  `main`), which is the *only* function in this project.
+
+- Ensure 16-byte stack alignment before `callq`
+
+## Testing Infrastructure
+
+The file `test.rkt` runs a set of formal tests, as in the last
+project.
+
+- `frontend` – runs `typecheck` → `anf-convert`, checks ANF via interpreter
+- `middleend` – runs `explicate-control` → `uncover-locals`, checks via `interpret-c1`
+- `backend` – runs `select-instructions` → `patch-instructions`, checks via `interpret-instr`
+- `native` – full compile → build binary → run with stdin → compare stdout to golden
+
+Usage:
+
+```
+racket test.rkt -m <mode> -i <comma-separated input files> -g <comma-separated goldens> <program.scm>
+```
+
+Example:
+
+```
+racket test.rkt -m native -i ./input-files/1.in -g goldens/example_1_uniqueify.stdout test-programs/example.scm
+```
+
+## Goldens: What They Are
+
+We use goldens to verify correctness:
+
+1. **Isolation goldens** – for non-native modes:
+   - Compare serialized ASTs and interpreter stdout
+2. **Native goldens** – for full pipeline:
+   - Run your compiled binary, compare stdout
+
+Layout:
+
+- `goldens/<prog>_<n>_<pass>.in-ast`
+- `goldens/<prog>_<n>_<pass>.out-ast`
+- `goldens/<prog>_<n>_<pass>.interp`
+- `goldens/<prog>_<n>_<pass>.stdout`
+
+Instructor-only `gengoldens` mode regenerates these.
+
+## FAQ
+
+- **Do I need register allocation?**  
+  No. Stack-based only.
+
+- **Can I write helpers?**  
+  Yes—keep pass signatures unchanged.
+
+- **Can I call arbitrary C functions?**  
+  No. Only use `read_int64` / `print_int64`.
+
+- **How are inputs fed?**  
+  Via stdin; `.in` files are whitespace-separated integers.
+
+## Autograder Tests
+
+The autograder invokes `test.rkt` in JSON mode. Your job is to make
+each pass satisfy its predicates and produce semantically equivalent
+IRs until final native code passes all tests.

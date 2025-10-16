@@ -1,0 +1,1 @@
+((3) 0 () 0 () () (c program c (h - (equal)) c (h - (equal) (conclusion q (movq (reg rax) (reg rdi)) (callq print_int64 0) (movq (imm 0) (reg rax)) (movq (reg rbp) (reg rsp)) (popq (reg rbp)) (retq)) (main q (pushq (reg rbp)) (movq (reg rsp) (reg rbp)) (addq (imm 0) (reg rsp)) (movq (imm 42) (reg rax)) (jmp conclusion)))))

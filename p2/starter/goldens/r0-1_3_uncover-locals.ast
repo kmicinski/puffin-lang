@@ -1,0 +1,4 @@
+(list
+ 'program
+ (set 'g6984)
+ '#hash((_main . (seq (assign g6984 (- 5)) (return g6984)))))

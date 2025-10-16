@@ -1,0 +1,16 @@
+'(program
+  #hash((read6958 . -8))
+  #hash((_main
+         .
+         ((pushq (reg rbp))
+          (movq (reg rsp) (reg rbp))
+          (addq (imm 0) (reg rsp))
+          (callq _read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (reg rdi))
+          (callq _print_int64 0)
+          (movq (imm 0) (reg rax))
+          (movq (reg rbp) (reg rsp))
+          (popq (reg rbp))
+          (retq)))))

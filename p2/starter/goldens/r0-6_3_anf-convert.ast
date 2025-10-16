@@ -1,0 +1,9 @@
+'(program
+  ()
+  (let ((read7595 (read)))
+    (let ((read7596 (read)))
+      (let ((read7597 (read)))
+        (let ((read7598 (read)))
+          (let ((|+7599| (+ read7597 read7598)))
+            (let ((|+7600| (+ read7596 |+7599|)))
+              (let ((|+7601| (+ read7595 |+7600|))) |+7601|))))))))

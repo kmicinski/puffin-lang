@@ -1,0 +1,25 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign read7975 (read))
+          (seq
+           (assign n read7975)
+           (seq
+            (assign |+7976| (+ n 1))
+            (seq
+             (assign m |+7976|)
+             (seq
+              (assign g7977 (- m))
+              (seq
+               (assign p g7977)
+               (seq
+                (assign |+7978| (+ p p))
+                (seq
+                 (assign q |+7978|)
+                 (seq
+                  (assign |+7979| (+ m n))
+                  (seq
+                   (assign |+7980| (+ q |+7979|))
+                   (return |+7980|))))))))))))))
