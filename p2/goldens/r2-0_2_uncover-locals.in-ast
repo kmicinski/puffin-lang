@@ -1,1 +1,1 @@
-((3) 0 () 0 () () (c program c () c (h - (equal) ((su . "lab6808") q return 23) ((su . "lab6809") q return 42) (main c seq c (c assign c (su . "g6805") q (not #f)) c (c if c (c eq? c (su . "g6805") q #f) c (c goto c (su . "lab6809")) c (c goto c (su . "lab6808")))))))
+((3) 0 () 0 () () (c program c () c (h - (equal) ((su . "lab5440") q return 23) ((su . "lab5441") q return 42) (main c seq c (c assign c (su . "g5437") q (not #f)) c (c if c (c eq? c (su . "g5437") q #f) c (c goto c (su . "lab5441")) c (c goto c (su . "lab5440")))))))
