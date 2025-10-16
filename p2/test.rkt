@@ -11,7 +11,7 @@
          "irs.rkt"
          "interpreters.rkt")
 
-;; ───── command-line parsing ─────
+;; command-line parsing
 (define mode (make-parameter "native"))
 (define in-files (make-parameter ""))
 (define goldens (make-parameter ""))
@@ -34,13 +34,13 @@
                    (cfg-file cfg)]
    #:args rest-args (if (empty? rest-args) 'no-file (first rest-args))))
 
-;; ───── mode → metadata ─────
+;; mode → metadata: synced with main.rkt
 (define modes
   (hash
-   "frontend"    (list "uniqueify"           "anf-convert"        R1?              interpret-anf)
-   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c0)
+   "frontend"    (list "typecheck"           "anf-convert"        R2?              interpret-anf)
+   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c1)
    "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
-   "native"      (list "uniqueify"           "render-x86"         string?          dummy-interp-x86-64)))
+   "native"      (list "typecheck"           "render-x86"         string?          dummy-interp-x86-64)))
 
 (define (file->ints p)
   (map string->number (file->lines p)))
@@ -230,7 +230,7 @@
           (with-output-to-file interp (λ () (displayln (hash-ref elt 'interp))) #:exists 'replace)
           (with-output-to-file stdout (λ () (displayln (hash-ref elt 'stdout ""))) #:exists 'replace))))))
 
-;; ───── execute tests ─────
+;; execute tests
 (define (tests)
   (cond
     [(equal? (mode) "json") ;; JSON mode is used by the autograder

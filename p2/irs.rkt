@@ -1,96 +1,151 @@
 #lang racket
+;;
+;; CIS531 Fall '25: Project 2 -- R2 / LIf
+;;
+;; This file specifies the IRs used across the compiler pipeline.  Do
+;; not change the intended meaning of these contracts; your passes
+;; must produce programs that satisfy these predicates.
+;;
 
 (require "system.rkt")
-
-;; 
-;; This file provides detailed documentation of each of the IRs used
-;; in the project.
-;; 
-;; Please do not modify this code (doing so will not help you): your
-;; passes must conform to these specifications for the autograder to
-;; work.
-
 (provide (all-defined-out))
 
+;; ---------------------------------------------------------------------
 ;; Helpers
-(define (atom?  a)          (or (fixnum? a)         (symbol? a)))
-(define (imm?   op)         (match op [`(imm ,n)    (fixnum? n)] [_ #f]))
-(define (byte-reg?  op)     (match op [`(byte-reg ,r)    (symbol? r)] [_ #f]))
-(define (reg?   op)         (match op [`(reg ,r)    (symbol? r)] [_ #f]))
-(define (var?   op)         (match op [`(var ,x)    (symbol? x)] [_ #f]))
-(define (cc?    op)         (member op '(e l le g ge)))
-(define (deref? op)         (match op [`(deref (reg ,r) ,i) (and (symbol? r) (integer? i))] [_ #f]))
-(define (label? l)          (symbol? l))
-;;
-;; Source language
-;;
-
-;; ---------------------------------------------------------------------
-;; 1.  Raw R2 program (before uniqueify)
 ;; ---------------------------------------------------------------------
 
-;; comparators
+(define (atom? a)                (or (fixnum? a) (symbol? a) (boolean? a)))
+(define (imm? op)                (match op [`(imm ,n)            (fixnum? n)] [_ #f]))
+(define (byte-reg? op)           (match op [`(byte-reg ,r)       (symbol? r)] [_ #f]))
+(define (reg? op)                (match op [`(reg ,r)            (symbol? r)] [_ #f]))
+(define (var? op)                (match op [`(var ,x)            (symbol? x)] [_ #f]))
+(define (cc? op)                 (member op '(e l le g ge))) ; we currently use only e (==) and l (<)
+(define (deref? op)              (match op [`(deref (reg ,r) ,i) (and (symbol? r) (integer? i))] [_ #f]))
+(define (label? l)               (symbol? l))
+
+;; ---------------------------------------------------------------------
+;; 1.  Raw R2 program (before shrink/uniqueify)
+;; ---------------------------------------------------------------------
+
+;; Comparators in the *source* language (shrink will reduce this set)
 (define (cmp? cmp)
   (member cmp '(eq? < <= > >=)))
 
 (define (R2-exp? e)
   (match e
-    [#t #t] ;; boolean constant #t -- new
-    [#f #t] ;; boolean constant #f -- new (notice the RHS is #t, not #f!)
+    [#t #t]
+    [#f #t]
     [(? fixnum? n) #t]
     [`(read) #t]
     [`(- ,(? R2-exp? e)) #t]
-    [`(- ,(? R2-exp? e0) ,(? R2-exp? e)1) #t] ;; new
+    [`(- ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
     [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1))  #t] ;; new
-    [`(or ,(? R2-exp? e0) ,(? R2-exp? e1)) #t] ;; new
-    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f)) #t] ;; new
-    [`(not ,(? R2-exp? e1)) #t] ;; new
-    [`(,(? cmp? cmp) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t] ;; new
+    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(or  ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f)) #t]
+    [`(not ,(? R2-exp? e1)) #t]
+    [`(,(? cmp? c) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
     [(? symbol? var) #t]
     [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
     [_ #f]))
 
-;; An R2 program is an R2 expression wrapped in '(program ...)
 (define (R2? e)
   (match e
     [`(program ,(? R2-exp? exp)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 2.  Unique R2 (after uniqueify)
-;;     – every bound identifier is written exactly once
+;; 2.  Typed R2 (typechecker lives elsewhere; this just names the types)
 ;; ---------------------------------------------------------------------
 
-(define (unique-source-tree? p)
-  (define (walk e seen)
-    (match e
-      [(? fixnum?)                        seen]
-      ['(read)                            seen]
-      [`(- ,e)                            (walk e seen)]
-      [`(+ ,e0 ,e1)                       (walk e1 (walk e0 seen))]
-      [(? symbol?)                        seen]
-      [`(let ([,(? symbol? x) ,e]) ,eb)
-       (and (not (set-member? seen x))
-            (let ([seen* (set-add (walk e seen) x)])
-              (walk eb seen*)))]
-      [_                                  #f]))
+(define (R2-type? t)
+  (match t
+    ['Int  #t]
+    ['Bool #t]
+    [_ #f]))
+
+;; Symbol to use when raising type errors from the typechecker
+(define type-error-tag 'type-error)
+
+;; ---------------------------------------------------------------------
+;; 3.  Shrunk R2 (after shrink)
+;;     – Removes binary minus, and/or, <=, >, >=
+;;     – Keeps: integers, booleans, read, unary -, +, not, if, eq?, <, let, vars
+;; ---------------------------------------------------------------------
+
+(define (shrunk-cmp? c) (member c '(eq? <)))
+
+(define (shrunk-R2-exp? e)
+  (match e
+    [#t #t]
+    [#f #t]
+    [(? fixnum? n) #t]
+    [`(read) #t]
+    ;; arithmetic
+    [`(- ,(? shrunk-R2-exp? e)) #t]                         ; unary minus only
+    [`(+ ,(? shrunk-R2-exp? e0) ,(? shrunk-R2-exp? e1)) #t] ; addition
+    ;; logic / tests
+    [`(not ,(? shrunk-R2-exp? e1)) #t]
+    [`(,(? shrunk-cmp? c) ,(? shrunk-R2-exp? e0) ,(? shrunk-R2-exp? e1)) #t]
+    ;; control
+    [`(if ,(? shrunk-R2-exp? e-g) ,(? shrunk-R2-exp? e-t) ,(? shrunk-R2-exp? e-f)) #t]
+    ;; vars/let
+    [(? symbol? x) #t]
+    [`(let ([,(? symbol? x) ,(? shrunk-R2-exp? e)]) ,(? shrunk-R2-exp? e-b)) #t]
+    [_ #f]))
+
+(define (shrunk-R2? p)
   (match p
-    [`(program () ,e)
-     (and (R2-exp? e)
-          (set? (walk e (set)))           ; walk returns a set when OK
-          )]
+    [`(program ,(? shrunk-R2-exp? e)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 3.  ANF (after anf-convert)
+;; 4.  Unique R2 (after uniqueify) — performed *after* shrink
+;;     – every bound identifier is written exactly once
+;; ---------------------------------------------------------------------
+
+(define (unique-source-tree/walk e seen)
+  (match e
+    [(? fixnum?)                        seen]
+    [#t                                 seen]
+    [#f                                 seen]
+    ['(read)                            seen]
+    ;; arithmetic
+    [`(- ,e)                            (unique-source-tree/walk e seen)]
+    [`(+ ,e0 ,e1)                       (unique-source-tree/walk e1 (unique-source-tree/walk e0 seen))]
+    ;; logic/tests
+    [`(not ,e)                          (unique-source-tree/walk e seen)]
+    [`(,(? shrunk-cmp? _) ,e0 ,e1)      (unique-source-tree/walk e1 (unique-source-tree/walk e0 seen))]
+    ;; control
+    [`(if ,e-g ,e-t ,e-f)               (unique-source-tree/walk e-f (unique-source-tree/walk e-t (unique-source-tree/walk e-g seen)))]
+    ;; variables
+    [(? symbol?)                        seen]
+    ;; let-binding (check "unique write" property)
+    [`(let ([,(? symbol? x) ,e]) ,eb)
+     (and (not (set-member? seen x))
+          (let ([seen* (set-add (unique-source-tree/walk e seen) x)])
+            (unique-source-tree/walk eb seen*)))]
+    [_                                  #f]))
+
+(define (unique-source-tree? p)
+  (match p
+    [`(program () ,e)
+     (and (shrunk-R2-exp? e)
+          (set? (unique-source-tree/walk e (set))))]
+    [_ #f]))
+
+;; ---------------------------------------------------------------------
+;; 5.  ANF (after anf-convert)
 ;; ---------------------------------------------------------------------
 
 (define (anf-rhs? rhs)
   (match rhs
-    [`(read)                          #t]
+    ['(read)                          #t]
     [`(- ,(? atom? a))                #t]
     [`(+ ,(? atom? a0) ,(? atom? a1)) #t]
+    [`(not ,(? atom? a))              #t]
+    [`(eq? ,(? atom? a0) ,(? atom? a1)) #t]
+    [`(<   ,(? atom? a0) ,(? atom? a1)) #t]
     [(? atom?)                        #t]
     [_                                #f]))
 
@@ -104,19 +159,20 @@
 (define (anf-program? p)
   (match p
     [`(program () ,(? anf-exp? e)) #t]
-    [_                #f]))
+    [_                             #f]))
 
 ;; ---------------------------------------------------------------------
-;; 4.  C1 / explicated control (after explicate-control)
+;; 6.  C1 / explicated control (after explicate-control)
+;;     (Comparators restricted to eq? and <)
 ;; ---------------------------------------------------------------------
 
 (define (c1-cmp? cmp) (member cmp '(eq? <)))
-
 
 (define (c1-rhs? rhs)
   (match rhs
     [(? fixnum?)              #t]
     [(? symbol?)              #t]
+    [(? boolean?)             #t]
     ['(read)                  #t]
     [`(- ,a)                  (atom? a)]
     [`(+ ,a0 ,a1)             (and (atom? a0) (atom? a1))]
@@ -145,7 +201,7 @@
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 5.  Locals uncovered (after uncover-locals)
+;; 7.  Locals uncovered (after uncover-locals)
 ;; ---------------------------------------------------------------------
 
 (define (locals-program? p)
@@ -156,65 +212,77 @@
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 6.  Instruction selection (var-operands still present)
+;; 8.  Instruction selection (vars still present as (var x))
 ;; ---------------------------------------------------------------------
-(define (operand/vars? op)  (or (imm? op) (reg? op) (var?  op) (byte-reg? op)))
 
-
+(define (operand/vars? op)
+  (or (imm? op) (reg? op) (var? op) (byte-reg? op)))
 
 (define (instr/vars? i)
   (match i
-    [`(movq ,(? operand/vars? src) ,(? operand/vars? dst))   #t]
-    [`(movzbq ,(? operand/vars? src) ,(? operand/vars? dst)) #t]
-    [`(addq ,(? operand/vars? src) ,(? operand/vars? dst))   #t]
-    [`(negq ,(? operand/vars? op))                           #t]
-    [`(pushq ,(? operand/vars? op))                          #t]
-    [`(popq ,(? operand/vars? op))                           #t]
-    [`(callq ,(? symbol?) ,(? integer?))                     #t]
-    [`(retq)                                                 #t]
-    [`(xorq ,(? operand/vars?) ,(? operand/vars?))           #t]
-    [`(cmpq ,(? operand/vars?) ,(? operand/vars?))           #t]
-    [`(set  ,(? cc?) ,(? operand/vars?))                     #t]
-    [`(jmp ,(? label?))                                      #t]
-    [`(jmp-if ,(? cc?) ,(? label?))                          #t]
-    [`(label ,(? label?))                                    #t]
-    [_                                                       #f]))
+    [`(movq ,(? operand/vars? src) ,(? operand/vars? dst))     #t]
+    [`(movzbq ,(? byte-reg? src) ,(? operand/vars? dst))       #t]
+    [`(addq ,(? operand/vars? src) ,(? operand/vars? dst))     #t]
+    [`(negq ,(? operand/vars? op))                             #t]
+    [`(pushq ,(? operand/vars? op))                            #t]
+    [`(popq ,(? operand/vars? op))                             #t]
+    [`(callq ,(? symbol?) ,(? integer?))                       #t]
+    [`(retq)                                                   #t]
+    [`(xorq ,(? operand/vars?) ,(? operand/vars?))             #t]
+    [`(cmpq ,(? operand/vars?) ,(? operand/vars?))             #t]
+    [`(set  ,(? cc?) ,(? byte-reg? dst))                       #t]
+    [`(jmp ,(? label?))                                        #t]
+    [`(jmp-if ,(? cc?) ,(? label?))                            #t]
+    [_                                                         #f]))
 
 (define (instr-program? p)      ; after select-instructions
   (match p
     [`(program ,info ,blocks)
      (and (set? info)
           (hash-has-key? blocks (entry-symbol))
-          (andmap instr/vars? (hash-ref blocks (entry-symbol))))]
+          (andmap (λ (blk-name)
+                    (andmap instr/vars? (hash-ref blocks blk-name)))
+           (hash-keys blocks)))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 7.  Homes assigned (vars → (deref rbp n))
+;; 9.  Homes assigned (vars → (deref rbp n))
 ;; ---------------------------------------------------------------------
-(define (operand/homes? op) (or (imm? op) (reg? op) (deref? op)))
+
+(define (operand/homes? op)
+  (or (imm? op) (reg? op) (deref? op) (byte-reg? op)))
 
 (define (instr/homes? i)
   (match i
-    [`(movq ,(? operand/homes? src) ,(? operand/homes? dst)) #t]
-    [`(addq ,(? operand/homes? src) ,(? operand/homes? dst)) #t]
-    [`(negq ,(? operand/homes? op))                          #t]
-    [`(pushq ,(? operand/homes? op))                         #t]
-    [`(popq ,(? operand/homes? op))                          #t]  
-    [`(callq ,(? symbol?) ,(? integer?))                     #t]
-    [`(retq)                                                 #t]
-    [_                                                       #f]))
+    [`(movq ,(? operand/homes? src) ,(? operand/homes? dst))     #t]
+    [`(movzbq ,(? operand/homes? src) ,(? operand/homes? dst))   #t]
+    [`(addq ,(? operand/homes? src) ,(? operand/homes? dst))     #t]
+    [`(negq ,(? operand/homes? op))                              #t]
+    [`(pushq ,(? operand/homes? op))                             #t]
+    [`(popq ,(? operand/homes? op))                              #t]
+    [`(callq ,(? symbol?) ,(? integer?))                         #t]
+    [`(retq)                                                     #t]
+    [`(cmpq ,(? operand/homes?) ,(? operand/homes?))             #t]
+    [`(xorq ,(? operand/homes?) ,(? operand/homes?))             #t]
+    [`(set  ,(? cc?) ,(? operand/homes?))                        #t]
+    [`(jmp ,(? label?))                                          #t]
+    [`(jmp-if ,(? cc?) ,(? label?))                              #t]
+    [`(label ,(? label?))                                        #t]
+    [_                                                           #f]))
 
 (define (homes-assigned-program? p)
   (match p
     [`(program ,var->loc ,blocks)
      (and (hash? var->loc)
           (hash-has-key? blocks (entry-symbol))
-          (andmap instr/homes? (hash-ref blocks (entry-symbol))))]
+          (andmap (λ (blk-name)
+                    (andmap instr/homes? (hash-ref blocks blk-name)))
+                  (hash-keys blocks)))]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 8.  Patched moves (after patch-instructions)
-;;     – no movq where both operands are derefs
+;; 10. Patched moves (after patch-instructions)
+;;     – no (movq (deref ...) (deref ...))
 ;; ---------------------------------------------------------------------
 
 (define (patched-instr? i)
@@ -227,22 +295,14 @@
   (and (homes-assigned-program? p)
        (match p
          [`(program ,_ ,blocks)
-          (andmap patched-instr? (hash-ref blocks (entry-symbol)))]
+          (andmap
+           (λ (blk-name)
+             (andmap patched-instr? (hash-ref blocks blk-name)))
+           (hash-keys blocks))]
          [_ #f])))
 
 ;; ---------------------------------------------------------------------
-;; 9.  Prelude + conclusion added (final x86 block)
+;; 11. Prelude + conclusion added (final x86 block)
 ;; ---------------------------------------------------------------------
 
-(define (x86-64? p)
-  (and (patched-program? p)
-       (match p
-         [`(program ,_ ,blocks)
-          (let* ([b  (hash-ref blocks (entry-symbol))]
-                 [hd (first b)]
-                 [tl (last  b)])
-            (pretty-print hd)
-            (pretty-print tl)
-            (and (equal? hd '(pushq (reg rbp)))
-                 (equal? tl '(retq))))]
-         [_ #f])))
+(define x86-64? patched-program?)

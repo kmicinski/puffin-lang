@@ -15,21 +15,21 @@
 (require "compile.rkt")
 (require "interpreters.rkt")
 
-;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
-;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
-(define all-passes
-  (list 
-   `(,typecheck              "typecheck"           ,R2?                       ,unique-source-tree?     ,interpret-R2)      
-   `(,shrink                 "shrink"              ,R2?                       ,shrunk-source-tree?     ,interpret-R2)
-   `(,uniqueify              "uniqueify"           ,R2?                       ,unique-source-tree?     ,interpret-R2)
-   `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
-   `(,explicate-control      "explicate-control"   ,anf-program?              ,c1-program?             ,interpret-c0)
-   `(,uncover-locals         "uncover-locals"      ,c0-program?               ,locals-program?         ,interpret-c0)
-   `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
-   `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
-   `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
-   `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
-   `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,dummy-interp-x86-64)))
+ ;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
+ ;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
+ (define all-passes
+   (list 
+    `(,typecheck              "typecheck"           ,R2?                       ,R2?                     ,interpret-R2)
+    `(,shrink                 "shrink"              ,R2?                       ,shrunk-R2?              ,interpret-R2)
+    `(,uniqueify              "uniqueify"           ,shrunk-R2?                ,unique-source-tree?     ,interpret-R2)
+    `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
+    `(,explicate-control      "explicate-control"   ,anf-program?              ,c1-program?             ,interpret-c1)
+    `(,uncover-locals         "uncover-locals"      ,c1-program?               ,locals-program?         ,interpret-c1)
+    `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
+    `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
+    `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
+    `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
+    `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,dummy-interp-x86-64)))
 
 ;; Make each column available
 (match-define (list passes
@@ -78,7 +78,7 @@
         (when (hash-ref h 'golden-input #f)
           (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
         (displayln "Input:")
-        (displayln (hash-ref h 'output))
+        (pretty-print (hash-ref h 'output))
         (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
         (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
         (displayln (hash-ref h 'pretty-output))
@@ -285,9 +285,7 @@
                   (loop rest))]))))
       (begin
         (displayln "Skipping assembly/linking (either no assembly or intentionally skipped)...")
-        (pretty-print trace)
         `(err ,trace))))
-
 
 ;;
 ;; Main entrypoint
@@ -307,7 +305,12 @@
     [_          (error 'main "expected at most one <filename>")])))
   ;; run the assembler / linker
   (define source-tree (with-input-from-file file-name read))
-  (run-assembler-linker source-tree))
+  (match (run-assembler-linker source-tree)
+    [`(err ,trace)
+     (displayln "!!! ERROR CAUGHT !!!")
+     (trace->stdout trace)]
+    ;; all good
+    [_ (void)]))
 
 ;; Parse the command line
 (module+ main
