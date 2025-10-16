@@ -120,6 +120,12 @@ Your job is to produce outputs that satisfy each predicate in
 `irs.rkt` and that remain semantically equivalent (the interpreters
 check this).
 
+**NOTE**: Right now (in this version of the project), I testing
+typechecking rather minimally. Unfortunately that is a known
+limitation of this project; please do implement typechecking, but know
+that it is far less important than the other parts (you can simply
+implement it as a no-op to start).
+
 ## IR Predicates and Interpreters
 
 - **Predicates** (`irs.rkt`): Each pass has a precise predicate (e.g.,
@@ -223,7 +229,15 @@ some advice I used when I was writing the compiler myself.
   skill and intuition for how to accomplish that exercise.
 
 - Remember, debugging is a key concept that you are practicing in this
-  class.
+  class. The worst possible thing you can do is "guess and check"
+  debugging (running the tests and hoping they pass)--the issue is
+  that doing this gives you very little observability into why the
+  code is broken. To fix this, you need to have some way of
+  interacting with the code. Experts debug their code using an
+  iterative, hypothesis-driven methodology, where they (a) articulate
+  a falsifiable hypothesis ("this match pattern never matches
+  anything"), (b) change their code to observe the bug ("add a
+  displayln at every match handler"), and (c) 
 
 ## Tricky Parts of this Project
 
