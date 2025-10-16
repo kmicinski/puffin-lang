@@ -120,6 +120,12 @@ Your job is to produce outputs that satisfy each predicate in
 `irs.rkt` and that remain semantically equivalent (the interpreters
 check this).
 
+**NOTE**: Right now (in this version of the project), I testing
+typechecking rather minimally. Unfortunately that is a known
+limitation of this project; please do implement typechecking, but know
+that it is far less important than the other parts (you can simply
+implement it as a no-op to start).
+
 ## IR Predicates and Interpreters
 
 - **Predicates** (`irs.rkt`): Each pass has a precise predicate (e.g.,
