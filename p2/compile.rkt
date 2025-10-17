@@ -9,7 +9,7 @@
 
 ;; The compiler is designed in passes, which go:
 ;;
-;; --> R2? -- Source program
+;; --> R3? -- Source program
 ;; |
 ;; +-> typed-R2? -- Typechecking R2
 ;; | 
