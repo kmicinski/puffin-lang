@@ -11,15 +11,13 @@
 ;;
 ;; --> R3? -- Source program
 ;; |
-;; +-> typed-R2? -- Typechecking R2
-;; | 
-;; +-> shrunk-R2? -- Shrunken R2 (removes several forms)
+;; +-> shrunk-R2? -- Shrunken R3 (removes several forms)
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
 ;; +-> anf-program? -- A-Normal form (flattening nested expressions)
 ;; |
-;; +-> c1-program? -- The C1 IR: blocks of sequences of commands, if, and gotos
+;; +-> c2-program? -- The C2 IR: blocks of sequences of commands, if, and gotos
 ;; |
 ;; +-> locals-program? -- Uncovering local variables
 ;; |
@@ -74,17 +72,17 @@
   (define (function-name? block-name) (equal? block-name (entry-symbol)))
   (match p
     [`(program ,info ,blocks)
-      (string-append
-       ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
-       (format ".globl ~a\n" (rt-sym (entry-symbol)))
-       ;; include these for sure
-       (runtime-function-externs)
-       (foldl (λ (block-name acc) (string-append acc (render-block (hash-ref blocks block-name)
-                                                                   (if (function-name? block-name)
-                                                                       (rt-sym block-name)
-                                                                       block-name))))
-              ""
-              (hash-keys blocks)))]))
+     (string-append
+      ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
+      (format ".globl ~a\n" (rt-sym (entry-symbol)))
+      ;; include these for sure
+      (runtime-function-externs)
+      (foldl (λ (block-name acc) (string-append acc (render-block (hash-ref blocks block-name)
+                                                                  (if (function-name? block-name)
+                                                                      (rt-sym block-name)
+                                                                      block-name))))
+             ""
+             (hash-keys blocks)))]))
 
 ;; adds the prelude and conclusion to each of the functions in the program
 (define (prelude-and-conclusion p)
@@ -256,7 +254,7 @@
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
     [`(program ,info ,h)
-     (define blocks (hash-set 
+     (define blocks (hash-set
                      (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref h block)))) h (hash-keys h))
                      (conclusion-block-name)
                      '())) ;; also add an empty conclusion block
@@ -357,7 +355,12 @@
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
-                         `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
+                         `(let ([,x ,atom]) ,(convert-expr e-b k))))]
+      [`(set! ,x ,e)
+       (convert-expr e (lambda (atom)
+                         `(set! x ,atom)))]
+      [`(while ,e-g ,e-b)
+       `(while ,(convert-expr e-g k) ,(convert-expr e-b k))]))
   (match p
     [`(program ,info ,e)
      `(program ,info ,(convert-expr e (lambda (x) x)))]))
@@ -387,7 +390,9 @@
                   [assignment+ (hash-set assignment x x+)])
              `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))
            (let ([assignment+ (hash-set assignment x x)])
-             `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]))
+             `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
+      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
+      [`(while ,e-g ,e-b) `(while ,e-g ,(rename e-b assignment))]))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -399,7 +404,7 @@
 ;; - Removes all binary comparators except < and eq?
 (define (shrink p)
   (define (h e)
-    (match e 
+    (match e
       ;; base cases
       [(? symbol?) e]
       [(? number?) e]
@@ -412,77 +417,51 @@
       [`(and ,e0 ,e1) `(if ,(h e0) ,(h e1) #f)]
       [`(or ,e0 ,e1) `(if ,(h e0) #t ,(h e1))]
       [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
-      [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
+      [`(> ,e0 ,e1) (h )]
+      [`(< ,e0 ,e1) `(< ,e0 ,e1)]
       [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
       [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
       [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]
-      [(list es ...) (map h es)]))
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h e-b))]
+      [`(let* ([,x ,e0]) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h e-b))]
+      [`(let* ([,x ,e0] ,rest ...) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
+      [`(begin ,e0) (h e0)]
+      [`(begin ,e0 ,e-rest ...) `(let ([_ ,(h e0)]) ,(h `(begin ,@e-rest)))]
+      [`(set! ,x ,e) `(set! ,x ,(h e))]
+      [`(while ,e-g ,e-b) `(while ,(h e-g) ,(h e-b))]))
   (match p
     [`(program ,exp)
      ;; empty info
      `(program ,(h exp))]))
 
-;; Type checking is separated into two functions:
+;; Live on the edge, don't typecheck
 
-;; Translate an expression to its corresponding type.
-;;       e : R2-exp?
-;;     env : hash from symbol -> R2-type?
+(pretty-print 
+ (shrink
+    '(program
+      (let* ([x (read)]
+             [y 0]
+             [z 1])
+        (begin
+          (while (< y x)
+            (begin (set! y (+ y 1))
+                   (set! z (+ z y))))
+          z))))) 
+
 ;; 
-;; If there is a type ERORR, you should raise an exception, but you
-;; *MUST* raise an exception using the 'type-error tag, for example:
-;;      (error type-error-tag "Expected integer, got boolean")
-;; Note that type-error-tag is defined in irs.rkt--you are encouraged
-;; to make use of it. 
-(define (expr->type e env)
-  (define (expect-type e typ k)
-    (if (equal? (expr->type e env) typ) 
-        (k)
-        (error type-error-tag (format "~a: Expected type ~a" (pretty-format e) (symbol->string typ)))))
-  (match e
-    [#t 'Bool] 
-    [#f 'Bool] 
-    [(? fixnum? n) 'Int]
-    [`(read) 'Int] ;; assume (read) returns int
-    [`(- ,(? R2-exp? e)) (expect-type e 'Int (λ () 'Int))]
-    [`(- ,(? R2-exp? e0) ,(? R2-exp? e1))
-     (expect-type e0 'Int
-                  (λ ()
-                    (expect-type e1 'Int
-                                 (λ () 'Int))))]
-    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1))
-     (expect-type e0 'Int
-                  (λ ()
-                    (expect-type e1 'Int
-                                 (λ () 'Int))))]
-    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) 
-     (expect-type e0 'Bool
-                  (λ ()
-                    (expect-type e1 'Bool
-                                 (λ () 'Bool))))]
-    [`(or ,(? R2-exp? e0) ,(? R2-exp? e1))
-     (expect-type e0 'Bool
-                  (λ ()
-                    (expect-type e1 'Bool
-                                 (λ () 'Bool))))]
-    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f))
-     (expect-type e-g
-                  'Bool
-                  (λ ()
-                    (define t (expr->type e-t env))
-                    (expect-type e-f t (λ () t))))]
-    [`(not ,e)
-     (expect-type e 'Bool (λ () 'Bool))] 
-    [`(,(? cmp? cmp) ,(? R2-exp? e0) ,(? R2-exp? e1))
-     (expect-type e0 'Int (λ () (expect-type e1 'Int (λ () 'Bool))))]
-    [(? symbol? x) (hash-ref env x (λ () (error type-error-tag "Undefined variable")))]
-    [`(let ([,x ,e]) ,e-b)
-     (define t (expr->type e env))
-     (expr->type e-b (hash-set env x t))]))
-
-;; Typecheck a program: a thin wrapper around expr->type. 
-(define (typecheck p)
-  (match-define `(program ,e) p)
-  ;; possibly throw type error
-  (define program-type (expr->type e (hash)))
-  ;; success, if we got here the program typechecked
-  p)
+(explicate-control 
+ (anf-convert
+  (uniqueify
+   (shrink
+    '(program
+      (let* ([x (read)]
+             [y 0]
+             [z 1])
+        (begin
+          (while (< y x)
+            (begin (set! y (+ y 1))
+                   (set! z (+ z y))))
+          z)))))))

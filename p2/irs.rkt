@@ -46,11 +46,14 @@
     [`(not ,(? R3-exp? e1)) #t]
     [`(,(? cmp? c) ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
     [(? symbol? var) #t]
+    [`(let ([,(? symbol? x) ,(? R3-exp? e)]) ,(? R3-exp? e-body)) #t]
+    ;; new forms
+    [`(begin ,(? R3-exp?) ... ,(? R3-exp? return-value)) #t]
+    [`(while ,(? R3-exp? e-g) ,(? R3-exp? es) ...) #t]
     [`(vector ,(? R3-exp?) ,(? R3-exp?) ...) #t] ;; at *least* one body
     [`(vector-ref ,(? R3-exp? vec) ,(? R3-exp? index)) #t]
     [`(vector-set! ,(? R3-exp? vec) ,(? R3-exp? index) ,(? R3-exp? value)) #t]
     [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
-    [`(let ([,(? symbol? x) ,(? R3-exp? e)]) ,(? R3-exp? e-body)) #t]
     [_ #f]))
 
 (define (R3? e)
@@ -82,8 +85,10 @@
     [`(if ,(? shrunk-R3-exp? e-g) ,(? shrunk-R3-exp? e-t) ,(? shrunk-R3-exp? e-f)) #t]
     ;; vars/let
     [(? symbol? x) #t]
+    ;; new -- sequence
     [`(let ([,(? symbol? x) ,(? shrunk-R3-exp? e)]) ,(? shrunk-R3-exp? e-b)) #t]
     ;; new forms
+    [`(let ([_ ,(? shrunk-R3-exp?)]) ,(? shrunk-R3-exp?)) #t] ;; begin turns into multiple lets
     [`(vector ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?) ...) #t]
     [`(vector-ref ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index)) #t]
     [`(vector-set! ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index) ,(? R3-exp? value)) #t]
@@ -126,7 +131,7 @@
 (define (unique-source-tree? p)
   (match p
     [`(program () ,e)
-     (and (shrunk-R2-exp? e)
+     (and (shrunk-R3-exp? e)
           (set? (unique-source-tree/walk e (set))))]
     [_ #f]))
 
@@ -166,15 +171,19 @@
 
 (define (c1-rhs? rhs)
   (match rhs
-    [(? fixnum?)              #t]
-    [(? symbol?)              #t]
-    [(? boolean?)             #t]
-    ['(read)                  #t]
-    [`(- ,a)                  (atom? a)]
-    [`(+ ,a0 ,a1)             (and (atom? a0) (atom? a1))]
-    [`(not ,a)                (atom? a)]
-    [`(,(? c1-cmp?) ,a0 ,a1)  (and (atom? a0) (atom? a1))]
-    [_                        #f]))
+    [(? fixnum?)                       #t]
+    [(? symbol?)                       #t]
+    [(? boolean?)                      #t]
+    ['(read)                           #t]
+    [`(- ,a)                           (atom? a)]
+    [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
+    [`(not ,a)                         (atom? a)]
+    [`(make-vec ,a)                    (atom? a)]
+    [`(vec-length ,a)                  (atom? a)]
+    [`(unsafe-vector-ref ,a0 ,a1)      (and (atom? a0) (atom? a1))]
+    [`(unsafe-vector-set! ,a0 ,a1 ,a2) (and (atom? a0) (atom? a1) (atom? a2))]
+    [`(,(? c1-cmp?) ,a0 ,a1)           (and (atom? a0) (atom? a1))]
+    [_                                 #f]))
 
 (define (c1-tail? s)
   (match s
