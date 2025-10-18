@@ -1,11 +1,17 @@
 #lang racket
 ;;
-;; CIS531 Fall '25: Project 2 -- R2 / LIf
+;; CIS531 Fall '25: Project 3 -- R3, set! and loops
 ;;
 ;; This file specifies the IRs used across the compiler pipeline.  Do
 ;; not change the intended meaning of these contracts; your passes
 ;; must produce programs that satisfy these predicates.
 ;;
+
+;;
+;; This project is a more significant departure from Siek's
+;; book--namely, we do not build our own garbage collector, and
+;; instead use a simpler allocator.
+;; 
 
 (require "system.rkt")
 (provide (all-defined-out))
@@ -89,6 +95,7 @@
     [`(let ([,(? symbol? x) ,(? shrunk-R3-exp? e)]) ,(? shrunk-R3-exp? e-b)) #t]
     ;; new forms
     [`(let ([_ ,(? shrunk-R3-exp?)]) ,(? shrunk-R3-exp?)) #t] ;; begin turns into multiple lets
+    [`(let ([_ (while ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?))]) ,(? shrunk-R3-exp?)) #t]
     [`(vector ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?) ...) #t]
     [`(vector-ref ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index)) #t]
     [`(vector-set! ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index) ,(? R3-exp? value)) #t]
@@ -141,21 +148,22 @@
 
 (define (anf-rhs? rhs)
   (match rhs
-    ['(read)                          #t]
-    [`(- ,(? atom? a))                #t]
-    [`(+ ,(? atom? a0) ,(? atom? a1)) #t]
-    [`(not ,(? atom? a))              #t]
+    ['(read)                            #t]
+    [`(- ,(? atom? a))                  #t]
+    [`(+ ,(? atom? a0) ,(? atom? a1))   #t]
+    [`(not ,(? atom? a))                #t]
     [`(eq? ,(? atom? a0) ,(? atom? a1)) #t]
     [`(<   ,(? atom? a0) ,(? atom? a1)) #t]
-    [(? atom?)                        #t]
-    [_                                #f]))
+    [(? atom?)                          #t]
+    [_                                  #f]))
 
 (define (anf-exp? e)
   (match e
-    [(? atom?)                                           #t]
-    [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?)) #t]
-    [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))    #t]
-    [_                                                   #f]))
+    [(? atom?)                                                      #t]
+    [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
+    [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?))            #t]
+    [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))               #t]
+    [_                                                              #f]))
 
 (define (anf-program? p)
   (match p

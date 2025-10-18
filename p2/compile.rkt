@@ -306,6 +306,14 @@
        (extend (expr->blocks e+ current-block) current-block `(assign ,x (< ,a0 ,a1)))]
       [`(let ([,x (eq? ,a0 ,a1)]) ,e+)
        (extend (expr->blocks e+ current-block) current-block `(assign ,x (eq? ,a0 ,a1)))]
+      [`(let ([,x (while ,e-g ,e-b)]) ,e-r)
+       (define l-rest (gensym 'rest))
+       (define l-header (gensym 'header))
+       (define l-body (gensym 'body))
+       (merge 
+        (merge (hash current-block `(goto ,l-header))
+               (expr->blocks e-r l-rest))
+        (expr->blocks l-body))]
       [(? atom? a)
        (hash current-block `(return ,a))]
       [`(if ,a ,e-t ,e-f)
@@ -322,6 +330,7 @@
     (match e
       [(? fixnum? n) (k n)]
       [(? boolean? b) (k b)]
+      ['(void) (k e)]
       ['(read)
        (let ([x (gensym 'read)])
          `(let ([,x (read)]) ,(k x)))]
@@ -353,14 +362,16 @@
         e0
         (λ (a-g)
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
+          ,(convert-expr e-r k))]
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]
       [`(set! ,x ,e)
        (convert-expr e (lambda (atom)
-                         `(set! x ,atom)))]
-      [`(while ,e-g ,e-b)
-       `(while ,(convert-expr e-g k) ,(convert-expr e-b k))]))
+                         `(set! ,x ,atom)))]
+      ))
   (match p
     [`(program ,info ,e)
      `(program ,info ,(convert-expr e (lambda (x) x)))]))
@@ -370,6 +381,7 @@
     (match e
       [(? fixnum? n) n]
       [(? boolean? b) b]
+      [`(void) e]
       [`(read) e]
       [`(- ,e+) `(- ,(rename e+ assignment))]
       [`(- ,e0 ,e1) `(- ,(rename e0 assignment) ,(rename e1 assignment))]
@@ -384,6 +396,8 @@
       [`(not ,e) `(not ,(rename e assignment))]
       [`(if ,e0 ,e1 ,e2)
        `(if ,(rename e0 assignment) ,(rename e1 assignment) ,(rename e2 assignment))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(rename e-g assignment) ,(rename e-b assignment))]) ,(rename e-r assignment))]
       [`(let ([,x ,e]) ,e-b)
        (if (hash-has-key? assignment x)
            (let* ([x+ (gensym x)]
@@ -392,7 +406,7 @@
            (let ([assignment+ (hash-set assignment x x)])
              `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
       [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
-      [`(while ,e-g ,e-b) `(while ,e-g ,(rename e-b assignment))]))
+      ))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -406,6 +420,7 @@
   (define (h e)
     (match e
       ;; base cases
+      [`(void) e]
       [(? symbol?) e]
       [(? number?) e]
       [#t #t]
@@ -429,9 +444,11 @@
       [`(let* ([,x ,e0] ,rest ...) ,e-b)
        `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
       [`(begin ,e0) (h e0)]
-      [`(begin ,e0 ,e-rest ...) `(let ([_ ,(h e0)]) ,(h `(begin ,@e-rest)))]
+      [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) ,@e-rest))]
       [`(set! ,x ,e) `(set! ,x ,(h e))]
-      [`(while ,e-g ,e-b) `(while ,(h e-g) ,(h e-b))]))
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
+      [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -440,8 +457,10 @@
 ;; Live on the edge, don't typecheck
 
 (pretty-print 
- (shrink
-    '(program
+ (anf-convert 
+  (uniqueify
+  (shrink
+   '(program
       (let* ([x (read)]
              [y 0]
              [z 1])
@@ -449,7 +468,10 @@
           (while (< y x)
             (begin (set! y (+ y 1))
                    (set! z (+ z y))))
-          z))))) 
+          z))))))  #;;
+               (anf-convert
+                (uniqueify
+                 )))
 
 ;; 
 (explicate-control 
