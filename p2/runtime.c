@@ -33,7 +33,8 @@ typedef struct {
 
 // Simplest-possible version: *don't* do garbage collection.
 // Use libc's `malloc` to grab bytes from the heap.
-TinyVecPacked* make_vector(int64_t len, int64_t init_val) {
+TinyVecPacked* make_vector(int64_t len) {
+  int64_t init_val = 0;
   TinyVecPacked* v = (TinyVecPacked*)malloc(sizeof(TinyVecPacked) + len * sizeof(int64_t));
   v->len = len;
   for (int64_t i = 0; i < len; i++) {

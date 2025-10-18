@@ -1,7 +1,7 @@
 #lang racket
 
-;; CIS531 Fall '25 Project 1
-;; Compiling LVar -> x86-64
+;; CIS531 Fall '25 Project 3
+;; Compiling R3 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
 
@@ -11,7 +11,7 @@
 ;;
 ;; --> R3? -- Source program
 ;; |
-;; +-> shrunk-R2? -- Shrunken R3 (removes several forms)
+;; +-> shrunk-R3? -- Shrunken R3 (removes several forms)
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
@@ -62,6 +62,7 @@
        ;; must call rt-sym here!
        (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
+      [`(goto ,l) (format "jmp ~a" (symbol->string  l))]
       ['(leave) "leave"]))
   (define (render-block block name)
     (apply string-append
@@ -127,15 +128,13 @@
       ['() '()]
       ;; first move into %rax, then move %rax into i1(%r1)
       [`((movq (deref (reg ,r0) ,i0) (deref (reg ,r1) ,i1)) ,rest ...)
-       `((movq (deref (reg ,r0) ,i0) (reg rax))
-         (movq (reg rax) (deref (reg ,r1) ,i1))
+       `((movq (deref (reg ,r0) ,i0) (reg r11))
+         (movq (reg r11) (deref (reg ,r1) ,i1))
          ,@(patch-tail rest))]
-      ;; new ...
       [`((movzbq (byte-reg ,r) (deref (reg ,r1) ,i1)) ,rest ...)
        `((movzbq (byte-reg ,r) (reg rax))
          (movq (reg rax) (deref (reg ,r1) ,i1))
          ,@(patch-tail rest))]
-      ;; new ...
       [`((cmpq ,a (deref (reg ,r1) ,i1)) ,rest ...)
        `((movq (deref (reg ,r1) ,i1) (reg rax))
          (cmpq ,a (reg rax))
@@ -193,6 +192,7 @@
   (define (c1->block c1)
     (define (h-atom a)
       (match a
+        ['(void)       `(imm 0)]
         [(? fixnum? n) `(imm ,n)]
         [(? symbol? x) `(var ,x)]
         [(? boolean? b) `(imm ,(if b 1 0))]))
@@ -249,7 +249,32 @@
          `((movq ,(h-atom a0) (reg rax))
            (addq ,(h-atom a1) (reg rax))
            (movq (reg rax) (var ,x))
-           ,@(h rest))]))
+           ,@(h rest))]
+        [`(seq (vector-set! ,a0 ,i ,a-v) ,rest)
+         `((movq ,(h-atom a0) (reg rax))
+           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i))))
+           ,@(h rest))]
+        ;; new
+        [`(seq (assign ,x (vector ,i)) ,rest)
+         `((movq (imm ,i) (reg rdi))
+           (callq make_vector 1)
+           (movq (reg rax) (var ,x))
+           ,@(h rest))]
+        [`(seq (assign ,x (vector-ref ,a ,i)) ,rest)
+         `((movq ,(h-atom a) (reg rax))
+           (movq (deref (reg rax) ,(* 8 (+ i 1))) (var ,x))
+           ,@(h rest))]
+        [`(seq (vector-set! ,a0 ,i ,a-v) ,rest)
+         `((movq ,(h-atom a0) (reg rax))
+           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i))))
+           ,@(h rest))]
+        ['(void) '()]
+        [`(goto ,l)
+         `((goto ,l))]
+        [`(vector-set! ,a0 ,i ,a-v)
+         `((movq ,(h-atom a0) (reg rax))
+           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i)))))]))
+    
     (h c1))
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
@@ -264,7 +289,12 @@
   (define (h seq)
     (match seq
       [`(return ,_) (set)]
+      [`(goto ,l) (set)]
       [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1)) (set)]
+      [`(set! ,_ ,_) (set)] ;; must be introduced by a let
+      [`(vector-set! ,_ ,_ ,_) (set)] ;; must be introduced by a let
+      [`(seq (vector-set! ,x ,_ ,_) ,rest)
+       (set-add (h rest) x)]
       [`(seq (assign ,x0 ,_) ,rest)
        (set-add (h rest) x0)]))
   (match p
@@ -280,51 +310,65 @@
   (define (merge h0 h1)
     (foldl (λ (k0 h1) (hash-set h1 k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
   (define (atom? a) (or (fixnum? a) (symbol? a) (boolean? a)))
+  (define (extend h label instruction)
+    (hash-set h label `(seq ,instruction ,(hash-ref h label))))
   ;; basic idea: return a hash which maps blocks to a label name
-  (define (expr->blocks e current-block)
-    ;; prefixing a basic block with an instruction
-    ;; (prefix-w-instruction (hash 'main (return 1)) 'main (assign x 1))
-    ;; => (hash 'main (seq (assign x 1) (return 1)))
-    (define (extend h label instruction)
-      (hash-set h label `(seq ,instruction ,(hash-ref h label))))
+  ;;
+  ;; k is a continuation which gets called on the ultimate return value
+  (define (expr->blocks e current-block k)
     (match e
       [`(let ([,x ,(? boolean? b)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,b))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,b))]
       [`(let ([,x ,(? fixnum? n)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,n))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,n))]
       [`(let ([,x ,(? symbol? y)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,y))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,y))]
       [`(let ([,x (read)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (read)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (read)))]
       [`(let ([,x (- ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (- ,a)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (- ,a)))]
       [`(let ([,x (not ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (not ,a)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (not ,a)))]
       [`(let ([,x (+ ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (+ ,a0 ,a1)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (+ ,a0 ,a1)))]
       [`(let ([,x (< ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (< ,a0 ,a1)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (< ,a0 ,a1)))]
       [`(let ([,x (eq? ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block) current-block `(assign ,x (eq? ,a0 ,a1)))]
-      [`(let ([,x (while ,e-g ,e-b)]) ,e-r)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (eq? ,a0 ,a1)))]
+      [`(let ([,x (make-vector ,a)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector ,a)))]
+      [`(let ([_ (vector-set! ,x ,i ,v)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
+      [`(let ([,x (vector-ref ,e-v ,i)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector-ref ,e-v ,i)))]
+      [`(let ([_ (void)]) ,e)
+       (expr->blocks e current-block k)]
+      [`(set! ,x ,a)
+       (hash current-block `(seq (set! ,x ,a) ,(k '(void))))]
+      [`(vector-set! ,x ,i ,v)
+       (hash current-block `(seq (vector-set! ,x ,i ,v) ,(k '(void))))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
        (define l-body (gensym 'body))
-       (merge 
-        (merge (hash current-block `(goto ,l-header))
-               (expr->blocks e-r l-rest))
-        (expr->blocks l-body))]
+       (define rest-blocks (expr->blocks e-r l-rest k))
+       (define body-blocks (expr->blocks e-b l-body (λ (_) `(goto ,l-header))))
+       (define header-blocks
+         (expr->blocks e-g
+                       l-header
+                       (λ (a-g) `(if (eq? ,a-g #f) (goto ,l-rest) (goto ,l-body)))))
+       (define this-block (hash current-block `(goto ,l-header)))
+       (merge
+        (merge
+         (merge rest-blocks body-blocks)
+         header-blocks)
+        this-block)]
       [(? atom? a)
-       (hash current-block `(return ,a))]
-      [`(if ,a ,e-t ,e-f)
-       (define l-t (gensym 'lab))
-       (define l-f (gensym 'lab))
-       (define h (merge (expr->blocks e-t l-t) (expr->blocks e-f l-f)))
-       (hash-set h current-block `(if (eq? ,a #f) (goto ,l-f) (goto ,l-t)))]))
+       (hash current-block (k a))]))
   (match p
     [`(program ,info ,anf)
-     `(program ,info ,(expr->blocks anf (entry-symbol)))]))
-
+     `(program ,info ,(expr->blocks anf (entry-symbol) (lambda (a) `(return ,a))))]))
+  
 (define (anf-convert p)
   (define (convert-expr e k)
     (match e
@@ -362,19 +406,71 @@
         e0
         (λ (a-g)
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
+
+      ;; new forms 
+      [`(let ([_ (vector-set! ,x ,e0 ,e1)]) ,e-b)
+       (convert-expr e0 (lambda (a-idx)
+                          (convert-expr e1 (lambda (a-val)
+                                             `(let ([_ (vector-set! ,x ,a-idx ,a-val)]) ,(convert-expr e-b k))))))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
+      
+      [`(make-vector ,e)
+       (convert-expr e (lambda (atom) 
+                         (define vec-a (gensym 'vec))
+                         `(let ([,vec-a (make-vector ,atom)])
+                            ,(k vec-a))))]
+      [`(vector-ref ,e0 ,e1)
+       (convert-expr e0
+                     (λ (a0)
+                       (convert-expr e1 (λ (a1)
+                                          (define ref (gensym 'ref))
+                                          `(let ([,ref (vector-ref ,a0 ,a1)]) ,(k ref))))))]
+      [`(vector-set! ,x ,e0 ,e1)
+       (convert-expr e0
+                     (lambda (a0)
+                       (convert-expr e1 (lambda (a1) `(vector-set! ,x ,a0 ,a1)))))]
+      ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
-                         `(let ([,x ,atom]) ,(convert-expr e-b k))))]
-      [`(set! ,x ,e)
-       (convert-expr e (lambda (atom)
-                         `(set! ,x ,atom)))]
-      ))
+                         `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
   (match p
     [`(program ,info ,e)
      `(program ,info ,(convert-expr e (lambda (x) x)))]))
+
+(define (assignment-convert p)
+  (define (a-c e)
+    (match e
+      [(? boolean? b) e]
+      [(? fixnum? n)  e]
+      [`(read)        e]
+      ['(void)        e]
+      [`(- ,e+) `(- ,(a-c e+))]                 
+      [`(+ ,e0 ,e1) `(+ ,(a-c e0) ,(a-c e1))]
+      [`(not ,e) `(not ,(a-c e))]
+      [`(,(? shrunk-cmp? c) ,e0 ,e1) `(,c ,(a-c e0) ,(a-c e1))]
+      ;; control
+      [`(if ,e-g ,e-t ,e-f)
+       `(if ,(a-c e-g)
+            ,(a-c e-t)
+            ,(a-c e-f))]
+      ;; vars/let
+      [(? symbol? x)
+       `(vector-ref ,x 0)]
+      ;; new forms
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(a-c e-g) ,(a-c e-b))]) ,(a-c e-r))]
+      [`(set! ,x ,e+)
+       `(vector-set! ,x 0 ,(a-c e+))]
+      ;; put original let last to avoid matching _
+      [`(let ([,x ,e]) ,e-b)
+       `(let ([,x (make-vector 1)])
+          (let ([_ (vector-set! ,x 0 ,(a-c e))])
+            ,(a-c e-b)))] ))
+  (match p
+    [`(program () ,exp)
+     `(program () ,(a-c exp))]))
 
 (define (uniqueify p)
   (define (rename e assignment)
@@ -398,6 +494,8 @@
        `(if ,(rename e0 assignment) ,(rename e1 assignment) ,(rename e2 assignment))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(rename e-g assignment) ,(rename e-b assignment))]) ,(rename e-r assignment))]
+      [`(let ([_ ,e]) ,e-b)
+       `(let ([_ ,(rename e assignment)]) ,(rename e-b assignment))]
       [`(let ([,x ,e]) ,e-b)
        (if (hash-has-key? assignment x)
            (let* ([x+ (gensym x)]
@@ -405,8 +503,7 @@
              `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))
            (let ([assignment+ (hash-set assignment x x)])
              `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
-      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
-      ))
+      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -432,7 +529,7 @@
       [`(and ,e0 ,e1) `(if ,(h e0) ,(h e1) #f)]
       [`(or ,e0 ,e1) `(if ,(h e0) #t ,(h e1))]
       [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
-      [`(> ,e0 ,e1) (h )]
+      [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
       [`(< ,e0 ,e1) `(< ,e0 ,e1)]
       [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
       [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
@@ -444,7 +541,7 @@
       [`(let* ([,x ,e0] ,rest ...) ,e-b)
        `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
       [`(begin ,e0) (h e0)]
-      [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) ,@e-rest))]
+      [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) (begin ,@e-rest)))]
       [`(set! ,x ,e) `(set! ,x ,(h e))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
@@ -456,26 +553,50 @@
 
 ;; Live on the edge, don't typecheck
 
-(pretty-print 
- (anf-convert 
-  (uniqueify
-  (shrink
-   '(program
-      (let* ([x (read)]
-             [y 0]
-             [z 1])
-        (begin
-          (while (< y x)
-            (begin (set! y (+ y 1))
-                   (set! z (+ z y))))
-          z))))))  #;;
-               (anf-convert
-                (uniqueify
-                 )))
-
-;; 
-(explicate-control 
+#;
+(pretty-print
  (anf-convert
+  (assignment-convert
+   (uniqueify
+    (shrink
+     '(program
+       (let* ([x (read)]
+              [y 0]
+              [z 1])
+         (begin
+           (while (< y x)
+                  (begin (set! y (+ y 1))
+                         (set! z (+ z y))))
+           z))))))))
+
+(displayln
+ (dump-x86-64
+  (prelude-and-conclusion
+   (patch-instructions
+    (assign-homes
+     (select-instructions
+      (uncover-locals
+       (explicate-control
+        (anf-convert
+         (assignment-convert
+          (uniqueify
+           (shrink
+            '(program
+              (let* ([x (read)]
+                     [y 0]
+                     [a 5]
+                     [z 15])
+                (begin
+                  (while (< y x)
+                         (begin (set! y (+ y 1))
+                                (set! z (+ z z))
+                                (set! a 10)))
+                  z)))))))))))))))
+
+
+#;
+(pretty-print 
+ (assignment-convert
   (uniqueify
    (shrink
     '(program
@@ -484,6 +605,23 @@
              [z 1])
         (begin
           (while (< y x)
-            (begin (set! y (+ y 1))
-                   (set! z (+ z y))))
+                 (begin (set! y (+ y 1))
+                        (set! z (+ z y))))
           z)))))))
+
+;; 
+#;
+(explicate-control
+ (anf-convert
+  (assignment-convert
+   (uniqueify
+    (shrink
+     '(program
+       (let* ([x (read)]
+              [y 0]
+              [z 1])
+         (begin
+           (while (< y x)
+                  (begin (set! y (+ y 1))
+                         (set! z (+ z y))))
+           z))))))))
