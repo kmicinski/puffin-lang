@@ -1,0 +1,35 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign read8284 (read))
+          (seq
+           (assign x read8284)
+           (seq
+            (assign |+8285| (+ x 10))
+            (seq
+             (assign y |+8285|)
+             (seq
+              (assign g8286 (- y))
+              (seq
+               (assign z g8286)
+               (seq
+                (assign |+8287| (+ z x))
+                (seq
+                 (assign u |+8287|)
+                 (seq
+                  (assign |+8288| (+ u y))
+                  (seq
+                   (assign v |+8288|)
+                   (seq
+                    (assign g8289 (- v))
+                    (seq
+                     (assign w g8289)
+                     (seq
+                      (assign |+8290| (+ w u))
+                      (seq
+                       (assign |+8291| (+ y z))
+                       (seq
+                        (assign |+8292| (+ |+8290| |+8291|))
+                        (return |+8292|)))))))))))))))))))

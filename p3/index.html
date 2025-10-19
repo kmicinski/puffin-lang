@@ -1,0 +1,272 @@
+<!-- CIS531 Compiler Debugging App --> 
+<!-- Kris Micinski, Fall 2025 --> 
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Compiler-IR Playground</title>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    <script>
+      require.config({
+        paths: { vs: "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs" }
+      });
+    </script>
+
+    <style>
+      :root {
+        --border:#c8c8c8;
+        --bg:#fafafa;
+        --pad:8px;
+        --runbar-h:38px;
+        font-family: system-ui, sans-serif;
+      }
+      html,body,#app{height:100%;margin:0}
+      #app{
+        display:grid;
+        grid-template-columns:1fr 1fr;
+      }
+      .editor-pane{border-right:1px solid var(--border);position:relative}
+      .runbar{
+        position:absolute;top:0;left:0;right:0;
+        height:var(--runbar-h);
+        display:flex;gap:8px;align-items:center;
+        padding:0 var(--pad);
+        background:#f3f3f3;border-bottom:1px solid var(--border);
+      }
+      .runbar input, .runbar select, .runbar button{height:26px}
+      .runbar input{flex:1 1 auto;padding:0 6px}
+      #editor{position:absolute;top:var(--runbar-h);bottom:0;left:0;right:0}
+
+      .pass-pane{overflow-y:auto;padding:0;position:relative}
+      .inputbar{
+        position:sticky;top:0;left:0;right:0;
+        display:flex;gap:8px;align-items:center;
+        padding:6px var(--pad);
+        background:#f3f3f3;border:1px solid var(--border);border-left:0;border-right:0;
+        margin:-8px -8px 8px -8px;
+      }
+      .inputbar label{font-weight:600}
+      .inputbar input{
+        flex:1 1 240px;height:26px;padding:0 8px;border:1px solid var(--border);border-radius:4px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;background:#fff;
+      }
+
+      .pass-box{
+        border:1px solid var(--border);
+        background:var(--bg);
+        padding:var(--pad);
+        margin:0 var(--pad) var(--pad);
+        white-space:pre-wrap;
+        font-family:monospace;
+      }
+      .subcard{
+        border:1px solid var(--border);
+        background:#fff;
+        padding:8px;
+        margin-top:8px;
+      }
+      .subcard .title{
+        font-weight:600;
+        margin-bottom:6px;
+      }
+      .golden-card{
+        background:#fff8dc; /* very light golden */
+        border-color:#e7d7a4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <!-- LEFT: Monaco -->
+      <div class="editor-pane">
+        <div class="runbar">
+          <input v-model="serverUrl" placeholder="http://localhost:8000/">
+          <select v-model="selectedId" style="max-width: 340px">
+            <option disabled value="">— choose a native test —</option>
+            <option v-for="t in tests" :key="t.id" :value="t.id">
+              {{ t.id }} (input stream {{ t.number }})
+            </option>
+          </select>
+          <button @click="loadTest">Load</button>
+          <button @click="evaluate">Run ▶︎</button>
+        </div>
+        <div id="editor"></div>
+      </div>
+
+      <!-- RIGHT: outputs -->
+      <div class="pass-pane">
+        <div class="inputbar">
+          <label for="inputstream">Input</label>
+          <input id="inputstream"
+                 v-model="inputStr"
+                 placeholder="e.g., 0,1,2,3,5,8"
+                 title="comma-separated integers (STDIN)"
+                 @input="selectedInputFile=''"
+                 @keydown.enter="evaluate">
+          <input type="hidden" v-model="selectedInputFile">
+        </div>
+
+        <template v-if="combined.length">
+          <div v-for="row in combined" :key="row.name" class="pass-box">
+            <strong>Pass {{ row.name }}</strong>
+
+            <!-- Your Solution (top) -->
+            <div class="subcard">
+              <div class="title">Your Solution</div>
+              <template v-if="row.yours">
+                <div><em>Input:</em></div>
+                <div>{{ row.yours.input }}</div>
+                <div style="margin-top:6px"><em>Output:</em></div>
+                <div>{{ row.yours['pretty-output'] }}</div>
+                <div style="margin-top:6px"><em>Satisfies input predicate:</em></div>
+                <div>{{ row.yours['satisfies-input-predicate'] }}</div>
+                <div style="margin-top:6px"><em>Satisfies output predicate:</em></div>
+                <div>{{ row.yours['satisfies-output-predicate'] }}</div>
+                <div style="margin-top:6px"><em>Interpretation:</em></div>
+                <div>{{ row.yours['interp'] }}</div>
+                <div style="margin-top:6px"><em>STDOUT:</em></div>
+                <div>{{ row.yours['stdout'] }}</div>
+              </template>
+              <template v-else>
+                <div style="color:#666">No run yet.</div>
+              </template>
+            </div>
+
+            <!-- Golden (below) -->
+            <div class="subcard golden-card">
+              <div class="title">Golden</div>
+              <template v-if="row.golden">
+                <div><em>Output:</em></div>
+                <div>{{ row.golden['pretty-output'] }}</div>
+                <div style="margin-top:6px"><em>Interpretation:</em></div>
+                <div>{{ row.golden['interp'] }}</div>
+                <div style="margin-top:6px"><em>STDOUT:</em></div>
+                <div>{{ row.golden['stdout'] }}</div>
+              </template>
+              <template v-else>
+                <div style="color:#666">No golden available.</div>
+              </template>
+            </div>
+          </div>
+        </template>
+
+        <p v-else style="color:#666; margin: 8px">Load a test to view its golden, or run your program to see results.</p>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, ref, onMounted, computed } = Vue;
+
+      createApp({
+        setup(){
+          const serverUrl  = ref("http://localhost:8000/");
+          const passes     = ref([]);
+          const goldenPasses = ref([]);
+          const tests      = ref([]);
+          const selectedId = ref("");
+          const selectedInputFile = ref("");
+          const inputStr   = ref("0,1,2,3,4,5");
+          let editor;
+
+          function base(u){ return u.replace(/\/$/,''); }
+
+          async function fetchJSON(url){
+            const r = await fetch(url);
+            if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+            return await r.json();
+          }
+
+          async function loadTests(){
+            tests.value = await fetchJSON(base(serverUrl.value) + "/tests");
+          }
+
+          function parseInputList(s){
+            if(!s || !s.trim()) return [];
+            const xs = s.split(",").map(t => t.trim()).filter(Boolean).map(Number);
+            if(xs.some(n => !Number.isFinite(n) || !Number.isInteger(n)))
+              throw new Error("Inputs must be integers, comma-separated.");
+            return xs;
+          }
+
+          async function loadGolden(id){
+            try{
+              goldenPasses.value = await fetchJSON(base(serverUrl.value) + "/golden-trace?id=" + encodeURIComponent(id));
+            }catch(e){
+              goldenPasses.value = [];
+              console.error("Failed to load golden trace:", e);
+            }
+          }
+
+          async function loadTest(){
+            if(!selectedId.value) return;
+            const meta = tests.value.find(t => t.id === selectedId.value);
+            if(meta && editor) editor.setValue(meta.programSource || "");
+            selectedInputFile.value = meta?.inputFile || "";
+            if(meta && Array.isArray(meta.inputs) && meta.inputs.length)
+              inputStr.value = meta.inputs.join(", ");
+            await loadGolden(selectedId.value);
+          }
+
+          function evaluate(){
+            if(!serverUrl.value){ alert("Set the server URL first."); return; }
+            const code = editor.getValue();
+            let inputs;
+            try { inputs = parseInputList(inputStr.value); }
+            catch(e){ alert(e.message); return; }
+            if(inputs.length === 0) inputs = [0];
+
+            fetch(base(serverUrl.value), {
+              method:"POST",
+              headers:{ "Content-Type":"application/json" },
+              body: JSON.stringify({
+                programSource: code,
+                inputFile: selectedInputFile.value || undefined,
+                input: inputs
+              })
+            })
+            .then(r => { if(!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); })
+            .then(list => { passes.value = list; })
+            .catch(e => alert("Request failed: " + e));
+          }
+
+          const combined = computed(() => {
+            const by = Object.create(null);
+            const order = [];
+            for(const g of goldenPasses.value){
+              const name = g['pass-name'];
+              if(!(name in by)){ by[name] = { name, golden: g, yours: null }; order.push(name); }
+              else by[name].golden = g;
+            }
+            for(const p of passes.value){
+              const name = p['pass-name'];
+              if(!(name in by)){ by[name] = { name, golden: null, yours: p }; order.push(name); }
+              else by[name].yours = p;
+            }
+            return order.map(n => by[n]);
+          });
+
+          require(["vs/editor/editor.main"], () => {
+            editor = monaco.editor.create(document.getElementById("editor"), {
+              value: "; enter R1 source here: (program ...)\n",
+              language: "scheme",
+              theme: "vs",
+              fontSize: 16,
+              automaticLayout: true
+            });
+          });
+
+          onMounted(loadTests);
+
+          return {
+            serverUrl, passes, goldenPasses, combined, tests, selectedId,
+            selectedInputFile, inputStr, loadTest, evaluate
+          };
+        }
+      }).mount("#app");
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1 @@
+((3) 0 () 0 () () (q program (let ((u (read))) (let ((v (+ u 3))) (let ((w (- v 4))) (if (or (and (<= w v) (> u 1)) (and (>= v w) #t)) (let ((q (if (eq? u v) 9 (- w)))) (+ (+ q u) (+ v w))) (if (and (not #f) (< w u)) (- (+ u v) (+ w 2)) (- u v))))))))

@@ -1,0 +1,2948 @@
+Compiling IR (using *your* compile.rkt) …
+Input:
+'(program
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (<= a b)))
+          (- (if c (+ b b) (- b a)) (if d (+ a a) (- a b))))))))
+Satsifes input predicate: YES
+Ran pass typecheck. Output:
+'(program
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (<= a b)))
+          (- (if c (+ b b) (- b a)) (if d (+ a a) (- a b))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (if (< a b) #t (eq? a b))))
+          (+ (if c (+ b b) (+ b (- a))) (- (if d (+ a a) (+ a (- b))))))))))
+Satsifes input predicate: YES
+Ran pass shrink. Output:
+'(program
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (if (< a b) #t (eq? a b))))
+          (+ (if c (+ b b) (+ b (- a))) (- (if d (+ a a) (+ a (- b))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (if (< a b) #t (eq? a b))))
+          (+ (if c (+ b b) (+ b (- a))) (- (if d (+ a a) (+ a (- b))))))))))
+Satsifes input predicate: YES
+Ran pass uniqueify. Output:
+'(program
+  ()
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((c (eq? a b)))
+        (let ((d (if (< a b) #t (eq? a b))))
+          (+ (if c (+ b b) (+ b (- a))) (- (if d (+ a a) (+ a (- b))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  (let ((read4375 (read)))
+    (let ((a read4375))
+      (let ((read4376 (read)))
+        (let ((b read4376))
+          (let ((g4377 (eq? a b)))
+            (let ((c g4377))
+              (let ((g4378 (< a b)))
+                (if g4378
+                  (let ((d #t))
+                    (if c
+                      (let ((|+4379| (+ b b)))
+                        (if d
+                          (let ((|+4380| (+ a a)))
+                            (let ((g4381 (- |+4380|)))
+                              (let ((|+4382| (+ |+4379| g4381))) |+4382|)))
+                          (let ((g4383 (- b)))
+                            (let ((|+4384| (+ a g4383)))
+                              (let ((g4385 (- |+4384|)))
+                                (let ((|+4386| (+ |+4379| g4385)))
+                                  |+4386|))))))
+                      (let ((g4387 (- a)))
+                        (let ((|+4388| (+ b g4387)))
+                          (if d
+                            (let ((|+4389| (+ a a)))
+                              (let ((g4390 (- |+4389|)))
+                                (let ((|+4391| (+ |+4388| g4390))) |+4391|)))
+                            (let ((g4392 (- b)))
+                              (let ((|+4393| (+ a g4392)))
+                                (let ((g4394 (- |+4393|)))
+                                  (let ((|+4395| (+ |+4388| g4394)))
+                                    |+4395|)))))))))
+                  (let ((g4396 (eq? a b)))
+                    (let ((d g4396))
+                      (if c
+                        (let ((|+4397| (+ b b)))
+                          (if d
+                            (let ((|+4398| (+ a a)))
+                              (let ((g4399 (- |+4398|)))
+                                (let ((|+4400| (+ |+4397| g4399))) |+4400|)))
+                            (let ((g4401 (- b)))
+                              (let ((|+4402| (+ a g4401)))
+                                (let ((g4403 (- |+4402|)))
+                                  (let ((|+4404| (+ |+4397| g4403)))
+                                    |+4404|))))))
+                        (let ((g4405 (- a)))
+                          (let ((|+4406| (+ b g4405)))
+                            (if d
+                              (let ((|+4407| (+ a a)))
+                                (let ((g4408 (- |+4407|)))
+                                  (let ((|+4409| (+ |+4406| g4408))) |+4409|)))
+                              (let ((g4410 (- b)))
+                                (let ((|+4411| (+ a g4410)))
+                                  (let ((g4412 (- |+4411|)))
+                                    (let ((|+4413| (+ |+4406| g4412)))
+                                      |+4413|)))))))))))))))))))
+Satsifes input predicate: YES
+Ran pass anf-convert. Output:
+'(program
+  ()
+  (let ((read4375 (read)))
+    (let ((a read4375))
+      (let ((read4376 (read)))
+        (let ((b read4376))
+          (let ((g4377 (eq? a b)))
+            (let ((c g4377))
+              (let ((g4378 (< a b)))
+                (if g4378
+                  (let ((d #t))
+                    (if c
+                      (let ((|+4379| (+ b b)))
+                        (if d
+                          (let ((|+4380| (+ a a)))
+                            (let ((g4381 (- |+4380|)))
+                              (let ((|+4382| (+ |+4379| g4381))) |+4382|)))
+                          (let ((g4383 (- b)))
+                            (let ((|+4384| (+ a g4383)))
+                              (let ((g4385 (- |+4384|)))
+                                (let ((|+4386| (+ |+4379| g4385)))
+                                  |+4386|))))))
+                      (let ((g4387 (- a)))
+                        (let ((|+4388| (+ b g4387)))
+                          (if d
+                            (let ((|+4389| (+ a a)))
+                              (let ((g4390 (- |+4389|)))
+                                (let ((|+4391| (+ |+4388| g4390))) |+4391|)))
+                            (let ((g4392 (- b)))
+                              (let ((|+4393| (+ a g4392)))
+                                (let ((g4394 (- |+4393|)))
+                                  (let ((|+4395| (+ |+4388| g4394)))
+                                    |+4395|)))))))))
+                  (let ((g4396 (eq? a b)))
+                    (let ((d g4396))
+                      (if c
+                        (let ((|+4397| (+ b b)))
+                          (if d
+                            (let ((|+4398| (+ a a)))
+                              (let ((g4399 (- |+4398|)))
+                                (let ((|+4400| (+ |+4397| g4399))) |+4400|)))
+                            (let ((g4401 (- b)))
+                              (let ((|+4402| (+ a g4401)))
+                                (let ((g4403 (- |+4402|)))
+                                  (let ((|+4404| (+ |+4397| g4403)))
+                                    |+4404|))))))
+                        (let ((g4405 (- a)))
+                          (let ((|+4406| (+ b g4405)))
+                            (if d
+                              (let ((|+4407| (+ a a)))
+                                (let ((g4408 (- |+4407|)))
+                                  (let ((|+4409| (+ |+4406| g4408))) |+4409|)))
+                              (let ((g4410 (- b)))
+                                (let ((|+4411| (+ a g4410)))
+                                  (let ((g4412 (- |+4411|)))
+                                    (let ((|+4413| (+ |+4406| g4412)))
+                                      |+4413|)))))))))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  #hash((lab4453
+         .
+         (seq (assign d #t) (if (eq? c #f) (goto lab4456) (goto lab4455))))
+        (lab4454
+         .
+         (seq
+          (assign g4435 (eq? a b))
+          (seq
+           (assign d g4435)
+           (if (eq? c #f) (goto lab4462) (goto lab4461)))))
+        (lab4455
+         .
+         (seq
+          (assign |+4418| (+ b b))
+          (if (eq? d #f) (goto lab4458) (goto lab4457))))
+        (lab4456
+         .
+         (seq
+          (assign g4426 (- a))
+          (seq
+           (assign |+4427| (+ b g4426))
+           (if (eq? d #f) (goto lab4460) (goto lab4459)))))
+        (lab4457
+         .
+         (seq
+          (assign |+4419| (+ a a))
+          (seq
+           (assign g4420 (- |+4419|))
+           (seq (assign |+4421| (+ |+4418| g4420)) (return |+4421|)))))
+        (lab4458
+         .
+         (seq
+          (assign g4422 (- b))
+          (seq
+           (assign |+4423| (+ a g4422))
+           (seq
+            (assign g4424 (- |+4423|))
+            (seq (assign |+4425| (+ |+4418| g4424)) (return |+4425|))))))
+        (lab4459
+         .
+         (seq
+          (assign |+4428| (+ a a))
+          (seq
+           (assign g4429 (- |+4428|))
+           (seq (assign |+4430| (+ |+4427| g4429)) (return |+4430|)))))
+        (lab4460
+         .
+         (seq
+          (assign g4431 (- b))
+          (seq
+           (assign |+4432| (+ a g4431))
+           (seq
+            (assign g4433 (- |+4432|))
+            (seq (assign |+4434| (+ |+4427| g4433)) (return |+4434|))))))
+        (lab4461
+         .
+         (seq
+          (assign |+4436| (+ b b))
+          (if (eq? d #f) (goto lab4464) (goto lab4463))))
+        (lab4462
+         .
+         (seq
+          (assign g4444 (- a))
+          (seq
+           (assign |+4445| (+ b g4444))
+           (if (eq? d #f) (goto lab4466) (goto lab4465)))))
+        (lab4463
+         .
+         (seq
+          (assign |+4437| (+ a a))
+          (seq
+           (assign g4438 (- |+4437|))
+           (seq (assign |+4439| (+ |+4436| g4438)) (return |+4439|)))))
+        (lab4464
+         .
+         (seq
+          (assign g4440 (- b))
+          (seq
+           (assign |+4441| (+ a g4440))
+           (seq
+            (assign g4442 (- |+4441|))
+            (seq (assign |+4443| (+ |+4436| g4442)) (return |+4443|))))))
+        (lab4465
+         .
+         (seq
+          (assign |+4446| (+ a a))
+          (seq
+           (assign g4447 (- |+4446|))
+           (seq (assign |+4448| (+ |+4445| g4447)) (return |+4448|)))))
+        (lab4466
+         .
+         (seq
+          (assign g4449 (- b))
+          (seq
+           (assign |+4450| (+ a g4449))
+           (seq
+            (assign g4451 (- |+4450|))
+            (seq (assign |+4452| (+ |+4445| g4451)) (return |+4452|))))))
+        (main
+         .
+         (seq
+          (assign read4414 (read))
+          (seq
+           (assign a read4414)
+           (seq
+            (assign read4415 (read))
+            (seq
+             (assign b read4415)
+             (seq
+              (assign g4416 (eq? a b))
+              (seq
+               (assign c g4416)
+               (seq
+                (assign g4417 (< a b))
+                (if (eq? g4417 #f) (goto lab4454) (goto lab4453))))))))))))
+Satsifes input predicate: YES
+Ran pass explicate-control. Output:
+'(program
+  ()
+  #hash((lab4453
+         .
+         (seq (assign d #t) (if (eq? c #f) (goto lab4456) (goto lab4455))))
+        (lab4454
+         .
+         (seq
+          (assign g4435 (eq? a b))
+          (seq
+           (assign d g4435)
+           (if (eq? c #f) (goto lab4462) (goto lab4461)))))
+        (lab4455
+         .
+         (seq
+          (assign |+4418| (+ b b))
+          (if (eq? d #f) (goto lab4458) (goto lab4457))))
+        (lab4456
+         .
+         (seq
+          (assign g4426 (- a))
+          (seq
+           (assign |+4427| (+ b g4426))
+           (if (eq? d #f) (goto lab4460) (goto lab4459)))))
+        (lab4457
+         .
+         (seq
+          (assign |+4419| (+ a a))
+          (seq
+           (assign g4420 (- |+4419|))
+           (seq (assign |+4421| (+ |+4418| g4420)) (return |+4421|)))))
+        (lab4458
+         .
+         (seq
+          (assign g4422 (- b))
+          (seq
+           (assign |+4423| (+ a g4422))
+           (seq
+            (assign g4424 (- |+4423|))
+            (seq (assign |+4425| (+ |+4418| g4424)) (return |+4425|))))))
+        (lab4459
+         .
+         (seq
+          (assign |+4428| (+ a a))
+          (seq
+           (assign g4429 (- |+4428|))
+           (seq (assign |+4430| (+ |+4427| g4429)) (return |+4430|)))))
+        (lab4460
+         .
+         (seq
+          (assign g4431 (- b))
+          (seq
+           (assign |+4432| (+ a g4431))
+           (seq
+            (assign g4433 (- |+4432|))
+            (seq (assign |+4434| (+ |+4427| g4433)) (return |+4434|))))))
+        (lab4461
+         .
+         (seq
+          (assign |+4436| (+ b b))
+          (if (eq? d #f) (goto lab4464) (goto lab4463))))
+        (lab4462
+         .
+         (seq
+          (assign g4444 (- a))
+          (seq
+           (assign |+4445| (+ b g4444))
+           (if (eq? d #f) (goto lab4466) (goto lab4465)))))
+        (lab4463
+         .
+         (seq
+          (assign |+4437| (+ a a))
+          (seq
+           (assign g4438 (- |+4437|))
+           (seq (assign |+4439| (+ |+4436| g4438)) (return |+4439|)))))
+        (lab4464
+         .
+         (seq
+          (assign g4440 (- b))
+          (seq
+           (assign |+4441| (+ a g4440))
+           (seq
+            (assign g4442 (- |+4441|))
+            (seq (assign |+4443| (+ |+4436| g4442)) (return |+4443|))))))
+        (lab4465
+         .
+         (seq
+          (assign |+4446| (+ a a))
+          (seq
+           (assign g4447 (- |+4446|))
+           (seq (assign |+4448| (+ |+4445| g4447)) (return |+4448|)))))
+        (lab4466
+         .
+         (seq
+          (assign g4449 (- b))
+          (seq
+           (assign |+4450| (+ a g4449))
+           (seq
+            (assign g4451 (- |+4450|))
+            (seq (assign |+4452| (+ |+4445| g4451)) (return |+4452|))))))
+        (main
+         .
+         (seq
+          (assign read4414 (read))
+          (seq
+           (assign a read4414)
+           (seq
+            (assign read4415 (read))
+            (seq
+             (assign b read4415)
+             (seq
+              (assign g4416 (eq? a b))
+              (seq
+               (assign c g4416)
+               (seq
+                (assign g4417 (< a b))
+                (if (eq? g4417 #f) (goto lab4454) (goto lab4453))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+(list
+ 'program
+ (set
+  'g4420
+  '|+4436|
+  '|+4452|
+  'c
+  '|+4421|
+  '|+4437|
+  'b
+  'g4422
+  'g4438
+  'a
+  '|+4423|
+  '|+4439|
+  'g4424
+  'g4440
+  '|+4425|
+  '|+4441|
+  'g4426
+  'g4442
+  '|+4427|
+  '|+4443|
+  'd
+  '|+4428|
+  'g4444
+  'g4429
+  '|+4445|
+  'read4414
+  '|+4430|
+  '|+4446|
+  'read4415
+  'g4431
+  'g4447
+  'g4416
+  '|+4432|
+  '|+4448|
+  'g4417
+  'g4433
+  'g4449
+  '|+4418|
+  '|+4434|
+  '|+4450|
+  '|+4419|
+  'g4435
+  'g4451)
+ '#hash((lab4467
+         .
+         (seq (assign d #t) (if (eq? c #f) (goto lab4470) (goto lab4469))))
+        (lab4468
+         .
+         (seq
+          (assign g4435 (eq? a b))
+          (seq
+           (assign d g4435)
+           (if (eq? c #f) (goto lab4476) (goto lab4475)))))
+        (lab4469
+         .
+         (seq
+          (assign |+4418| (+ b b))
+          (if (eq? d #f) (goto lab4472) (goto lab4471))))
+        (lab4470
+         .
+         (seq
+          (assign g4426 (- a))
+          (seq
+           (assign |+4427| (+ b g4426))
+           (if (eq? d #f) (goto lab4474) (goto lab4473)))))
+        (lab4471
+         .
+         (seq
+          (assign |+4419| (+ a a))
+          (seq
+           (assign g4420 (- |+4419|))
+           (seq (assign |+4421| (+ |+4418| g4420)) (return |+4421|)))))
+        (lab4472
+         .
+         (seq
+          (assign g4422 (- b))
+          (seq
+           (assign |+4423| (+ a g4422))
+           (seq
+            (assign g4424 (- |+4423|))
+            (seq (assign |+4425| (+ |+4418| g4424)) (return |+4425|))))))
+        (lab4473
+         .
+         (seq
+          (assign |+4428| (+ a a))
+          (seq
+           (assign g4429 (- |+4428|))
+           (seq (assign |+4430| (+ |+4427| g4429)) (return |+4430|)))))
+        (lab4474
+         .
+         (seq
+          (assign g4431 (- b))
+          (seq
+           (assign |+4432| (+ a g4431))
+           (seq
+            (assign g4433 (- |+4432|))
+            (seq (assign |+4434| (+ |+4427| g4433)) (return |+4434|))))))
+        (lab4475
+         .
+         (seq
+          (assign |+4436| (+ b b))
+          (if (eq? d #f) (goto lab4478) (goto lab4477))))
+        (lab4476
+         .
+         (seq
+          (assign g4444 (- a))
+          (seq
+           (assign |+4445| (+ b g4444))
+           (if (eq? d #f) (goto lab4480) (goto lab4479)))))
+        (lab4477
+         .
+         (seq
+          (assign |+4437| (+ a a))
+          (seq
+           (assign g4438 (- |+4437|))
+           (seq (assign |+4439| (+ |+4436| g4438)) (return |+4439|)))))
+        (lab4478
+         .
+         (seq
+          (assign g4440 (- b))
+          (seq
+           (assign |+4441| (+ a g4440))
+           (seq
+            (assign g4442 (- |+4441|))
+            (seq (assign |+4443| (+ |+4436| g4442)) (return |+4443|))))))
+        (lab4479
+         .
+         (seq
+          (assign |+4446| (+ a a))
+          (seq
+           (assign g4447 (- |+4446|))
+           (seq (assign |+4448| (+ |+4445| g4447)) (return |+4448|)))))
+        (lab4480
+         .
+         (seq
+          (assign g4449 (- b))
+          (seq
+           (assign |+4450| (+ a g4449))
+           (seq
+            (assign g4451 (- |+4450|))
+            (seq (assign |+4452| (+ |+4445| g4451)) (return |+4452|))))))
+        (main
+         .
+         (seq
+          (assign read4414 (read))
+          (seq
+           (assign a read4414)
+           (seq
+            (assign read4415 (read))
+            (seq
+             (assign b read4415)
+             (seq
+              (assign g4416 (eq? a b))
+              (seq
+               (assign c g4416)
+               (seq
+                (assign g4417 (< a b))
+                (if (eq? g4417 #f) (goto lab4468) (goto lab4467))))))))))))
+Satsifes input predicate: YES
+Ran pass uncover-locals. Output:
+(list
+ 'program
+ (set
+  'g4420
+  '|+4436|
+  '|+4452|
+  'c
+  '|+4421|
+  '|+4437|
+  'b
+  'g4422
+  'g4438
+  'a
+  '|+4423|
+  '|+4439|
+  'g4424
+  'g4440
+  '|+4425|
+  '|+4441|
+  'g4426
+  'g4442
+  '|+4427|
+  '|+4443|
+  'd
+  '|+4428|
+  'g4444
+  'g4429
+  '|+4445|
+  'read4414
+  '|+4430|
+  '|+4446|
+  'read4415
+  'g4431
+  'g4447
+  'g4416
+  '|+4432|
+  '|+4448|
+  'g4417
+  'g4433
+  'g4449
+  '|+4418|
+  '|+4434|
+  '|+4450|
+  '|+4419|
+  'g4435
+  'g4451)
+ '#hash((lab4467
+         .
+         (seq (assign d #t) (if (eq? c #f) (goto lab4470) (goto lab4469))))
+        (lab4468
+         .
+         (seq
+          (assign g4435 (eq? a b))
+          (seq
+           (assign d g4435)
+           (if (eq? c #f) (goto lab4476) (goto lab4475)))))
+        (lab4469
+         .
+         (seq
+          (assign |+4418| (+ b b))
+          (if (eq? d #f) (goto lab4472) (goto lab4471))))
+        (lab4470
+         .
+         (seq
+          (assign g4426 (- a))
+          (seq
+           (assign |+4427| (+ b g4426))
+           (if (eq? d #f) (goto lab4474) (goto lab4473)))))
+        (lab4471
+         .
+         (seq
+          (assign |+4419| (+ a a))
+          (seq
+           (assign g4420 (- |+4419|))
+           (seq (assign |+4421| (+ |+4418| g4420)) (return |+4421|)))))
+        (lab4472
+         .
+         (seq
+          (assign g4422 (- b))
+          (seq
+           (assign |+4423| (+ a g4422))
+           (seq
+            (assign g4424 (- |+4423|))
+            (seq (assign |+4425| (+ |+4418| g4424)) (return |+4425|))))))
+        (lab4473
+         .
+         (seq
+          (assign |+4428| (+ a a))
+          (seq
+           (assign g4429 (- |+4428|))
+           (seq (assign |+4430| (+ |+4427| g4429)) (return |+4430|)))))
+        (lab4474
+         .
+         (seq
+          (assign g4431 (- b))
+          (seq
+           (assign |+4432| (+ a g4431))
+           (seq
+            (assign g4433 (- |+4432|))
+            (seq (assign |+4434| (+ |+4427| g4433)) (return |+4434|))))))
+        (lab4475
+         .
+         (seq
+          (assign |+4436| (+ b b))
+          (if (eq? d #f) (goto lab4478) (goto lab4477))))
+        (lab4476
+         .
+         (seq
+          (assign g4444 (- a))
+          (seq
+           (assign |+4445| (+ b g4444))
+           (if (eq? d #f) (goto lab4480) (goto lab4479)))))
+        (lab4477
+         .
+         (seq
+          (assign |+4437| (+ a a))
+          (seq
+           (assign g4438 (- |+4437|))
+           (seq (assign |+4439| (+ |+4436| g4438)) (return |+4439|)))))
+        (lab4478
+         .
+         (seq
+          (assign g4440 (- b))
+          (seq
+           (assign |+4441| (+ a g4440))
+           (seq
+            (assign g4442 (- |+4441|))
+            (seq (assign |+4443| (+ |+4436| g4442)) (return |+4443|))))))
+        (lab4479
+         .
+         (seq
+          (assign |+4446| (+ a a))
+          (seq
+           (assign g4447 (- |+4446|))
+           (seq (assign |+4448| (+ |+4445| g4447)) (return |+4448|)))))
+        (lab4480
+         .
+         (seq
+          (assign g4449 (- b))
+          (seq
+           (assign |+4450| (+ a g4449))
+           (seq
+            (assign g4451 (- |+4450|))
+            (seq (assign |+4452| (+ |+4445| g4451)) (return |+4452|))))))
+        (main
+         .
+         (seq
+          (assign read4414 (read))
+          (seq
+           (assign a read4414)
+           (seq
+            (assign read4415 (read))
+            (seq
+             (assign b read4415)
+             (seq
+              (assign g4416 (eq? a b))
+              (seq
+               (assign c g4416)
+               (seq
+                (assign g4417 (< a b))
+                (if (eq? g4417 #f) (goto lab4468) (goto lab4467))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+(list
+ 'program
+ (set
+  'g4420
+  '|+4436|
+  '|+4452|
+  'c
+  '|+4421|
+  '|+4437|
+  'b
+  'g4422
+  'g4438
+  'a
+  '|+4423|
+  '|+4439|
+  'g4424
+  'g4440
+  '|+4425|
+  '|+4441|
+  'g4426
+  'g4442
+  '|+4427|
+  '|+4443|
+  'd
+  '|+4428|
+  'g4444
+  'g4429
+  '|+4445|
+  'read4414
+  '|+4430|
+  '|+4446|
+  'read4415
+  'g4431
+  'g4447
+  'g4416
+  '|+4432|
+  '|+4448|
+  'g4417
+  'g4433
+  'g4449
+  '|+4418|
+  '|+4434|
+  '|+4450|
+  '|+4419|
+  'g4435
+  'g4451)
+ '#hash((lab4467
+         .
+         ((movq (imm 1) (var d))
+          (cmpq (imm 0) (var c))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((cmpq (var b) (var a))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (var g4435))
+          (movq (var g4435) (var d))
+          (cmpq (imm 0) (var c))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (var b) (reg rax))
+          (addq (var b) (reg rax))
+          (movq (reg rax) (var |+4418|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (var a) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4426))
+          (movq (var b) (reg rax))
+          (addq (var g4426) (reg rax))
+          (movq (reg rax) (var |+4427|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4419|))
+          (movq (var |+4419|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4420))
+          (movq (var |+4418|) (reg rax))
+          (addq (var g4420) (reg rax))
+          (movq (reg rax) (var |+4421|))
+          (movq (var |+4421|) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4422))
+          (movq (var a) (reg rax))
+          (addq (var g4422) (reg rax))
+          (movq (reg rax) (var |+4423|))
+          (movq (var |+4423|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4424))
+          (movq (var |+4418|) (reg rax))
+          (addq (var g4424) (reg rax))
+          (movq (reg rax) (var |+4425|))
+          (movq (var |+4425|) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4428|))
+          (movq (var |+4428|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4429))
+          (movq (var |+4427|) (reg rax))
+          (addq (var g4429) (reg rax))
+          (movq (reg rax) (var |+4430|))
+          (movq (var |+4430|) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4431))
+          (movq (var a) (reg rax))
+          (addq (var g4431) (reg rax))
+          (movq (reg rax) (var |+4432|))
+          (movq (var |+4432|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4433))
+          (movq (var |+4427|) (reg rax))
+          (addq (var g4433) (reg rax))
+          (movq (reg rax) (var |+4434|))
+          (movq (var |+4434|) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (var b) (reg rax))
+          (addq (var b) (reg rax))
+          (movq (reg rax) (var |+4436|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (var a) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4444))
+          (movq (var b) (reg rax))
+          (addq (var g4444) (reg rax))
+          (movq (reg rax) (var |+4445|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4437|))
+          (movq (var |+4437|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4438))
+          (movq (var |+4436|) (reg rax))
+          (addq (var g4438) (reg rax))
+          (movq (reg rax) (var |+4439|))
+          (movq (var |+4439|) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4440))
+          (movq (var a) (reg rax))
+          (addq (var g4440) (reg rax))
+          (movq (reg rax) (var |+4441|))
+          (movq (var |+4441|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4442))
+          (movq (var |+4436|) (reg rax))
+          (addq (var g4442) (reg rax))
+          (movq (reg rax) (var |+4443|))
+          (movq (var |+4443|) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4446|))
+          (movq (var |+4446|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4447))
+          (movq (var |+4445|) (reg rax))
+          (addq (var g4447) (reg rax))
+          (movq (reg rax) (var |+4448|))
+          (movq (var |+4448|) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4449))
+          (movq (var a) (reg rax))
+          (addq (var g4449) (reg rax))
+          (movq (reg rax) (var |+4450|))
+          (movq (var |+4450|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4451))
+          (movq (var |+4445|) (reg rax))
+          (addq (var g4451) (reg rax))
+          (movq (reg rax) (var |+4452|))
+          (movq (var |+4452|) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (var read4414))
+          (movq (var read4414) (var a))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4415))
+          (movq (var read4415) (var b))
+          (cmpq (var b) (var a))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (var g4416))
+          (movq (var g4416) (var c))
+          (cmpq (var b) (var a))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (var g4417))
+          (cmpq (imm 0) (var g4417))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satsifes input predicate: YES
+Ran pass select-instructions. Output:
+(list
+ 'program
+ (set
+  'g4420
+  '|+4436|
+  '|+4452|
+  'c
+  '|+4421|
+  '|+4437|
+  'b
+  'g4422
+  'g4438
+  'a
+  '|+4423|
+  '|+4439|
+  'g4424
+  'g4440
+  '|+4425|
+  '|+4441|
+  'g4426
+  'g4442
+  '|+4427|
+  '|+4443|
+  'd
+  '|+4428|
+  'g4444
+  'g4429
+  '|+4445|
+  'read4414
+  '|+4430|
+  '|+4446|
+  'read4415
+  'g4431
+  'g4447
+  'g4416
+  '|+4432|
+  '|+4448|
+  'g4417
+  'g4433
+  'g4449
+  '|+4418|
+  '|+4434|
+  '|+4450|
+  '|+4419|
+  'g4435
+  'g4451)
+ '#hash((lab4467
+         .
+         ((movq (imm 1) (var d))
+          (cmpq (imm 0) (var c))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((cmpq (var b) (var a))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (var g4435))
+          (movq (var g4435) (var d))
+          (cmpq (imm 0) (var c))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (var b) (reg rax))
+          (addq (var b) (reg rax))
+          (movq (reg rax) (var |+4418|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (var a) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4426))
+          (movq (var b) (reg rax))
+          (addq (var g4426) (reg rax))
+          (movq (reg rax) (var |+4427|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4419|))
+          (movq (var |+4419|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4420))
+          (movq (var |+4418|) (reg rax))
+          (addq (var g4420) (reg rax))
+          (movq (reg rax) (var |+4421|))
+          (movq (var |+4421|) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4422))
+          (movq (var a) (reg rax))
+          (addq (var g4422) (reg rax))
+          (movq (reg rax) (var |+4423|))
+          (movq (var |+4423|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4424))
+          (movq (var |+4418|) (reg rax))
+          (addq (var g4424) (reg rax))
+          (movq (reg rax) (var |+4425|))
+          (movq (var |+4425|) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4428|))
+          (movq (var |+4428|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4429))
+          (movq (var |+4427|) (reg rax))
+          (addq (var g4429) (reg rax))
+          (movq (reg rax) (var |+4430|))
+          (movq (var |+4430|) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4431))
+          (movq (var a) (reg rax))
+          (addq (var g4431) (reg rax))
+          (movq (reg rax) (var |+4432|))
+          (movq (var |+4432|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4433))
+          (movq (var |+4427|) (reg rax))
+          (addq (var g4433) (reg rax))
+          (movq (reg rax) (var |+4434|))
+          (movq (var |+4434|) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (var b) (reg rax))
+          (addq (var b) (reg rax))
+          (movq (reg rax) (var |+4436|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (var a) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4444))
+          (movq (var b) (reg rax))
+          (addq (var g4444) (reg rax))
+          (movq (reg rax) (var |+4445|))
+          (cmpq (imm 0) (var d))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4437|))
+          (movq (var |+4437|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4438))
+          (movq (var |+4436|) (reg rax))
+          (addq (var g4438) (reg rax))
+          (movq (reg rax) (var |+4439|))
+          (movq (var |+4439|) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4440))
+          (movq (var a) (reg rax))
+          (addq (var g4440) (reg rax))
+          (movq (reg rax) (var |+4441|))
+          (movq (var |+4441|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4442))
+          (movq (var |+4436|) (reg rax))
+          (addq (var g4442) (reg rax))
+          (movq (reg rax) (var |+4443|))
+          (movq (var |+4443|) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (var a) (reg rax))
+          (addq (var a) (reg rax))
+          (movq (reg rax) (var |+4446|))
+          (movq (var |+4446|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4447))
+          (movq (var |+4445|) (reg rax))
+          (addq (var g4447) (reg rax))
+          (movq (reg rax) (var |+4448|))
+          (movq (var |+4448|) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (var b) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4449))
+          (movq (var a) (reg rax))
+          (addq (var g4449) (reg rax))
+          (movq (reg rax) (var |+4450|))
+          (movq (var |+4450|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g4451))
+          (movq (var |+4445|) (reg rax))
+          (addq (var g4451) (reg rax))
+          (movq (reg rax) (var |+4452|))
+          (movq (var |+4452|) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (var read4414))
+          (movq (var read4414) (var a))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4415))
+          (movq (var read4415) (var b))
+          (cmpq (var b) (var a))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (var g4416))
+          (movq (var g4416) (var c))
+          (cmpq (var b) (var a))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (var g4417))
+          (cmpq (imm 0) (var g4417))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (cmpq (imm 0) (deref (reg rbp) -320))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (deref (reg rbp) -184))
+          (cmpq (imm 0) (deref (reg rbp) -320))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (deref (reg rbp) -296))
+          (cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (deref (reg rbp) -320))
+          (cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -72))
+          (cmpq (imm 0) (deref (reg rbp) -72))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satsifes input predicate: YES
+Ran pass assign-homes. Output:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (cmpq (imm 0) (deref (reg rbp) -320))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (deref (reg rbp) -184))
+          (cmpq (imm 0) (deref (reg rbp) -320))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (cmpq (imm 0) (deref (reg rbp) -184))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (deref (reg rbp) -296))
+          (cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (deref (reg rbp) -320))
+          (cmpq (deref (reg rbp) -296) (deref (reg rbp) -272))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (deref (reg rbp) -72))
+          (cmpq (imm 0) (deref (reg rbp) -72))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -296))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -320))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -72) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satsifes input predicate: YES
+Ran pass patch-instructions. Output:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion . ())
+        (main
+         .
+         ((callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -296))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -320))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -72) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion
+         .
+         ((movq (reg rax) (reg rdi))
+          (callq print_int64 0)
+          (movq (imm 0) (reg rax))
+          (movq (reg rbp) (reg rsp))
+          (popq (reg rbp))
+          (retq)))
+        (main
+         .
+         ((pushq (reg rbp))
+          (movq (reg rsp) (reg rbp))
+          (addq (imm -352) (reg rsp))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -296))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -320))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -72) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satsifes input predicate: YES
+Ran pass prelude-and-conclusion. Output:
+'(program
+  #hash((|+4418| . -48)
+        (|+4419| . -24)
+        (|+4421| . -312)
+        (|+4423| . -264)
+        (|+4425| . -232)
+        (|+4427| . -200)
+        (|+4428| . -176)
+        (|+4430| . -136)
+        (|+4432| . -88)
+        (|+4434| . -40)
+        (|+4436| . -336)
+        (|+4437| . -304)
+        (|+4439| . -256)
+        (|+4441| . -224)
+        (|+4443| . -192)
+        (|+4445| . -152)
+        (|+4446| . -128)
+        (|+4448| . -80)
+        (|+4450| . -32)
+        (|+4452| . -328)
+        (g4416 . -96)
+        (g4417 . -72)
+        (g4420 . -344)
+        (g4422 . -288)
+        (g4424 . -248)
+        (g4426 . -216)
+        (g4429 . -160)
+        (g4431 . -112)
+        (g4433 . -64)
+        (g4435 . -16)
+        (g4438 . -280)
+        (g4440 . -240)
+        (g4442 . -208)
+        (g4444 . -168)
+        (g4447 . -104)
+        (g4449 . -56)
+        (g4451 . -8)
+        (read4414 . -144)
+        (read4415 . -120)
+        (a . -272)
+        (b . -296)
+        (c . -320)
+        (d . -184))
+  #hash((lab4467
+         .
+         ((movq (imm 1) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4470)
+          (jmp lab4469)))
+        (lab4468
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -16))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -184))
+          (movq (deref (reg rbp) -320) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4476)
+          (jmp lab4475)))
+        (lab4469
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4472)
+          (jmp lab4471)))
+        (lab4470
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -216))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -216) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -200))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4474)
+          (jmp lab4473)))
+        (lab4471
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -24))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -344))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -344) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -312))
+          (movq (deref (reg rbp) -312) (reg rax))
+          (jmp conclusion)))
+        (lab4472
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -288))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -288) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -264))
+          (movq (deref (reg rbp) -264) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -248))
+          (movq (deref (reg rbp) -48) (reg rax))
+          (addq (deref (reg rbp) -248) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -232))
+          (movq (deref (reg rbp) -232) (reg rax))
+          (jmp conclusion)))
+        (lab4473
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -176))
+          (movq (deref (reg rbp) -176) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -160))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -160) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -136))
+          (movq (deref (reg rbp) -136) (reg rax))
+          (jmp conclusion)))
+        (lab4474
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -112))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -112) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -88) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -200) (reg rax))
+          (addq (deref (reg rbp) -64) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -40) (reg rax))
+          (jmp conclusion)))
+        (lab4475
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -296) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -336))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4478)
+          (jmp lab4477)))
+        (lab4476
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -168))
+          (movq (deref (reg rbp) -296) (reg rax))
+          (addq (deref (reg rbp) -168) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -152))
+          (movq (deref (reg rbp) -184) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4480)
+          (jmp lab4479)))
+        (lab4477
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -304))
+          (movq (deref (reg rbp) -304) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -280))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -280) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -256))
+          (movq (deref (reg rbp) -256) (reg rax))
+          (jmp conclusion)))
+        (lab4478
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -240))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -240) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -224))
+          (movq (deref (reg rbp) -224) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -208))
+          (movq (deref (reg rbp) -336) (reg rax))
+          (addq (deref (reg rbp) -208) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -192))
+          (movq (deref (reg rbp) -192) (reg rax))
+          (jmp conclusion)))
+        (lab4479
+         .
+         ((movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -272) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -128))
+          (movq (deref (reg rbp) -128) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -104))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -104) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg rax))
+          (jmp conclusion)))
+        (lab4480
+         .
+         ((movq (deref (reg rbp) -296) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (addq (deref (reg rbp) -56) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -152) (reg rax))
+          (addq (deref (reg rbp) -8) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -328))
+          (movq (deref (reg rbp) -328) (reg rax))
+          (jmp conclusion)))
+        (conclusion
+         .
+         ((movq (reg rax) (reg rdi))
+          (callq print_int64 0)
+          (movq (imm 0) (reg rax))
+          (movq (reg rbp) (reg rsp))
+          (popq (reg rbp))
+          (retq)))
+        (main
+         .
+         ((pushq (reg rbp))
+          (movq (reg rsp) (reg rbp))
+          (addq (imm -352) (reg rsp))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -144))
+          (movq (deref (reg rbp) -144) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -272))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -120))
+          (movq (deref (reg rbp) -120) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -296))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set e (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -320))
+          (movq (deref (reg rbp) -272) (reg rax))
+          (cmpq (deref (reg rbp) -296) (reg rax))
+          (set l (byte-reg al))
+          (movzbq (byte-reg al) (reg rax))
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -72) (reg rax))
+          (cmpq (imm 0) (reg rax))
+          (jmp-if e lab4468)
+          (jmp lab4467)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+0
+Input:
+".globl _main\n.extern _read_int64\n.extern _print_int64\nlab4468:\n    movq -272(%rbp), %rax\n    cmpq -296(%rbp), %rax\n    sete %al\n    movzbq %al, %rax\n    movq %rax, -16(%rbp)\n    movq -16(%rbp), %rax\n    movq %rax, -184(%rbp)\n    movq -320(%rbp), %rax\n    cmpq $0, %rax\n    je lab4476\n    jmp lab4475\nlab4470:\n    movq -272(%rbp), %rax\n    negq %rax\n    movq %rax, -216(%rbp)\n    movq -296(%rbp), %rax\n    addq -216(%rbp), %rax\n    movq %rax, -200(%rbp)\n    movq -184(%rbp), %rax\n    cmpq $0, %rax\n    je lab4474\n    jmp lab4473\nlab4471:\n    movq -272(%rbp), %rax\n    addq -272(%rbp), %rax\n    movq %rax, -24(%rbp)\n    movq -24(%rbp), %rax\n    negq %rax\n    movq %rax, -344(%rbp)\n    movq -48(%rbp), %rax\n    addq -344(%rbp), %rax\n    movq %rax, -312(%rbp)\n    movq -312(%rbp), %rax\n    jmp conclusion\nlab4472:\n    movq -296(%rbp), %rax\n    negq %rax\n    movq %rax, -288(%rbp)\n    movq -272(%rbp), %rax\n    addq -288(%rbp), %rax\n    movq %rax, -264(%rbp)\n    movq -264(%rbp), %rax\n    negq %rax\n    movq %rax, -248(%rbp)\n    movq -48(%rbp), %rax\n    addq -248(%rbp), %rax\n    movq %rax, -232(%rbp)\n    movq -232(%rbp), %rax\n    jmp conclusion\nlab4473:\n    movq -272(%rbp), %rax\n    addq -272(%rbp), %rax\n    movq %rax, -176(%rbp)\n    movq -176(%rbp), %rax\n    negq %rax\n    movq %rax, -160(%rbp)\n    movq -200(%rbp), %rax\n    addq -160(%rbp), %rax\n    movq %rax, -136(%rbp)\n    movq -136(%rbp), %rax\n    jmp conclusion\nlab4474:\n    movq -296(%rbp), %rax\n    negq %rax\n    movq %rax, -112(%rbp)\n    movq -272(%rbp), %rax\n    addq -112(%rbp), %rax\n    movq %rax, -88(%rbp)\n    movq -88(%rbp), %rax\n    negq %rax\n    movq %rax, -64(%rbp)\n    movq -200(%rbp), %rax\n    addq -64(%rbp), %rax\n    movq %rax, -40(%rbp)\n    movq -40(%rbp), %rax\n    jmp conclusion\nlab4475:\n    movq -296(%rbp), %rax\n    addq -296(%rbp), %rax\n    movq %rax, -336(%rbp)\n    movq -184(%rbp), %rax\n    cmpq $0, %rax\n    je lab4478\n    jmp lab4477\nlab4476:\n    movq -272(%rbp), %rax\n    negq %rax\n    movq %rax, -168(%rbp)\n    movq -296(%rbp), %rax\n    addq -168(%rbp), %rax\n    movq %rax, -152(%rbp)\n    movq -184(%rbp), %rax\n    cmpq $0, %rax\n    je lab4480\n    jmp lab4479\nlab4477:\n    movq -272(%rbp), %rax\n    addq -272(%rbp), %rax\n    movq %rax, -304(%rbp)\n    movq -304(%rbp), %rax\n    negq %rax\n    movq %rax, -280(%rbp)\n    movq -336(%rbp), %rax\n    addq -280(%rbp), %rax\n    movq %rax, -256(%rbp)\n    movq -256(%rbp), %rax\n    jmp conclusion\nlab4478:\n    movq -296(%rbp), %rax\n    negq %rax\n    movq %rax, -240(%rbp)\n    movq -272(%rbp), %rax\n    addq -240(%rbp), %rax\n    movq %rax, -224(%rbp)\n    movq -224(%rbp), %rax\n    negq %rax\n    movq %rax, -208(%rbp)\n    movq -336(%rbp), %rax\n    addq -208(%rbp), %rax\n    movq %rax, -192(%rbp)\n    movq -192(%rbp), %rax\n    jmp conclusion\nlab4480:\n    movq -296(%rbp), %rax\n    negq %rax\n    movq %rax, -56(%rbp)\n    movq -272(%rbp), %rax\n    addq -56(%rbp), %rax\n    movq %rax, -32(%rbp)\n    movq -32(%rbp), %rax\n    negq %rax\n    movq %rax, -8(%rbp)\n    movq -152(%rbp), %rax\n    addq -8(%rbp), %rax\n    movq %rax, -328(%rbp)\n    movq -328(%rbp), %rax\n    jmp conclusion\nlab4467:\n    movq $1, -184(%rbp)\n    movq -320(%rbp), %rax\n    cmpq $0, %rax\n    je lab4470\n    jmp lab4469\nlab4469:\n    movq -296(%rbp), %rax\n    addq -296(%rbp), %rax\n    movq %rax, -48(%rbp)\n    movq -184(%rbp), %rax\n    cmpq $0, %rax\n    je lab4472\n    jmp lab4471\nconclusion:\n    movq %rax, %rdi\n    call _print_int64\n    movq $0, %rax\n    movq %rbp, %rsp\n    popq %rbp\n    ret\n_main:\n    pushq %rbp\n    movq %rsp, %rbp\n    addq $-352, %rsp\n    call _read_int64\n    movq %rax, -144(%rbp)\n    movq -144(%rbp), %rax\n    movq %rax, -272(%rbp)\n    call _read_int64\n    movq %rax, -120(%rbp)\n    movq -120(%rbp), %rax\n    movq %rax, -296(%rbp)\n    movq -272(%rbp), %rax\n    cmpq -296(%rbp), %rax\n    sete %al\n    movzbq %al, %rax\n    movq %rax, -96(%rbp)\n    movq -96(%rbp), %rax\n    movq %rax, -320(%rbp)\n    movq -272(%rbp), %rax\n    cmpq -296(%rbp), %rax\n    setl %al\n    movzbq %al, %rax\n    movq %rax, -72(%rbp)\n    movq -72(%rbp), %rax\n    cmpq $0, %rax\n    je lab4468\n    jmp lab4467\nlab4479:\n    movq -272(%rbp), %rax\n    addq -272(%rbp), %rax\n    movq %rax, -128(%rbp)\n    movq -128(%rbp), %rax\n    negq %rax\n    movq %rax, -104(%rbp)\n    movq -152(%rbp), %rax\n    addq -104(%rbp), %rax\n    movq %rax, -80(%rbp)\n    movq -80(%rbp), %rax\n    jmp conclusion\n"
+Satsifes input predicate: YES
+Ran pass render-x86. Output:
+.globl _main
+.extern _read_int64
+.extern _print_int64
+lab4468:
+    movq -272(%rbp), %rax
+    cmpq -296(%rbp), %rax
+    sete %al
+    movzbq %al, %rax
+    movq %rax, -16(%rbp)
+    movq -16(%rbp), %rax
+    movq %rax, -184(%rbp)
+    movq -320(%rbp), %rax
+    cmpq $0, %rax
+    je lab4476
+    jmp lab4475
+lab4470:
+    movq -272(%rbp), %rax
+    negq %rax
+    movq %rax, -216(%rbp)
+    movq -296(%rbp), %rax
+    addq -216(%rbp), %rax
+    movq %rax, -200(%rbp)
+    movq -184(%rbp), %rax
+    cmpq $0, %rax
+    je lab4474
+    jmp lab4473
+lab4471:
+    movq -272(%rbp), %rax
+    addq -272(%rbp), %rax
+    movq %rax, -24(%rbp)
+    movq -24(%rbp), %rax
+    negq %rax
+    movq %rax, -344(%rbp)
+    movq -48(%rbp), %rax
+    addq -344(%rbp), %rax
+    movq %rax, -312(%rbp)
+    movq -312(%rbp), %rax
+    jmp conclusion
+lab4472:
+    movq -296(%rbp), %rax
+    negq %rax
+    movq %rax, -288(%rbp)
+    movq -272(%rbp), %rax
+    addq -288(%rbp), %rax
+    movq %rax, -264(%rbp)
+    movq -264(%rbp), %rax
+    negq %rax
+    movq %rax, -248(%rbp)
+    movq -48(%rbp), %rax
+    addq -248(%rbp), %rax
+    movq %rax, -232(%rbp)
+    movq -232(%rbp), %rax
+    jmp conclusion
+lab4473:
+    movq -272(%rbp), %rax
+    addq -272(%rbp), %rax
+    movq %rax, -176(%rbp)
+    movq -176(%rbp), %rax
+    negq %rax
+    movq %rax, -160(%rbp)
+    movq -200(%rbp), %rax
+    addq -160(%rbp), %rax
+    movq %rax, -136(%rbp)
+    movq -136(%rbp), %rax
+    jmp conclusion
+lab4474:
+    movq -296(%rbp), %rax
+    negq %rax
+    movq %rax, -112(%rbp)
+    movq -272(%rbp), %rax
+    addq -112(%rbp), %rax
+    movq %rax, -88(%rbp)
+    movq -88(%rbp), %rax
+    negq %rax
+    movq %rax, -64(%rbp)
+    movq -200(%rbp), %rax
+    addq -64(%rbp), %rax
+    movq %rax, -40(%rbp)
+    movq -40(%rbp), %rax
+    jmp conclusion
+lab4475:
+    movq -296(%rbp), %rax
+    addq -296(%rbp), %rax
+    movq %rax, -336(%rbp)
+    movq -184(%rbp), %rax
+    cmpq $0, %rax
+    je lab4478
+    jmp lab4477
+lab4476:
+    movq -272(%rbp), %rax
+    negq %rax
+    movq %rax, -168(%rbp)
+    movq -296(%rbp), %rax
+    addq -168(%rbp), %rax
+    movq %rax, -152(%rbp)
+    movq -184(%rbp), %rax
+    cmpq $0, %rax
+    je lab4480
+    jmp lab4479
+lab4477:
+    movq -272(%rbp), %rax
+    addq -272(%rbp), %rax
+    movq %rax, -304(%rbp)
+    movq -304(%rbp), %rax
+    negq %rax
+    movq %rax, -280(%rbp)
+    movq -336(%rbp), %rax
+    addq -280(%rbp), %rax
+    movq %rax, -256(%rbp)
+    movq -256(%rbp), %rax
+    jmp conclusion
+lab4478:
+    movq -296(%rbp), %rax
+    negq %rax
+    movq %rax, -240(%rbp)
+    movq -272(%rbp), %rax
+    addq -240(%rbp), %rax
+    movq %rax, -224(%rbp)
+    movq -224(%rbp), %rax
+    negq %rax
+    movq %rax, -208(%rbp)
+    movq -336(%rbp), %rax
+    addq -208(%rbp), %rax
+    movq %rax, -192(%rbp)
+    movq -192(%rbp), %rax
+    jmp conclusion
+lab4480:
+    movq -296(%rbp), %rax
+    negq %rax
+    movq %rax, -56(%rbp)
+    movq -272(%rbp), %rax
+    addq -56(%rbp), %rax
+    movq %rax, -32(%rbp)
+    movq -32(%rbp), %rax
+    negq %rax
+    movq %rax, -8(%rbp)
+    movq -152(%rbp), %rax
+    addq -8(%rbp), %rax
+    movq %rax, -328(%rbp)
+    movq -328(%rbp), %rax
+    jmp conclusion
+lab4467:
+    movq $1, -184(%rbp)
+    movq -320(%rbp), %rax
+    cmpq $0, %rax
+    je lab4470
+    jmp lab4469
+lab4469:
+    movq -296(%rbp), %rax
+    addq -296(%rbp), %rax
+    movq %rax, -48(%rbp)
+    movq -184(%rbp), %rax
+    cmpq $0, %rax
+    je lab4472
+    jmp lab4471
+conclusion:
+    movq %rax, %rdi
+    call _print_int64
+    movq $0, %rax
+    movq %rbp, %rsp
+    popq %rbp
+    ret
+_main:
+    pushq %rbp
+    movq %rsp, %rbp
+    addq $-352, %rsp
+    call _read_int64
+    movq %rax, -144(%rbp)
+    movq -144(%rbp), %rax
+    movq %rax, -272(%rbp)
+    call _read_int64
+    movq %rax, -120(%rbp)
+    movq -120(%rbp), %rax
+    movq %rax, -296(%rbp)
+    movq -272(%rbp), %rax
+    cmpq -296(%rbp), %rax
+    sete %al
+    movzbq %al, %rax
+    movq %rax, -96(%rbp)
+    movq -96(%rbp), %rax
+    movq %rax, -320(%rbp)
+    movq -272(%rbp), %rax
+    cmpq -296(%rbp), %rax
+    setl %al
+    movzbq %al, %rax
+    movq %rax, -72(%rbp)
+    movq -72(%rbp), %rax
+    cmpq $0, %rax
+    je lab4468
+    jmp lab4467
+lab4479:
+    movq -272(%rbp), %rax
+    addq -272(%rbp), %rax
+    movq %rax, -128(%rbp)
+    movq -128(%rbp), %rax
+    negq %rax
+    movq %rax, -104(%rbp)
+    movq -152(%rbp), %rax
+    addq -104(%rbp), %rax
+    movq %rax, -80(%rbp)
+    movq -80(%rbp), %rax
+    jmp conclusion
+
+Satisfies output predicate: YES
+Evaluation of your output:
+x86-64 code not interpreted, skipping interpreter for this pass--test by running binary
+
+Summary of passes run:
+
+typecheck                     : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+shrink                        : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+uniqueify                     : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+anf-convert                   : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+explicate-control             : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+uncover-locals                : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+select-instructions           : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+assign-homes                  : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+patch-instructions            : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+prelude-and-conclusion        : Input (YES) Output (YES) Evaluation: 0 stdout: "1"
+render-x86                    : Input (YES) Output (YES) Evaluation: <string> 
+Consistent across passes? YES
+🏗️ Now building a binary... 🏗️
+-> Host: macosx/x86_64  Target: x86_64-apple-darwin  Entry: main
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./output.s -o ./output.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./runtime.c -o ./runtime.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 ./output.o ./runtime.o -o ./output
+Success! Executable produced at: ./output

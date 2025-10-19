@@ -1,0 +1,9 @@
+(list
+ 'program
+ (set 'x7655 'x7656 'x)
+ '#hash((_main
+         .
+         ((movq (imm 2) (var x))
+          (movq (var x) (var x7655))
+          (movq (var x7655) (var x7656))
+          (movq (var x7656) (reg rax))))))

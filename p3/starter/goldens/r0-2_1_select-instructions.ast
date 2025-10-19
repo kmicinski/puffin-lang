@@ -1,0 +1,20 @@
+(list
+ 'program
+ (set '|+7080| 'read7081 '|+7082| 'g7083 '|+7084|)
+ '#hash((_main
+         .
+         ((movq (imm 5) (reg rax))
+          (addq (imm 3) (reg rax))
+          (movq (reg rax) (var |+7080|))
+          (callq _read_int64 0)
+          (movq (reg rax) (var read7081))
+          (movq (imm 2) (reg rax))
+          (addq (var read7081) (reg rax))
+          (movq (reg rax) (var |+7082|))
+          (movq (var |+7082|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g7083))
+          (movq (var |+7080|) (reg rax))
+          (addq (var g7083) (reg rax))
+          (movq (reg rax) (var |+7084|))
+          (movq (var |+7084|) (reg rax))))))
