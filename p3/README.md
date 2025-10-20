@@ -1,4 +1,4 @@
-# Project 3: R3 / set! & while -> x86-64
+# Project 4: R3 / set! & while -> x86-64
 
 This project is inspired by *Essentials of Compilation* (EoC), but in
 this project I take a departure from the book's content in several

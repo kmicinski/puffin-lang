@@ -209,7 +209,7 @@
   (display-return (car res)))
 
 ;; ────────────────────────────────────────────────────────────────────────────
-;; C2 (explicate-control) and Locals – same interpreter
+;; C2 (explicate-control and uncover-locals):
 ;;   - RHS supports: read, -, +, not, eq?, <, (vector aLen), (vector-ref a i)
 ;;   - Statement form in tails: (vector-set! a i v)
 ;;   - IF form: (if (<|eq? a0 a1) (goto lt) (goto lf))
@@ -261,8 +261,15 @@
   (display-return (car (exec-c2 blocks (entry-symbol) (hash) in))))
 
 ;; ────────────────────────────────────────────────────────────────────────────
-;; (Pseudo-)x86-64 Interpreter (unchanged structure, minor robustness)
+;; (Pseudo-)x86-64 Interpreter
 ;; ────────────────────────────────────────────────────────────────────────────
+
+;; State is:
+;; `(,regs ,vars ,mem ,stack ,flags)
+;; 
+;; Pointers are represented as `(pointer-to addr)`
+;; Addresses are either '(stack-addr i) or '(heap-addr i)
+;; Primitive operations are updated to work on pointers
 
 (define (read-op op st)
   (match-define `(,regs ,vars ,mem ,stack ,flags) st)
