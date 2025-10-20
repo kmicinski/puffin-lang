@@ -279,9 +279,9 @@
     [`(byte-reg ,r)               (hash-ref regs r 0)]
     [`(var ,x)                    (hash-ref vars x (λ () (error 'interp-instrs "unbound var ~a" x)))]
     [`(deref (reg ,r) ,off)
-     (if (eq? r 'rbp)
-         (hash-ref mem off 0)
-         (error 'interp-instrs "bad deref ~a" op))]))
+     (pretty-print st)
+     (match (read-op `(reg ,r) st)
+       [(? number? n) n])]))
 
 (define (write-op op v st)
   (match-define `(,regs ,vars ,mem ,stack ,flags) st)
@@ -290,9 +290,9 @@
     [`(byte-reg ,r)               `(,(hash-set regs r (bitwise-and v #xFF)) ,vars ,mem ,stack ,flags)]
     [`(var ,x)                    `(,regs ,(hash-set vars x v) ,mem ,stack ,flags)]
     [`(deref (reg ,r) ,off)
-     (if (eq? r 'rbp)
-         `(,regs ,vars ,(hash-set mem off v) ,stack ,flags)
-         (error 'interp-instrs "bad deref ~a" op))]
+     (pretty-print st)
+     (pretty-print op)
+     (match (read-op `(reg ,r) st))]
     [_ (error 'interp-instrs "cannot write to ~a" op)]))
 
 (define (cmp-flags srcv dstv)
@@ -375,6 +375,10 @@
         (displayln (read-op '(reg rax) st))
         (set! out? #t)
         (interp-tail rst blocks st in)]
+       ['make_vector
+        (define i (read-op '(reg rax) st))
+        (define vec (make-vector i))
+        (interp-tail rst blocks (write-op '(reg rax) vec st) in)]
        [_ (error 'interp-instrs "unknown call ~a" lbl)])]
     [_ (error 'interp-instrs "unknown instruction sequence ~a" instrs)]))
 
@@ -383,7 +387,10 @@
   (match prog
     [`(program ,_ ,blocks)
      (define instrs (hash-ref blocks (entry-symbol)))
-     (define init-state `(,(hash) ,(hash) ,(hash) () ,(hash 'ZF #f 'SF #f 'OF #f)))
+     (define init-regs (hash 'rsp '(stack-addr #xAA000000)
+                             'rbp '(stack-addr #xAA000000)
+))
+     (define init-state `(,init-regs ,(hash) ,(hash) () ,(hash 'ZF #f 'SF #f 'OF #f)))
      (define result (interp-tail instrs blocks init-state in))
      (if out? result (begin (displayln result) result))]))
 
