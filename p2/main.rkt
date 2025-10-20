@@ -22,7 +22,7 @@
     `(,typecheck              "typecheck"           ,R2?                       ,R2?                     ,interpret-R2)
     `(,shrink                 "shrink"              ,R2?                       ,shrunk-R2?              ,interpret-R2)
     `(,uniqueify              "uniqueify"           ,shrunk-R2?                ,unique-source-tree?     ,interpret-R2)
-    `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
+    `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-R2)
     `(,explicate-control      "explicate-control"   ,anf-program?              ,c1-program?             ,interpret-c1)
     `(,uncover-locals         "uncover-locals"      ,c1-program?               ,locals-program?         ,interpret-c1)
     `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
