@@ -1,0 +1,20 @@
+(list
+ 'program
+ (set 'read7588 'read7589 'read7590 'read7591 '|+7592| '|+7593| '|+7594|)
+ '#hash((_main
+         .
+         (seq
+          (assign read7588 (read))
+          (seq
+           (assign read7589 (read))
+           (seq
+            (assign read7590 (read))
+            (seq
+             (assign read7591 (read))
+             (seq
+              (assign |+7592| (+ read7590 read7591))
+              (seq
+               (assign |+7593| (+ read7589 |+7592|))
+               (seq
+                (assign |+7594| (+ read7588 |+7593|))
+                (return |+7594|)))))))))))

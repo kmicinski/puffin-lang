@@ -1,0 +1,39 @@
+(list
+ 'program
+ (set
+  'g7379
+  '|+7380|
+  'read7372
+  'g7373
+  '|+7374|
+  'read7375
+  'read7376
+  '|+7377|
+  '|+7378|)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read7372))
+          (movq (var read7372) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g7373))
+          (movq (imm 1) (reg rax))
+          (addq (var g7373) (reg rax))
+          (movq (reg rax) (var |+7374|))
+          (callq _read_int64 0)
+          (movq (reg rax) (var read7375))
+          (callq _read_int64 0)
+          (movq (reg rax) (var read7376))
+          (movq (var read7375) (reg rax))
+          (addq (var read7376) (reg rax))
+          (movq (reg rax) (var |+7377|))
+          (movq (var |+7374|) (reg rax))
+          (addq (var |+7377|) (reg rax))
+          (movq (reg rax) (var |+7378|))
+          (movq (var |+7378|) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g7379))
+          (movq (var g7379) (reg rax))
+          (addq (imm 42) (reg rax))
+          (movq (reg rax) (var |+7380|))
+          (movq (var |+7380|) (reg rax))))))

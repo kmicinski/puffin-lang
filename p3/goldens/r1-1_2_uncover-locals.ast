@@ -1,0 +1,8 @@
+(list
+ 'program
+ (set 'x7651 'x7652 'x)
+ '#hash((_main
+         .
+         (seq
+          (assign x 2)
+          (seq (assign x7651 x) (seq (assign x7652 x7651) (return x7652)))))))

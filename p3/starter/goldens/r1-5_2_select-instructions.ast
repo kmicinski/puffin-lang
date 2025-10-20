@@ -1,0 +1,53 @@
+(list
+ 'program
+ (set
+  'g8307
+  '|+8308|
+  '|+8309|
+  '|+8310|
+  'w
+  'v
+  'u
+  'z
+  'y
+  '|+8303|
+  'g8304
+  '|+8305|
+  '|+8306|
+  'x
+  'read8302)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read8302))
+          (movq (var read8302) (var x))
+          (movq (var x) (reg rax))
+          (addq (imm 10) (reg rax))
+          (movq (reg rax) (var |+8303|))
+          (movq (var |+8303|) (var y))
+          (movq (var y) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g8304))
+          (movq (var g8304) (var z))
+          (movq (var z) (reg rax))
+          (addq (var x) (reg rax))
+          (movq (reg rax) (var |+8305|))
+          (movq (var |+8305|) (var u))
+          (movq (var u) (reg rax))
+          (addq (var y) (reg rax))
+          (movq (reg rax) (var |+8306|))
+          (movq (var |+8306|) (var v))
+          (movq (var v) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g8307))
+          (movq (var g8307) (var w))
+          (movq (var w) (reg rax))
+          (addq (var u) (reg rax))
+          (movq (reg rax) (var |+8308|))
+          (movq (var y) (reg rax))
+          (addq (var z) (reg rax))
+          (movq (reg rax) (var |+8309|))
+          (movq (var |+8308|) (reg rax))
+          (addq (var |+8309|) (reg rax))
+          (movq (reg rax) (var |+8310|))
+          (movq (var |+8310|) (reg rax))))))

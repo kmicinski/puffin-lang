@@ -1,0 +1,24 @@
+(list
+ 'program
+ (set 'b 'a 'sum 'read8108 '|+8109| 'g8110 '|+8111| '|+8112| 'n)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read8108))
+          (movq (var read8108) (var n))
+          (movq (imm 0) (var a))
+          (movq (imm 1) (var b))
+          (movq (var a) (reg rax))
+          (addq (var b) (reg rax))
+          (movq (reg rax) (var |+8109|))
+          (movq (var |+8109|) (var sum))
+          (movq (var n) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g8110))
+          (movq (var sum) (reg rax))
+          (addq (var g8110) (reg rax))
+          (movq (reg rax) (var |+8111|))
+          (movq (var n) (reg rax))
+          (addq (var |+8111|) (reg rax))
+          (movq (reg rax) (var |+8112|))
+          (movq (var |+8112|) (reg rax))))))

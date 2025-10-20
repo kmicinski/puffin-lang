@@ -188,6 +188,7 @@
 ;; issue: we won't be using *registers*, we'll keep using variables
 ;; for now.
 (define (select-instructions p)
+  (pretty-print p)
   ;; Translate ANF-ified C0 to a block of instructions
   (define (c1->block c1)
     (define (h-atom a)
@@ -339,14 +340,8 @@
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector ,a)))]
       [`(let ([_ (vector-set! ,x ,i ,v)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
-      [`(let ([,x (vector-ref ,e-v ,i)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector-ref ,e-v ,i)))]
       [`(let ([_ (void)]) ,e)
        (expr->blocks e current-block k)]
-      [`(set! ,x ,a)
-       (hash current-block `(seq (set! ,x ,a) ,(k '(void))))]
-      [`(vector-set! ,x ,i ,v)
-       (hash current-block `(seq (vector-set! ,x ,i ,v) ,(k '(void))))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
@@ -363,6 +358,24 @@
          (merge rest-blocks body-blocks)
          header-blocks)
         this-block)]
+      [`(let ([,x (vector-ref ,e-v ,i)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector-ref ,e-v ,i)))]
+      [`(vector-set! ,x ,i ,v)
+       (hash current-block `(seq (vector-set! ,x ,i ,v) ,(k '(void))))]
+      [`(if ,a ,e-t ,e-f)
+       (define l-t (gensym 'lab))
+       (define l-f (gensym 'lab))
+       (define true-blocks (expr->blocks e-t l-t k)) 
+       (define false-blocks (expr->blocks e-f l-f k))
+       (define all-blocks (merge true-blocks false-blocks))
+       (hash-set all-blocks
+                 current-block ;; the current block's label
+                 `(if (eq? ,a 0)
+                      ;; take the false branch
+                      (goto ,l-f)
+                      ;; take the true branch...
+                      (goto ,l-t)))]
+
       [(? atom? a)
        (hash current-block (k a))]))
   (match p
@@ -415,7 +428,6 @@
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
-      
       [`(make-vector ,e)
        (convert-expr e (lambda (atom) 
                          (define vec-a (gensym 'vec))
@@ -427,10 +439,10 @@
                        (convert-expr e1 (λ (a1)
                                           (define ref (gensym 'ref))
                                           `(let ([,ref (vector-ref ,a0 ,a1)]) ,(k ref))))))]
-      [`(vector-set! ,x ,e0 ,e1)
+      [`(vector-set! ,e0 ,i ,e1)
        (convert-expr e0
                      (lambda (a0)
-                       (convert-expr e1 (lambda (a1) `(vector-set! ,x ,a0 ,a1)))))]
+                       (convert-expr e1 (lambda (a1) `(vector-set! ,a0 ,i ,a1)))))]
       ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
@@ -461,8 +473,15 @@
       ;; new forms
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(a-c e-g) ,(a-c e-b))]) ,(a-c e-r))]
+      [`(let ([_ ,e]) ,e-b)
+       `(let ([_ ,(a-c e)]) ,(a-c e-b))]
       [`(set! ,x ,e+)
        `(vector-set! ,x 0 ,(a-c e+))]
+      [`(vector-ref ,e ,i)
+       `(vector-ref ,(a-c e) ,i)]
+      [`(vector-set! ,e ,i ,e-v)
+       `(vector-set! ,(a-c e) ,i ,(a-c e-v))]
+      [`(make-vector ,i) e]
       ;; put original let last to avoid matching _
       [`(let ([,x ,e]) ,e-b)
        `(let ([,x (make-vector 1)])
@@ -503,6 +522,9 @@
              `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))
            (let ([assignment+ (hash-set assignment x x)])
              `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
+      [`(make-vector ,i) e]
+      [`(vector-ref ,e ,i) `(vector-ref ,(rename e assignment) ,i)]
+      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(rename e assignment) ,i ,(rename e-v assignment))]
       [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]))
   (match p
     [`(program ,exp)
@@ -534,18 +556,21 @@
       [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
       [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
       [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]
-      [`(let ([,x ,e0]) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h e-b))]
-      [`(let* ([,x ,e0]) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h e-b))]
-      [`(let* ([,x ,e0] ,rest ...) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
       [`(begin ,e0) (h e0)]
       [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) (begin ,@e-rest)))]
       [`(set! ,x ,e) `(set! ,x ,(h e))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
-      [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]))
+      [`(make-vector ,i) e]
+      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(h e) ,i ,(h e-v))]
+      [`(vector-ref ,e ,i) `(vector-ref ,(h e) ,i)]
+      [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h e-b))]
+      [`(let* ([,x ,e0]) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h e-b))]
+      [`(let* ([,x ,e0] ,rest ...) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -553,75 +578,44 @@
 
 ;; Live on the edge, don't typecheck
 
-#;
-(pretty-print
- (anf-convert
-  (assignment-convert
-   (uniqueify
-    (shrink
-     '(program
-       (let* ([x (read)]
-              [y 0]
-              [z 1])
-         (begin
-           (while (< y x)
-                  (begin (set! y (+ y 1))
-                         (set! z (+ z y))))
-           z))))))))
-
-(displayln
- (dump-x86-64
-  (prelude-and-conclusion
-   (patch-instructions
-    (assign-homes
-     (select-instructions
-      (uncover-locals
-       (explicate-control
-        (anf-convert
-         (assignment-convert
-          (uniqueify
-           (shrink
-            '(program
+(define ex0 '(program
               (let* ([x (read)]
-                     [y 0]
-                     [a 5]
-                     [z 15])
+                     [i 0]
+                     [acc 0])
                 (begin
-                  (while (< y x)
-                         (begin (set! y (+ y 1))
-                                (set! z (+ z z))
-                                (set! a 10)))
-                  z)))))))))))))))
+                  (while (< i x)
+                         (begin
+                           (set! acc (+ acc i))
+                           (set! i (+ i 1))))
+                  acc))))
 
+(define ex1
+  '(program
+    (let* ([v (make-vector 3)]
+           [_ (vector-set! v 0 10)]
+           [_ (vector-set! v 1 20)]
+           [_ (vector-set! v 2 30)])
+      (vector-ref v 1))))
 
-#;
-(pretty-print 
- (assignment-convert
-  (uniqueify
-   (shrink
-    '(program
-      (let* ([x (read)]
-             [y 0]
-             [z 1])
-        (begin
-          (while (< y x)
-                 (begin (set! y (+ y 1))
-                        (set! z (+ z y))))
-          z)))))))
+(define (ezcompile p)
+  (pretty-print 
+   (anf-convert
+           (assignment-convert
+            (uniqueify
+             (shrink p))))) 
 
-;; 
-#;
-(explicate-control
- (anf-convert
-  (assignment-convert
-   (uniqueify
-    (shrink
-     '(program
-       (let* ([x (read)]
-              [y 0]
-              [z 1])
-         (begin
-           (while (< y x)
-                  (begin (set! y (+ y 1))
-                         (set! z (+ z y))))
-           z))))))))
+  #;
+  (displayln
+   (dump-x86-64
+    (prelude-and-conclusion
+     (patch-instructions
+      (assign-homes
+       (select-instructions
+        (uncover-locals
+         (explicate-control
+          (anf-convert
+           (assignment-convert
+            (uniqueify
+             (shrink p)))))))))))))
+
+(ezcompile ex1)

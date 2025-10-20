@@ -1,0 +1,51 @@
+(list
+ 'program
+ (set
+  'g8307
+  '|+8308|
+  '|+8309|
+  '|+8310|
+  'w
+  'v
+  'u
+  'z
+  'y
+  '|+8303|
+  'g8304
+  '|+8305|
+  '|+8306|
+  'x
+  'read8302)
+ '#hash((_main
+         .
+         (seq
+          (assign read8302 (read))
+          (seq
+           (assign x read8302)
+           (seq
+            (assign |+8303| (+ x 10))
+            (seq
+             (assign y |+8303|)
+             (seq
+              (assign g8304 (- y))
+              (seq
+               (assign z g8304)
+               (seq
+                (assign |+8305| (+ z x))
+                (seq
+                 (assign u |+8305|)
+                 (seq
+                  (assign |+8306| (+ u y))
+                  (seq
+                   (assign v |+8306|)
+                   (seq
+                    (assign g8307 (- v))
+                    (seq
+                     (assign w g8307)
+                     (seq
+                      (assign |+8308| (+ w u))
+                      (seq
+                       (assign |+8309| (+ y z))
+                       (seq
+                        (assign |+8310| (+ |+8308| |+8309|))
+                        (return |+8310|)))))))))))))))))))

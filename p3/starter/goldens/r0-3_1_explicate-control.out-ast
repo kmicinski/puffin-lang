@@ -1,0 +1,1 @@
+((3) 0 () 1 ((q (read))) () (c program c () c (h - (equal) (main c seq c (c assign c (su . "read5596") ? . 0) c (c seq c (c assign c (su . "read5597") ? . 0) c (c seq c (c assign c (su . "g5598") c (c - c (su . "read5597"))) c (c seq c (c assign c (su . "+5599") c (c + c (su . "read5596") c (su . "g5598"))) c (c return c (su . "+5599")))))))))
