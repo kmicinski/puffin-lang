@@ -14,7 +14,7 @@
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
 (define run-test-mode (make-parameter #f))
-(define start-pass (make-parameter "typecheck")) ;; synced with main.rkt
+(define start-pass (make-parameter "shrink")) ;; synced with main.rkt
 (define end-pass (make-parameter "render-x86"))  ;; synced with main.rkt
 (define write-stdout-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))

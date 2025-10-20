@@ -1,70 +1,71 @@
-# Project 3: LIf / R2 -> x86-64
+# Project 3: R3 / set! & while -> x86-64
 
-This project is inspired by *Essentials of Compilation* (EoC), but the
-code here is a from-scratch reimplementation with some simplifications
-to keep the workload reasonable and to make grading/debugging
-clearer. Where behavior differs from the book, **this README is the
-source of truth** for expectations, file names, and command lines.
+This project is inspired by *Essentials of Compilation* (EoC), but in
+this project I take a departure from the book's content in several
+important ways. The language in this project, R3, is an
+imperative-style language with loops, but at the core the important
+thing happening is dynamic memory allocation on the heap. In the EoC
+book, this is covered alongside garbage collection--in my class (at
+least this iteration) I prefer to skip implementing garbage
+collection: you need to know C well (to do it correctly), and the
+algorithms are both tricky to describe and challenging to implement
+and debug. Thus, I opt for a simpler route: just use malloc, and
+(optionally) get garbage collection by using (e.g.,) the Boehm garbage
+collector; alternatively, I will describe an arena allocator as a
+stretch goal.
 
-You will compile a tiny expression language (**R2 / LIf**) with
-integers, booleans, `let`, arithmetic, conditionals, and comparisons
-into x86-64 assembly, then produce a real binary and test it on actual
-inputs. The power of this language is (roughly) decision diagrams (and
-functions on) finite input streams. 
+## Input Language (R3)
 
-This README file contains some specific tips which I hope you will
-read, including debugging tips and some project-specific
-instructions. Please read the whole README file and be prepared to
-discuss it in office hours, email, and class.
-
-## Input Language (R2 / LIf)
-
-R2 extends the straight-line arithmetic core with booleans and simple
-conditionals. It includes integers, booleans, variables, `let`, unary
-minus, addition, logical operators, comparisons, and a zero-argument
-`(read)` primitive that consumes one integer from stdin at runtime.
-
-Before shrinking, the surface language allows `and`, `or`, `not`,
-`if`, and the comparators `eq?`, `<`, `<=`, `>`, `>=`. The `shrink`
-pass reduces this set to `eq?` and `<`, removes binary minus, and
-desugars `and`/`or`.
+this language, which I am calling **R3**, adds imperative features to
+**R2/LIf**. Specifically, we add the forms:
 
 ```racket
-;; Core (pre-shrink) expressions and programs (abridged)
-(define (cmp? cmp) (member cmp '(eq? < <= > >=)))
-(define (R2-exp? e)
-  (match e
-    [#t #t]
-    [#f #t]
-    [(? fixnum? n) #t]
-    [`(read) #t]
-    [`(- ,(? R2-exp? e)) #t]                           ; unary minus
-    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(or  ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(not ,(? R2-exp? e)) #t]
-    [`(,(? cmp? c) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(if ,(? R2-exp? g) ,(? R2-exp? t) ,(? R2-exp? f)) #t]
-    [(? symbol? var) #t]
-    [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
-    [_ #f]))
-
-(define (R2? e)
-  (match e
-    [`(program ,(? R2-exp? exp)) #t]
-    [_ #f]))
+(let* ([x e] ...) e-b) ;; let*, allows multiple simultaneously definitions
+(void) ;; operations like vector-set! return void
+(vector i) ;; Allocate a vector of size i, initialize all entries to 0
+(vector-ref e i) ;; Dereference the vector e at index i, i must be static 
+(vector-set! e i ev) ;; e[i] := v
+(set! x e) ;; Any variable can be set!d
+(while e-g e-b) ;; While e-g, do e-b, eval to (void)
+(begin es ... e-last) ;; Do all of es..., eval to the result of e-last
 ```
 
-Programs on disk are s-expressions, e.g.:
+As an example of an R3 program...
 
-```racket
-(program
-  (let ([a (+ 1 (read))])
-    (if (<= a 0)
-        (let ([x (if (< a 2) 3 (+ 1 (- 2)))])
-          (> x 1))
-        3)))
+```scheme
+ (program
+              (let* ([x (read)]
+                     [i 0]
+                     [acc 0])
+                (begin
+                  (while (< i x)
+                         (begin
+                           (set! acc (+ acc i))
+                           (set! i (+ i 1))))
+                  acc)))
 ```
+
+There are several relevant things to note:
+
+- We have a new literal, called `(void)`. This is sometimes called the
+  "unit value," and carries no computational information, i.e.,
+  control-flow never depends on the value of its contents; in an ideal
+  world we would eliminate voids entirely via optimization, but their
+  inclusion allows us to answer questions like: "what should
+  vector-set! return?"
+
+- *All* variables may be mutated via set!, our language is no longer
+  pure. We handle this by "boxing" every variable, a process we
+  describe below.
+
+- Programs may allocate vectors using `(vector i)`, which zeros all
+  entries of the vector.
+
+- Mutability goes hand-in-hand with loops, in the sense that mutable
+  variables are not much fun unless you add loops. So we add a form,
+  `(while e-g e-b)`, which continually evaluates the loop guard `e-g`
+  and executes the body `e-b` (discarding its result) until the loop
+  is finished. `(while ...)` reduces to `(void)`.
 
 ## Repository Layout
 
@@ -84,16 +85,14 @@ Please do not rename files or directories (grading infra depends on them).
 
 ## The Compiler Pipeline (passes)
 
-The compiler consists of a number of passes. Please do not get
-overwhelmed: each of these passes is going to be very small, and each
-has a specific, isolated behavior that will allow us to explain the
-specific stages of compilation. Additionally, as the code is compiled,
-it is translated into an increasingly-lower-level IR.
+In this project, I skip typechecking; the compilation simply assumes
+the program is type-correct. If the program is not type correct, it
+may go wrong (segfault, etc.). Ensuring the program does not go wrong
+may be accomplished a variety of ways (type checking, dynamic error
+handling, etc.), and we will discuss these trade-offs in class.
 
 You will implement the following passes:
 
-1. `typecheck` → assign R2 types (`Int`, `Bool`) or raise `'type-error`
-   Input: `R2?` → Output: `R2?` → Interp: `interpret-R2`
 2. `shrink` → remove binary `-`, `and`/`or`, and `<=, >, >=` (desugar to `eq?`/`<`)  
    Input: `R2?` → Output: `shrunk-R2?` → Interp: `interpret-R2`
 3. `uniqueify` → ensure each bound identifier is written exactly once  
@@ -120,11 +119,95 @@ Your job is to produce outputs that satisfy each predicate in
 `irs.rkt` and that remain semantically equivalent (the interpreters
 check this).
 
-**NOTE**: Right now (in this version of the project), I testing
-typechecking rather minimally. Unfortunately that is a known
-limitation of this project; please do implement typechecking, but know
-that it is far less important than the other parts (you can simply
-implement it as a no-op to start).
+## "Boxing" and assignment-conversion
+
+In this project we embrace mutability by enabling `set!`, which allows
+us to make mutable updates to variables:
+
+```
+(program
+ (let* ([x (read)]
+        [y (read)]
+        [tmp 0])
+   (begin
+     (set! tmp x)
+     (set! x y)
+     (set! y tmp)
+     y)))
+```
+
+Notice that we can use `set!`, which mutably updates a variable; this
+is not possible in "pure" functional programs, and mutation is simply
+not provided in those languages (at least as a builtin). The question
+is how to implement `set!`. It may seem like an obvious choice: each
+variable becomes a single register-sized (8-byte) value on the
+stack. However, this approach starts to fall apart when variables
+outlive their stack frames (which will happen when we add functions /
+procedures). Instead, we use this as an opportunity to discuss another
+necessary challenge to work towards a general-purpose programming
+language: heap-allocated data. You likely know about the heap from
+programming in C with `malloc` (or C++ with `new`). These procedures
+allow us to allocate memory from a large block of available memory
+(the heap), with the obligation that we later release ("free") it back
+to the operating system.
+
+To enable mutability and `set!`, we will employ a technique called
+"boxing." In short, we assume that _all_ data is put in a vector
+("box") on the heap. In our case, we will use a very simple
+representation of vectors:
+
+```
+typedef struct {
+    int64_t len;
+    int64_t data[];
+} TinyVecPacked;
+```
+
+In terms of memory representation, a `TinyVecPacked` struct has a very
+simple layout: a single 64-bit value representing the length, followed
+by a data array of 8-byte values. For example, the vector containing
+the sequence `5` followed by `20` (starting at the address `0xAAAA00`)
+would be represented as:
+
+```
+   lower addresses →                                       higher addresses →
+   ┌───────────────────────┬───────────────────────┬───────────────────────┐
+   │  len (int64)          │  data[0] (int64)      │  data[1] (int64)      │ 
+   │  8 bytes              │  8 bytes              │  8 bytes              │
+   ├───────── ─ 0xAAAA00 ──┼────────── 0xAAAA08  ──┼──────── 0xAAAA10  ────┤
+   │ e.g., 2               │ e.g., 5               │ e.g., 20              │
+   └───────────────────────┴───────────────────────┴───────────────────────┘
+```
+
+The length can be used to avoid accesses outside of the buffer: we
+don't want to be able to write outside of the bounds of a buffer
+because it could contain junk data, we want to be able to write
+outside of the bounds of a buffer because we could mess up *other*
+data, unrelated to this vector (but still within our same address
+space, assuming the OS provides virtual memory). To handle this, we
+could take one of three positions:
+
+(a) don't worry about it--just be unsafe, and let the program crash.
+
+(b) check the bound before each access, if a bad access would occur,
+jump to an exception handler.
+
+(c) use a static type system to ensure this could never happen.
+
+Each of these approaches has different trade offs: C, C++, and similar
+languages opt for (a), which is fast but risky--the program might
+crash in a subtle or even exploitable way. Managed languages like
+Java, C#, etc. often opt for (b), but can sometimes optimize to avoid
+checks if certain conditions are met (e.g., using profiling data and
+just-in time compilation). The issue with (b) is that it is slow:
+every single access necessitates a branch, compared with (a) which
+might just be as simple as `movq`. Languages like Rust use (c), which
+enables the benefits of (b) as a zero-cost abstraction, often matching
+(or even exceeding) the performance of (a).
+
+In this project we will do (a)/(b): 
+
+## C2 
 
 ## IR Predicates and Interpreters
 

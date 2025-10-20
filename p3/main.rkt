@@ -16,20 +16,20 @@
 (require "interpreters.rkt")
 
  ;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
- ;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
+ ;; NOTE: first/last pass has to stay in sync with the parameters in system.rkt
  (define all-passes
    (list 
-    `(,typecheck              "typecheck"           ,R2?                       ,R2?                     ,interpret-R2)
-    `(,shrink                 "shrink"              ,R2?                       ,shrunk-R2?              ,interpret-R2)
-    `(,uniqueify              "uniqueify"           ,shrunk-R2?                ,unique-source-tree?     ,interpret-R2)
-    `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
-    `(,explicate-control      "explicate-control"   ,anf-program?              ,c1-program?             ,interpret-c1)
-    `(,uncover-locals         "uncover-locals"      ,c1-program?               ,locals-program?         ,interpret-c1)
-    `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
-    `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
-    `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
-    `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
-    `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,dummy-interp-x86-64)))
+    `(,shrink                 "shrink"                 ,R3?                       ,shrunk-R3?              ,interpret-R2)
+    `(,uniqueify              "uniqueify"              ,shrunk-R3?                ,unique-source-tree?     ,interpret-R2)
+    `(,assignment-convert     "assignment-convert"     ,unique-source-tree?       ,unique-source-tree?     ,interpret-R2)
+    `(,anf-convert            "anf-convert"            ,unique-source-tree?       ,anf-program?            ,interpret-anf)
+    `(,explicate-control      "explicate-control"      ,anf-program?              ,c2-program?             ,interpret-c2)
+    `(,uncover-locals         "uncover-locals"         ,c2-program?               ,locals-program?         ,interpret-c2)
+    `(,select-instructions    "select-instructions"    ,locals-program?           ,instr-program?          ,interpret-instr)
+    `(,assign-homes           "assign-homes"           ,instr-program?            ,homes-assigned-program? ,interpret-instr)
+    `(,patch-instructions     "patch-instructions"     ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
+    `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?          ,x86-64?                 ,interpret-instr)
+    `(,dump-x86-64            "render-x86"             ,x86-64?                   ,string?                 ,dummy-interp-x86-64)))
 
 ;; Make each column available
 (match-define (list passes

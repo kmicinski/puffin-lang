@@ -88,15 +88,15 @@
 ;; adds the prelude and conclusion to each of the functions in the program
 (define (prelude-and-conclusion p)
   ;; ensure the stack is aligned
-  (define (align8 n)
-    (bitwise-and (+ n 8)
-                 (bitwise-not 8)))  ; clear the low four bits
+  (define (align16 n)
+    (bitwise-and (+ n 15) (bitwise-not 15)))
+  ; clear the low four bits
   (match p
     [`(program ,locals ,blocks)
      ;; negative number, added to %rsp
      (define space-needed (if (empty? (hash-values locals))
                               0
-                              (- (align8 (- (apply min (hash-values locals)))))))
+                              (- (align16 (- (apply min (hash-values locals)))))))
      (define start-block (hash-ref blocks (entry-symbol)))
      (define new-start-block
        `((pushq (reg rbp))
@@ -121,7 +121,8 @@
 
 ;; walks over instructions and replaces invalid movqs, where both
 ;; operands are indirects (offsets of %rax). In x86_64, we *cannot*
-;; have both arguments in registers, so
+;; have all operands in memory, so we shuffle into utility register(s)
+;; as necessary to restore the necessary invariants.
 (define (patch-instructions p)
   (define (patch-tail block)
     (match block
@@ -188,7 +189,6 @@
 ;; issue: we won't be using *registers*, we'll keep using variables
 ;; for now.
 (define (select-instructions p)
-  (pretty-print p)
   ;; Translate ANF-ified C0 to a block of instructions
   (define (c1->block c1)
     (define (h-atom a)
@@ -251,10 +251,6 @@
            (addq ,(h-atom a1) (reg rax))
            (movq (reg rax) (var ,x))
            ,@(h rest))]
-        [`(seq (vector-set! ,a0 ,i ,a-v) ,rest)
-         `((movq ,(h-atom a0) (reg rax))
-           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i))))
-           ,@(h rest))]
         ;; new
         [`(seq (assign ,x (vector ,i)) ,rest)
          `((movq (imm ,i) (reg rdi))
@@ -271,10 +267,7 @@
            ,@(h rest))]
         ['(void) '()]
         [`(goto ,l)
-         `((goto ,l))]
-        [`(vector-set! ,a0 ,i ,a-v)
-         `((movq ,(h-atom a0) (reg rax))
-           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i)))))]))
+         `((goto ,l))]))
     
     (h c1))
   ;; the input is C0: h is (hash 'start '(let ...))
@@ -293,7 +286,6 @@
       [`(goto ,l) (set)]
       [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1)) (set)]
       [`(set! ,_ ,_) (set)] ;; must be introduced by a let
-      [`(vector-set! ,_ ,_ ,_) (set)] ;; must be introduced by a let
       [`(seq (vector-set! ,x ,_ ,_) ,rest)
        (set-add (h rest) x)]
       [`(seq (assign ,x0 ,_) ,rest)
@@ -421,11 +413,10 @@
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
 
       ;; new forms 
-      [`(let ([_ (vector-set! ,x ,e0 ,e1)]) ,e-b)
-       (displayln "here")
-       (convert-expr e0 (lambda (a-idx)
+      [`(let ([_ (vector-set! ,e0 ,idx ,e1)]) ,e-b)
+       (convert-expr e0 (lambda (a-vec)
                           (convert-expr e1 (lambda (a-val)
-                                             `(let ([_ (vector-set! ,x ,a-idx ,a-val)]) ,(convert-expr e-b k))))))]
+                                             `(let ([_ (vector-set! ,a-vec ,idx ,a-val)]) ,(convert-expr e-b k))))))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
@@ -590,22 +581,8 @@
                            (set! i (+ i 1))))
                   acc))))
 
-(define ex1
-  '(program
-    (let* ([v (make-vector 3)]
-           [_ (vector-set! v 0 10)]
-           [_ (vector-set! v 1 20)]
-           [_ (vector-set! v 2 30)])
-      (vector-ref v 1))))
 
 (define (ezcompile p)
-  (pretty-print 
-   (anf-convert
-           (assignment-convert
-            (uniqueify
-             (shrink p))))) 
-
-  #;
   (displayln
    (dump-x86-64
     (prelude-and-conclusion
@@ -619,4 +596,4 @@
             (uniqueify
              (shrink p)))))))))))))
 
-(ezcompile ex1)
+(ezcompile ex0)
