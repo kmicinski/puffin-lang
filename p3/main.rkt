@@ -197,6 +197,11 @@
     (if (input-file)
         (map string->number (file->lines (input-file)))
         (range 100)))
+  (define interp-functions (slice-list interpreters our-range))
+  (define interpreters-to-use
+    (if (write-stdout-mode)
+        interp-functions
+        (map (λ (_) (λ (p in) "skipping interpretation...")) (range (length interp-functions))))) 
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
   (let ([trace (run-chain source-tree
@@ -204,7 +209,7 @@
                           (slice-list pass-names our-range)
                           (slice-list input-predicates our-range)
                           (slice-list output-predicates our-range)
-                          (slice-list interpreters our-range)
+                          interpreters-to-use
                           our-input-stream)])
     (when (write-stdout-mode)
       (trace->stdout trace))
@@ -298,6 +303,8 @@
    (start-pass pass)]
   [("-e" "--end-pass") pass "End at pass <pass>"
    (end-pass pass)]
+  [("-f" "--fast") "Skip interpretation / dumping, just compile"
+                   (write-stdout-mode #f)]
   #:args leftover
   (match leftover
     ['()        (error 'main "expected a <filename>")]    

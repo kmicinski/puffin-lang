@@ -4,7 +4,7 @@
 ;; Compiling R3 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
-(require "interpreters.rkt") ;; XXX 
+(require "interpreters.rkt") ;; XXX
 
 (provide (all-defined-out)) ;; export everything for testing
 
@@ -253,6 +253,9 @@
            (movq (reg rax) (var ,x))
            ,@(h rest))]
         ;; new
+        [`(seq (assign ,x (void)) ,rest)
+         `((movq (imm 0) (var ,x))
+           ,@(h rest))]
         [`(seq (assign ,x (vector ,i)) ,rest)
          `((movq (imm ,i) (reg rdi))
            (callq make_vector 1)
@@ -269,7 +272,7 @@
         ['(void) '()]
         [`(goto ,l)
          `((goto ,l))]))
-    
+
     (h c1))
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
@@ -303,7 +306,7 @@
   ;; merge two hashes, assume no common keys
   (define (merge h0 h1)
     (foldl (λ (k0 h1) (hash-set h1 k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
-  (define (atom? a) (or (fixnum? a) (symbol? a) (boolean? a)))
+  (define (atom? a) (or (fixnum? a) (symbol? a) (boolean? a) (equal? a '(void))))
   (define (extend h label instruction)
     (hash-set h label `(seq ,instruction ,(hash-ref h label))))
   ;; basic idea: return a hash which maps blocks to a label name
@@ -335,6 +338,8 @@
        (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
       [`(let ([_ (void)]) ,e)
        (expr->blocks e current-block k)]
+      [`(let ([,x (void)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (void)))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
@@ -358,7 +363,7 @@
       [`(if ,a ,e-t ,e-f)
        (define l-t (gensym 'lab))
        (define l-f (gensym 'lab))
-       (define true-blocks (expr->blocks e-t l-t k)) 
+       (define true-blocks (expr->blocks e-t l-t k))
        (define false-blocks (expr->blocks e-f l-f k))
        (define all-blocks (merge true-blocks false-blocks))
        (hash-set all-blocks
@@ -374,7 +379,7 @@
   (match p
     [`(program ,info ,anf)
      `(program ,info ,(expr->blocks anf (entry-symbol) (lambda (a) `(return ,a))))]))
-  
+
 (define (anf-convert p)
   (define (convert-expr e k)
     (match e
@@ -413,7 +418,7 @@
         (λ (a-g)
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
 
-      ;; new forms 
+      ;; new forms
       [`(let ([_ (vector-set! ,e0 ,idx ,e1)]) ,e-b)
        (convert-expr e0 (lambda (a-vec)
                           (convert-expr e1 (lambda (a-val)
@@ -422,7 +427,7 @@
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
       [`(make-vector ,e)
-       (convert-expr e (lambda (atom) 
+       (convert-expr e (lambda (atom)
                          (define vec-a (gensym 'vec))
                          `(let ([,vec-a (make-vector ,atom)])
                             ,(k vec-a))))]
@@ -451,7 +456,7 @@
       [(? fixnum? n)  e]
       [`(read)        e]
       ['(void)        e]
-      [`(- ,e+) `(- ,(a-c e+))]                 
+      [`(- ,e+) `(- ,(a-c e+))]
       [`(+ ,e0 ,e1) `(+ ,(a-c e0) ,(a-c e1))]
       [`(not ,e) `(not ,(a-c e))]
       [`(,(? shrunk-cmp? c) ,e0 ,e1) `(,c ,(a-c e0) ,(a-c e1))]
@@ -585,14 +590,14 @@
 
 (define (ezcompile p)
   (interpret-instr
-    (select-instructions
-        (uncover-locals
-         (explicate-control
-          (anf-convert
-           (assignment-convert
-            (uniqueify
-             (shrink p)))))))
-    (range 100)))
+   (select-instructions
+    (uncover-locals
+     (explicate-control
+      (anf-convert
+       (assignment-convert
+        (uniqueify
+         (shrink p)))))))
+   (range 100)))
 
 ;(ezcompile ex0)
 

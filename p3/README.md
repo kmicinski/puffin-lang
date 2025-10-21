@@ -9,10 +9,11 @@ book, this is covered alongside garbage collection--in my class (at
 least this iteration) I prefer to skip implementing garbage
 collection: you need to know C well (to do it correctly), and the
 algorithms are both tricky to describe and challenging to implement
-and debug. Thus, I opt for a simpler route: just use malloc, and
-(optionally) get garbage collection by using (e.g.,) the Boehm garbage
-collector; alternatively, I will describe an arena allocator as a
-stretch goal.
+and debug in class where we have not covered C programming. Thus, I
+opt for a simpler route: just use malloc, and (optionally) get garbage
+collection by using (e.g.,) the Boehm garbage collector; I will
+describe an arena allocator as a stretch goal, which you should pursue
+if you are a PhD student or interested to learn more.
 
 ## Input Language (R3)
 
@@ -22,7 +23,7 @@ this language, which I am calling **R3**, adds imperative features to
 ```racket
 (let* ([x e] ...) e-b) ;; let*, allows multiple simultaneously definitions
 (void) ;; operations like vector-set! return void
-(vector i) ;; Allocate a vector of size i, initialize all entries to 0
+(make-vector i) ;; Allocate a vector of size i, initialize all entries to 0
 (vector-ref e i) ;; Dereference the vector e at index i, i must be static 
 (vector-set! e i ev) ;; e[i] := v
 (set! x e) ;; Any variable can be set!d
@@ -45,7 +46,7 @@ As an example of an R3 program...
                   acc)))
 ```
 
-There are several relevant things to note:
+The major extensions are these:
 
 - We have a new literal, called `(void)`. This is sometimes called the
   "unit value," and carries no computational information, i.e.,
@@ -54,12 +55,18 @@ There are several relevant things to note:
   inclusion allows us to answer questions like: "what should
   vector-set! return?"
 
+- Programs may allocate vectors using `(make-vector i)`, which zeros
+  all entries of the vector. These get translated into calls to an
+  allocation function in `runtime.c`.
+
+- Programs may perform vector operations, but these operations are
+  limited to constant arguments--we may generalize this in subsequent
+  projects
+
 - *All* variables may be mutated via set!, our language is no longer
   pure. We handle this by "boxing" every variable, a process we
   describe below.
 
-- Programs may allocate vectors using `(vector i)`, which zeros all
-  entries of the vector.
 
 - Mutability goes hand-in-hand with loops, in the sense that mutable
   variables are not much fun unless you add loops. So we add a form,
