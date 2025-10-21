@@ -1,4 +1,4 @@
-# Project 3: LIf / R2 -> x86-64
+# Project 2: LIf / R2 → x86-64
 
 This project is inspired by *Essentials of Compilation* (EoC), but the
 code here is a from-scratch reimplementation with some simplifications

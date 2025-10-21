@@ -1,7 +1,7 @@
 #lang racket
 
-;; CIS531 Fall '25 Project 3
-;; Compiling R3 -> x86-64
+;; CIS531 Fall '25 Project 1
+;; Compiling LVar -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
 
@@ -9,15 +9,17 @@
 
 ;; The compiler is designed in passes, which go:
 ;;
-;; --> R3? -- Source program
+;; --> R2? -- Source program
 ;; |
-;; +-> shrunk-R3? -- Shrunken R3 (removes several forms)
+;; +-> typed-R2? -- Typechecking R2
+;; | 
+;; +-> shrunk-R2? -- Shrunken R2 (removes several forms)
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
 ;; +-> anf-program? -- A-Normal form (flattening nested expressions)
 ;; |
-;; +-> c2-program? -- The C2 IR: blocks of sequences of commands, if, and gotos
+;; +-> c1-program? -- The C1 IR: blocks of sequences of commands, if, and gotos
 ;; |
 ;; +-> locals-program? -- Uncovering local variables
 ;; |
@@ -62,7 +64,6 @@
        ;; must call rt-sym here!
        (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
-      [`(goto ,l) (format "jmp ~a" (symbol->string  l))]
       ['(leave) "leave"]))
   (define (render-block block name)
     (apply string-append
@@ -73,17 +74,17 @@
   (define (function-name? block-name) (equal? block-name (entry-symbol)))
   (match p
     [`(program ,info ,blocks)
-     (string-append
-      ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
-      (format ".globl ~a\n" (rt-sym (entry-symbol)))
-      ;; include these for sure
-      (runtime-function-externs)
-      (foldl (λ (block-name acc) (string-append acc (render-block (hash-ref blocks block-name)
-                                                                  (if (function-name? block-name)
-                                                                      (rt-sym block-name)
-                                                                      block-name))))
-             ""
-             (hash-keys blocks)))]))
+      (string-append
+       ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
+       (format ".globl ~a\n" (rt-sym (entry-symbol)))
+       ;; include these for sure
+       (runtime-function-externs)
+       (foldl (λ (block-name acc) (string-append acc (render-block (hash-ref blocks block-name)
+                                                                   (if (function-name? block-name)
+                                                                       (rt-sym block-name)
+                                                                       block-name))))
+              ""
+              (hash-keys blocks)))]))
 
 ;; adds the prelude and conclusion to each of the functions in the program
 (define (prelude-and-conclusion p)
@@ -128,13 +129,15 @@
       ['() '()]
       ;; first move into %rax, then move %rax into i1(%r1)
       [`((movq (deref (reg ,r0) ,i0) (deref (reg ,r1) ,i1)) ,rest ...)
-       `((movq (deref (reg ,r0) ,i0) (reg r11))
-         (movq (reg r11) (deref (reg ,r1) ,i1))
+       `((movq (deref (reg ,r0) ,i0) (reg rax))
+         (movq (reg rax) (deref (reg ,r1) ,i1))
          ,@(patch-tail rest))]
+      ;; new ...
       [`((movzbq (byte-reg ,r) (deref (reg ,r1) ,i1)) ,rest ...)
        `((movzbq (byte-reg ,r) (reg rax))
          (movq (reg rax) (deref (reg ,r1) ,i1))
          ,@(patch-tail rest))]
+      ;; new ...
       [`((cmpq ,a (deref (reg ,r1) ,i1)) ,rest ...)
        `((movq (deref (reg ,r1) ,i1) (reg rax))
          (cmpq ,a (reg rax))
@@ -188,12 +191,10 @@
 ;; issue: we won't be using *registers*, we'll keep using variables
 ;; for now.
 (define (select-instructions p)
-  (pretty-print p)
   ;; Translate ANF-ified C0 to a block of instructions
   (define (c1->block c1)
     (define (h-atom a)
       (match a
-        ['(void)       `(imm 0)]
         [(? fixnum? n) `(imm ,n)]
         [(? symbol? x) `(var ,x)]
         [(? boolean? b) `(imm ,(if b 1 0))]))
@@ -250,37 +251,12 @@
          `((movq ,(h-atom a0) (reg rax))
            (addq ,(h-atom a1) (reg rax))
            (movq (reg rax) (var ,x))
-           ,@(h rest))]
-        [`(seq (vector-set! ,a0 ,i ,a-v) ,rest)
-         `((movq ,(h-atom a0) (reg rax))
-           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i))))
-           ,@(h rest))]
-        ;; new
-        [`(seq (assign ,x (vector ,i)) ,rest)
-         `((movq (imm ,i) (reg rdi))
-           (callq make_vector 1)
-           (movq (reg rax) (var ,x))
-           ,@(h rest))]
-        [`(seq (assign ,x (vector-ref ,a ,i)) ,rest)
-         `((movq ,(h-atom a) (reg rax))
-           (movq (deref (reg rax) ,(* 8 (+ i 1))) (var ,x))
-           ,@(h rest))]
-        [`(seq (vector-set! ,a0 ,i ,a-v) ,rest)
-         `((movq ,(h-atom a0) (reg rax))
-           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i))))
-           ,@(h rest))]
-        ['(void) '()]
-        [`(goto ,l)
-         `((goto ,l))]
-        [`(vector-set! ,a0 ,i ,a-v)
-         `((movq ,(h-atom a0) (reg rax))
-           (movq ,(h-atom a-v) (deref (reg rax) ,(* 8 (+ 1 i)))))]))
-    
+           ,@(h rest))]))
     (h c1))
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
     [`(program ,info ,h)
-     (define blocks (hash-set
+     (define blocks (hash-set 
                      (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref h block)))) h (hash-keys h))
                      (conclusion-block-name)
                      '())) ;; also add an empty conclusion block
@@ -290,12 +266,7 @@
   (define (h seq)
     (match seq
       [`(return ,_) (set)]
-      [`(goto ,l) (set)]
       [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1)) (set)]
-      [`(set! ,_ ,_) (set)] ;; must be introduced by a let
-      [`(vector-set! ,_ ,_ ,_) (set)] ;; must be introduced by a let
-      [`(seq (vector-set! ,x ,_ ,_) ,rest)
-       (set-add (h rest) x)]
       [`(seq (assign ,x0 ,_) ,rest)
        (set-add (h rest) x0)]))
   (match p
@@ -311,83 +282,48 @@
   (define (merge h0 h1)
     (foldl (λ (k0 h1) (hash-set h1 k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
   (define (atom? a) (or (fixnum? a) (symbol? a) (boolean? a)))
-  (define (extend h label instruction)
-    (hash-set h label `(seq ,instruction ,(hash-ref h label))))
   ;; basic idea: return a hash which maps blocks to a label name
-  ;;
-  ;; k is a continuation which gets called on the ultimate return value
-  (define (expr->blocks e current-block k)
+  (define (expr->blocks e current-block)
+    ;; prefixing a basic block with an instruction
+    ;; (prefix-w-instruction (hash 'main (return 1)) 'main (assign x 1))
+    ;; => (hash 'main (seq (assign x 1) (return 1)))
+    (define (extend h label instruction)
+      (hash-set h label `(seq ,instruction ,(hash-ref h label))))
     (match e
       [`(let ([,x ,(? boolean? b)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,b))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,b))]
       [`(let ([,x ,(? fixnum? n)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,n))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,n))]
       [`(let ([,x ,(? symbol? y)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,y))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x ,y))]
       [`(let ([,x (read)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (read)))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (read)))]
       [`(let ([,x (- ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (- ,a)))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (- ,a)))]
       [`(let ([,x (not ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (not ,a)))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (not ,a)))]
       [`(let ([,x (+ ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (+ ,a0 ,a1)))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (+ ,a0 ,a1)))]
       [`(let ([,x (< ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (< ,a0 ,a1)))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (< ,a0 ,a1)))]
       [`(let ([,x (eq? ,a0 ,a1)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (eq? ,a0 ,a1)))]
-      [`(let ([,x (make-vector ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector ,a)))]
-      [`(let ([_ (vector-set! ,x ,i ,v)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
-      [`(let ([_ (void)]) ,e)
-       (expr->blocks e current-block k)]
-      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       (define l-rest (gensym 'rest))
-       (define l-header (gensym 'header))
-       (define l-body (gensym 'body))
-       (define rest-blocks (expr->blocks e-r l-rest k))
-       (define body-blocks (expr->blocks e-b l-body (λ (_) `(goto ,l-header))))
-       (define header-blocks
-         (expr->blocks e-g
-                       l-header
-                       (λ (a-g) `(if (eq? ,a-g #f) (goto ,l-rest) (goto ,l-body)))))
-       (define this-block (hash current-block `(goto ,l-header)))
-       (merge
-        (merge
-         (merge rest-blocks body-blocks)
-         header-blocks)
-        this-block)]
-      [`(let ([,x (vector-ref ,e-v ,i)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector-ref ,e-v ,i)))]
-      [`(vector-set! ,x ,i ,v)
-       (hash current-block `(seq (vector-set! ,x ,i ,v) ,(k '(void))))]
+       (extend (expr->blocks e+ current-block) current-block `(assign ,x (eq? ,a0 ,a1)))]
+      [(? atom? a)
+       (hash current-block `(return ,a))]
       [`(if ,a ,e-t ,e-f)
        (define l-t (gensym 'lab))
        (define l-f (gensym 'lab))
-       (define true-blocks (expr->blocks e-t l-t k)) 
-       (define false-blocks (expr->blocks e-f l-f k))
-       (define all-blocks (merge true-blocks false-blocks))
-       (hash-set all-blocks
-                 current-block ;; the current block's label
-                 `(if (eq? ,a 0)
-                      ;; take the false branch
-                      (goto ,l-f)
-                      ;; take the true branch...
-                      (goto ,l-t)))]
-
-      [(? atom? a)
-       (hash current-block (k a))]))
+       (define h (merge (expr->blocks e-t l-t) (expr->blocks e-f l-f)))
+       (hash-set h current-block `(if (eq? ,a #f) (goto ,l-f) (goto ,l-t)))]))
   (match p
     [`(program ,info ,anf)
-     `(program ,info ,(expr->blocks anf (entry-symbol) (lambda (a) `(return ,a))))]))
-  
+     `(program ,info ,(expr->blocks anf (entry-symbol)))]))
+
 (define (anf-convert p)
   (define (convert-expr e k)
     (match e
       [(? fixnum? n) (k n)]
       [(? boolean? b) (k b)]
-      ['(void) (k e)]
       ['(read)
        (let ([x (gensym 'read)])
          `(let ([,x (read)]) ,(k x)))]
@@ -419,31 +355,6 @@
         e0
         (λ (a-g)
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
-
-      ;; new forms 
-      [`(let ([_ (vector-set! ,x ,e0 ,e1)]) ,e-b)
-       (convert-expr e0 (lambda (a-idx)
-                          (convert-expr e1 (lambda (a-val)
-                                             `(let ([_ (vector-set! ,x ,a-idx ,a-val)]) ,(convert-expr e-b k))))))]
-      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
-          ,(convert-expr e-r k))]
-      [`(make-vector ,e)
-       (convert-expr e (lambda (atom) 
-                         (define vec-a (gensym 'vec))
-                         `(let ([,vec-a (make-vector ,atom)])
-                            ,(k vec-a))))]
-      [`(vector-ref ,e0 ,e1)
-       (convert-expr e0
-                     (λ (a0)
-                       (convert-expr e1 (λ (a1)
-                                          (define ref (gensym 'ref))
-                                          `(let ([,ref (vector-ref ,a0 ,a1)]) ,(k ref))))))]
-      [`(vector-set! ,e0 ,i ,e1)
-       (convert-expr e0
-                     (lambda (a0)
-                       (convert-expr e1 (lambda (a1) `(vector-set! ,a0 ,i ,a1)))))]
-      ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
@@ -451,52 +362,11 @@
     [`(program ,info ,e)
      `(program ,info ,(convert-expr e (lambda (x) x)))]))
 
-(define (assignment-convert p)
-  (define (a-c e)
-    (match e
-      [(? boolean? b) e]
-      [(? fixnum? n)  e]
-      [`(read)        e]
-      ['(void)        e]
-      [`(- ,e+) `(- ,(a-c e+))]                 
-      [`(+ ,e0 ,e1) `(+ ,(a-c e0) ,(a-c e1))]
-      [`(not ,e) `(not ,(a-c e))]
-      [`(,(? shrunk-cmp? c) ,e0 ,e1) `(,c ,(a-c e0) ,(a-c e1))]
-      ;; control
-      [`(if ,e-g ,e-t ,e-f)
-       `(if ,(a-c e-g)
-            ,(a-c e-t)
-            ,(a-c e-f))]
-      ;; vars/let
-      [(? symbol? x)
-       `(vector-ref ,x 0)]
-      ;; new forms
-      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       `(let ([_ (while ,(a-c e-g) ,(a-c e-b))]) ,(a-c e-r))]
-      [`(let ([_ ,e]) ,e-b)
-       `(let ([_ ,(a-c e)]) ,(a-c e-b))]
-      [`(set! ,x ,e+)
-       `(vector-set! ,x 0 ,(a-c e+))]
-      [`(vector-ref ,e ,i)
-       `(vector-ref ,(a-c e) ,i)]
-      [`(vector-set! ,e ,i ,e-v)
-       `(vector-set! ,(a-c e) ,i ,(a-c e-v))]
-      [`(make-vector ,i) e]
-      ;; put original let last to avoid matching _
-      [`(let ([,x ,e]) ,e-b)
-       `(let ([,x (make-vector 1)])
-          (let ([_ (vector-set! ,x 0 ,(a-c e))])
-            ,(a-c e-b)))] ))
-  (match p
-    [`(program () ,exp)
-     `(program () ,(a-c exp))]))
-
 (define (uniqueify p)
   (define (rename e assignment)
     (match e
       [(? fixnum? n) n]
       [(? boolean? b) b]
-      [`(void) e]
       [`(read) e]
       [`(- ,e+) `(- ,(rename e+ assignment))]
       [`(- ,e0 ,e1) `(- ,(rename e0 assignment) ,(rename e1 assignment))]
@@ -511,21 +381,13 @@
       [`(not ,e) `(not ,(rename e assignment))]
       [`(if ,e0 ,e1 ,e2)
        `(if ,(rename e0 assignment) ,(rename e1 assignment) ,(rename e2 assignment))]
-      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       `(let ([_ (while ,(rename e-g assignment) ,(rename e-b assignment))]) ,(rename e-r assignment))]
-      [`(let ([_ ,e]) ,e-b)
-       `(let ([_ ,(rename e assignment)]) ,(rename e-b assignment))]
       [`(let ([,x ,e]) ,e-b)
        (if (hash-has-key? assignment x)
            (let* ([x+ (gensym x)]
                   [assignment+ (hash-set assignment x x+)])
              `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))
            (let ([assignment+ (hash-set assignment x x)])
-             `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
-      [`(make-vector ,i) e]
-      [`(vector-ref ,e ,i) `(vector-ref ,(rename e assignment) ,i)]
-      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(rename e assignment) ,i ,(rename e-v assignment))]
-      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]))
+             `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]))
   (match p
     [`(program ,exp)
      ;; empty info
@@ -537,9 +399,8 @@
 ;; - Removes all binary comparators except < and eq?
 (define (shrink p)
   (define (h e)
-    (match e
+    (match e 
       ;; base cases
-      [`(void) e]
       [(? symbol?) e]
       [(? number?) e]
       [#t #t]
@@ -552,70 +413,76 @@
       [`(or ,e0 ,e1) `(if ,(h e0) #t ,(h e1))]
       [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
       [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
-      [`(< ,e0 ,e1) `(< ,e0 ,e1)]
       [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
       [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
       [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]
-      [`(begin ,e0) (h e0)]
-      [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) (begin ,@e-rest)))]
-      [`(set! ,x ,e) `(set! ,x ,(h e))]
-      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
-      [`(make-vector ,i) e]
-      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(h e) ,i ,(h e-v))]
-      [`(vector-ref ,e ,i) `(vector-ref ,(h e) ,i)]
-      [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]
-      [`(let ([,x ,e0]) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h e-b))]
-      [`(let* ([,x ,e0]) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h e-b))]
-      [`(let* ([,x ,e0] ,rest ...) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]))
+      [(list es ...) (map h es)]))
   (match p
     [`(program ,exp)
      ;; empty info
      `(program ,(h exp))]))
 
-;; Live on the edge, don't typecheck
+;; Type checking is separated into two functions:
 
-(define ex0 '(program
-              (let* ([x (read)]
-                     [i 0]
-                     [acc 0])
-                (begin
-                  (while (< i x)
-                         (begin
-                           (set! acc (+ acc i))
-                           (set! i (+ i 1))))
-                  acc))))
+;; Translate an expression to its corresponding type.
+;;       e : R2-exp?
+;;     env : hash from symbol -> R2-type?
+;; 
+;; If there is a type ERORR, you should raise an exception, but you
+;; *MUST* raise an exception using the 'type-error tag, for example:
+;;      (error type-error-tag "Expected integer, got boolean")
+;; Note that type-error-tag is defined in irs.rkt--you are encouraged
+;; to make use of it. 
+(define (expr->type e env)
+  (define (expect-type e typ k)
+    (if (equal? (expr->type e env) typ) 
+        (k)
+        (error type-error-tag (format "~a: Expected type ~a" (pretty-format e) (symbol->string typ)))))
+  (match e
+    [#t 'Bool] 
+    [#f 'Bool] 
+    [(? fixnum? n) 'Int]
+    [`(read) 'Int] ;; assume (read) returns int
+    [`(- ,(? R2-exp? e)) (expect-type e 'Int (λ () 'Int))]
+    [`(- ,(? R2-exp? e0) ,(? R2-exp? e1))
+     (expect-type e0 'Int
+                  (λ ()
+                    (expect-type e1 'Int
+                                 (λ () 'Int))))]
+    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1))
+     (expect-type e0 'Int
+                  (λ ()
+                    (expect-type e1 'Int
+                                 (λ () 'Int))))]
+    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) 
+     (expect-type e0 'Bool
+                  (λ ()
+                    (expect-type e1 'Bool
+                                 (λ () 'Bool))))]
+    [`(or ,(? R2-exp? e0) ,(? R2-exp? e1))
+     (expect-type e0 'Bool
+                  (λ ()
+                    (expect-type e1 'Bool
+                                 (λ () 'Bool))))]
+    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f))
+     (expect-type e-g
+                  'Bool
+                  (λ ()
+                    (define t (expr->type e-t env))
+                    (expect-type e-f t (λ () t))))]
+    [`(not ,e)
+     (expect-type e 'Bool (λ () 'Bool))] 
+    [`(,(? cmp? cmp) ,(? R2-exp? e0) ,(? R2-exp? e1))
+     (expect-type e0 'Int (λ () (expect-type e1 'Int (λ () 'Bool))))]
+    [(? symbol? x) (hash-ref env x (λ () (error type-error-tag "Undefined variable")))]
+    [`(let ([,x ,e]) ,e-b)
+     (define t (expr->type e env))
+     (expr->type e-b (hash-set env x t))]))
 
-(define ex1
-  '(program
-    (let* ([v (make-vector 3)]
-           [_ (vector-set! v 0 10)]
-           [_ (vector-set! v 1 20)]
-           [_ (vector-set! v 2 30)])
-      (vector-ref v 1))))
-
-(define (ezcompile p)
-  (pretty-print 
-   (anf-convert
-           (assignment-convert
-            (uniqueify
-             (shrink p))))) 
-
-  #;
-  (displayln
-   (dump-x86-64
-    (prelude-and-conclusion
-     (patch-instructions
-      (assign-homes
-       (select-instructions
-        (uncover-locals
-         (explicate-control
-          (anf-convert
-           (assignment-convert
-            (uniqueify
-             (shrink p)))))))))))))
-
-(ezcompile ex1)
+;; Typecheck a program: a thin wrapper around expr->type. 
+(define (typecheck p)
+  (match-define `(program ,e) p)
+  ;; possibly throw type error
+  (define program-type (expr->type e (hash)))
+  ;; success, if we got here the program typechecked
+  p)

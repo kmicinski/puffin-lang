@@ -1,17 +1,11 @@
 #lang racket
 ;;
-;; CIS531 Fall '25: Project 3 -- R3, set! and loops
+;; CIS531 Fall '25: Project 2 -- R2 / LIf
 ;;
 ;; This file specifies the IRs used across the compiler pipeline.  Do
 ;; not change the intended meaning of these contracts; your passes
 ;; must produce programs that satisfy these predicates.
 ;;
-
-;;
-;; This project is a more significant departure from Siek's
-;; book--namely, we do not build our own garbage collector, and
-;; instead use a simpler allocator.
-;; 
 
 (require "system.rkt")
 (provide (all-defined-out))
@@ -30,81 +24,79 @@
 (define (label? l)               (symbol? l))
 
 ;; ---------------------------------------------------------------------
-;; 1.  Raw R3 program (before shrink/uniqueify)
+;; 1.  Raw R2 program (before shrink/uniqueify)
 ;; ---------------------------------------------------------------------
 
 ;; Comparators in the *source* language (shrink will reduce this set)
 (define (cmp? cmp)
   (member cmp '(eq? < <= > >=)))
 
-(define (R3-exp? e)
+(define (R2-exp? e)
   (match e
     [#t #t]
     [#f #t]
     [(? fixnum? n) #t]
     [`(read) #t]
-    [`(- ,(? R3-exp? e)) #t]
-    [`(- ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(+ ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(and ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(or  ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(if ,(? R3-exp? e-g) ,(? R3-exp? e-t) ,(? R3-exp? e-f)) #t]
-    [`(not ,(? R3-exp? e1)) #t]
-    [`(,(? cmp? c) ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
+    [`(- ,(? R2-exp? e)) #t]
+    [`(- ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(or  ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
+    [`(if ,(? R2-exp? e-g) ,(? R2-exp? e-t) ,(? R2-exp? e-f)) #t]
+    [`(not ,(? R2-exp? e1)) #t]
+    [`(,(? cmp? c) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
     [(? symbol? var) #t]
-    [`(let ([,(? symbol? x) ,(? R3-exp? e)]) ,(? R3-exp? e-body)) #t]
-    ;; new forms
-    [`(begin ,(? R3-exp?) ... ,(? R3-exp? return-value)) #t]
-    [`(while ,(? R3-exp? e-g) ,(? R3-exp? es) ...) #t]
-    [`(vector ,(? R3-exp?) ,(? R3-exp?) ...) #t] ;; at *least* one body
-    [`(vector-ref ,(? R3-exp? vec) ,(? R3-exp? index)) #t]
-    [`(vector-set! ,(? R3-exp? vec) ,(? R3-exp? index) ,(? R3-exp? value)) #t]
-    [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
+    [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
     [_ #f]))
 
-(define (R3? e)
+(define (R2? e)
   (match e
-    [`(program ,(? R3-exp? exp)) #t]
+    [`(program ,(? R2-exp? exp)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 3.  Shrunk R3 (after shrink)
+;; 2.  Typed R2 (typechecker lives elsewhere; this just names the types)
+;; ---------------------------------------------------------------------
+
+(define (R2-type? t)
+  (match t
+    ['Int  #t]
+    ['Bool #t]
+    [_ #f]))
+
+;; Symbol to use when raising type errors from the typechecker
+(define type-error-tag 'type-error)
+
+;; ---------------------------------------------------------------------
+;; 3.  Shrunk R2 (after shrink)
 ;;     – Removes binary minus, and/or, <=, >, >=
 ;;     – Keeps: integers, booleans, read, unary -, +, not, if, eq?, <, let, vars
 ;; ---------------------------------------------------------------------
 
 (define (shrunk-cmp? c) (member c '(eq? <)))
 
-(define (shrunk-R3-exp? e)
+(define (shrunk-R2-exp? e)
   (match e
     [#t #t]
     [#f #t]
     [(? fixnum? n) #t]
     [`(read) #t]
     ;; arithmetic
-    [`(- ,(? shrunk-R3-exp? e)) #t]                         ; unary minus only
-    [`(+ ,(? shrunk-R3-exp? e0) ,(? shrunk-R3-exp? e1)) #t] ; addition
+    [`(- ,(? shrunk-R2-exp? e)) #t]                         ; unary minus only
+    [`(+ ,(? shrunk-R2-exp? e0) ,(? shrunk-R2-exp? e1)) #t] ; addition
     ;; logic / tests
-    [`(not ,(? shrunk-R3-exp? e1)) #t]
-    [`(,(? shrunk-cmp? c) ,(? shrunk-R3-exp? e0) ,(? shrunk-R3-exp? e1)) #t]
+    [`(not ,(? shrunk-R2-exp? e1)) #t]
+    [`(,(? shrunk-cmp? c) ,(? shrunk-R2-exp? e0) ,(? shrunk-R2-exp? e1)) #t]
     ;; control
-    [`(if ,(? shrunk-R3-exp? e-g) ,(? shrunk-R3-exp? e-t) ,(? shrunk-R3-exp? e-f)) #t]
+    [`(if ,(? shrunk-R2-exp? e-g) ,(? shrunk-R2-exp? e-t) ,(? shrunk-R2-exp? e-f)) #t]
     ;; vars/let
     [(? symbol? x) #t]
-    ;; new -- sequence
-    [`(let ([,(? symbol? x) ,(? shrunk-R3-exp? e)]) ,(? shrunk-R3-exp? e-b)) #t]
-    ;; new forms
-    [`(let ([_ ,(? shrunk-R3-exp?)]) ,(? shrunk-R3-exp?)) #t] ;; begin turns into multiple lets
-    [`(let ([_ (while ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?))]) ,(? shrunk-R3-exp?)) #t]
-    [`(vector ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?) ...) #t]
-    [`(vector-ref ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index)) #t]
-    [`(vector-set! ,(? shrunk-R3-exp? vec) ,(? shrunk-R3-exp? index) ,(? R3-exp? value)) #t]
-    [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
+    [`(let ([,(? symbol? x) ,(? shrunk-R2-exp? e)]) ,(? shrunk-R2-exp? e-b)) #t]
     [_ #f]))
 
-(define (shrunk-R3? p)
+(define (shrunk-R2? p)
   (match p
-    [`(program ,(? shrunk-R3-exp? e)) #t]
+    [`(program ,(? shrunk-R2-exp? e)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -138,7 +130,7 @@
 (define (unique-source-tree? p)
   (match p
     [`(program () ,e)
-     (and (shrunk-R3-exp? e)
+     (and (shrunk-R2-exp? e)
           (set? (unique-source-tree/walk e (set))))]
     [_ #f]))
 
@@ -148,22 +140,21 @@
 
 (define (anf-rhs? rhs)
   (match rhs
-    ['(read)                            #t]
-    [`(- ,(? atom? a))                  #t]
-    [`(+ ,(? atom? a0) ,(? atom? a1))   #t]
-    [`(not ,(? atom? a))                #t]
+    ['(read)                          #t]
+    [`(- ,(? atom? a))                #t]
+    [`(+ ,(? atom? a0) ,(? atom? a1)) #t]
+    [`(not ,(? atom? a))              #t]
     [`(eq? ,(? atom? a0) ,(? atom? a1)) #t]
     [`(<   ,(? atom? a0) ,(? atom? a1)) #t]
-    [(? atom?)                          #t]
-    [_                                  #f]))
+    [(? atom?)                        #t]
+    [_                                #f]))
 
 (define (anf-exp? e)
   (match e
-    [(? atom?)                                                      #t]
-    [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
-    [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?))            #t]
-    [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))               #t]
-    [_                                                              #f]))
+    [(? atom?)                                           #t]
+    [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?)) #t]
+    [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))    #t]
+    [_                                                   #f]))
 
 (define (anf-program? p)
   (match p
@@ -179,19 +170,15 @@
 
 (define (c1-rhs? rhs)
   (match rhs
-    [(? fixnum?)                       #t]
-    [(? symbol?)                       #t]
-    [(? boolean?)                      #t]
-    ['(read)                           #t]
-    [`(- ,a)                           (atom? a)]
-    [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
-    [`(not ,a)                         (atom? a)]
-    [`(make-vec ,a)                    (atom? a)]
-    [`(vec-length ,a)                  (atom? a)]
-    [`(unsafe-vector-ref ,a0 ,a1)      (and (atom? a0) (atom? a1))]
-    [`(unsafe-vector-set! ,a0 ,a1 ,a2) (and (atom? a0) (atom? a1) (atom? a2))]
-    [`(,(? c1-cmp?) ,a0 ,a1)           (and (atom? a0) (atom? a1))]
-    [_                                 #f]))
+    [(? fixnum?)              #t]
+    [(? symbol?)              #t]
+    [(? boolean?)             #t]
+    ['(read)                  #t]
+    [`(- ,a)                  (atom? a)]
+    [`(+ ,a0 ,a1)             (and (atom? a0) (atom? a1))]
+    [`(not ,a)                (atom? a)]
+    [`(,(? c1-cmp?) ,a0 ,a1)  (and (atom? a0) (atom? a1))]
+    [_                        #f]))
 
 (define (c1-tail? s)
   (match s
