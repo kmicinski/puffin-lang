@@ -60,8 +60,9 @@ The major extensions are these:
   allocation function in `runtime.c`.
 
 - Programs may perform vector operations, but these operations are
-  limited to constant arguments--we may generalize this in subsequent
-  projects
+  limited to constant indices (i.e., we can't compute the index that
+  we want to write / read via `vector-ref`/`vector-set!`))--we may
+  generalize this in subsequent projects. 
 
 - *All* variables may be mutated via set!, our language is no longer
   pure. We handle this by "boxing" every variable, a process we

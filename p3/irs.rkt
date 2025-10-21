@@ -149,6 +149,52 @@
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
+;; 4) assignment conversion
+;;     - Replaces let-bindings with allocations: make-vector and vector-set! 
+;;     - Replaces variable references with vector-ref (no bare bindings)
+;;     - Replaces set! by vector-set! 
+;; ---------------------------------------------------------------------
+
+(define (assignment-converted-exp? e)
+  (match e
+    [#t #t]
+    [#f #t]
+    [(? fixnum?) #t]
+    ['(void) #t]
+    ['(read) #t]
+    [`(- ,(? assignment-converted-exp? e)) #t]
+    [`(+ ,(? assignment-converted-exp? e0) ,(? assignment-converted-exp? e1)) #t]
+    [`(not ,(? assignment-converted-exp? e)) #t]
+    [`(,(? shrunk-cmp? c) ,(? assignment-converted-exp? e0) ,(? assignment-converted-exp? e1)) #t]
+    ;; control
+    [`(if ,(? assignment-converted-exp? g)
+          ,(? assignment-converted-exp? t)
+          ,(? assignment-converted-exp? f)) #t]
+    ;; vectors / mutation
+    ;; allow symbol as the vector operand (boxed var) OR a compound expr
+    [`(vector-ref ,(? assignment-converted-exp? v) ,(? fixnum?)) #t]
+    [`(vector-set! ,(? assignment-converted-exp? v) ,(? fixnum?) ,(? assignment-converted-exp? val)) #t]
+    [`(make-vector ,(? assignment-converted-exp? len)) #t]
+    [`(let ([_ (while ,(? assignment-converted-exp? g)
+                      ,(? assignment-converted-exp? b))])
+        ,(? assignment-converted-exp? r)) #t]
+    [`(let ([_ ,(? assignment-converted-exp? sidefx)]) ,(? assignment-converted-exp? body)) #t]
+    [`(let ([,(? symbol? x) (make-vector ,(? assignment-converted-exp? len))])
+        ,(? assignment-converted-exp? body)) #t]
+    ;; unboxed let 
+    [`(let ([,(? symbol? x) ,(? assignment-converted-exp? rhs)])
+        ,(? assignment-converted-exp? body)) #t]
+    ;; bare variables must be converted to usages of vector-set!  but
+    ;; vector-set! and such will still reference variables...
+    [(? symbol?) #t]
+    [_ #f]))
+
+(define (assignment-converted-program? p)
+  (match p
+    [`(program () ,(? assignment-converted-exp? e)) #t]
+    [_ #f]))
+
+;; ---------------------------------------------------------------------
 ;; 4) ANF (after anf-convert)
 ;;     - RHS is atomic or a small op over atoms
 ;;     - Allows let([x rhs]) ..., if over atomic guard, and the while/vector-set!
