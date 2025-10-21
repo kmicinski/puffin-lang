@@ -1,0 +1,16 @@
+(program
+  (let ((a (read)))
+    (let ((b (read)))
+      (let ((cellA (make-vector 1)))
+        (let ((cellB (make-vector 1)))
+          (let ((_ (vector-set! cellA 0 a)))
+            (let ((_ (vector-set! cellB 0 b)))
+              (let ((i 2))
+                (let ((acc 0))
+                  (let ((_ (while
+                            (< i 7)
+                            (let ((next (+ (vector-ref cellA 0) (vector-ref cellB 0))))
+                              (let ((_ (vector-set! cellA 0 (vector-ref cellB 0))))
+                                (let ((_ (vector-set! cellB 0 next)))
+                                  (set! i (+ i 1))))))))
+                    (vector-ref cellB 0)))))))))))
