@@ -4,6 +4,7 @@
 ;; Compiling R3 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
+(require "interpreters.rkt") ;; XXX 
 
 (provide (all-defined-out)) ;; export everything for testing
 
@@ -583,17 +584,14 @@
 
 
 (define (ezcompile p)
-  (displayln
-   (dump-x86-64
-    (prelude-and-conclusion
-     (patch-instructions
-      (assign-homes
-       (select-instructions
+  (interpret-instr
+    (select-instructions
         (uncover-locals
          (explicate-control
           (anf-convert
            (assignment-convert
             (uniqueify
-             (shrink p)))))))))))))
+             (shrink p)))))))
+    (range 100)))
 
 (ezcompile ex0)
