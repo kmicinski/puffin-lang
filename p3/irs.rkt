@@ -49,6 +49,7 @@
     [`(,(? cmp? c) ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
     [`(if ,(? R3-exp? e-g) ,(? R3-exp? e-t) ,(? R3-exp? e-f)) #t]
     [(? symbol?) #t]
+    [`(let* ([,(? symbol? xs) ,(? R3-exp? es)] ...) ,(? R3-exp? eb)) #t]
     [`(let ([,(? symbol? x) ,(? R3-exp? e)]) ,(? R3-exp? eb)) #t]
     ;; sequences / loops / vectors / mutation
     [`(begin ,(? R3-exp?) ... ,(? R3-exp? ret)) #t]
@@ -125,15 +126,15 @@
     ;; variables
     [(? symbol?)                        seen]
     ;; let-binding (check "unique write" property)
-    [`(let ([,(? symbol? x) ,e]) ,eb)
-     (and (not (set-member? seen x))
-          (let ([seen* (set-add (unique-source-tree/walk e seen) x)])
-            (unique-source-tree/walk eb seen*)))]
-    ;; while / vector ops / set! just traverse
     [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
      (unique-source-tree/walk e-r (unique-source-tree/walk e-b (unique-source-tree/walk e-g seen)))]
     [`(let ([_ ,e]) ,e-b)
      (unique-source-tree/walk e-b (unique-source-tree/walk e seen))]
+    ;; Important: put after _ cases
+    [`(let ([,(? symbol? x) ,e]) ,eb)
+     (and (not (set-member? seen x))
+          (let ([seen* (set-add (unique-source-tree/walk e seen) x)])
+            (unique-source-tree/walk eb seen*)))]
     [`(make-vector ,e)                  (unique-source-tree/walk e seen)]
     [`(vector-ref ,e ,i)                (unique-source-tree/walk i (unique-source-tree/walk e seen))]
     [`(vector-set! ,e ,i ,v)            (unique-source-tree/walk v (unique-source-tree/walk i (unique-source-tree/walk e seen)))]
@@ -246,7 +247,7 @@
 ;; ---------------------------------------------------------------------
 
 (define (operand/vars? op)
-  (or (imm? op) (reg? op) (var? op) (byte-reg? op)))
+    (or (imm? op) (reg? op) (var? op) (byte-reg? op) (deref? op)))
 
 (define (instr/vars? i)
   (match i

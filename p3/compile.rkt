@@ -594,4 +594,5 @@
              (shrink p)))))))
     (range 100)))
 
-(ezcompile ex0)
+;(ezcompile ex0)
+

@@ -49,12 +49,12 @@
 
 (define (eval-R3-binary op e0 e1 env in)
   (cond
-    [(eq? op 'and)
+    [(equal? op 'and)
      (match (eval-R3-exp e0 env in)
        [(cons v0 in1)
         (expect-bool v0 'and)
         (if v0 (eval-R3-exp e1 env in1) (cons #f in1))])]
-    [(eq? op 'or)
+    [(equal? op 'or)
      (match (eval-R3-exp e0 env in)
        [(cons v0 in1)
         (expect-bool v0 'or)
@@ -221,14 +221,21 @@
     [(? boolean? b)                       (cons b in)]
     [(? symbol? x)                        (cons (hash-ref env x (λ () (error 'interpret "unbound id ~a" x))) in)]
     ['(read)                              (next-input in)]
-    [`(- ,a)                              (cons (- (atom-val a env)) in)]
-    [`(+ ,a0 ,a1)                         (cons (+ (atom-val a0 env) (atom-val a1 env)) in)]
-    [`(not ,a)                            (cons (not (expect-bool (atom-val a env) 'C2-not)) in)]
-    [`(eq? ,a0 ,a1)                       (cons (equal? (atom-val a0 env) (atom-val a1 env)) in)]
-    [`(<   ,a0 ,a1)                       (cons (< (atom-val a0 env) (atom-val a1 env)) in)]
-    [`(vector ,i)                         (cons (make-vector i) in)]
+    [`(- ,a)
+     (cons (- (expect-int (atom-val a env) 'C2-unary-)) in)]
+    [`(+ ,a0 ,a1)
+     (cons (+ (expect-int (atom-val a0 env) 'C2/+)
+              (expect-int (atom-val a1 env) 'C2/+)) in)]
+    [`(eq? ,a0 ,a1)
+     (cons (equal? (atom-val a0 env) (atom-val a1 env)) in)]
+    [`(< ,a0 ,a1)
+     (cons (< (expect-int (atom-val a0 env) 'C2/<)
+              (expect-int (atom-val a1 env) 'C2/<)) in)]
+    [`(vector ,i)
+     (cons (make-vector (expect-int (atom-val i env) 'C2/vector)) in)]
     [`(vector-ref ,a0 ,i)
-     (cons (vector-ref (atom-val a0 env) (atom-val i env)) in)]
+     (cons (vector-ref (atom-val a0 env)
+                       (expect-int (atom-val i env) 'C2/vector-ref)) in)]
     [_                                    (error 'interpret "bad C2 rhs ~a" rhs)]))
 
 (define (exec-c2 blocks label env in)
@@ -240,7 +247,9 @@
          [(cons v in*) (go rest (hash-set env x v) in*)])]
       ;; side-effect statement
       [`(seq (vector-set! ,av ,i ,aval) ,rest)
-       (vector-set! (atom-val av env) i (atom-val aval env))
+       (vector-set! (atom-val av env) 
+              (expect-int (atom-val i env) 'C2/vector-set!)
+              (atom-val aval env))
        (go rest env in)]
       ;; generic IF on eq?/</etc.
       [`(if (,cmp ,a0 ,a1) (goto ,(? label? l-t)) (goto ,(? label? l-f)))
@@ -278,7 +287,10 @@
     [`(reg ,r)                    (hash-ref regs r 0)]
     [`(byte-reg ,r)               (hash-ref regs r 0)]
     [`(var ,x)                    (hash-ref vars x (λ () (error 'interp-instrs "unbound var ~a" x)))]
-    [`(deref (reg rbp) ,off)      (hash-ref mem off 0)]))
+    [`(deref (reg rbp) ,off)      (hash-ref mem off 0)]
+    [`(deref (reg ,r) ,off)
+     (match (read-op `(reg ,r) st)
+       [(? vector? v) (vector-ref v (/ (- off 8) 8))])]))
 
 (define (write-op op v st)
   (match-define `(,regs ,vars ,mem ,stack ,flags) st)
@@ -288,9 +300,11 @@
     [`(var ,x)                    `(,regs ,(hash-set vars x v) ,mem ,stack ,flags)]
     [`(deref (reg rbp) ,off)      `(,regs ,vars ,(hash-set mem off v) ,stack ,flags)]
     [`(deref (reg ,r) ,off)
-     (define v (read-op `(reg ,r) st))
-     (pretty-print op)
-     (pretty-print v)]
+     (define vec (read-op `(reg ,r) st))
+     (define idx (/ (- off 8) 8))
+     (match vec
+       [(? vector?) (vector-set! vec idx v)])
+     `(,regs ,vars ,mem ,stack ,flags)]
     [_ (error 'interp-instrs "cannot write to ~a" op)]))
 
 (define (cmp-flags srcv dstv)
@@ -324,14 +338,18 @@
   (match instrs
     ['() (read-op '(reg rax) st)]
     [`((retq) . ,_) (read-op '(reg rax) st)]
-    [`(((label ,_) . ,rst) ...)
-     (interp-tail rst blocks st in)]
+    [`((goto ,l) . ,_)
+     (interp-tail (hash-ref blocks l) blocks st in)]
     [`((movq ,src ,dst) . ,rst) 
      (interp-tail rst blocks (write-op dst (read-op src st) st) in)]
     [`((movzbq ,src ,dst) . ,rst)
      (interp-tail rst blocks (write-op dst (bitwise-and (read-op src st) #xFF) st) in)]
     [`((addq ,src ,dst) . ,rst)
-     (define sum (+ (read-op dst st) (read-op src st)))
+     (define src-v (read-op src st))
+     (define dst-v (read-op dst st))
+     (define sum (match dst-v
+                   [(? fixnum? n) (+ dst-v src-v)]
+                   [`(stack-addr ,v) `(stack-addr ,(+ v src-v))]))
      (interp-tail rst blocks (write-op dst sum st) in)]
     [`((xorq ,src ,dst) . ,rst)
      (define res (bitwise-xor (read-op dst st) (read-op src st)))
@@ -381,7 +399,6 @@
     [_ (error 'interp-instrs "unknown instruction sequence ~a" instrs)]))
 
 (define (interpret-instr prog [in '()])
-  (pretty-print prog)
   (set! out? #f)
   (match prog
     [`(program ,_ ,blocks)

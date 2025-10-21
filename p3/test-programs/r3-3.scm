@@ -1,0 +1,11 @@
+(program
+  (let* ([x (read)]
+         [y (read)]
+         [vx (make-vector 1)]
+         [vy (make-vector 1)])
+    (begin
+      (vector-set! vx 0 x)
+      (vector-set! vy 0 y)
+      (if (>= (vector-ref vx 0) (vector-ref vy 0))
+          (vector-ref vx 0)
+          (vector-ref vy 0)))))
