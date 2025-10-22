@@ -368,7 +368,7 @@
        (define all-blocks (merge true-blocks false-blocks))
        (hash-set all-blocks
                  current-block ;; the current block's label
-                 `(if (eq? ,a 0)
+                 `(if (eq? ,a #f)
                       ;; take the false branch
                       (goto ,l-f)
                       ;; take the true branch...
@@ -560,8 +560,8 @@
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
       [`(make-vector ,i) e]
-      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(h e) ,i ,(h e-v))]
       [`(vector-ref ,e ,i) `(vector-ref ,(h e) ,i)]
+      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(h e) ,i ,(h e-v))]
       [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]
       [`(let ([,x ,e0]) ,e-b)
        `(let ([,x ,(h e0)]) ,(h e-b))]

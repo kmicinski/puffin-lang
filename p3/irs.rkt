@@ -203,26 +203,26 @@
 
 (define (anf-rhs? rhs)
   (match rhs
-    ['(read)                            #t]
-    [`(- ,(? atom? a))                  #t]
-    [`(+ ,(? atom? a0) ,(? atom? a1))   #t]
-    [`(not ,(? atom? a))                #t]
-    [`(eq? ,(? atom? a0) ,(? atom? a1)) #t]
-    [`(<   ,(? atom? a0) ,(? atom? a1)) #t]
-    [`(make-vector ,(? atom? a))        #t]
-    [(? atom?)                          #t]
-    [_                                  #f]))
+    ['(read)                             #t]
+    [`(- ,(? atom? a))                   #t]
+    [`(+ ,(? atom? a0) ,(? atom? a1))    #t]
+    [`(not ,(? atom? a))                 #t]
+    [`(eq? ,(? atom? a0) ,(? atom? a1))  #t]
+    [`(<   ,(? atom? a0) ,(? atom? a1))  #t]
+    [`(make-vector ,(? atom? a))         #t]
+    [(? atom?)                           #t]
+    [_                                   #f]))
 
 (define (anf-exp? e)
   (match e
     [(? atom?)                                                      #t]
     [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
+    [`(let ([_ (vector-set! ,(? atom?) ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
+    [`(let ([,(? symbol?) (vector-ref ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
     [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?))            #t]
     [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))               #t]
-    ;; vector-ref lowered via let-binding in anf-convert, but allow it if present:
-    [`(let ([,(? symbol?) (vector-ref ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
-    ;; side-effect in ANF via dummy binding:
-    [`(let ([_ (vector-set! ,(? atom?) ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
+    ;; allow bare vector-set! 
+    [`(vector-set! ,(? atom?) ,(? atom?) ,(? atom?))                #t]
     [_                                                              #f]))
 
 (define (anf-program? p)

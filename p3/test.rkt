@@ -37,10 +37,10 @@
 ;; mode → metadata: synced with main.rkt
 (define modes
   (hash
-   "frontend"    (list "typecheck"           "anf-convert"        R2?              interpret-anf)
-   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c1)
+   "frontend"    (list "shrink"              "anf-convert"        R3?              interpret-anf)
+   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c2)
    "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
-   "native"      (list "typecheck"           "render-x86"         string?          dummy-interp-x86-64)))
+   "native"      (list "shrink"              "render-x86"         string?          dummy-interp-x86-64)))
 
 (define (file->ints p)
   (map string->number (file->lines p)))
