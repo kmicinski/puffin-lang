@@ -51,7 +51,7 @@
   (define output (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
                    (pass input)))
   ;; Build an object of metadata
-  (define h (hash 'input (pretty-format input)
+  (define h (hash 'input input
                   'orig-input input
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
@@ -75,12 +75,13 @@
         (displayln "!!! This pass crashed!!! !!!")
         (displayln (hash-ref h 'error)))
       (begin
+        (displayln (format "Running pass ~a." (hash-ref h 'pass-name)))
         (when (hash-ref h 'golden-input #f)
           (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
         (displayln "Input:")
-        (pretty-print (hash-ref h 'output))
+        (pretty-print (hash-ref h 'input))
         (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
-        (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
+        (displayln "Output:")
         (displayln (hash-ref h 'pretty-output))
         (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
         (displayln "Evaluation of your output:")

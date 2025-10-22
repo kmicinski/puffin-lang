@@ -426,6 +426,7 @@
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
+      
       [`(make-vector ,e)
        (convert-expr e (lambda (atom)
                          (define vec-a (gensym 'vec))
@@ -440,7 +441,8 @@
       [`(vector-set! ,e0 ,i ,e1)
        (convert-expr e0
                      (lambda (a0)
-                       (convert-expr e1 (lambda (a1) `(vector-set! ,a0 ,i ,a1)))))]
+                       (convert-expr e1 (lambda (a1)
+                                          `(let ([_ (vector-set! ,a0 ,i ,a1)]) ,(k '(void)))))))]
       ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)

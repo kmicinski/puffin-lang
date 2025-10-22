@@ -40,6 +40,7 @@
     [#f #t]
     [(? fixnum?) #t]
     ['(read) #t]
+    ['(void) #t]
     [`(- ,(? R3-exp? e)) #t]
     [`(- ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
     [`(+ ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
