@@ -55,8 +55,8 @@
     [`(begin ,(? R3-exp?) ... ,(? R3-exp? ret)) #t]
     [`(while ,(? R3-exp? e-g) ,(? R3-exp? es) ...) #t]
     [`(make-vector ,(? R3-exp? len)) #t]
-    [`(vector-ref ,(? R3-exp? v) ,(? R3-exp? i)) #t]
-    [`(vector-set! ,(? R3-exp? v) ,(? R3-exp? i) ,(? R3-exp? val)) #t]
+    [`(vector-ref ,(? R3-exp? v) ,(? fixnum? i)) #t]
+    [`(vector-set! ,(? R3-exp? v) ,(? fixnum? i)) #t]
     [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
     [_ #f]))
 
@@ -94,8 +94,8 @@
     [`(let ([_ ,(? shrunk-R3-exp?)]) ,(? shrunk-R3-exp?)) #t]
     [`(let ([_ (while ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?))]) ,(? shrunk-R3-exp?)) #t]
     [`(make-vector ,(? shrunk-R3-exp? len)) #t]
-    [`(vector-ref ,(? shrunk-R3-exp? v) ,(? shrunk-R3-exp? i)) #t]
-    [`(vector-set! ,(? shrunk-R3-exp? v) ,(? shrunk-R3-exp? i) ,(? shrunk-R3-exp? val)) #t]
+    [`(vector-ref ,(? shrunk-R3-exp? v) ,(? fixnum? i)) #t]
+    [`(vector-set! ,(? shrunk-R3-exp? v) ,(? fixnum? i) ,(? shrunk-R3-exp? val)) #t]
     [`(set! ,(? symbol?) ,(? shrunk-R3-exp?)) #t]
     [_ #f]))
 
@@ -136,8 +136,8 @@
           (let ([seen* (set-add (unique-source-tree/walk e seen) x)])
             (unique-source-tree/walk eb seen*)))]
     [`(make-vector ,e)                  (unique-source-tree/walk e seen)]
-    [`(vector-ref ,e ,i)                (unique-source-tree/walk i (unique-source-tree/walk e seen))]
-    [`(vector-set! ,e ,i ,v)            (unique-source-tree/walk v (unique-source-tree/walk i (unique-source-tree/walk e seen)))]
+    [`(vector-ref ,e ,(? fixnum? i))                (unique-source-tree/walk i (unique-source-tree/walk e seen))]
+    [`(vector-set! ,e ,(? fixnum? i) ,v)            (unique-source-tree/walk v (unique-source-tree/walk e seen))]
     [`(set! ,x ,e)                      (unique-source-tree/walk e seen)]
     [_                                  #f]))
 
@@ -217,8 +217,8 @@
   (match e
     [(? atom?)                                                      #t]
     [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
-    [`(let ([_ (vector-set! ,(? atom?) ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
-    [`(let ([,(? symbol?) (vector-ref ,(? atom?) ,(? atom?))]) ,(? anf-exp?)) #t]
+    [`(let ([_ (vector-set! ,(? atom?) ,(? fixnum? i) ,(? atom?))]) ,(? anf-exp?)) #t]
+    [`(let ([,(? symbol?) (vector-ref ,(? atom?) ,(? fixnum?))]) ,(? anf-exp?)) #t]
     [`(let ([,(? symbol?) ,(? anf-rhs?)]) ,(? anf-exp?))            #t]
     [`(if ,(? atom? a-g) ,(? anf-exp?) ,(? anf-exp?))               #t]
     ;; allow bare vector-set! 
@@ -249,7 +249,7 @@
     [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
     [`(not ,a)                         (atom? a)]
     [`(vector ,a)                      (atom? a)] ; vector *constructor* at this stage
-    [`(vector-ref ,a0 ,i)              (and (atom? a0) (or (fixnum? i) (symbol? i) (boolean? i)))]
+    [`(vector-ref ,a0 ,i)              (and (atom? a0) (fixnum? i))]
     [`(,(? c2-cmp?) ,a0 ,a1)           (and (atom? a0) (atom? a1))]
     [_                                 #f]))
 

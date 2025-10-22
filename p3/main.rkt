@@ -19,10 +19,10 @@
  ;; NOTE: first/last pass has to stay in sync with the parameters in system.rkt
  (define all-passes
    (list 
-    `(,shrink                 "shrink"                 ,R3?                           ,shrunk-R3?                    ,interpret-R2)
-    `(,uniqueify              "uniqueify"              ,shrunk-R3?                    ,unique-source-tree?           ,interpret-R2)
-    `(,assignment-convert     "assignment-convert"     ,unique-source-tree?           ,assignment-converted-program? ,interpret-R2)
-    `(,anf-convert            "anf-convert"            ,assignment-converted-program? ,anf-program?                  ,interpret-R2)
+    `(,shrink                 "shrink"                 ,R3?                           ,shrunk-R3?                    ,interpret-R3)
+    `(,uniqueify              "uniqueify"              ,shrunk-R3?                    ,unique-source-tree?           ,interpret-R3)
+    `(,assignment-convert     "assignment-convert"     ,unique-source-tree?           ,assignment-converted-program? ,interpret-R3)
+    `(,anf-convert            "anf-convert"            ,assignment-converted-program? ,anf-program?                  ,interpret-R3)
     `(,explicate-control      "explicate-control"      ,anf-program?                  ,c2-program?                   ,interpret-c2)
     `(,uncover-locals         "uncover-locals"         ,c2-program?                   ,locals-program?               ,interpret-c2)
     `(,select-instructions    "select-instructions"    ,locals-program?               ,instr-program?                ,interpret-instr)

@@ -6,6 +6,11 @@
 
 (provide (all-defined-out))
 
+;; In this case we provide three interpreters:
+;; - R3 -- works for shrink, uniqueify, assignment-convert, and anf-convert
+;; - c2 -- works for explicate-control, uncover-locals
+;; - instr -- works for select-instructions, assign-homes, patch-instructions, prelude-and-conclusion
+
 ;; ────────────────────────────────────────────────────────────────────────────
 ;; Helpers
 ;; ────────────────────────────────────────────────────────────────────────────
@@ -41,7 +46,7 @@
     [_ (error who "unsupported binary op ~a" op)]))
 
 ;; ────────────────────────────────────────────────────────────────────────────
-;; R3 / shrunk-R3 / unique-source-tree (source-level interpreter)
+;; R3 / shrunk-R3 / unique-source-tree / ANF (source-level interpreter)
 ;;   - Supports while, begin, set!, make-vector, vector-ref, vector-set!
 ;; ────────────────────────────────────────────────────────────────────────────
 
@@ -146,66 +151,6 @@
               [`(program () ,e)   e]
               [_ (error 'interpret-R3 "bad program ~a" p)]))
   (define res (eval-R3-exp e (hash) in))
-  (display-return (car res)))
-
-;; Keep the old name for main.rkt compatibility
-(define interpret-R2 interpret-R3)
-
-;; ────────────────────────────────────────────────────────────────────────────
-;; ANF
-;;   - RHS: +, -, not, eq?, <, make-vector, atoms
-;;   - Side-effect statements in ANF tail: (let ([_ (vector-set! ...)]) e)
-;;                                        (let ([_ (while g b)]) e)
-;;   - vector-ref appears as an RHS via a let-binding (we support that too)
-;; ────────────────────────────────────────────────────────────────────────────
-
-(define anf-binary-ops '(+ eq? < <= > >=))
-
-(define (anf-binary op a0 a1 env)
-  (apply-binary op (atom-val a0 env) (atom-val a1 env) 'ANF))
-
-(define (eval-anf-rhs rhs env in)
-  (match rhs
-    ['(read)                  (next-input in)]
-    [`(- ,a)                  (cons (- (expect-int (atom-val a env) 'ANF)) in)]
-    [`(not ,a)                (cons (not (expect-bool (atom-val a env) 'ANF)) in)]
-    [`(,op ,a0 ,a1) #:when (member op anf-binary-ops)
-     (cons (anf-binary op a0 a1 env) in)]
-    [`(make-vector ,i)
-     (cons (make-vector i) in)]
-    [`(vector-ref ,a0 ,i)
-     (cons (vector-ref a0 i) in)]
-    [(? atom?)                (cons (atom-val rhs env) in)]
-    [_                        (error 'interpret "bad ANF rhs ~a" rhs)]))
-
-(define (eval-anf-exp e env in)
-  (match e
-    [(? atom?)                            (cons (atom-val e env) in)]
-    ;; side-effect statements in tail
-    [`(let ([_ (vector-set! ,av ,i ,aval)]) ,body)
-     (vector-set! (atom-val av env) i (atom-val aval env))
-     (eval-anf-exp body env in)]
-    [`(let ([_ (while ,g ,b)]) ,body)
-     ;; Evaluate while using ANF exp evaluator (g and b are ANF)
-     (let loop ([env env] [in in])
-       (match (eval-anf-exp g env in)
-         [(cons vg in1)
-          (if (expect-bool vg 'ANF-while)
-              (match (eval-anf-exp b env in1)
-                [(cons _ in2) (loop env in2)])
-              (eval-anf-exp body env in1))]))]
-    ;; normal let
-    [`(let ([,(? symbol? x) ,rhs]) ,body)
-     (match (eval-anf-rhs rhs env in)
-       [(cons v in*) (eval-anf-exp body (hash-set env x v) in*)])]
-    [`(if ,a-g ,e-t ,e-f)                 (if (expect-bool (atom-val a-g env) 'ANF-if)
-                                              (eval-anf-exp e-t env in)
-                                              (eval-anf-exp e-f env in))]
-    [_                                    (error 'interpret "bad ANF exp ~a" e)]))
-
-(define (interpret-anf p [in '()])
-  (match-define `(program () ,body) p)
-  (define res (eval-anf-exp body (hash) in))
   (display-return (car res)))
 
 ;; ────────────────────────────────────────────────────────────────────────────
@@ -420,7 +365,7 @@
   (cond [(R3? p)                                 (interpret-R3 p in)]
         [(shrunk-R3? p)                          (interpret-R3 p in)]
         [(unique-source-tree? p)                 (interpret-R3 p in)]
-        [(anf-program? p)                        (interpret-anf p in)]
+        [(anf-program? p)                        (interpret-R3 p in)]
         [(c2-program? p)                         (interpret-c2 p in)]
         [(locals-program? p)                     (interpret-c2 p in)]
         [(instr-program? p)                      (interpret-instr p in)]

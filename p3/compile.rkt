@@ -16,6 +16,8 @@
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
+;; +-> assignment-converted-program? -- eliminates set!, replaces variable references by vector-ref
+;; |
 ;; +-> anf-program? -- A-Normal form (flattening nested expressions)
 ;; |
 ;; +-> c2-program? -- The C2 IR: blocks of sequences of commands, if, and gotos
@@ -574,30 +576,4 @@
      ;; empty info
      `(program ,(h exp))]))
 
-;; Live on the edge, don't typecheck
-
-(define ex0 '(program
-              (let* ([x (read)]
-                     [i 0]
-                     [acc 0])
-                (begin
-                  (while (< i x)
-                         (begin
-                           (set! acc (+ acc i))
-                           (set! i (+ i 1))))
-                  acc))))
-
-
-(define (ezcompile p)
-  (interpret-instr
-   (select-instructions
-    (uncover-locals
-     (explicate-control
-      (anf-convert
-       (assignment-convert
-        (uniqueify
-         (shrink p)))))))
-   (range 100)))
-
-;(ezcompile ex0)
 
