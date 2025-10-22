@@ -26,6 +26,7 @@
   (cond [(fixnum? a) a]
         [(symbol? a) (hash-ref env a (λ () (error 'interpret "unbound id ~a" a)))]
         [(boolean? a) a]
+        [(equal? a '(void)) (void)]
         [else (error 'interpret "bad atom ~a" a)]))
 
 (define (expect-int v who)
@@ -38,7 +39,7 @@
   (match op
     ['+   (+ (expect-int v0 who) (expect-int v1 who))]
     ['-   (- (expect-int v0 who) (expect-int v1 who))]
-    ['eq? (= (expect-int v0 who) (expect-int v1 who))]
+    ['eq? (equal? v0 v1)] ;; permit non-ints to be eq?d 
     ['<   (< (expect-int v0 who) (expect-int v1 who))]
     ['<=  (<= (expect-int v0 who) (expect-int v1 who))]
     ['>   (> (expect-int v0 who) (expect-int v1 who))]
@@ -93,6 +94,7 @@
     [#f                              (cons #f in)]
     [(? fixnum? n)                   (cons n in)]
     ['(read)                         (next-input in)]
+    ['(void)                         (cons (void) in)]
     ;; unary
     [`(- ,e0)
      (match (eval-R3-exp e0 env in)
@@ -165,9 +167,11 @@
     [(? fixnum? n)                        (cons n in)]
     [(? boolean? b)                       (cons b in)]
     [(? symbol? x)                        (cons (hash-ref env x (λ () (error 'interpret "unbound id ~a" x))) in)]
+    ['(void)                              (cons (void) in)]
     ['(read)                              (next-input in)]
     [`(- ,a)
      (cons (- (expect-int (atom-val a env) 'C2-unary-)) in)]
+    [`(not ,a)                            (cons (not (atom-val a env)) in)]
     [`(+ ,a0 ,a1)
      (cons (+ (expect-int (atom-val a0 env) 'C2/+)
               (expect-int (atom-val a1 env) 'C2/+)) in)]
@@ -176,7 +180,7 @@
     [`(< ,a0 ,a1)
      (cons (< (expect-int (atom-val a0 env) 'C2/<)
               (expect-int (atom-val a1 env) 'C2/<)) in)]
-    [`(vector ,i)
+    [`(make-vector ,i)
      (cons (make-vector (expect-int (atom-val i env) 'C2/vector)) in)]
     [`(vector-ref ,a0 ,i)
      (cons (vector-ref (atom-val a0 env)

@@ -258,7 +258,7 @@
         [`(seq (assign ,x (void)) ,rest)
          `((movq (imm 0) (var ,x))
            ,@(h rest))]
-        [`(seq (assign ,x (vector ,i)) ,rest)
+        [`(seq (assign ,x (make-vector ,i)) ,rest)
          `((movq (imm ,i) (reg rdi))
            (callq make_vector 1)
            (movq (reg rax) (var ,x))
@@ -335,11 +335,9 @@
       [`(let ([,x (eq? ,a0 ,a1)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (eq? ,a0 ,a1)))]
       [`(let ([,x (make-vector ,a)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (vector ,a)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (make-vector ,a)))]
       [`(let ([_ (vector-set! ,x ,i ,v)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
-      [`(let ([_ (void)]) ,e)
-       (expr->blocks e current-block k)]
       [`(let ([,x (void)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (void)))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
@@ -550,6 +548,7 @@
       [`(- ,e) `(- ,(h e))]
       [`(and ,e0 ,e1) `(if ,(h e0) ,(h e1) #f)]
       [`(or ,e0 ,e1) `(if ,(h e0) #t ,(h e1))]
+      [`(not ,e) `(not ,(h e))]
       [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
       [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
       [`(< ,e0 ,e1) `(< ,e0 ,e1)]

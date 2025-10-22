@@ -56,7 +56,7 @@
     [`(while ,(? R3-exp? e-g) ,(? R3-exp? es) ...) #t]
     [`(make-vector ,(? R3-exp? len)) #t]
     [`(vector-ref ,(? R3-exp? v) ,(? fixnum? i)) #t]
-    [`(vector-set! ,(? R3-exp? v) ,(? fixnum? i)) #t]
+    [`(vector-set! ,(? R3-exp? v) ,(? fixnum? i) ,(? R3-exp? e-v)) #t]
     [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
     [_ #f]))
 
@@ -209,7 +209,7 @@
     [`(not ,(? atom? a))                 #t]
     [`(eq? ,(? atom? a0) ,(? atom? a1))  #t]
     [`(<   ,(? atom? a0) ,(? atom? a1))  #t]
-    [`(make-vector ,(? atom? a))         #t]
+    [`(make-vector ,(? fixnum? i))       #t]
     [(? atom?)                           #t]
     [_                                   #f]))
 
@@ -248,7 +248,7 @@
     [`(- ,a)                           (atom? a)]
     [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
     [`(not ,a)                         (atom? a)]
-    [`(vector ,a)                      (atom? a)] ; vector *constructor* at this stage
+    [`(make-vector ,i)                 (fixnum? i)] ; vector *constructor* at this stage
     [`(vector-ref ,a0 ,i)              (and (atom? a0) (fixnum? i))]
     [`(,(? c2-cmp?) ,a0 ,a1)           (and (atom? a0) (atom? a1))]
     [_                                 #f]))
