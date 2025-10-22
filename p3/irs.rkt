@@ -13,7 +13,7 @@
 ;; Helpers (shared across IRs)
 ;; ---------------------------------------------------------------------
 
-(define (atom? a)                (or (fixnum? a) (symbol? a) (boolean? a)))
+(define (atom? a)                (or (fixnum? a) (symbol? a) (boolean? a) (equal? a '(void))))
 (define (imm? op)                (match op [`(imm ,n)            (fixnum? n)] [_ #f]))
 (define (byte-reg? op)           (match op [`(byte-reg ,r)       (symbol? r)] [_ #f]))
 (define (reg? op)                (match op [`(reg ,r)            (symbol? r)] [_ #f]))
