@@ -1,0 +1,1 @@
+'(program () #hash((_main . (seq (assign read6960 (read)) (return read6960)))))

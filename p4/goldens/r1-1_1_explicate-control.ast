@@ -1,0 +1,7 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign x 2)
+          (seq (assign x7647 x) (seq (assign x7648 x7647) (return x7648)))))))

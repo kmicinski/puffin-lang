@@ -1,0 +1,9 @@
+(program
+    (let* ([x (read)]
+           [y (read)]
+           [tmp 0])
+      (begin
+        (set! tmp y)
+        (set! y x)
+        (set! x tmp)
+        x)))

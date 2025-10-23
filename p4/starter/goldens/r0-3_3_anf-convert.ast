@@ -1,0 +1,6 @@
+'(program
+  ()
+  (let ((read7193 (read)))
+    (let ((read7194 (read)))
+      (let ((g7195 (- read7194)))
+        (let ((|+7196| (+ read7193 g7195))) |+7196|)))))

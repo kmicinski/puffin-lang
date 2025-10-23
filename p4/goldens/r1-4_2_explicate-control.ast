@@ -1,0 +1,23 @@
+'(program
+  ()
+  #hash((_main
+         .
+         (seq
+          (assign read8098 (read))
+          (seq
+           (assign n read8098)
+           (seq
+            (assign a 0)
+            (seq
+             (assign b 1)
+             (seq
+              (assign |+8099| (+ a b))
+              (seq
+               (assign sum |+8099|)
+               (seq
+                (assign g8100 (- n))
+                (seq
+                 (assign |+8101| (+ sum g8100))
+                 (seq
+                  (assign |+8102| (+ n |+8101|))
+                  (return |+8102|)))))))))))))

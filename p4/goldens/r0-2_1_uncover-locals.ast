@@ -1,0 +1,14 @@
+(list
+ 'program
+ (set '|+7080| 'read7081 '|+7082| 'g7083 '|+7084|)
+ '#hash((_main
+         .
+         (seq
+          (assign |+7080| (+ 5 3))
+          (seq
+           (assign read7081 (read))
+           (seq
+            (assign |+7082| (+ 2 read7081))
+            (seq
+             (assign g7083 (- |+7082|))
+             (seq (assign |+7084| (+ |+7080| g7083)) (return |+7084|)))))))))

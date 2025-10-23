@@ -1,0 +1,8 @@
+(list
+ 'program
+ (set 'read6960)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read6960))
+          (movq (var read6960) (reg rax))))))

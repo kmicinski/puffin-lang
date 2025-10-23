@@ -1,0 +1,27 @@
+(list
+ 'program
+ (set 'q 'p 'read7963 '|+7964| 'g7965 '|+7966| '|+7967| 'm '|+7968| 'n)
+ '#hash((_main
+         .
+         ((callq _read_int64 0)
+          (movq (reg rax) (var read7963))
+          (movq (var read7963) (var n))
+          (movq (var n) (reg rax))
+          (addq (imm 1) (reg rax))
+          (movq (reg rax) (var |+7964|))
+          (movq (var |+7964|) (var m))
+          (movq (var m) (reg rax))
+          (negq (reg rax))
+          (movq (reg rax) (var g7965))
+          (movq (var g7965) (var p))
+          (movq (var p) (reg rax))
+          (addq (var p) (reg rax))
+          (movq (reg rax) (var |+7966|))
+          (movq (var |+7966|) (var q))
+          (movq (var m) (reg rax))
+          (addq (var n) (reg rax))
+          (movq (reg rax) (var |+7967|))
+          (movq (var q) (reg rax))
+          (addq (var |+7967|) (reg rax))
+          (movq (reg rax) (var |+7968|))
+          (movq (var |+7968|) (reg rax))))))
