@@ -1,0 +1,8 @@
+(program
+ (let ([x (void)])
+   (let ([_ (void)])
+     (begin
+       (void)
+       (void)
+       (void)
+       (let* ([_ (void)] [_ (void)]) 42)))))

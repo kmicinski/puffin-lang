@@ -196,7 +196,7 @@
   (define (c1->block c1)
     (define (h-atom a)
       (match a
-        ['(void)       `(imm 0)]
+        ['(void)       `(imm ,(void-magic-value))]
         [(? fixnum? n) `(imm ,n)]
         [(? symbol? x) `(var ,x)]
         [(? boolean? b) `(imm ,(if b 1 0))]))

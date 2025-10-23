@@ -80,6 +80,7 @@
     [#f #t]
     [(? fixnum?) #t]
     ['(read) #t]
+    ['(void) #t]
     ;; arithmetic
     [`(- ,(? shrunk-R3-exp? e)) #t]
     [`(+ ,(? shrunk-R3-exp? e0) ,(? shrunk-R3-exp? e1)) #t]
@@ -116,6 +117,7 @@
     [#t                                 seen]
     [#f                                 seen]
     ['(read)                            seen]
+    ['(void)                            seen]
     ;; arithmetic
     [`(- ,e)                            (unique-source-tree/walk e seen)]
     [`(+ ,e0 ,e1)                       (unique-source-tree/walk e1 (unique-source-tree/walk e0 seen))]
@@ -246,6 +248,7 @@
     [(? symbol?)                       #t]
     [(? boolean?)                      #t]
     ['(read)                           #t]
+    [`(void)                           #t]
     [`(- ,a)                           (atom? a)]
     [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
     [`(not ,a)                         (atom? a)]

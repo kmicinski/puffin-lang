@@ -31,6 +31,8 @@
 (define (entry-symbol) 'main)
 (define (conclusion-block-name)   'conclusion)
 
+(define (void-magic-value) 67) ;; our void value
+
 ;; Turn a string into its "runtime symbol" version: on OSX, names need
 ;; to be prefixed with _, but not on Linux.
 (define (rt-sym s)
