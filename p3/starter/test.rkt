@@ -16,7 +16,6 @@
 (define in-files (make-parameter ""))
 (define goldens (make-parameter ""))
 (define tests-dir (make-parameter "./test-programs/"))
-(define verbose-mode (make-parameter #f))
 (define cfg-file (make-parameter #f))
 (define repro-file (make-parameter "./repro.sh"))
 
@@ -37,10 +36,10 @@
 ;; mode → metadata: synced with main.rkt
 (define modes
   (hash
-   "frontend"    (list "typecheck"           "anf-convert"        R2?              interpret-anf)
-   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c1)
+   "frontend"    (list "shrink"              "anf-convert"        R3?              interpret-R3)
+   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c2)
    "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
-   "native"      (list "typecheck"           "render-x86"         string?          dummy-interp-x86-64)))
+   "native"      (list "shrink"              "render-x86"         string?          dummy-interp-x86-64)))
 
 (define (file->ints p)
   (map string->number (file->lines p)))
@@ -120,7 +119,7 @@
           (define program (with-input-from-file prog-file (λ () (deserialize (read)))))
           (define output-string (open-output-string))
           (define trace
-            (parameterize (;;[current-output-port output-string]
+            (parameterize ([current-output-port output-string]
                            [start-pass (first  (hash-ref modes mode))]
                            [end-pass   (second (hash-ref modes mode))]
                            [input-file in-file])
@@ -237,6 +236,8 @@
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg
      (match cfg
        [(list mode prog-file input-files goldens)
+        (define result (with-handlers ([exn:fail? (λ (e) (cons 'failed (exn-message e)))])
+                         (run/capture (λ () (run-test mode prog-file input-files goldens)))))
         ;; run testcase...
         (match (with-handlers ([exn:fail? (λ (e) (cons 'failed (exn-message e)))])
                  (run/capture (λ () (run-test mode prog-file input-files goldens))))

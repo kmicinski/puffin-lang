@@ -1,0 +1,1 @@
+((3) 0 () 0 () () (q program (let* ((a (read)) (flag #t) (acc 0)) (begin (if (not flag) (set! acc (+ acc 1)) (set! acc (+ acc 2))) (let* ((i 0)) (while (< i 3) (begin (set! acc (+ acc 20)) (set! i (+ i 1))))) acc))))

@@ -14,11 +14,11 @@
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
 (define run-test-mode (make-parameter #f))
-(define start-pass (make-parameter "typecheck")) ;; synced with main.rkt
+(define start-pass (make-parameter "shrink")) ;; synced with main.rkt
 (define end-pass (make-parameter "render-x86"))  ;; synced with main.rkt
 (define write-stdout-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))
-(define verbose-mode (make-parameter #t))
+(define verbose-mode (make-parameter #f))
 (define intermediate-ir (make-parameter #f))
 (define test-mode (make-parameter "native"))
 (define input-file (make-parameter #f))
@@ -30,6 +30,8 @@
 
 (define (entry-symbol) 'main)
 (define (conclusion-block-name)   'conclusion)
+
+(define (void-magic-value) 67) ;; our void value
 
 ;; Turn a string into its "runtime symbol" version: on OSX, names need
 ;; to be prefixed with _, but not on Linux.

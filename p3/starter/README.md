@@ -1,70 +1,78 @@
-# Project 2: LIf / R2 → x86-64
+# Project 4: R3 / set! & while -> x86-64
 
-This project is inspired by *Essentials of Compilation* (EoC), but the
-code here is a from-scratch reimplementation with some simplifications
-to keep the workload reasonable and to make grading/debugging
-clearer. Where behavior differs from the book, **this README is the
-source of truth** for expectations, file names, and command lines.
+This project is inspired by *Essentials of Compilation* (EoC), but in
+this project I take a departure from the book's content in several
+important ways. The language in this project, R3, is an
+imperative-style language with loops, but at the core the important
+thing happening is dynamic memory allocation on the heap. In the EoC
+book, this is covered alongside garbage collection--in my class (at
+least this iteration) I prefer to skip implementing garbage
+collection: you need to know C well (to do it correctly), and the
+algorithms are both tricky to describe and challenging to implement
+and debug in class where we have not covered C programming. Thus, I
+opt for a simpler route: just use malloc, and (optionally) get garbage
+collection by using (e.g.,) the Boehm garbage collector; I will
+describe an arena allocator as a stretch goal, which you should pursue
+if you are a PhD student or interested to learn more.
 
-You will compile a tiny expression language (**R2 / LIf**) with
-integers, booleans, `let`, arithmetic, conditionals, and comparisons
-into x86-64 assembly, then produce a real binary and test it on actual
-inputs. The power of this language is (roughly) decision diagrams (and
-functions on) finite input streams. 
+## Input Language (R3)
 
-This README file contains some specific tips which I hope you will
-read, including debugging tips and some project-specific
-instructions. Please read the whole README file and be prepared to
-discuss it in office hours, email, and class.
-
-## Input Language (R2 / LIf)
-
-R2 extends the straight-line arithmetic core with booleans and simple
-conditionals. It includes integers, booleans, variables, `let`, unary
-minus, addition, logical operators, comparisons, and a zero-argument
-`(read)` primitive that consumes one integer from stdin at runtime.
-
-Before shrinking, the surface language allows `and`, `or`, `not`,
-`if`, and the comparators `eq?`, `<`, `<=`, `>`, `>=`. The `shrink`
-pass reduces this set to `eq?` and `<`, removes binary minus, and
-desugars `and`/`or`.
+this language, which I am calling **R3**, adds imperative features to
+**R2/LIf**. Specifically, we add the forms:
 
 ```racket
-;; Core (pre-shrink) expressions and programs (abridged)
-(define (cmp? cmp) (member cmp '(eq? < <= > >=)))
-(define (R2-exp? e)
-  (match e
-    [#t #t]
-    [#f #t]
-    [(? fixnum? n) #t]
-    [`(read) #t]
-    [`(- ,(? R2-exp? e)) #t]                           ; unary minus
-    [`(+ ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(and ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(or  ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(not ,(? R2-exp? e)) #t]
-    [`(,(? cmp? c) ,(? R2-exp? e0) ,(? R2-exp? e1)) #t]
-    [`(if ,(? R2-exp? g) ,(? R2-exp? t) ,(? R2-exp? f)) #t]
-    [(? symbol? var) #t]
-    [`(let ([,(? symbol? x) ,(? R2-exp? e)]) ,(? R2-exp? e-body)) #t]
-    [_ #f]))
-
-(define (R2? e)
-  (match e
-    [`(program ,(? R2-exp? exp)) #t]
-    [_ #f]))
+(let* ([x e] ...) e-b) ;; let*, allows multiple simultaneously definitions
+(void) ;; operations like vector-set! return void
+(make-vector i) ;; Allocate a vector of size i, initialize all entries to 0
+(vector-ref e i) ;; Dereference the vector e at index i, i must be static 
+(vector-set! e i ev) ;; e[i] := v
+(set! x e) ;; Any variable can be set!d
+(while e-g e-b) ;; While e-g, do e-b, eval to (void)
+(begin es ... e-last) ;; Do all of es..., eval to the result of e-last
 ```
 
-Programs on disk are s-expressions, e.g.:
+As an example of an R3 program...
 
-```racket
-(program
-  (let ([a (+ 1 (read))])
-    (if (<= a 0)
-        (let ([x (if (< a 2) 3 (+ 1 (- 2)))])
-          (> x 1))
-        3)))
+```scheme
+ (program
+              (let* ([x (read)]
+                     [i 0]
+                     [acc 0])
+                (begin
+                  (while (< i x)
+                         (begin
+                           (set! acc (+ acc i))
+                           (set! i (+ i 1))))
+                  acc)))
 ```
+
+The major extensions are these:
+
+- We have a new literal, called `(void)`. This is sometimes called the
+  "unit value," and carries no computational information, i.e.,
+  control-flow never depends on the value of its contents; in an ideal
+  world we would eliminate voids entirely via optimization, but their
+  inclusion allows us to answer questions like: "what should
+  vector-set! return?"
+
+- Programs may allocate vectors using `(make-vector i)`, which zeros
+  all entries of the vector. These get translated into calls to an
+  allocation function in `runtime.c`.
+
+- Programs may perform vector operations, but these operations are
+  limited to constant indices (i.e., we can't compute the index that
+  we want to write / read via `vector-ref`/`vector-set!`))--we may
+  generalize this in subsequent projects. 
+
+- *All* variables may be mutated via set!, our language is no longer
+  pure. We handle this by "boxing" every variable, a process we
+  describe below.
+
+- Mutability goes hand-in-hand with loops, in the sense that mutable
+  variables are not much fun unless you add loops. So we add a form,
+  `(while e-g e-b)`, which continually evaluates the loop guard `e-g`
+  and executes the body `e-b` (discarding its result) until the loop
+  is finished. `(while ...)` reduces to `(void)`.
 
 ## Repository Layout
 
@@ -84,47 +92,161 @@ Please do not rename files or directories (grading infra depends on them).
 
 ## The Compiler Pipeline (passes)
 
-The compiler consists of a number of passes. Please do not get
-overwhelmed: each of these passes is going to be very small, and each
-has a specific, isolated behavior that will allow us to explain the
-specific stages of compilation. Additionally, as the code is compiled,
-it is translated into an increasingly-lower-level IR.
+We skip typechecking in this project; programs are assumed type-correct. If not, behavior is undefined (e.g., segfaults). You’ll implement the following passes in `compile.rkt`. Each pass must produce an output that satisfies the corresponding predicate in `irs.rkt`, and preserve behavior across interpretable stages.
 
-You will implement the following passes:
+1. `shrink` Removes binary `-`, `and`/`or`, and `<=, >, >=` by rewriting to `eq?`/`<`/`if`. Preserves `let`, `while`, vectors, `set!`, and `begin` (canonically as `let` chains). Rewrites `while` so that it appears only in non-tail position: `(while e-g e-b) => (let ([_ (while e-g e-b)]) (void))`
+   Input: `R3?` → Output: `shrunk-R3?`
 
-1. `typecheck` → assign R2 types (`Int`, `Bool`) or raise `'type-error`
-   Input: `R2?` → Output: `R2?` → Interp: `interpret-R2`
-2. `shrink` → remove binary `-`, `and`/`or`, and `<=, >, >=` (desugar to `eq?`/`<`)  
-   Input: `R2?` → Output: `shrunk-R2?` → Interp: `interpret-R2`
-3. `uniqueify` → ensure each bound identifier is written exactly once  
-   Input: `shrunk-R2?` → Output: `unique-source-tree?` → Interp: `interpret-R2`
-4. `anf-convert` → ANF conversion (introduce temps; maintain booleans/comparisons)  
-   Input: `unique-source-tree?` → Output: `anf-program?` → Interp: `interpret-anf`
-5. `explicate-control` → ANF → **C1** (blocks with `(seq (assign …) …)`, `if`/`goto`)  
-   Input: `anf-program?` → Output: `c1-program?` → Interp: `interpret-c1`
-6. `uncover-locals` → collect locals for stack layout  
-   Input: `c1-program?` → Output: `locals-program?` → Interp: `interpret-c1`
-7. `select-instructions` → C1 → pseudo-x86 (vars, `cmpq`, `set e|l`, `jmp-if e|l`)  
-   Input: `locals-program?` → Output: `instr-program?` → Interp: `interpret-instr`
-8. `assign-homes` → map `(var x)` → `(deref (reg rbp) n)`  
-   Input: `instr-program?` → Output: `homes-assigned-program?` → Interp: `interpret-instr`
-9. `patch-instructions` → fix illegal memory↔memory moves and related cases  
-   Input: `homes-assigned-program?` → Output: `patched-program?` → Interp: `interpret-instr`
-10. `prelude-and-conclusion` → prologue, print result, return 0  
-    Input: `patched-program?` → Output: `x86-64?` → Interp: `interpret-instr`
-11. `dump-x86-64` → render assembly text  
-    Input: `x86-64?` → Output: `string?` → Interp: `dummy-interp-x86-64`
+2. `uniqueify` Alpha-renames so that each bound identifier is written exactly once. Output program’s info field is `()`.  
+   Input: `shrunk-R3?` → Output: `unique-source-tree?`
 
-**What you implement**: All passes in `compile.rkt` are scaffolded.
-Your job is to produce outputs that satisfy each predicate in
-`irs.rkt` and that remain semantically equivalent (the interpreters
-check this).
+3. `assignment-convert`
+   Boxes variables. Rewrites:
+     * `let` → `(make-vector 1)` + `vector-set!` to initialize
+     * uses of `x` → `(vector-ref x 0)`
+     * `(set! x e)` → `(vector-set! x 0 e)`
+   Loops and vector ops remain.  
+   Input: `unique-source-tree?` → Output: `assignment-converted-program?`
 
-**NOTE**: Right now (in this version of the project), I testing
-typechecking rather minimally. Unfortunately that is a known
-limitation of this project; please do implement typechecking, but know
-that it is far less important than the other parts (you can simply
-implement it as a no-op to start).
+4. `anf-convert`  Converts to ANF: RHS are atoms or small ops over atoms; side-effects sequenced via `let ([_ (vector-set! …)]) …` and `let ([_ (while …)]) …`; `if` guards are atomic.
+   Input: `assignment-converted-program?` → Output: `anf-program?`
+
+5. `explicate-control` Lowers ANF to C2: a map from labels to tails with `seq (assign x rhs) …`, `if (cmp a0 a1) (goto lt) (goto lf)`, `goto`, `return a`, and standalone `vector-set!`. `while` becomes `header`/`body`/`rest` labeled blocks.  Input: `anf-program?` → Output: `c2-program?`
+
+6. `uncover-locals`  Computes the set of locals (variables assigned or used as vector operands) for stack layout; carries it as the program’s `info` set.
+ Input: `c2-program?` → Output: `locals-program?`
+
+7. `select-instructions` Selects pseudo-x86 instructions still using `(var x)` operands. Uses `cmpq` + `set{e,l}` + `movzbq` for comparisons, calls `read_int64`/`make_vector`, and on `return` jumps to a special `conclusion` label (no early `ret`).
+   Input: `locals-program?` → Output: `instr-program?`
+
+8. `assign-homes` Replaces `(var x)` with stack slots `(deref (reg rbp) n)` using the locals set; negative 8-byte offsets.
+   Input: `instr-program?` → Output: `homes-assigned-program?`
+
+9. `patch-instructions`  Fixes illegal instructions (e.g., `movq (deref …) (deref …)`, certain `cmpq` forms) by shuttling through a temp register.
+   Input: `homes-assigned-program?` → Output: `patched-program?`
+
+10. `prelude-and-conclusion` Inserts function prologue/epilogue and the `conclusion` block that prints `%rax`, sets `%rax := 0`, and returns. Ensures 16-byte stack alignment before `callq` and reserves aligned space for locals.
+    Input: `patched-program?` → Output: `x86-64?`
+
+11. `dump-x86-64` Renders GAS assembly text. Emits a global for the entry symbol (`rt-sym`), includes `runtime-function-externs`, and prints operands as `$imm`, `%reg`, `disp(%reg)`.
+    Input: `x86-64?` → Output: `string?`
+
+Your task: implement these passes so each output satisfies its predicate in `irs.rkt` and preserves semantics (the harness checks using interpreters where applicable).
+
+## "Boxing" and assignment-conversion
+
+In this project we embrace mutability by enabling `set!`, which allows
+us to make mutable updates to variables:
+
+```
+(program
+ (let* ([x (read)]
+        [y (read)]
+        [tmp 0])
+   (begin
+     (set! tmp x)
+     (set! x y)
+     (set! y tmp)
+     y)))
+```
+
+Notice that we can use `set!`, which mutably updates a variable; this
+is not possible in "pure" functional programs, and mutation is simply
+not provided in those languages (at least as a builtin). The question
+is how to implement `set!`. It may seem like an obvious choice: each
+variable becomes a single register-sized (8-byte) value on the
+stack. However, this approach starts to fall apart when variables
+outlive their stack frames (which will happen when we add functions /
+procedures). Instead, we use this as an opportunity to discuss another
+necessary challenge to work towards a general-purpose programming
+language: heap-allocated data. You likely know about the heap from
+programming in C with `malloc` (or C++ with `new`). These procedures
+allow us to allocate memory from a large block of available memory
+(the heap), with the obligation that we later release ("free") it back
+to the operating system.
+
+To enable mutability and `set!`, we will employ a technique called
+"boxing." In short, we assume that _all_ data is put in a vector
+("box") on the heap. In our case, we will use a very simple
+representation of vectors:
+
+```
+typedef struct {
+    int64_t len;
+    int64_t data[];
+} TinyVecPacked;
+```
+
+In terms of memory representation, a `TinyVecPacked` struct has a very
+simple layout: a single 64-bit value representing the length, followed
+by a data array of 8-byte values. For example, the vector containing
+the sequence `5` followed by `20` (starting at the address `0xAAAA00`)
+would be represented as:
+
+```
+   lower addresses →                                       higher addresses →
+   ┌───────────────────────┬───────────────────────┬───────────────────────┐
+   │  len (int64)          │  data[0] (int64)      │  data[1] (int64)      │ 
+   │  8 bytes              │  8 bytes              │  8 bytes              │
+   ├───────── ─ 0xAAAA00 ──┼────────── 0xAAAA08  ──┼──────── 0xAAAA10  ────┤
+   │ e.g., 2               │ e.g., 5               │ e.g., 20              │
+   └───────────────────────┴───────────────────────┴───────────────────────┘
+```
+
+The length can be used to avoid accesses outside of the buffer: we
+don't want to be able to write outside of the bounds of a buffer
+because it could contain junk data, we want to be able to write
+outside of the bounds of a buffer because we could mess up *other*
+data, unrelated to this vector (but still within our same address
+space, assuming the OS provides virtual memory). To handle this, we
+could take one of three positions:
+
+(a) don't worry about it--just be unsafe, and let the program crash.
+
+(b) check the bound before each access, if a bad access would occur,
+jump to an exception handler.
+
+(c) use a static type system to ensure this could never happen.
+
+Each of these approaches has different trade offs: C, C++, and similar
+languages opt for (a), which is fast but risky--the program might
+crash in a subtle or even exploitable way. Managed languages like
+Java, C#, etc. often opt for (b), but can sometimes optimize to avoid
+checks if certain conditions are met (e.g., using profiling data and
+just-in time compilation). The issue with (b) is that it is slow:
+every single access necessitates a branch, compared with (a) which
+might just be as simple as `movq`. Languages like Rust use (c), which
+enables the benefits of (b) as a zero-cost abstraction, often matching
+(or even exceeding) the performance of (a).
+
+In this project we will do (a): we assume the program is type
+correct. This means that as you generate code, you assume that
+operations for various builtins are also type correct. You will *not*
+be given any programs to test which contain type errrors.
+
+In short:
+
+- To implement `make-vector`, you will ultimately emit a call to
+  `make_vector` in `runtime.c`. 
+- To impelment `(vector-ref v i)`, you will emit code that uses `movq`
+  to dereference the vector `v`. You want to movq the value at
+  8*(i+1), the +1 is due to the fact that the first 8 bytes of every
+  vector holds its length. You could also consider emitting a *safe*
+  vector reference, checking the bounds each time (but it is not
+  necessary in this specific case, because we don't test any offensive
+  programs).
+- To implement `vector-set!`, you will *also* emit a `movq` instruction.
+
+## Translating Loops
+
+A `while e-g e-b` lowers to three blocks:
+
+- `header`: evaluate guard, then if (eq? a-g #f) (goto rest) (goto body).
+- `body`: code for e-b, then goto header.
+- `rest`: continuation after the loop.
+
+In ANF/C2 we sequence any side-effects (e.g., vector-set!) via seq and
+keep the tail forms restricted to return, goto, or a single if.
 
 ## IR Predicates and Interpreters
 
@@ -192,17 +314,7 @@ some advice I used when I was writing the compiler myself.
  (dump-x86-64
   (prelude-and-conclusion
    (patch-instructions
-    (assign-homes
-     (select-instructions
-      (uncover-locals
-       (explicate-control
-        (anf-convert
-         (uniqueify
-          (shrink
-           (typecheck '(program (let ([a (read)])
-                                  (let ([b (read)]) (if (or (> a b) (eq? (+ b 1) 0))
-                                                        (+ a b)
-                                                        (- b a)))))))))))))))))
+      ...))))
 ```
 
 - I started with a fairly large test in my case--since I was merely
@@ -243,17 +355,20 @@ some advice I used when I was writing the compiler myself.
 
 **BE CAREFUL** of the following:
 
-- In the event of a type error, raise `(error (type-error-tag) "Error here...")`
+- There is *no* type checking.
 
-- In the previous implementation, we had only a single block, and
-  `prelude-and-conclusion` sandwiched the generated code between code
-  to set up the function and code to print the value and exit the
-  function. In this case, that will not work so well. Instead, I
-  recommend the following approach: in the `select-instructions` pass,
-  assume the existence of a special block named `conclusion`, which
-  assumes the return value (to be printed) is in `%rax`, and jump to
-  that label. Then, in `prelude-and-conclusion`, add this label to the
-  program with the right code to print the value of `%rax`. 
+- In this case, `explicate-control` needs to be updated, because when
+  generating loops, you need to "take hold" of the return value from
+  the translated block and use it for some purpose (e.g., branch on
+  it, or ignore it and jump back to the header). I have generalized
+  `expr->blocks` to accept a third argument, `k`, which is a
+  *continuation* that gets applied to the eventual return value.
+
+- Non-loop conclusion flow: select-instructions must end "returns" by
+  jumping to conclusion; don’t emit ret in the middle of blocks.
+
+- Indices must be static: `vector-ref` / `vector-set!` indices are
+  fixnum literals at compile time in this project.
 
 - On Mac OSX, you need to prefix labels for functions, meaning `_main`
   instead of `main`. To facilitate this, I provide a function `(rt-sym
@@ -311,20 +426,6 @@ Layout:
 - `goldens/<prog>_<n>_<pass>.stdout`
 
 Instructor-only `gengoldens` mode regenerates these.
-
-## FAQ
-
-- **Do I need register allocation?**  
-  No. Stack-based only.
-
-- **Can I write helpers?**  
-  Yes—keep pass signatures unchanged.
-
-- **Can I call arbitrary C functions?**  
-  No. Only use `read_int64` / `print_int64`.
-
-- **How are inputs fed?**  
-  Via stdin; `.in` files are whitespace-separated integers.
 
 ## Autograder Tests
 

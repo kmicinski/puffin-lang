@@ -1,0 +1,940 @@
+Compiling IR (using *your* compile.rkt) …
+Input:
+'(program
+  (let ((x (read)))
+    (let ((y (read)))
+      (let ((tmp 0))
+        (let ((_ (set! tmp y)))
+          (let ((_ (set! y x))) (let ((_ (set! x tmp))) x)))))))
+Satsifes input predicate: NO
+Ran pass shrink. Output:
+'(program
+  (let ((x (read)))
+    (let ((y (read)))
+      (let ((tmp 0))
+        (let ((_ (set! tmp y)))
+          (let ((_ (set! y x))) (let ((_ (set! x tmp))) x)))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  (let ((x (read)))
+    (let ((y (read)))
+      (let ((tmp 0))
+        (let ((_ (set! tmp y)))
+          (let ((_ (set! y x))) (let ((_ (set! x tmp))) x)))))))
+Satsifes input predicate: YES
+Ran pass uniqueify. Output:
+'(program
+  ()
+  (let ((x (read)))
+    (let ((y (read)))
+      (let ((tmp 0))
+        (let ((_ (set! tmp y)))
+          (let ((_ (set! y x))) (let ((_ (set! x tmp))) x)))))))
+Satisfies output predicate: NO
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  (let ((x (make-vector 1)))
+    (let ((_ (vector-set! x 0 (read))))
+      (let ((y (make-vector 1)))
+        (let ((_ (vector-set! y 0 (read))))
+          (let ((tmp (make-vector 1)))
+            (let ((_ (vector-set! tmp 0 0)))
+              (let ((_ (vector-set! tmp 0 (vector-ref y 0))))
+                (let ((_ (vector-set! y 0 (vector-ref x 0))))
+                  (let ((_ (vector-set! x 0 (vector-ref tmp 0))))
+                    (vector-ref x 0)))))))))))
+Satsifes input predicate: NO
+Ran pass assignment-convert. Output:
+'(program
+  ()
+  (let ((x (make-vector 1)))
+    (let ((_ (vector-set! x 0 (read))))
+      (let ((y (make-vector 1)))
+        (let ((_ (vector-set! y 0 (read))))
+          (let ((tmp (make-vector 1)))
+            (let ((_ (vector-set! tmp 0 0)))
+              (let ((_ (vector-set! tmp 0 (vector-ref y 0))))
+                (let ((_ (vector-set! y 0 (vector-ref x 0))))
+                  (let ((_ (vector-set! x 0 (vector-ref tmp 0))))
+                    (vector-ref x 0)))))))))))
+Satisfies output predicate: NO
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  (let ((vec4482 (make-vector 1)))
+    (let ((x vec4482))
+      (let ((read4483 (read)))
+        (let ((_ (vector-set! x 0 read4483)))
+          (let ((vec4484 (make-vector 1)))
+            (let ((y vec4484))
+              (let ((read4485 (read)))
+                (let ((_ (vector-set! y 0 read4485)))
+                  (let ((vec4486 (make-vector 1)))
+                    (let ((tmp vec4486))
+                      (let ((_ (vector-set! tmp 0 0)))
+                        (let ((ref4487 (vector-ref y 0)))
+                          (let ((_ (vector-set! tmp 0 ref4487)))
+                            (let ((ref4488 (vector-ref x 0)))
+                              (let ((_ (vector-set! y 0 ref4488)))
+                                (let ((ref4489 (vector-ref tmp 0)))
+                                  (let ((_ (vector-set! x 0 ref4489)))
+                                    (let ((ref4490 (vector-ref x 0)))
+                                      ref4490)))))))))))))))))))
+Satsifes input predicate: NO
+Ran pass anf-convert. Output:
+'(program
+  ()
+  (let ((vec4482 (make-vector 1)))
+    (let ((x vec4482))
+      (let ((read4483 (read)))
+        (let ((_ (vector-set! x 0 read4483)))
+          (let ((vec4484 (make-vector 1)))
+            (let ((y vec4484))
+              (let ((read4485 (read)))
+                (let ((_ (vector-set! y 0 read4485)))
+                  (let ((vec4486 (make-vector 1)))
+                    (let ((tmp vec4486))
+                      (let ((_ (vector-set! tmp 0 0)))
+                        (let ((ref4487 (vector-ref y 0)))
+                          (let ((_ (vector-set! tmp 0 ref4487)))
+                            (let ((ref4488 (vector-ref x 0)))
+                              (let ((_ (vector-set! y 0 ref4488)))
+                                (let ((ref4489 (vector-ref tmp 0)))
+                                  (let ((_ (vector-set! x 0 ref4489)))
+                                    (let ((ref4490 (vector-ref x 0)))
+                                      ref4490)))))))))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  ()
+  #hash((main
+         .
+         (seq
+          (assign vec4491 (vector 1))
+          (seq
+           (assign x vec4491)
+           (seq
+            (assign read4492 (read))
+            (seq
+             (vector-set! x 0 read4492)
+             (seq
+              (assign vec4493 (vector 1))
+              (seq
+               (assign y vec4493)
+               (seq
+                (assign read4494 (read))
+                (seq
+                 (vector-set! y 0 read4494)
+                 (seq
+                  (assign vec4495 (vector 1))
+                  (seq
+                   (assign tmp vec4495)
+                   (seq
+                    (vector-set! tmp 0 0)
+                    (seq
+                     (assign ref4496 (vector-ref y 0))
+                     (seq
+                      (vector-set! tmp 0 ref4496)
+                      (seq
+                       (assign ref4497 (vector-ref x 0))
+                       (seq
+                        (vector-set! y 0 ref4497)
+                        (seq
+                         (assign ref4498 (vector-ref tmp 0))
+                         (seq
+                          (vector-set! x 0 ref4498)
+                          (seq
+                           (assign ref4499 (vector-ref x 0))
+                           (return ref4499))))))))))))))))))))))
+Satsifes input predicate: YES
+Ran pass explicate-control. Output:
+'(program
+  ()
+  #hash((main
+         .
+         (seq
+          (assign vec4491 (vector 1))
+          (seq
+           (assign x vec4491)
+           (seq
+            (assign read4492 (read))
+            (seq
+             (vector-set! x 0 read4492)
+             (seq
+              (assign vec4493 (vector 1))
+              (seq
+               (assign y vec4493)
+               (seq
+                (assign read4494 (read))
+                (seq
+                 (vector-set! y 0 read4494)
+                 (seq
+                  (assign vec4495 (vector 1))
+                  (seq
+                   (assign tmp vec4495)
+                   (seq
+                    (vector-set! tmp 0 0)
+                    (seq
+                     (assign ref4496 (vector-ref y 0))
+                     (seq
+                      (vector-set! tmp 0 ref4496)
+                      (seq
+                       (assign ref4497 (vector-ref x 0))
+                       (seq
+                        (vector-set! y 0 ref4497)
+                        (seq
+                         (assign ref4498 (vector-ref tmp 0))
+                         (seq
+                          (vector-set! x 0 ref4498)
+                          (seq
+                           (assign ref4499 (vector-ref x 0))
+                           (return ref4499))))))))))))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+(list
+ 'program
+ (set
+  'vec4491
+  'read4492
+  'vec4493
+  'read4494
+  'vec4495
+  'ref4496
+  'ref4497
+  'ref4498
+  'ref4499
+  'y
+  'x
+  'tmp)
+ '#hash((main
+         .
+         (seq
+          (assign vec4491 (vector 1))
+          (seq
+           (assign x vec4491)
+           (seq
+            (assign read4492 (read))
+            (seq
+             (vector-set! x 0 read4492)
+             (seq
+              (assign vec4493 (vector 1))
+              (seq
+               (assign y vec4493)
+               (seq
+                (assign read4494 (read))
+                (seq
+                 (vector-set! y 0 read4494)
+                 (seq
+                  (assign vec4495 (vector 1))
+                  (seq
+                   (assign tmp vec4495)
+                   (seq
+                    (vector-set! tmp 0 0)
+                    (seq
+                     (assign ref4496 (vector-ref y 0))
+                     (seq
+                      (vector-set! tmp 0 ref4496)
+                      (seq
+                       (assign ref4497 (vector-ref x 0))
+                       (seq
+                        (vector-set! y 0 ref4497)
+                        (seq
+                         (assign ref4498 (vector-ref tmp 0))
+                         (seq
+                          (vector-set! x 0 ref4498)
+                          (seq
+                           (assign ref4499 (vector-ref x 0))
+                           (return ref4499))))))))))))))))))))))
+Satsifes input predicate: YES
+Ran pass uncover-locals. Output:
+(list
+ 'program
+ (set
+  'vec4491
+  'read4492
+  'vec4493
+  'read4494
+  'vec4495
+  'ref4496
+  'ref4497
+  'ref4498
+  'ref4499
+  'y
+  'x
+  'tmp)
+ '#hash((main
+         .
+         (seq
+          (assign vec4491 (vector 1))
+          (seq
+           (assign x vec4491)
+           (seq
+            (assign read4492 (read))
+            (seq
+             (vector-set! x 0 read4492)
+             (seq
+              (assign vec4493 (vector 1))
+              (seq
+               (assign y vec4493)
+               (seq
+                (assign read4494 (read))
+                (seq
+                 (vector-set! y 0 read4494)
+                 (seq
+                  (assign vec4495 (vector 1))
+                  (seq
+                   (assign tmp vec4495)
+                   (seq
+                    (vector-set! tmp 0 0)
+                    (seq
+                     (assign ref4496 (vector-ref y 0))
+                     (seq
+                      (vector-set! tmp 0 ref4496)
+                      (seq
+                       (assign ref4497 (vector-ref x 0))
+                       (seq
+                        (vector-set! y 0 ref4497)
+                        (seq
+                         (assign ref4498 (vector-ref tmp 0))
+                         (seq
+                          (vector-set! x 0 ref4498)
+                          (seq
+                           (assign ref4499 (vector-ref x 0))
+                           (return ref4499))))))))))))))))))))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+(list
+ 'program
+ (set
+  'vec4491
+  'read4492
+  'vec4493
+  'read4494
+  'vec4495
+  'ref4496
+  'ref4497
+  'ref4498
+  'ref4499
+  'y
+  'x
+  'tmp)
+ '#hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4491))
+          (movq (var vec4491) (var x))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4492))
+          (movq (var x) (reg rax))
+          (movq (var read4492) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4493))
+          (movq (var vec4493) (var y))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4494))
+          (movq (var y) (reg rax))
+          (movq (var read4494) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4495))
+          (movq (var vec4495) (var tmp))
+          (movq (var tmp) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (var y) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4496))
+          (movq (var tmp) (reg rax))
+          (movq (var ref4496) (deref (reg rax) 8))
+          (movq (var x) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4497))
+          (movq (var y) (reg rax))
+          (movq (var ref4497) (deref (reg rax) 8))
+          (movq (var tmp) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4498))
+          (movq (var x) (reg rax))
+          (movq (var ref4498) (deref (reg rax) 8))
+          (movq (var x) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4499))
+          (movq (var ref4499) (reg rax))
+          (jmp conclusion)))))
+Satsifes input predicate: YES
+Ran pass select-instructions. Output:
+(list
+ 'program
+ (set
+  'vec4491
+  'read4492
+  'vec4493
+  'read4494
+  'vec4495
+  'ref4496
+  'ref4497
+  'ref4498
+  'ref4499
+  'y
+  'x
+  'tmp)
+ '#hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4491))
+          (movq (var vec4491) (var x))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4492))
+          (movq (var x) (reg rax))
+          (movq (var read4492) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4493))
+          (movq (var vec4493) (var y))
+          (callq read_int64 0)
+          (movq (reg rax) (var read4494))
+          (movq (var y) (reg rax))
+          (movq (var read4494) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (var vec4495))
+          (movq (var vec4495) (var tmp))
+          (movq (var tmp) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (var y) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4496))
+          (movq (var tmp) (reg rax))
+          (movq (var ref4496) (deref (reg rax) 8))
+          (movq (var x) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4497))
+          (movq (var y) (reg rax))
+          (movq (var ref4497) (deref (reg rax) 8))
+          (movq (var tmp) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4498))
+          (movq (var x) (reg rax))
+          (movq (var ref4498) (deref (reg rax) 8))
+          (movq (var x) (reg rax))
+          (movq (deref (reg rax) 8) (var ref4499))
+          (movq (var ref4499) (reg rax))
+          (jmp conclusion)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satsifes input predicate: YES
+Ran pass assign-homes. Output:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satsifes input predicate: YES
+Ran pass patch-instructions. Output:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion . ())
+        (main
+         .
+         ((movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+1
+Input:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion
+         .
+         ((movq (reg rax) (reg rdi))
+          (callq print_int64 0)
+          (movq (imm 0) (reg rax))
+          (movq (reg rbp) (reg rsp))
+          (popq (reg rbp))
+          (retq)))
+        (main
+         .
+         ((pushq (reg rbp))
+          (movq (reg rsp) (reg rbp))
+          (addq (imm -96) (reg rsp))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satsifes input predicate: YES
+Ran pass prelude-and-conclusion. Output:
+'(program
+  #hash((read4492 . -88)
+        (read4494 . -72)
+        (ref4496 . -56)
+        (ref4497 . -48)
+        (ref4498 . -40)
+        (ref4499 . -32)
+        (vec4491 . -96)
+        (vec4493 . -80)
+        (vec4495 . -64)
+        (tmp . -8)
+        (x . -16)
+        (y . -24))
+  #hash((conclusion
+         .
+         ((movq (reg rax) (reg rdi))
+          (callq print_int64 0)
+          (movq (imm 0) (reg rax))
+          (movq (reg rbp) (reg rsp))
+          (popq (reg rbp))
+          (retq)))
+        (main
+         .
+         ((pushq (reg rbp))
+          (movq (reg rsp) (reg rbp))
+          (addq (imm -96) (reg rsp))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -96))
+          (movq (deref (reg rbp) -96) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -16))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -88))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -88) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -80))
+          (movq (deref (reg rbp) -80) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -24))
+          (callq read_int64 0)
+          (movq (reg rax) (deref (reg rbp) -72))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -72) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (imm 1) (reg rdi))
+          (callq make_vector 1)
+          (movq (reg rax) (deref (reg rbp) -64))
+          (movq (deref (reg rbp) -64) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (imm 0) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -56))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rbp) -56) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -48))
+          (movq (deref (reg rbp) -24) (reg rax))
+          (movq (deref (reg rbp) -48) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -8) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -40))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rbp) -40) (reg r11))
+          (movq (reg r11) (deref (reg rax) 8))
+          (movq (deref (reg rbp) -16) (reg rax))
+          (movq (deref (reg rax) 8) (reg r11))
+          (movq (reg r11) (deref (reg rbp) -32))
+          (movq (deref (reg rbp) -32) (reg rax))
+          (jmp conclusion)))))
+Satisfies output predicate: YES
+Evaluation of your output:
+0
+Input:
+".globl _main\n.extern _read_int64\n.extern _print_int64\nconclusion:\n    movq %rax, %rdi\n    call _print_int64\n    movq $0, %rax\n    movq %rbp, %rsp\n    popq %rbp\n    ret\n_main:\n    pushq %rbp\n    movq %rsp, %rbp\n    addq $-96, %rsp\n    movq $1, %rdi\n    call _make_vector\n    movq %rax, -96(%rbp)\n    movq -96(%rbp), %r11\n    movq %r11, -16(%rbp)\n    call _read_int64\n    movq %rax, -88(%rbp)\n    movq -16(%rbp), %rax\n    movq -88(%rbp), %r11\n    movq %r11, 8(%rax)\n    movq $1, %rdi\n    call _make_vector\n    movq %rax, -80(%rbp)\n    movq -80(%rbp), %r11\n    movq %r11, -24(%rbp)\n    call _read_int64\n    movq %rax, -72(%rbp)\n    movq -24(%rbp), %rax\n    movq -72(%rbp), %r11\n    movq %r11, 8(%rax)\n    movq $1, %rdi\n    call _make_vector\n    movq %rax, -64(%rbp)\n    movq -64(%rbp), %r11\n    movq %r11, -8(%rbp)\n    movq -8(%rbp), %rax\n    movq $0, 8(%rax)\n    movq -24(%rbp), %rax\n    movq 8(%rax), %r11\n    movq %r11, -56(%rbp)\n    movq -8(%rbp), %rax\n    movq -56(%rbp), %r11\n    movq %r11, 8(%rax)\n    movq -16(%rbp), %rax\n    movq 8(%rax), %r11\n    movq %r11, -48(%rbp)\n    movq -24(%rbp), %rax\n    movq -48(%rbp), %r11\n    movq %r11, 8(%rax)\n    movq -8(%rbp), %rax\n    movq 8(%rax), %r11\n    movq %r11, -40(%rbp)\n    movq -16(%rbp), %rax\n    movq -40(%rbp), %r11\n    movq %r11, 8(%rax)\n    movq -16(%rbp), %rax\n    movq 8(%rax), %r11\n    movq %r11, -32(%rbp)\n    movq -32(%rbp), %rax\n    jmp conclusion\n"
+Satsifes input predicate: YES
+Ran pass render-x86. Output:
+.globl _main
+.extern _read_int64
+.extern _print_int64
+conclusion:
+    movq %rax, %rdi
+    call _print_int64
+    movq $0, %rax
+    movq %rbp, %rsp
+    popq %rbp
+    ret
+_main:
+    pushq %rbp
+    movq %rsp, %rbp
+    addq $-96, %rsp
+    movq $1, %rdi
+    call _make_vector
+    movq %rax, -96(%rbp)
+    movq -96(%rbp), %r11
+    movq %r11, -16(%rbp)
+    call _read_int64
+    movq %rax, -88(%rbp)
+    movq -16(%rbp), %rax
+    movq -88(%rbp), %r11
+    movq %r11, 8(%rax)
+    movq $1, %rdi
+    call _make_vector
+    movq %rax, -80(%rbp)
+    movq -80(%rbp), %r11
+    movq %r11, -24(%rbp)
+    call _read_int64
+    movq %rax, -72(%rbp)
+    movq -24(%rbp), %rax
+    movq -72(%rbp), %r11
+    movq %r11, 8(%rax)
+    movq $1, %rdi
+    call _make_vector
+    movq %rax, -64(%rbp)
+    movq -64(%rbp), %r11
+    movq %r11, -8(%rbp)
+    movq -8(%rbp), %rax
+    movq $0, 8(%rax)
+    movq -24(%rbp), %rax
+    movq 8(%rax), %r11
+    movq %r11, -56(%rbp)
+    movq -8(%rbp), %rax
+    movq -56(%rbp), %r11
+    movq %r11, 8(%rax)
+    movq -16(%rbp), %rax
+    movq 8(%rax), %r11
+    movq %r11, -48(%rbp)
+    movq -24(%rbp), %rax
+    movq -48(%rbp), %r11
+    movq %r11, 8(%rax)
+    movq -8(%rbp), %rax
+    movq 8(%rax), %r11
+    movq %r11, -40(%rbp)
+    movq -16(%rbp), %rax
+    movq -40(%rbp), %r11
+    movq %r11, 8(%rax)
+    movq -16(%rbp), %rax
+    movq 8(%rax), %r11
+    movq %r11, -32(%rbp)
+    movq -32(%rbp), %rax
+    jmp conclusion
+
+Satisfies output predicate: YES
+Evaluation of your output:
+x86-64 code not interpreted, skipping interpreter for this pass--test by running binary
+
+Summary of passes run:
+
+shrink                        : Input (NO) Output (YES) Evaluation: 1 stdout: "1"
+uniqueify                     : Input (YES) Output (NO) Evaluation: 1 stdout: "1"
+assignment-convert            : Input (NO) Output (NO) Evaluation: 1 stdout: "1"
+anf-convert                   : Input (NO) Output (YES) Evaluation: 1 stdout: "1"
+explicate-control             : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+uncover-locals                : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+select-instructions           : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+assign-homes                  : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+patch-instructions            : Input (YES) Output (YES) Evaluation: 1 stdout: "1"
+prelude-and-conclusion        : Input (YES) Output (YES) Evaluation: 0 stdout: "1"
+render-x86                    : Input (YES) Output (YES) Evaluation: <string> 
+Consistent across passes? YES
+BUILD BUILD BUILD  Now building a binary... BUILD BUILD BUILD ️
+-> Host: macosx/x86_64  Target: x86_64-apple-darwin  Entry: main
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./output.s -o ./output.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 -c ./runtime.c -o ./runtime.o
+/usr/bin/clang -target x86_64-apple-darwin -Wall -O2 ./output.o ./runtime.o -o ./output
+Success! Executable produced at: ./output

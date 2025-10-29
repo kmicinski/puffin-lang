@@ -8,6 +8,7 @@ mkdir starter
 # copy everything except test, goldens, outputs, caches, etc.
 rsync -av . starter/ \
   --exclude 'test/' \
+  --exclude 'selected-tests.txt' \ 
   --exclude 'testout' \
   --exclude 'output' \
   --exclude 'output.o' \

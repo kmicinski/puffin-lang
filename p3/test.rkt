@@ -16,7 +16,6 @@
 (define in-files (make-parameter ""))
 (define goldens (make-parameter ""))
 (define tests-dir (make-parameter "./test-programs/"))
-(define verbose-mode (make-parameter #f))
 (define cfg-file (make-parameter #f))
 (define repro-file (make-parameter "./repro.sh"))
 

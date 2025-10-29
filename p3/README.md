@@ -68,7 +68,6 @@ The major extensions are these:
   pure. We handle this by "boxing" every variable, a process we
   describe below.
 
-
 - Mutability goes hand-in-hand with loops, in the sense that mutable
   variables are not much fun unless you add loops. So we add a form,
   `(while e-g e-b)`, which continually evaluates the loop guard `e-g`
@@ -93,39 +92,46 @@ Please do not rename files or directories (grading infra depends on them).
 
 ## The Compiler Pipeline (passes)
 
-In this project, I skip typechecking; the compilation simply assumes
-the program is type-correct. If the program is not type correct, it
-may go wrong (segfault, etc.). Ensuring the program does not go wrong
-may be accomplished a variety of ways (type checking, dynamic error
-handling, etc.), and we will discuss these trade-offs in class.
+We skip typechecking in this project; programs are assumed type-correct. If not, behavior is undefined (e.g., segfaults). You’ll implement the following passes in `compile.rkt`. Each pass must produce an output that satisfies the corresponding predicate in `irs.rkt`, and preserve behavior across interpretable stages.
 
-You will implement the following passes:
+1. `shrink` Removes binary `-`, `and`/`or`, and `<=, >, >=` by rewriting to `eq?`/`<`/`if`. Preserves `let`, `while`, vectors, `set!`, and `begin` (canonically as `let` chains). Rewrites `while` so that it appears only in non-tail position: `(while e-g e-b) => (let ([_ (while e-g e-b)]) (void))`
+   Input: `R3?` → Output: `shrunk-R3?`
 
-2. `shrink` → remove binary `-`, `and`/`or`, and `<=, >, >=` (desugar to `eq?`/`<`)  
-   Input: `R2?` → Output: `shrunk-R2?` → Interp: `interpret-R2`
-3. `uniqueify` → ensure each bound identifier is written exactly once  
-   Input: `shrunk-R2?` → Output: `unique-source-tree?` → Interp: `interpret-R2`
-4. `anf-convert` → ANF conversion (introduce temps; maintain booleans/comparisons)  
-   Input: `unique-source-tree?` → Output: `anf-program?` → Interp: `interpret-anf`
-5. `explicate-control` → ANF → **C1** (blocks with `(seq (assign …) …)`, `if`/`goto`)  
-   Input: `anf-program?` → Output: `c1-program?` → Interp: `interpret-c1`
-6. `uncover-locals` → collect locals for stack layout  
-   Input: `c1-program?` → Output: `locals-program?` → Interp: `interpret-c1`
-7. `select-instructions` → C1 → pseudo-x86 (vars, `cmpq`, `set e|l`, `jmp-if e|l`)  
-   Input: `locals-program?` → Output: `instr-program?` → Interp: `interpret-instr`
-8. `assign-homes` → map `(var x)` → `(deref (reg rbp) n)`  
-   Input: `instr-program?` → Output: `homes-assigned-program?` → Interp: `interpret-instr`
-9. `patch-instructions` → fix illegal memory↔memory moves and related cases  
-   Input: `homes-assigned-program?` → Output: `patched-program?` → Interp: `interpret-instr`
-10. `prelude-and-conclusion` → prologue, print result, return 0  
-    Input: `patched-program?` → Output: `x86-64?` → Interp: `interpret-instr`
-11. `dump-x86-64` → render assembly text  
-    Input: `x86-64?` → Output: `string?` → Interp: `dummy-interp-x86-64`
+2. `uniqueify` Alpha-renames so that each bound identifier is written exactly once. Output program’s info field is `()`.  
+   Input: `shrunk-R3?` → Output: `unique-source-tree?`
 
-**What you implement**: All passes in `compile.rkt` are scaffolded.
-Your job is to produce outputs that satisfy each predicate in
-`irs.rkt` and that remain semantically equivalent (the interpreters
-check this).
+3. `assignment-convert`
+   Boxes variables. Rewrites:
+     * `let` → `(make-vector 1)` + `vector-set!` to initialize
+     * uses of `x` → `(vector-ref x 0)`
+     * `(set! x e)` → `(vector-set! x 0 e)`
+   Loops and vector ops remain.  
+   Input: `unique-source-tree?` → Output: `assignment-converted-program?`
+
+4. `anf-convert`  Converts to ANF: RHS are atoms or small ops over atoms; side-effects sequenced via `let ([_ (vector-set! …)]) …` and `let ([_ (while …)]) …`; `if` guards are atomic.
+   Input: `assignment-converted-program?` → Output: `anf-program?`
+
+5. `explicate-control` Lowers ANF to C2: a map from labels to tails with `seq (assign x rhs) …`, `if (cmp a0 a1) (goto lt) (goto lf)`, `goto`, `return a`, and standalone `vector-set!`. `while` becomes `header`/`body`/`rest` labeled blocks.  Input: `anf-program?` → Output: `c2-program?`
+
+6. `uncover-locals`  Computes the set of locals (variables assigned or used as vector operands) for stack layout; carries it as the program’s `info` set.
+ Input: `c2-program?` → Output: `locals-program?`
+
+7. `select-instructions` Selects pseudo-x86 instructions still using `(var x)` operands. Uses `cmpq` + `set{e,l}` + `movzbq` for comparisons, calls `read_int64`/`make_vector`, and on `return` jumps to a special `conclusion` label (no early `ret`).
+   Input: `locals-program?` → Output: `instr-program?`
+
+8. `assign-homes` Replaces `(var x)` with stack slots `(deref (reg rbp) n)` using the locals set; negative 8-byte offsets.
+   Input: `instr-program?` → Output: `homes-assigned-program?`
+
+9. `patch-instructions`  Fixes illegal instructions (e.g., `movq (deref …) (deref …)`, certain `cmpq` forms) by shuttling through a temp register.
+   Input: `homes-assigned-program?` → Output: `patched-program?`
+
+10. `prelude-and-conclusion` Inserts function prologue/epilogue and the `conclusion` block that prints `%rax`, sets `%rax := 0`, and returns. Ensures 16-byte stack alignment before `callq` and reserves aligned space for locals.
+    Input: `patched-program?` → Output: `x86-64?`
+
+11. `dump-x86-64` Renders GAS assembly text. Emits a global for the entry symbol (`rt-sym`), includes `runtime-function-externs`, and prints operands as `$imm`, `%reg`, `disp(%reg)`.
+    Input: `x86-64?` → Output: `string?`
+
+Your task: implement these passes so each output satisfies its predicate in `irs.rkt` and preserves semantics (the harness checks using interpreters where applicable).
 
 ## "Boxing" and assignment-conversion
 
@@ -213,9 +219,34 @@ might just be as simple as `movq`. Languages like Rust use (c), which
 enables the benefits of (b) as a zero-cost abstraction, often matching
 (or even exceeding) the performance of (a).
 
-In this project we will do (a)/(b): 
+In this project we will do (a): we assume the program is type
+correct. This means that as you generate code, you assume that
+operations for various builtins are also type correct. You will *not*
+be given any programs to test which contain type errrors.
 
-## C2 
+In short:
+
+- To implement `make-vector`, you will ultimately emit a call to
+  `make_vector` in `runtime.c`. 
+- To impelment `(vector-ref v i)`, you will emit code that uses `movq`
+  to dereference the vector `v`. You want to movq the value at
+  8*(i+1), the +1 is due to the fact that the first 8 bytes of every
+  vector holds its length. You could also consider emitting a *safe*
+  vector reference, checking the bounds each time (but it is not
+  necessary in this specific case, because we don't test any offensive
+  programs).
+- To implement `vector-set!`, you will *also* emit a `movq` instruction.
+
+## Translating Loops
+
+A `while e-g e-b` lowers to three blocks:
+
+- `header`: evaluate guard, then if (eq? a-g #f) (goto rest) (goto body).
+- `body`: code for e-b, then goto header.
+- `rest`: continuation after the loop.
+
+In ANF/C2 we sequence any side-effects (e.g., vector-set!) via seq and
+keep the tail forms restricted to return, goto, or a single if.
 
 ## IR Predicates and Interpreters
 
@@ -283,17 +314,7 @@ some advice I used when I was writing the compiler myself.
  (dump-x86-64
   (prelude-and-conclusion
    (patch-instructions
-    (assign-homes
-     (select-instructions
-      (uncover-locals
-       (explicate-control
-        (anf-convert
-         (uniqueify
-          (shrink
-           (typecheck '(program (let ([a (read)])
-                                  (let ([b (read)]) (if (or (> a b) (eq? (+ b 1) 0))
-                                                        (+ a b)
-                                                        (- b a)))))))))))))))))
+      ...))))
 ```
 
 - I started with a fairly large test in my case--since I was merely
@@ -334,17 +355,20 @@ some advice I used when I was writing the compiler myself.
 
 **BE CAREFUL** of the following:
 
-- In the event of a type error, raise `(error (type-error-tag) "Error here...")`
+- There is *no* type checking.
 
-- In the previous implementation, we had only a single block, and
-  `prelude-and-conclusion` sandwiched the generated code between code
-  to set up the function and code to print the value and exit the
-  function. In this case, that will not work so well. Instead, I
-  recommend the following approach: in the `select-instructions` pass,
-  assume the existence of a special block named `conclusion`, which
-  assumes the return value (to be printed) is in `%rax`, and jump to
-  that label. Then, in `prelude-and-conclusion`, add this label to the
-  program with the right code to print the value of `%rax`. 
+- In this case, `explicate-control` needs to be updated, because when
+  generating loops, you need to "take hold" of the return value from
+  the translated block and use it for some purpose (e.g., branch on
+  it, or ignore it and jump back to the header). I have generalized
+  `expr->blocks` to accept a third argument, `k`, which is a
+  *continuation* that gets applied to the eventual return value.
+
+- Non-loop conclusion flow: select-instructions must end "returns" by
+  jumping to conclusion; don’t emit ret in the middle of blocks.
+
+- Indices must be static: `vector-ref` / `vector-set!` indices are
+  fixnum literals at compile time in this project.
 
 - On Mac OSX, you need to prefix labels for functions, meaning `_main`
   instead of `main`. To facilitate this, I provide a function `(rt-sym
@@ -402,20 +426,6 @@ Layout:
 - `goldens/<prog>_<n>_<pass>.stdout`
 
 Instructor-only `gengoldens` mode regenerates these.
-
-## FAQ
-
-- **Do I need register allocation?**  
-  No. Stack-based only.
-
-- **Can I write helpers?**  
-  Yes—keep pass signatures unchanged.
-
-- **Can I call arbitrary C functions?**  
-  No. Only use `read_int64` / `print_int64`.
-
-- **How are inputs fed?**  
-  Via stdin; `.in` files are whitespace-separated integers.
 
 ## Autograder Tests
 
