@@ -1,7 +1,7 @@
 #lang racket
 
 ;; CIS531 Fall '25 Project 3
-;; Compiling R3 -> x86-64
+;; Compiling R4 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
 (require "interpreters.rkt") ;; XXX
@@ -10,9 +10,9 @@
 
 ;; The compiler is designed in passes, which go:
 ;;
-;; --> R3? -- Source program
+;; --> R4? -- Source program
 ;; |
-;; +-> shrunk-R3? -- Shrunken R3 (removes several forms)
+;; +-> shrunk-R4? -- Shrunken R4 (removes several forms)
 ;; |
 ;; +-> unique-source-tree? -- every bound identifier is written exactly once
 ;; |
@@ -451,6 +451,8 @@
     [`(program ,info ,e)
      `(program ,info ,(convert-expr e (lambda (x) x)))]))
 
+;;(define (reveal-functions p))
+
 (define (assignment-convert p)
   (define (a-c e)
     (match e
@@ -525,11 +527,22 @@
       [`(make-vector ,i) e]
       [`(vector-ref ,e ,i) `(vector-ref ,(rename e assignment) ,i)]
       [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(rename e assignment) ,i ,(rename e-v assignment))]
-      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]))
+      [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
+      [`(,e-f ,e-args ...) `(,(rename e-f assignment) ,@(map (lambda (e-arg) (rename e-arg assignment)) e-args))]))
+  (define (per-defn def)
+    (match def
+      [`(define (,f ,xs ...) ,e-b)
+       (define assignment+ (foldl (lambda (x acc)
+                                    (if (hash-has-key? acc x)
+                                        (let ([x+ (gensym x)]) (hash-set acc x x+))
+                                        (hash-set acc x x)))
+                                  (hash)
+                                  xs))
+       `(define (,f ,@xs) ,(rename e-b assignment+))]))
   (match p
-    [`(program ,exp)
+    [`(program ,defns ...)
      ;; empty info
-     `(program () ,(rename exp (hash)))]))
+     `(program () ,(map per-defn defns))]))
 
 ;; Takes p and...
 ;; - Removes binary minus
@@ -571,10 +584,26 @@
       [`(let* ([,x ,e0]) ,e-b)
        `(let ([,x ,(h e0)]) ,(h e-b))]
       [`(let* ([,x ,e0] ,rest ...) ,e-b)
-       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]))
+       `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
+      [`(,e-f ,e-args ...)
+       `(,(h e-f) ,@(map h e-args))]))
+  (define (per-defn defn)
+    (match defn
+      [`(define (,f ,xs ...) ,e-b) 
+       `(define (,f ,@xs) ,(h e-b))]))
   (match p
-    [`(program ,exp)
-     ;; empty info
-     `(program ,(h exp))]))
+    [`(program ,defns ... ,expr)
+     `(program ,@(cons `(define (main) ,(h expr)) (map per-defn defns)))]))
 
-
+ (shrink
+  '(program
+    (define (f x)
+      (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
+    (f (read))))
+(uniqueify
+ (shrink
+  '(program
+    (define (f x)
+      (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
+    (f (read))))
+)

@@ -1,6 +1,6 @@
 #lang racket
 ;;
-;; CIS531 Fall '25: Project 3 -- R3 with vectors, set!, and while
+;; CIS531 Fall '25: Project 3 -- R4 with vectors, set!, and while
 ;;
 ;; Interface (predicates) for every IR used across the pipeline.
 ;; Keep these aligned with compile.rkt’s expectations.
@@ -31,50 +31,60 @@
 (define (shrunk-cmp? c)          (member c '(eq? <)))
 
 ;; ---------------------------------------------------------------------
-;; 1) Raw R3 (source)
+;; 1) Raw R4 (source)
 ;; ---------------------------------------------------------------------
 
-(define (R3-exp? e)
+(define (R4-exp? e)
   (match e
     [#t #t]
     [#f #t]
     [(? fixnum?) #t]
     ['(read) #t]
     ['(void) #t]
-    [`(- ,(? R3-exp? e)) #t]
-    [`(- ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(+ ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(and ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(or  ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(not ,(? R3-exp? e1)) #t]
-    [`(,(? cmp? c) ,(? R3-exp? e0) ,(? R3-exp? e1)) #t]
-    [`(if ,(? R3-exp? e-g) ,(? R3-exp? e-t) ,(? R3-exp? e-f)) #t]
+    [`(- ,(? R4-exp? e)) #t]
+    [`(- ,(? R4-exp? e0) ,(? R4-exp? e1)) #t]
+    [`(+ ,(? R4-exp? e0) ,(? R4-exp? e1)) #t]
+    [`(and ,(? R4-exp? e0) ,(? R4-exp? e1)) #t]
+    [`(or  ,(? R4-exp? e0) ,(? R4-exp? e1)) #t]
+    [`(not ,(? R4-exp? e1)) #t]
+    [`(,(? cmp? c) ,(? R4-exp? e0) ,(? R4-exp? e1)) #t]
+    [`(if ,(? R4-exp? e-g) ,(? R4-exp? e-t) ,(? R4-exp? e-f)) #t]
     [(? symbol?) #t]
-    [`(let* ([,(? symbol? xs) ,(? R3-exp? es)] ...) ,(? R3-exp? eb)) #t]
-    [`(let ([,(? symbol? x) ,(? R3-exp? e)]) ,(? R3-exp? eb)) #t]
+    [`(let* ([,(? symbol? xs) ,(? R4-exp? es)] ...) ,(? R4-exp? eb)) #t]
+    [`(let ([,(? symbol? x) ,(? R4-exp? e)]) ,(? R4-exp? eb)) #t]
     ;; sequences / loops / vectors / mutation
-    [`(begin ,(? R3-exp?) ... ,(? R3-exp? ret)) #t]
-    [`(while ,(? R3-exp? e-g) ,(? R3-exp? es) ...) #t]
-    [`(make-vector ,(? R3-exp? len)) #t]
-    [`(vector-ref ,(? R3-exp? v) ,(? fixnum? i)) #t]
-    [`(vector-set! ,(? R3-exp? v) ,(? fixnum? i) ,(? R3-exp? e-v)) #t]
-    [`(set! ,(? symbol? x) ,(? R3-exp? e)) #t]
+    [`(begin ,(? R4-exp?) ... ,(? R4-exp? ret)) #t]
+    [`(while ,(? R4-exp? e-g) ,(? R4-exp? es) ...) #t]
+    [`(make-vector ,(? R4-exp? len)) #t]
+    [`(vector-ref ,(? R4-exp? v) ,(? fixnum? i)) #t]
+    [`(vector-set! ,(? R4-exp? v) ,(? fixnum? i) ,(? R4-exp? e-v)) #t]
+    [`(set! ,(? symbol? x) ,(? R4-exp? e)) #t]
+    ;; new forms
+    [`(lambda (,(? symbol? xs) ...) ,(? R4-exp? body)) #t]
+    [`(,(? R4-exp? e-f) ,(? R4-exp? a-args) ...) #t]
     [_ #f]))
 
-(define (R3? p)
+(define (R4-definition? defn)
+  (match defn
+    [`(define (,(? symbol? procedure-name) ,(? symbol? formal-args) ...)
+        ,(? R4-exp? body))
+     #t]
+    [_ #f]))
+
+(define (R4? p)
   (match p
-    [`(program ,(? R3-exp? e)) #t]
+    [`(program (? R4-definition? defns) ... ,(? R4-exp?)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
-;; 2) Shrunk R3 (after shrink)
+;; 2) Shrunk R4 (after shrink)
 ;;     - binary minus removed
 ;;     - and/or/<=/>/>= removed
 ;;     - keeps: integers, booleans, read, unary -, +, not, if, eq?, <, let, vars
 ;;     - also keeps while/make-vector/vector-ref/vector-set!/set!/begin (as let chains)
 ;; ---------------------------------------------------------------------
 
-(define (shrunk-R3-exp? e)
+(define (shrunk-R4-exp? e)
   (match e
     [#t #t]
     [#f #t]
@@ -82,28 +92,28 @@
     ['(read) #t]
     ['(void) #t]
     ;; arithmetic
-    [`(- ,(? shrunk-R3-exp? e)) #t]
-    [`(+ ,(? shrunk-R3-exp? e0) ,(? shrunk-R3-exp? e1)) #t]
+    [`(- ,(? shrunk-R4-exp? e)) #t]
+    [`(+ ,(? shrunk-R4-exp? e0) ,(? shrunk-R4-exp? e1)) #t]
     ;; logic / tests
-    [`(not ,(? shrunk-R3-exp? e1)) #t]
-    [`(,(? shrunk-cmp? c) ,(? shrunk-R3-exp? e0) ,(? shrunk-R3-exp? e1)) #t]
+    [`(not ,(? shrunk-R4-exp? e1)) #t]
+    [`(,(? shrunk-cmp? c) ,(? shrunk-R4-exp? e0) ,(? shrunk-R4-exp? e1)) #t]
     ;; control
-    [`(if ,(? shrunk-R3-exp? e-g) ,(? shrunk-R3-exp? e-t) ,(? shrunk-R3-exp? e-f)) #t]
+    [`(if ,(? shrunk-R4-exp? e-g) ,(? shrunk-R4-exp? e-t) ,(? shrunk-R4-exp? e-f)) #t]
     ;; vars/let
     [(? symbol?) #t]
-    [`(let ([,(? symbol? x) ,(? shrunk-R3-exp? e)]) ,(? shrunk-R3-exp? eb)) #t]
+    [`(let ([,(? symbol? x) ,(? shrunk-R4-exp? e)]) ,(? shrunk-R4-exp? eb)) #t]
     ;; canonicalized forms that shrink passes through
-    [`(let ([_ ,(? shrunk-R3-exp?)]) ,(? shrunk-R3-exp?)) #t]
-    [`(let ([_ (while ,(? shrunk-R3-exp?) ,(? shrunk-R3-exp?))]) ,(? shrunk-R3-exp?)) #t]
-    [`(make-vector ,(? shrunk-R3-exp? len)) #t]
-    [`(vector-ref ,(? shrunk-R3-exp? v) ,(? fixnum? i)) #t]
-    [`(vector-set! ,(? shrunk-R3-exp? v) ,(? fixnum? i) ,(? shrunk-R3-exp? val)) #t]
-    [`(set! ,(? symbol?) ,(? shrunk-R3-exp?)) #t]
+    [`(let ([_ ,(? shrunk-R4-exp?)]) ,(? shrunk-R4-exp?)) #t]
+    [`(let ([_ (while ,(? shrunk-R4-exp?) ,(? shrunk-R4-exp?))]) ,(? shrunk-R4-exp?)) #t]
+    [`(make-vector ,(? shrunk-R4-exp? len)) #t]
+    [`(vector-ref ,(? shrunk-R4-exp? v) ,(? fixnum? i)) #t]
+    [`(vector-set! ,(? shrunk-R4-exp? v) ,(? fixnum? i) ,(? shrunk-R4-exp? val)) #t]
+    [`(set! ,(? symbol?) ,(? shrunk-R4-exp?)) #t]
     [_ #f]))
 
-(define (shrunk-R3? p)
+(define (shrunk-R4? p)
   (match p
-    [`(program ,(? shrunk-R3-exp? e)) #t]
+    [`(program ,(? shrunk-R4-exp? e)) #t]
     [_ #f]))
 
 ;; ---------------------------------------------------------------------
@@ -147,7 +157,7 @@
 (define (unique-source-tree? p)
   (match p
     [`(program () ,e)
-     (and (shrunk-R3-exp? e)
+     (and (shrunk-R4-exp? e)
           (set? (unique-source-tree/walk e (set))))]
     [_ #f]))
 

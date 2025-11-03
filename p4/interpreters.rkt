@@ -1,13 +1,13 @@
 #lang racket
 
-;; Interpreters for each IR in irs.rkt – updated for the new R3 pipeline.
+;; Interpreters for each IR in irs.rkt – updated for the new R4 pipeline.
 (require "irs.rkt")
 (require "system.rkt")
 
 (provide (all-defined-out))
 
 ;; In this case we provide three interpreters:
-;; - R3 -- works for shrink, uniqueify, assignment-convert, and anf-convert
+;; - R4 -- works for shrink, uniqueify, assignment-convert, and anf-convert
 ;; - c2 -- works for explicate-control, uncover-locals
 ;; - instr -- works for select-instructions, assign-homes, patch-instructions, prelude-and-conclusion
 
@@ -47,48 +47,48 @@
     [_ (error who "unsupported binary op ~a" op)]))
 
 ;; ────────────────────────────────────────────────────────────────────────────
-;; R3 / shrunk-R3 / unique-source-tree / ANF (source-level interpreter)
+;; R4 / shrunk-R4 / unique-source-tree / ANF (source-level interpreter)
 ;;   - Supports while, begin, set!, make-vector, vector-ref, vector-set!
 ;; ────────────────────────────────────────────────────────────────────────────
 
 (define r3-binary-ops '(+ - and or eq? < <= > >=))
 
-(define (eval-R3-binary op e0 e1 env in)
+(define (eval-R4-binary op e0 e1 env in)
   (cond
     [(equal? op 'and)
-     (match (eval-R3-exp e0 env in)
+     (match (eval-R4-exp e0 env in)
        [(cons v0 in1)
         (expect-bool v0 'and)
-        (if v0 (eval-R3-exp e1 env in1) (cons #f in1))])]
+        (if v0 (eval-R4-exp e1 env in1) (cons #f in1))])]
     [(equal? op 'or)
-     (match (eval-R3-exp e0 env in)
+     (match (eval-R4-exp e0 env in)
        [(cons v0 in1)
         (expect-bool v0 'or)
-        (if v0 (cons #t in1) (eval-R3-exp e1 env in1))])]
+        (if v0 (cons #t in1) (eval-R4-exp e1 env in1))])]
     [else
-     (match (eval-R3-exp e0 env in)
+     (match (eval-R4-exp e0 env in)
        [(cons v0 in1)
-        (match (eval-R3-exp e1 env in1)
-          [(cons v1 in2) (cons (apply-binary op v0 v1 'R3) in2)])])]))
+        (match (eval-R4-exp e1 env in1)
+          [(cons v1 in2) (cons (apply-binary op v0 v1 'R4) in2)])])]))
 
-(define (eval-R3-begin es env in)
+(define (eval-R4-begin es env in)
   (match es
     ['() (cons 0 in)]
-    [`(,e) (eval-R3-exp e env in)]
+    [`(,e) (eval-R4-exp e env in)]
     [`(,e . ,rest)
-     (match (eval-R3-exp e env in)
-       [(cons _ in1) (eval-R3-begin rest env in1)])]))
+     (match (eval-R4-exp e env in)
+       [(cons _ in1) (eval-R4-begin rest env in1)])]))
 
-(define (eval-R3-while g b env in)
+(define (eval-R4-while g b env in)
   (let loop ([env env] [in in])
-    (match (eval-R3-exp g env in)
+    (match (eval-R4-exp g env in)
       [(cons vg in1)
        (if (expect-bool vg 'while)
-           (match (eval-R3-exp b env in1)
+           (match (eval-R4-exp b env in1)
              [(cons _ in2) (loop env in2)])
            (cons 0 in1))])))
 
-(define (eval-R3-exp e env in)
+(define (eval-R4-exp e env in)
   (match e
     [#t                              (cons #t in)]
     [#f                              (cons #f in)]
@@ -97,62 +97,62 @@
     ['(void)                         (cons (void) in)]
     ;; unary
     [`(- ,e0)
-     (match (eval-R3-exp e0 env in)
+     (match (eval-R4-exp e0 env in)
        [(cons v in*) (cons (- (expect-int v 'unary-)) in*)])]
     [`(not ,e0)
-     (match (eval-R3-exp e0 env in)
+     (match (eval-R4-exp e0 env in)
        [(cons v in*) (cons (not (expect-bool v 'not)) in*)])]
     ;; binary
     [`(,op ,e0 ,e1) #:when (member op r3-binary-ops)
-                    (eval-R3-binary op e0 e1 env in)]
+                    (eval-R4-binary op e0 e1 env in)]
     ;; control
     [`(if ,e-g ,e-t ,e-f)
-     (match (eval-R3-exp e-g env in)
+     (match (eval-R4-exp e-g env in)
        [(cons vg in1)
         (if (expect-bool vg 'if)
-            (eval-R3-exp e-t env in1)
-            (eval-R3-exp e-f env in1))])]
+            (eval-R4-exp e-t env in1)
+            (eval-R4-exp e-f env in1))])]
     ;; sequencing and loops
-    [`(begin ,es ... ,ret)          (eval-R3-begin (append es (list ret)) env in)]
-    [`(while ,g ,b)                 (eval-R3-while g b env in)]
+    [`(begin ,es ... ,ret)          (eval-R4-begin (append es (list ret)) env in)]
+    [`(while ,g ,b)                 (eval-R4-while g b env in)]
     ;; vectors
     [`(make-vector ,e-len)
-     (match (eval-R3-exp e-len env in)
+     (match (eval-R4-exp e-len env in)
        [(cons len in1) (cons (make-vector len) in1)])]
     [`(vector-ref ,e-v ,e-i)
-     (match (eval-R3-exp e-v env in)
+     (match (eval-R4-exp e-v env in)
        [(cons vv in1)
-        (match (eval-R3-exp e-i env in1)
+        (match (eval-R4-exp e-i env in1)
           [(cons vi in2) (cons (vector-ref vv vi) in2)])])]
     [`(vector-set! ,e-v ,e-i ,e-val)
-     (match (eval-R3-exp e-v env in)
+     (match (eval-R4-exp e-v env in)
        [(cons vv in1)
-        (match (eval-R3-exp e-i env in1)
+        (match (eval-R4-exp e-i env in1)
           [(cons vi in2)
-           (match (eval-R3-exp e-val env in2)
+           (match (eval-R4-exp e-val env in2)
              [(cons v3 in3) (vector-set! vv vi v3) (cons 0 in3)])])])]
     ;; variables / let / set!
     [(? symbol? x)
      (cons (vector-ref (hash-ref env x (λ () (error 'interpret "unbound id ~a" x))) 0)  in)]
     [`(let ([,(? symbol? x) ,rhs]) ,body)
      (define cell (make-vector 1))
-     (match (eval-R3-exp rhs env in)
+     (match (eval-R4-exp rhs env in)
        [(cons v in*)
         (vector-set! cell 0 v)
-        (eval-R3-exp body (hash-set env x cell) in*)])]
+        (eval-R4-exp body (hash-set env x cell) in*)])]
     [`(set! ,(? symbol? x) ,rhs)
-     (match (eval-R3-exp rhs env in)
+     (match (eval-R4-exp rhs env in)
        [(cons v in*)
         (vector-set! (hash-ref env x) 0 v)
         '(void)])]
-    [_ (error 'interpret "malformed R3 expression: ~a" e)]))
+    [_ (error 'interpret "malformed R4 expression: ~a" e)]))
 
-(define (interpret-R3 p [in '()])
+(define (interpret-R4 p [in '()])
   (define e (match p
               [`(program ,e)      e]
               [`(program () ,e)   e]
-              [_ (error 'interpret-R3 "bad program ~a" p)]))
-  (define res (eval-R3-exp e (hash) in))
+              [_ (error 'interpret-R4 "bad program ~a" p)]))
+  (define res (eval-R4-exp e (hash) in))
   (display-return (car res)))
 
 ;; ────────────────────────────────────────────────────────────────────────────
@@ -366,10 +366,10 @@
 ;; ────────────────────────────────────────────────────────────────────────────
 
 (define (interpret p [in (range 100)])
-  (cond [(R3? p)                                 (interpret-R3 p in)]
-        [(shrunk-R3? p)                          (interpret-R3 p in)]
-        [(unique-source-tree? p)                 (interpret-R3 p in)]
-        [(anf-program? p)                        (interpret-R3 p in)]
+  (cond [(R4? p)                                 (interpret-R4 p in)]
+        [(shrunk-R4? p)                          (interpret-R4 p in)]
+        [(unique-source-tree? p)                 (interpret-R4 p in)]
+        [(anf-program? p)                        (interpret-R4 p in)]
         [(c2-program? p)                         (interpret-c2 p in)]
         [(locals-program? p)                     (interpret-c2 p in)]
         [(instr-program? p)                      (interpret-instr p in)]
