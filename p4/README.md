@@ -1,19 +1,9 @@
-# Project 4: R3 / set! & while -> x86-64
+# Project 5: Functions, Lambdas, and Closures
 
-This project is inspired by *Essentials of Compilation* (EoC), but in
-this project I take a departure from the book's content in several
-important ways. The language in this project, R3, is an
-imperative-style language with loops, but at the core the important
-thing happening is dynamic memory allocation on the heap. In the EoC
-book, this is covered alongside garbage collection--in my class (at
-least this iteration) I prefer to skip implementing garbage
-collection: you need to know C well (to do it correctly), and the
-algorithms are both tricky to describe and challenging to implement
-and debug in class where we have not covered C programming. Thus, I
-opt for a simpler route: just use malloc, and (optionally) get garbage
-collection by using (e.g.,) the Boehm garbage collector; I will
-describe an arena allocator as a stretch goal, which you should pursue
-if you are a PhD student or interested to learn more.
+This is the final language that everyone in the class will
+implement. We'll implement a language, R4, which includes functions
+`(define (f ...) ...)` and `(lambda () ...)`, and application of
+user-defined functions `(f ...)`.
 
 ## Input Language (R3)
 
