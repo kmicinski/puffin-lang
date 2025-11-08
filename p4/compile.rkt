@@ -340,6 +340,8 @@
        (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
       [`(let ([,x (void)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (void)))]
+      [`(let ([,x (app ,a-f ,a-args ...)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ( ,a-f ,a-args ...)))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
@@ -373,12 +375,16 @@
                       (goto ,l-f)
                       ;; take the true branch...
                       (goto ,l-t)))]
-
       [(? atom? a)
        (hash current-block (k a))]))
+
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(expr->blocks e-body fname (lambda (a) `(return ,a))))]))
   (match p
-    [`(program ,info ,anf)
-     `(program ,info ,(expr->blocks anf (entry-symbol) (lambda (a) `(return ,a))))]))
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
 
 (define (anf-convert p)
   (define (convert-expr e k)
@@ -417,8 +423,6 @@
         e0
         (λ (a-g)
           `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
-
-      ;; new forms
       [`(let ([_ (vector-set! ,e0 ,idx ,e1)]) ,e-b)
        (convert-expr e0 (lambda (a-vec)
                           (convert-expr e1 (lambda (a-val)
@@ -426,7 +430,6 @@
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
-      
       [`(make-vector ,e)
        (convert-expr e (lambda (atom)
                          (define vec-a (gensym 'vec))
@@ -443,16 +446,34 @@
                      (lambda (a0)
                        (convert-expr e1 (lambda (a1)
                                           `(let ([_ (vector-set! ,a0 ,i ,a1)]) ,(k '(void)))))))]
+      ;; new forms
+      [`(app ,e0 ,e-rest ...)
+       (define (handle-rest e-rest as)
+         (match e-rest
+           ['()
+            (let ([x (gensym 'x)])
+              `(let ([,x (app ,@(reverse as))]) ,(k x)))]
+           [`(,hd . ,rest)
+            (convert-expr
+             hd
+             (lambda (a) (handle-rest rest (cons a as))))]))
+       (convert-expr 
+        e0
+        (lambda (a0) (handle-rest e-rest `(,a0))))]
+      [`(fun-ref ,f) (k e)]
       ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(convert-expr e-body (lambda (x) x)))]))
   (match p
-    [`(program ,info ,e)
-     `(program ,info ,(convert-expr e (lambda (x) x)))]))
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
 
-;;(define (reveal-functions p))
-
+;; Updated only superficially
 (define (assignment-convert p)
   (define (a-c e)
     (match e
@@ -472,7 +493,6 @@
       ;; vars/let
       [(? symbol? x)
        `(vector-ref ,x 0)]
-      ;; new forms
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(a-c e-g) ,(a-c e-b))]) ,(a-c e-r))]
       [`(let ([_ ,e]) ,e-b)
@@ -484,32 +504,114 @@
       [`(vector-set! ,e ,i ,e-v)
        `(vector-set! ,(a-c e) ,i ,(a-c e-v))]
       [`(make-vector ,i) e]
+      ;; new forms
+      [`(fun-ref ,g) e]
+      [`(app ,es ...) `(app ,@(map a-c es))]
       ;; put original let last to avoid matching _
       [`(let ([,x ,e]) ,e-b)
        `(let ([,x (make-vector 1)])
           (let ([_ (vector-set! ,x 0 ,(a-c e))])
-            ,(a-c e-b)))] ))
+            ,(a-c e-b)))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(a-c e-body))]))
   (match p
-    [`(program () ,exp)
-     `(program () ,(a-c exp))]))
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; NEW: pass -- limit-functions
+;;
+;; This pass rewrites functions of >6 arguments to pass the rest via a
+;; vector, rather than the stack (as in x86-64 typically).
+;;
+;; At this point, we only have toplevel defines--all closures have
+;; been eliminted (turned into vector operations) via closure
+;; conversion / lambda lifting. Now, we face a bit of a tricky issue:
+;; in x86-64, we can pass the first six arguments in registers, but
+;; the rest have to go on the stack. Passing things on the stack can
+;; complicate some other implementation details (e.g., efficient tail
+;; calls via indirect jump), and so this pass indirects the rest
+;; through a vector.
+(define (limit-functions p)
+  (define (walk-expr e)
+    (match e
+      [(? fixnum? n) e]
+      [(? boolean? b) e]
+      [`(void) e]
+      [`(read) e]
+      [`(fun-ref ,f) e]
+      [`(- ,e+) `(- ,(walk-expr e))]
+      [`(+ ,e0 ,e1) `(+ ,(walk-expr e0) ,(walk-expr e1))]
+      [(? symbol? x) x] ;; variable reference
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk-expr e0)
+                              ,(walk-expr e1)
+                              ,(walk-expr e2))]
+      [`(,(? cmp? c) ,e0 ,e1) `(,c ,(walk-expr e0) ,(walk-expr e1))]
+      [`(and ,e0 ,e1) `(and ,(walk-expr e0) ,(walk-expr e1))]
+      [`(or ,e0 ,e1)  `(or ,(walk-expr e0) ,(walk-expr e1))]
+      [`(not ,e) `(not ,(walk-expr e))]
+      [`(if ,e0 ,e1 ,e2)
+       `(if ,(walk-expr e0) ,(walk-expr e1) ,(walk-expr e2))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk-expr e-g) ,(walk-expr e-b))]) ,(walk-expr e-r))]
+      [`(let ([,x ,e]) ,e-b)
+       `(let ([,x ,(walk-expr e)]) ,(walk-expr e-b))]
+      [`(make-vector ,i) e]
+      [`(vector-ref ,e ,i) `(vector-ref ,(walk-expr e) ,i)]
+      [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(walk-expr e) ,i ,(walk-expr e-v))]
+      [`(set! ,x ,e) `(set! ,x ,(walk-expr e))]
+      ;; > six arguments
+      [`(app ,e-f ,ea0 ,ea1 ,ea2 ,ea3 ,ea4 ,ea5 ,ea-rest ...)
+       (define rest-es (cons ea5 ea-rest))
+       (define v (gensym 'vec))
+       (define (rest-stack es i)
+         (match es
+           ['()
+            `(app ,e-f ,ea0 ,ea1 ,ea2 ,ea3 ,ea4 ,v)]
+           [`(,hd . ,rest)
+            `(let ([_ (vector-set! ,v ,i ,hd)])
+               ,(rest-stack rest (+ i 1)))]))
+       (rest-stack rest-es 0)]
+      ;; <= six arguments
+      [`(app ,e-f ,e-args ...)
+       `(app ,e-f ,@(map walk-expr e-args))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,a0 ,a1 ,a2 ,a3 ,a4 ,a5 ,a-rest ...) ,e-body)
+       (define args-vec (gensym 'rest-args))
+       (define (args-vec-stack formals i)
+         (match formals
+           ['() (walk-expr e-body)]
+           [`(,hd . ,tl)
+            `(let ([,hd (vector-ref ,args-vec ,i)])
+               ,(args-vec-stack tl (add1 i)))]))
+       `(define (,fname ,a0 ,a2 ,a2 ,a3 ,a4 ,args-vec)
+          ,(args-vec-stack (cons a5 a-rest) 0))]
+      [`(define (,fname ,formals ...) ,e-body)
+       ;; add `env` but only to non-main symbols
+       (define maybe-env (if (equal? fname (entry-symbol)) '() '(env)))
+       `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
+  (match p
+    [`(program ,info ,definitions ...)
+     `(program ,info ,@(map per-defn definitions))]))
 
 ;; NEW: pass -- lift-lambdas
-;; 
+;;
 ;; Perform closure conversion on the program. Lift every lambda to a
 ;; top-level function. Basic approach: walk over each definition in
 ;; the program, accumulate a list of expressions associated with
 ;; each. A function, `walk-body`, will demand the lifting of body
 ;; expressions, which happens recursively.
-
+;;
 ;; I recommend doing bottom-up closure conversion, which involves
 ;; writing a recursive function which traverses expressions. The
 ;; function returns `(,converted-expr ,lifted-defns), i.e., a
 ;; two-element list consisting of the lifted expression and also a set
-;; of definitions which resulted from the lifting of lambdas. 
+;; of definitions which resulted from the lifting of lambdas.
 (define (lift-lambdas p)
   (define emitted-defines (set))
   (define (emit-define! defn) (set! emitted-defines (set-add emitted-defines defn)))
-
   ;; calculate the free variables of an expression e...
   (define (free-vars e)
     (match e
@@ -535,8 +637,7 @@
       [`(vector-set! ,e ,i ,e-v) (set-union (free-vars e) (free-vars e-v))]
       [`(set! ,x ,e) (free-vars e)]
       [`(lambda (,xs ...) ,e) (foldl (lambda (x acc) (set-remove acc x)) (free-vars e) xs)]
-      [`(app ,e-f ,e-args ...) (foldl (lambda (s acc) (set-union s acc)) (free-vars e-f) (map free-vars e-args))]))  
-
+      [`(app ,e-f ,e-args ...) (foldl (lambda (s acc) (set-union s acc)) (free-vars e-f) (map free-vars e-args))]))
   (define (walk-expr e)
     (match e
       [(? fixnum? n) e]
@@ -579,7 +680,7 @@
            ['()
             converted-expr]))
        (define newly-created-define
-         `(define (,f-name ,@xs env)
+         `(define (,f-name env ,@xs)
             ,(letstack canonical-vars 1)))
        (emit-define! newly-created-define)
        ;; now, return an expression that creates the closure...
@@ -589,7 +690,7 @@
            [`(,hd . ,tl )
             `(let ([_ (vector-set! ,v ,i ,hd)])
                ,(init-stack tl (+ i 1)))]
-           ['() ;; ultimate return point, return v 
+           ['() ;; ultimate return point, return v
             v]))
        `(let ([,v (make-vector ,(+ (length canonical-vars) 1))])
           (let ([_ (vector-set! ,v 0 ,f-name)]) ;; function name
@@ -599,20 +700,20 @@
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
        ;; add `env` but only to non-main symbols
-       (define also (if (equal? fname (entry-symbol)) '() '(env)))
-       `(define (,fname ,@formals ,@also) ,(walk-expr e-body))]))
+       (define maybe-env (if (equal? fname (entry-symbol)) '() '(env)))
+       `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
   (match p
     [`(program ,info ,definitions ...)
      `(program ,info ,@(map per-defn definitions) ,@(set->list emitted-defines))]))
 
 
 ;; NEW: pass -- reveal-functions
-;; 
+;;
 ;; Analyze the syntax of p, and collect up a set of available
 ;; top-level functions. Then, we walk over each body expression, and
 ;; mark those usages as fnames. Also, ensure that application of
 ;; user-defined functions is made explicit via `app`.
-;; 
+;;
 ;; (define (f x) (+ x (g 1))) (define (g y) y) (f 23)
 ;; => (define (f x) (+ x (app (fun-ref g) 1)))
 ;;    (define (g y) y)
@@ -657,9 +758,9 @@
      `(program
        ()
        ,@(map (lambda (name params body) `(define (,name ,@params) ,(walk body name-set)))
-             names
-             params
-             bodies))]))
+              names
+              params
+              bodies))]))
 
 (define (uniqueify p)
   (define (rename e assignment)
@@ -753,31 +854,47 @@
        `(let ([,x ,(h e0)]) ,(h e-b))]
       [`(let* ([,x ,e0] ,rest ...) ,e-b)
        `(let ([,x ,(h e0)]) ,(h `(let* (,@rest) ,e-b)))]
-      ;; new 
+      ;; new
       [`(lambda (,xs ...) ,e-b)
        `(lambda ,xs ,(h e-b))]
       [`(,e-f ,e-args ...)
        `(,(h e-f) ,@(map h e-args))]))
   (define (per-defn defn)
     (match defn
-      [`(define (,f ,xs ...) ,e-b) 
+      [`(define (,f ,xs ...) ,e-b)
        `(define (,f ,@xs) ,(h e-b))]))
   (match p
     [`(program ,defns ... ,expr)
      `(program ,@(cons `(define (main) ,(h expr)) (map per-defn defns)))]))
 
 
-(define ex0 
+(define ex0
   '(program
-      (define (f x)
-        (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
-      (f (read))))    
+    (define (f x)
+      (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
+    (f (read))))
 
+(pretty-print
+ (explicate-control
+  (anf-convert
+   (assignment-convert
+    (limit-functions
+     (lift-lambdas
+      (reveal-functions
+       (uniqueify
+        (shrink
+         '(program (define (f x) (lambda (y) (+ x y)))
+                   (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                   (g (read))))))))))))
 
-(pretty-print (lift-lambdas 
- (reveal-functions
-  (uniqueify
-   (shrink
-    '(program (define (f x) (lambda (y) (+ x y)))
-              (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-              (g (read))))))))  
+#;
+(pretty-print
+ (limit-functions
+  (lift-lambdas
+   (reveal-functions
+    (uniqueify
+     (shrink
+      '(program (define (f x) (lambda (y) (+ x y)))
+                (define (h a b c d e f g h0 i j k l m n o p) (+ a (+ g (+ o p))))
+                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                (h 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))))))))

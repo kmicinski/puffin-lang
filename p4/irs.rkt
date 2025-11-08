@@ -167,7 +167,6 @@
 ;;     - Replaces variable references with vector-ref (no bare bindings)
 ;;     - Replaces set! by vector-set! 
 ;; ---------------------------------------------------------------------
-
 (define (assignment-converted-exp? e)
   (match e
     [#t #t]
@@ -244,10 +243,10 @@
     [_                             #f]))
 
 ;; ---------------------------------------------------------------------
-;; 5) C2 / explicated control (after explicate-control)
+;; 5) C3 / explicated control (after explicate-control)
 ;;     - Blocks of tails, with seq/assign of simple rhs
 ;;     - `vector-ref` and `vector` can appear on the RHS of an assignment 
-;;     - 
+;;     - `app` can appear on the RHS of an assignment
 ;; ---------------------------------------------------------------------
 
 (define (c2-cmp? cmp) (member cmp '(eq? <)))
@@ -261,6 +260,7 @@
     [`(void)                           #t]
     [`(- ,a)                           (atom? a)]
     [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
+    [`()]
     [`(not ,a)                         (atom? a)]
     [`(make-vector ,i)                 (fixnum? i)] ; vector *constructor* at this stage
     [`(vector-ref ,a0 ,i)              (and (atom? a0) (fixnum? i))]
