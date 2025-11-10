@@ -296,6 +296,10 @@
        (set-add (h rest) x)]
       [`(seq (assign ,x0 ,_) ,rest)
        (set-add (h rest) x0)]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(h e-body))]))
   (match p
     [`(program () ,blocks)
      (define locals (foldl (λ (block acc) (set-union acc (h (hash-ref blocks block))))
@@ -340,8 +344,10 @@
        (extend (expr->blocks e+ current-block k) current-block `(vector-set! ,x ,i ,v))]
       [`(let ([,x (void)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (void)))]
+      [`(let ([,x (fun-ref ,f)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (fun-ref ,f)))]
       [`(let ([,x (app ,a-f ,a-args ...)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ( ,a-f ,a-args ...)))]
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (app ,a-f ,@a-args)))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
@@ -377,7 +383,6 @@
                       (goto ,l-t)))]
       [(? atom? a)
        (hash current-block (k a))]))
-
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
@@ -875,17 +880,18 @@
     (f (read))))
 
 (pretty-print
- (explicate-control
-  (anf-convert
-   (assignment-convert
-    (limit-functions
-     (lift-lambdas
-      (reveal-functions
-       (uniqueify
-        (shrink
-         '(program (define (f x) (lambda (y) (+ x y)))
-                   (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                   (g (read))))))))))))
+ (uncover-locals
+  (explicate-control
+   (anf-convert
+    (assignment-convert
+     (limit-functions
+      (lift-lambdas
+       (reveal-functions
+        (uniqueify
+         (shrink
+          '(program (define (f x) (lambda (y) (+ x y)))
+                    (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                    (g (read)))))))))))))
 
 #;
 (pretty-print

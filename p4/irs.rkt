@@ -260,7 +260,9 @@
     [`(void)                           #t]
     [`(- ,a)                           (atom? a)]
     [`(+ ,a0 ,a1)                      (and (atom? a0) (atom? a1))]
-    [`()]
+    ;; new forms
+    [`(app ,a-f ,args ...)             (andmap atom? (cons a-f args))] 
+    [`(fun-ref ,f)                     (symbol? f)]
     [`(not ,a)                         (atom? a)]
     [`(make-vector ,i)                 (fixnum? i)] ; vector *constructor* at this stage
     [`(vector-ref ,a0 ,i)              (and (atom? a0) (fixnum? i))]
