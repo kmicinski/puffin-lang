@@ -156,41 +156,49 @@
 
 ;; Take variables into either the stack/registers
 (define (assign-homes p)
-  (match-define `(program ,info ,blocks) p)
-  (define var->stackloc
-    (let ([l (set->list info)])
-      (foldl (lambda (v i h) (hash-set h v (* -8 i))) (hash) l (range 1 (add1 (length l))))))
-  ;; map (var x) to its home (an offset of rbp)
-  (define (home a)
-    (match a
-      [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
-      [_ a]))
   ;; traverse each instruction in the block to replace (var x) with
   ;; the appropriate stack position. Note: this will leave some
   ;; instructions
-  (define (h block)
-    (match block
-      ['() '()]
-      [`((cmpq ,a0 ,a1) ,rest ...)
-       `((cmpq ,(home a0) ,(home a1)) ,@(h rest))]
-      [`((movzbq ,a0 ,a1) ,rest ...)
-       `((movzbq ,(home a0) ,(home a1)) ,@(h rest))]
-      [`((movq ,a0 ,a1) ,rest ...)
-       `((movq ,(home a0) ,(home a1)) ,@(h rest))]
-      [`((addq ,a0 ,a1) ,rest ...)
-       `((addq ,(home a0) ,(home a1)) ,@(h rest))]
-      [`((negq ,a) ,rest ...)
-       `((negq ,(home a)) ,@(h rest))]
-      [`(,instr0 ,rest ...)
-       `(,instr0 ,@(h rest))]))
-  (define blocks+ (foldl (λ (blk acc)
+
+  (define (per-defn definition)
+    (match-define `(define ,locals (,f ,args ...) ,blocks) definition)
+    (print definition)
+    (define var->stackloc
+      (let ([l (set->list locals)])
+        (foldl (lambda (v i h) (hash-set h v (* -8 i))) (hash) l (range 1 (add1 (length l))))))
+    ;; map (var x) to its home (an offset of rbp)
+    (define (home a)
+      (match a
+        [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
+        [_ a]))    
+    (define (h block)
+      (match block
+        ['() '()]
+        [`((cmpq ,a0 ,a1) ,rest ...)
+         `((cmpq ,(home a0) ,(home a1)) ,@(h rest))]
+        [`((movzbq ,a0 ,a1) ,rest ...)
+         `((movzbq ,(home a0) ,(home a1)) ,@(h rest))]
+        [`((movq ,a0 ,a1) ,rest ...)
+         `((movq ,(home a0) ,(home a1)) ,@(h rest))]
+        [`((addq ,a0 ,a1) ,rest ...)
+         `((addq ,(home a0) ,(home a1)) ,@(h rest))]
+        [`((negq ,a) ,rest ...)
+         `((negq ,(home a)) ,@(h rest))]
+        [`(,instr0 ,rest ...)
+         `(,instr0 ,@(h rest))]))
+    (define blocks+ (foldl (λ (blk acc)
                            (hash-set acc blk (h (hash-ref blocks blk)))) blocks (hash-keys blocks)))
-  `(program ,var->stackloc ,blocks+))
+    `(define ,locals (,f ,@args) ,blocks+))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
 
 
 ;; The output of this pass is almost x86, but there will still be an
 ;; issue: we won't be using *registers*, we'll keep using variables
 ;; for now.
+;; 
+;; NEW: need to handle fun-ref as an atom
 (define (select-instructions p)
   ;; Translate ANF-ified C0 to a block of instructions
   (define (c1->block c1)
@@ -199,7 +207,9 @@
         ['(void)       `(imm ,(void-magic-value))]
         [(? fixnum? n) `(imm ,n)]
         [(? symbol? x) `(var ,x)]
-        [(? boolean? b) `(imm ,(if b 1 0))]))
+        [(? boolean? b) `(imm ,(if b 1 0))]
+        ;; new
+        [`(fun-ref ,f) `(fun-ref ,f)]))
     (define (h seq)
       (match seq
         ;; returns--we leave out the final (ret), we will take care of
@@ -254,7 +264,6 @@
            (addq ,(h-atom a1) (reg rax))
            (movq (reg rax) (var ,x))
            ,@(h rest))]
-        ;; new
         [`(seq (assign ,x (void)) ,rest)
          `((movq (imm 0) (var ,x))
            ,@(h rest))]
@@ -273,17 +282,38 @@
            ,@(h rest))]
         ['(void) '()]
         [`(goto ,l)
-         `((goto ,l))]))
+         `((goto ,l))]
+        ;; new
 
+        ;; non-tail application form:
+        ;; - move each argument into a register in the order %rdi, %rsi, %rdx, %rcx, %r8, %r9
+        ;; - Generate an `(indirect-callq ,fun) instruction (we will render this later)
+        ;; - movq the result (left in rax) into the lhs
+        [`(seq (assign ,lhs (app ,a-f ,args ...)) ,next)
+         (define (copy-arguments remaining-args remaining-registers)
+           (match remaining-args
+             ['() `()]
+             [`(,a0 . ,rst)
+              `((movq ,a0 ,(first remaining-registers)) ,@(copy-arguments rst (rest remaining-registers)))]))
+         `(,@(copy-arguments args (argument-registers-list))
+           (indirect-callq ,a-f)
+           (movq (reg rax) ,lhs)
+           ,@(h next))]))
     (h c1))
+
+  (define (per-defn defn)
+    (match-define `(define ,locals (,f ,args ...) ,blocks) defn)
+    (define blocks+ (hash-set
+                     (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref blocks block)))) (hash) (hash-keys blocks))
+                     (conclusion-block-name)
+                     '()))
+    `(define ,locals (,f ,@args) ,blocks+))
+
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
-    [`(program ,info ,h)
-     (define blocks (hash-set
-                     (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref h block)))) h (hash-keys h))
-                     (conclusion-block-name)
-                     '())) ;; also add an empty conclusion block
-     `(program ,info ,blocks)]))
+    [`(program ,info ,defns ...)
+      ;; also add an empty conclusion block
+     `(program ,info ,@(map per-defn defns))]))
 
 (define (uncover-locals p)
   (define (h seq)
@@ -298,14 +328,14 @@
        (set-add (h rest) x0)]))
   (define (per-defn definition)
     (match definition
-      [`(define (,fname ,formals ...) ,e-body)
-       `(define (,fname ,@formals) ,(h e-body))]))
-  (match p
-    [`(program () ,blocks)
-     (define locals (foldl (λ (block acc) (set-union acc (h (hash-ref blocks block))))
+      [`(define (,fname ,formals ...) ,blocks)
+       (define locals (foldl (λ (block acc) (set-union acc (h (hash-ref blocks block))))
                            (set)
                            (hash-keys blocks)))
-     `(program ,locals ,blocks)]))
+       `(define ,locals (,fname ,@formals) ,blocks)]))
+  (match p
+    [`(program ,info ,definitions ...)
+     `(program ,info ,@(map per-defn definitions))]))
 
 ;; Convert p (in ANF) to  C-style IR consisting consisting of labeled blocks
 (define (explicate-control p)
@@ -478,7 +508,7 @@
     [`(program ,info ,defns ...)
      `(program ,info ,@(map per-defn defns))]))
 
-;; Updated only superficially
+;; New: map over all the definitions
 (define (assignment-convert p)
   (define (a-c e)
     (match e
@@ -591,12 +621,10 @@
            [`(,hd . ,tl)
             `(let ([,hd (vector-ref ,args-vec ,i)])
                ,(args-vec-stack tl (add1 i)))]))
-       `(define (,fname ,a0 ,a2 ,a2 ,a3 ,a4 ,args-vec)
-          ,(args-vec-stack (cons a5 a-rest) 0))]
+       `(define (,fname ,a0 ,a1 ,a2 ,a3 ,a4 ,args-vec)
+          ,(args-vec-stack (cons a5 a-rest) 1))]
       [`(define (,fname ,formals ...) ,e-body)
-       ;; add `env` but only to non-main symbols
-       (define maybe-env (if (equal? fname (entry-symbol)) '() '(env)))
-       `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
+       `(define (,fname ,@formals) ,(walk-expr e-body))]))
   (match p
     [`(program ,info ,definitions ...)
      `(program ,info ,@(map per-defn definitions))]))
@@ -698,9 +726,12 @@
            ['() ;; ultimate return point, return v
             v]))
        `(let ([,v (make-vector ,(+ (length canonical-vars) 1))])
-          (let ([_ (vector-set! ,v 0 ,f-name)]) ;; function name
+          (let ([_ (vector-set! ,v 0 (fun-ref ,f-name))]) ;; function name
             ,(init-stack canonical-vars 1)))]
-      [`(app ,e-f ,e-args ...) `(app ,(walk-expr e-f) ,@(map (lambda (e) (walk-expr e))  e-args))]))
+      [`(app ,e-f ,e-args ...) 
+       (define clo (gensym 'clo))
+       `(let ([,clo ,(walk-expr e-f)])
+          (app (vector-ref ,clo 0) (vector-ref ,clo 1) ,@(map (lambda (e) (walk-expr e))  e-args)))]))
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
@@ -879,28 +910,22 @@
       (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
     (f (read))))
 
-(pretty-print
- (uncover-locals
-  (explicate-control
-   (anf-convert
-    (assignment-convert
-     (limit-functions
-      (lift-lambdas
-       (reveal-functions
-        (uniqueify
-         (shrink
-          '(program (define (f x) (lambda (y) (+ x y)))
-                    (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                    (g (read)))))))))))))
 
-#;
 (pretty-print
- (limit-functions
-  (lift-lambdas
-   (reveal-functions
-    (uniqueify
-     (shrink
-      '(program (define (f x) (lambda (y) (+ x y)))
-                (define (h a b c d e f g h0 i j k l m n o p) (+ a (+ g (+ o p))))
-                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                (h 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16))))))))
+ (assign-homes
+  (select-instructions
+   (uncover-locals
+    (explicate-control
+     (anf-convert
+      (assignment-convert
+       (limit-functions
+        (lift-lambdas
+         (reveal-functions
+          (uniqueify
+           (shrink
+            '(program (define (f x) (lambda (y) (+ x y)))
+                      (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                      (g (read)))))))))))))))
+
+
+

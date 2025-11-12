@@ -82,3 +82,6 @@
   (cons v (string-append (get-output-string out) (if (equal? (get-output-string err) "")
                                                      ""
                                                      (format " stderr: ~a" (get-output-string err))))))
+
+(define (argument-registers-list)
+  '(rdi rsi rdx rcx r8 r9))
