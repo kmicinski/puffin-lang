@@ -88,39 +88,71 @@
              ""
              (hash-keys blocks)))]))
 
-;; adds the prelude and conclusion to each of the functions in the program
+;; NEW: walks over each definition
+;; 
+;; - For (entry-symbol), it does the same thing as before--prints the
+;; result of evaluating the expression.
+;; 
+
 (define (prelude-and-conclusion p)
-  ;; ensure the stack is aligned
+  (pretty-print p)
   (define (align16 n)
     (bitwise-and (+ n 15) (bitwise-not 15)))
-  ; clear the low four bits
+
+  ;; walk over all blocks in a hash and replace '(jmp conclusion) to
+  ;; `(jmp ,name)
+  (define (rename-conclusion blocks name)
+    (define (h instr)
+      (match instr
+        [`(jmp ,blk) #:when (equal? blk (conclusion-block-name))
+         `(jmp ,name)]
+        [i i]))
+    (foldl (lambda (k acc) (hash-set acc k (map h (hash-ref blocks k))))
+           (hash)
+           (hash-keys blocks)))
+  
+  (define (per-defn p)
+    (pretty-print p)
+    (match p
+      [`(define ,locals (,f ,args ...) ,blocks)
+       ;; negative number, added to %rsp
+       (define space-needed (if (empty? (hash-values locals))
+                                0
+                                (- (align16 (- (apply min (hash-values locals)))))))
+       (define start-block (hash-ref blocks f))
+       (define new-start-block
+         `((pushq (reg rbp))
+           (movq (reg rsp) (reg rbp))
+           (addq (imm ,space-needed) (reg rsp))
+           ,@start-block))
+       (define conclusion-block
+         (if (equal? f (entry-symbol))
+             `(;; move result into %rdi and print_int64 it
+               (movq (reg rax) (reg rdi))
+               (callq print_int64 0)
+               ;; 0 return value (to the terminal/system) into %rax
+               (movq (imm 0) (reg rax))
+               ;; reinstate stored %rbp
+               (movq (reg rbp) (reg rsp))
+               (popq (reg rbp))
+               ;; transfer back to caller
+               (retq))
+             ;; else, just retq
+             `((retq))))
+       (define my-conclusion-block (gensym 'conclusion))
+       (define blocks+ 
+         (hash-set (hash-remove (hash-set blocks f new-start-block)
+                                (conclusion-block-name))
+                   my-conclusion-block
+                   conclusion-block))
+       ;; change the block name from (conclusion-block-name) to a
+       ;; per-definition conclusion. Make sure you use hash-remove to
+       ;; clear the previous key from the hash so that it is not
+       ;; printed!
+       `(define ,locals (,f ,@args) ,blocks+)]))
   (match p
-    [`(program ,locals ,blocks)
-     ;; negative number, added to %rsp
-     (define space-needed (if (empty? (hash-values locals))
-                              0
-                              (- (align16 (- (apply min (hash-values locals)))))))
-     (define start-block (hash-ref blocks (entry-symbol)))
-     (define new-start-block
-       `((pushq (reg rbp))
-         (movq (reg rsp) (reg rbp))
-         (addq (imm ,space-needed) (reg rsp))
-         ,@start-block))
-     (define conclusion-block
-       `(;; move result into %rdi and print_int64 it
-         (movq (reg rax) (reg rdi))
-         (callq print_int64 0)
-         ;; 0 return value (to the terminal/system) into %rax
-         (movq (imm 0) (reg rax))
-         ;; reinstate stored %rbp
-         (movq (reg rbp) (reg rsp))
-         (popq (reg rbp))
-         ;; transfer back to caller
-         (retq)))
-     ;; to build a new block, insert the prelude / conclusion
-     `(program ,locals ,(hash-set (hash-set blocks (entry-symbol) new-start-block)
-                                  (conclusion-block-name)
-                                  conclusion-block))]))
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
 
 ;; walks over instructions and replaces invalid movqs, where both
 ;; operands are indirects (offsets of %rax). In x86_64, we *cannot*
@@ -149,17 +181,22 @@
          ,@(patch-tail rest))]
       [`(,instr ,rest ...)
        `(,instr ,@(patch-tail rest))]))
+  (define (per-defn defn)
+    (match-define `(define ,info (,f ,formals ...) ,blocks) defn)
+    (define blocks+
+      (foldl (lambda (k a) (hash-set a k (patch-tail (hash-ref blocks k))))
+             (hash)
+             (hash-keys blocks)))
+    `(define ,info (,f ,@formals) ,blocks+))
   (match p
-    [`(program ,info ,blocks)
-     (define blocks+ (foldl (λ (blk acc) (hash-set acc blk (patch-tail (hash-ref blocks blk)))) blocks (hash-keys blocks)))
-     `(program ,info ,blocks+)]))
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
 
 ;; Take variables into either the stack/registers
 (define (assign-homes p)
   ;; traverse each instruction in the block to replace (var x) with
   ;; the appropriate stack position. Note: this will leave some
   ;; instructions
-
   (define (per-defn definition)
     (match-define `(define ,locals (,f ,args ...) ,blocks) definition)
     (print definition)
@@ -170,8 +207,11 @@
     (define (home a)
       (match a
         [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
-        [_ a]))    
+        [`(imm ,i) a]
+        [`(reg ,r) a]
+        [`(deref ,rest ...) a]))    
     (define (h block)
+      (pretty-print block)
       (match block
         ['() '()]
         [`((cmpq ,a0 ,a1) ,rest ...)
@@ -184,11 +224,18 @@
          `((addq ,(home a0) ,(home a1)) ,@(h rest))]
         [`((negq ,a) ,rest ...)
          `((negq ,(home a)) ,@(h rest))]
-        [`(,instr0 ,rest ...)
-         `(,instr0 ,@(h rest))]))
+        [`((jmp ,l) ,rest ...)
+         `((jmp ,l) ,@(h rest))]
+        ;; new 
+        [`((indirect-callq ,a) ,rest ...)
+         `((indirect-callq ,(home a)) ,@(h rest))]
+        [`((callq ,f ,i) ,rest ...)
+         `((callq ,f ,i) ,@(h rest))]
+        [`((leaq (fun-ref ,f) ,a) ,rest ...)
+         `((leaq (fun-ref ,f) ,(home a)) ,@(h rest))]))
     (define blocks+ (foldl (λ (blk acc)
                            (hash-set acc blk (h (hash-ref blocks blk)))) blocks (hash-keys blocks)))
-    `(define ,locals (,f ,@args) ,blocks+))
+    `(define ,var->stackloc (,f ,@args) ,blocks+))
   (match p
     [`(program ,info ,defns ...)
      `(program ,info ,@(map per-defn defns))]))
@@ -207,9 +254,7 @@
         ['(void)       `(imm ,(void-magic-value))]
         [(? fixnum? n) `(imm ,n)]
         [(? symbol? x) `(var ,x)]
-        [(? boolean? b) `(imm ,(if b 1 0))]
-        ;; new
-        [`(fun-ref ,f) `(fun-ref ,f)]))
+        [(? boolean? b) `(imm ,(if b 1 0))]))
     (define (h seq)
       (match seq
         ;; returns--we leave out the final (ret), we will take care of
@@ -284,7 +329,9 @@
         [`(goto ,l)
          `((goto ,l))]
         ;; new
-
+        [`(seq (assign ,x (fun-ref ,f)) ,rest)
+         `((leaq (fun-ref ,f) (var ,x))
+           ,@(h rest))]
         ;; non-tail application form:
         ;; - move each argument into a register in the order %rdi, %rsi, %rdx, %rcx, %r8, %r9
         ;; - Generate an `(indirect-callq ,fun) instruction (we will render this later)
@@ -293,22 +340,31 @@
          (define (copy-arguments remaining-args remaining-registers)
            (match remaining-args
              ['() `()]
-             [`(,a0 . ,rst)
-              `((movq ,a0 ,(first remaining-registers)) ,@(copy-arguments rst (rest remaining-registers)))]))
+             [`(,a . ,rst)
+              `((movq ,(h-atom a) (reg ,(first remaining-registers))) ,@(copy-arguments rst (rest remaining-registers)))]))
          `(,@(copy-arguments args (argument-registers-list))
-           (indirect-callq ,a-f)
-           (movq (reg rax) ,lhs)
+           (indirect-callq ,(h-atom a-f))
+           (movq (reg rax) (var ,lhs))
            ,@(h next))]))
     (h c1))
 
+  ;; per-defn here needs to build blocks+, the transformed blocks, and
+  ;; also needs to add a little bit of code to the beginning of the
+  ;; first block to copy the arguments from registers to their
+  ;; respective locations
   (define (per-defn defn)
     (match-define `(define ,locals (,f ,args ...) ,blocks) defn)
     (define blocks+ (hash-set
                      (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref blocks block)))) (hash) (hash-keys blocks))
                      (conclusion-block-name)
                      '()))
-    `(define ,locals (,f ,@args) ,blocks+))
-
+    (define entry (hash-ref blocks+ f))
+    (define moves
+      (map (λ (a r) `(movq (reg ,r) (var ,a)))
+           args (take (argument-registers-list) (length args))))
+    (define blocks++
+      (hash-set blocks+ f (append moves entry)))
+    `(define ,locals (,f ,@args) ,blocks++))
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
     [`(program ,info ,defns ...)
@@ -329,9 +385,10 @@
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,blocks)
-       (define locals (foldl (λ (block acc) (set-union acc (h (hash-ref blocks block))))
-                           (set)
-                           (hash-keys blocks)))
+       (define locals (set-union (list->set formals)
+                                 (foldl (λ (block acc) (set-union acc (h (hash-ref blocks block))))
+                                        (set)
+                                        (hash-keys blocks))))
        `(define ,locals (,fname ,@formals) ,blocks)]))
   (match p
     [`(program ,info ,definitions ...)
@@ -495,7 +552,9 @@
        (convert-expr 
         e0
         (lambda (a0) (handle-rest e-rest `(,a0))))]
-      [`(fun-ref ,f) (k e)]
+      [`(fun-ref ,f) 
+       (define x (gensym 'funref))
+       `(let ([,x (fun-ref ,f)]) ,(k x))]
       ;; let
       [`(let ([,x ,e]) ,e-b)
        (convert-expr e (lambda (atom)
@@ -910,9 +969,10 @@
       (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
     (f (read))))
 
-
 (pretty-print
- (assign-homes
+ (prelude-and-conclusion 
+  (patch-instructions 
+  (assign-homes
   (select-instructions
    (uncover-locals
     (explicate-control
@@ -923,9 +983,12 @@
          (reveal-functions
           (uniqueify
            (shrink
+            '(program (define (f x y z) (lambda (a b) (+ x b)))
+                      ((f (read) 2 3) 4 5))
+            #;
             '(program (define (f x) (lambda (y) (+ x y)))
                       (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                      (g (read)))))))))))))))
+                      (g (read)))))))))))))))))
 
 
 
