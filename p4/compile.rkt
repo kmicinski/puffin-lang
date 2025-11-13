@@ -66,7 +66,11 @@
        (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
       [`(goto ,l) (format "jmp ~a" (symbol->string  l))]
-      ['(leave) "leave"]))
+      ['(leave) "leave"]
+      ;; NEW forms
+      [`(leaq (fun-ref ,f) ,dst)
+       (format "leaq ~a(%rip), ~a" f (render-op dst))]
+      [`(indirect-callq ,a) (format "callq *~a" (render-op a))]))
   (define (render-block block name)
     (apply string-append
            (cons (format "~a:\n" name)
@@ -74,19 +78,21 @@
   ;; which block names are top-level functions? In this language, this
   ;; is only `main`.
   (define (function-name? block-name) (equal? block-name (entry-symbol)))
+  (define (per-defn defn)
+    (match-define `(define ,_ (,f ,formals ...) ,blocks) defn)
+    (foldl (lambda (k acc) (string-append acc (render-block (hash-ref blocks k) k)))
+           ""
+           (hash-keys blocks)))
   (match p
-    [`(program ,info ,blocks)
+    [`(program ,_ ,defns ...)
      (string-append
       ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
       ;; include these for sure
       (runtime-function-externs)
-      (foldl (λ (block-name acc) (string-append acc (render-block (hash-ref blocks block-name)
-                                                                  (if (function-name? block-name)
-                                                                      (rt-sym block-name)
-                                                                      block-name))))
+      (foldl (λ (defn acc) (string-append acc (per-defn defn)))
              ""
-             (hash-keys blocks)))]))
+             defns))]))
 
 ;; NEW: walks over each definition
 ;; 
@@ -95,7 +101,6 @@
 ;; 
 
 (define (prelude-and-conclusion p)
-  (pretty-print p)
   (define (align16 n)
     (bitwise-and (+ n 15) (bitwise-not 15)))
 
@@ -112,7 +117,6 @@
            (hash-keys blocks)))
   
   (define (per-defn p)
-    (pretty-print p)
     (match p
       [`(define ,locals (,f ,args ...) ,blocks)
        ;; negative number, added to %rsp
@@ -141,10 +145,12 @@
              `((retq))))
        (define my-conclusion-block (gensym 'conclusion))
        (define blocks+ 
-         (hash-set (hash-remove (hash-set blocks f new-start-block)
+         (rename-conclusion
+          (hash-set (hash-remove (hash-set blocks f new-start-block)
                                 (conclusion-block-name))
                    my-conclusion-block
-                   conclusion-block))
+                   conclusion-block)
+          my-conclusion-block))
        ;; change the block name from (conclusion-block-name) to a
        ;; per-definition conclusion. Make sure you use hash-remove to
        ;; clear the previous key from the hash so that it is not
@@ -154,10 +160,9 @@
     [`(program ,info ,defns ...)
      `(program ,info ,@(map per-defn defns))]))
 
-;; walks over instructions and replaces invalid movqs, where both
-;; operands are indirects (offsets of %rax). In x86_64, we *cannot*
-;; have all operands in memory, so we shuffle into utility register(s)
-;; as necessary to restore the necessary invariants.
+;; new:
+;; - the destination of leaq must be a register
+;; - the argument of 
 (define (patch-instructions p)
   (define (patch-tail block)
     (match block
@@ -178,6 +183,12 @@
       [`((cmpq ,a (imm ,d)) ,rest ...)
        `((movq (imm ,d) (reg rax))
          (cmpq ,a (reg rax))
+         ,@(patch-tail rest))]
+      [`((leaq ,src (reg ,r)) ,rest ...)
+       `((leaq ,src (reg ,r)) ,@(patch-tail rest))]
+      [`((leaq ,src ,dst) ,rest ...)
+       `((leaq ,src (reg rax)) 
+         (movq (reg rax) ,dst)
          ,@(patch-tail rest))]
       [`(,instr ,rest ...)
        `(,instr ,@(patch-tail rest))]))
@@ -211,7 +222,6 @@
         [`(reg ,r) a]
         [`(deref ,rest ...) a]))    
     (define (h block)
-      (pretty-print block)
       (match block
         ['() '()]
         [`((cmpq ,a0 ,a1) ,rest ...)
@@ -736,7 +746,12 @@
       [(? boolean? b) e]
       [`(void) e]
       [`(read) e]
-      [`(fun-ref ,f) e]
+      ;; New: emit a wrapping vector (to make a closure)
+      [`(fun-ref ,f) 
+       (define v (gensym 'v))
+       `(let ([,v (make-vector 1)])
+          (let ([_ (vector-set! ,v 0 (fun-ref ,f))])
+            ,v))]
       [`(- ,e+) `(- ,(walk-expr e))]
       [`(+ ,e0 ,e1) `(+ ,(walk-expr e0) ,(walk-expr e1))]
       [(? symbol? x) x] ;; variable reference
@@ -790,7 +805,7 @@
       [`(app ,e-f ,e-args ...) 
        (define clo (gensym 'clo))
        `(let ([,clo ,(walk-expr e-f)])
-          (app (vector-ref ,clo 0) (vector-ref ,clo 1) ,@(map (lambda (e) (walk-expr e))  e-args)))]))
+          (app (vector-ref ,clo 0) ,clo ,@(map (lambda (e) (walk-expr e))  e-args)))]))
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
@@ -969,26 +984,57 @@
       (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
     (f (read))))
 
-(pretty-print
- (prelude-and-conclusion 
-  (patch-instructions 
-  (assign-homes
-  (select-instructions
-   (uncover-locals
-    (explicate-control
-     (anf-convert
-      (assignment-convert
-       (limit-functions
-        (lift-lambdas
-         (reveal-functions
-          (uniqueify
-           (shrink
-            '(program (define (f x y z) (lambda (a b) (+ x b)))
-                      ((f (read) 2 3) 4 5))
-            #;
-            '(program (define (f x) (lambda (y) (+ x y)))
-                      (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                      (g (read)))))))))))))))))
+#;
+(pretty-print 
+ (limit-functions
+  (lift-lambdas
+   (reveal-functions
+    (uniqueify
+     (shrink
+      '(program (define (f x) (+ x 1))
+                (f 5))
+      #;
+      '(program (define (f x) (lambda (y) (+ x y)))
+                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                (g (read)))))))))
+
+#;
+(pretty-print 
+ (anf-convert
+  (limit-functions
+   (lift-lambdas
+    (reveal-functions
+     (uniqueify
+      (shrink
+       '(program (define (f x) (+ x 1))
+                 (f 5))
+       #;
+       '(program (define (f x) (lambda (y) (+ x y)))
+                 (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                 (g (read))))))))))
+
+
+(displayln 
+ (dump-x86-64
+  (prelude-and-conclusion
+   (patch-instructions
+    (assign-homes
+     (select-instructions
+      (uncover-locals
+       (explicate-control
+        (anf-convert
+         (assignment-convert
+          (limit-functions
+           (lift-lambdas
+            (reveal-functions
+             (uniqueify
+              (shrink
+               '(program (define (f x) (+ x 1))
+                         (f 5))
+               #;
+               '(program (define (f x) (lambda (y) (+ x y)))
+                         (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+                         (g (read))))))))))))))))))
 
 
 
