@@ -5,20 +5,18 @@ implement. We'll implement a language, R4, which includes functions
 `(define (f ...) ...)` and `(lambda () ...)`, and application of
 user-defined functions `(f ...)`.
 
-## Input Language (R3)
+## Input Language (R4/R5)
 
-this language, which I am calling **R3**, adds imperative features to
-**R2/LIf**. Specifically, we add the forms:
+All students must implement the language R4, which extends our
+language to include top-level (but not nested) `define`s. Compared to
+R3 and the previous languages--where our program was a single
+expression--our program now consists of a list of functions, followed
+by a single "main" expression. When our program is compiled, we handle
+this "main" expression a bit differently (we describe more below):
 
 ```racket
-(let* ([x e] ...) e-b) ;; let*, allows multiple simultaneously definitions
-(void) ;; operations like vector-set! return void
-(make-vector i) ;; Allocate a vector of size i, initialize all entries to 0
-(vector-ref e i) ;; Dereference the vector e at index i, i must be static 
-(vector-set! e i ev) ;; e[i] := v
-(set! x e) ;; Any variable can be set!d
-(while e-g e-b) ;; While e-g, do e-b, eval to (void)
-(begin es ... e-last) ;; Do all of es..., eval to the result of e-last
+defn ::= (define (f x ...) e) ;; Fixed-arity top-level definitions
+program ::= (program defn* e)
 ```
 
 As an example of an R3 program...
@@ -116,6 +114,47 @@ You will implement the following passes:
 Your job is to produce outputs that satisfy each predicate in
 `irs.rkt` and that remain semantically equivalent (the interpreters
 check this).
+
+## Implementing `define`s and applications
+
+The major innovation of this project is to enable functions at the top
+level and (optionally) to perform lambda lifting. The most common
+change that our compiler will face is this: in our previous IR, we had
+an IR like `(program ,info ,code), where info and code got filled in
+throughout the compilation to be increasingly lower-level--but at each
+pass, we always matched with this pattern. But now, we can't do that
+anymore--we need to generalize every pass. This sounds like a lot of
+work, but generally it ends up amounting to changing our code from
+something like this:
+
+```
+(match p
+  [`(program ,info ,e)
+   `(program ,info ,(process e))))
+```
+
+to something like this:
+
+```
+(define (per-defn defn)
+  (match-defne defn `(define ,info (,f ,formals ...) ,code))
+  `(define ,info (,f ,@formals) ,(process code)))
+(match p
+  [`(program ,info ,defns ...)
+   `(program ,info ,(map per-defn defns))])
+```
+
+See what we did? We wrote a per-definition handler, `(per-defn ...)`,
+which does the bulk of the processing that we did before--then, we
+mapped over that per-definition function for each of the
+definitions. This trick is very common is the best way to start
+transforming your passes to accomodate definitions.
+
+The `shrink` pass now assumes that the program has the structure
+`(program (define (f ...) ...) ... e)`, and transforms it so that `e`
+is wrapped in a special top-level `main` block (you should use
+`(entry-symbol)`, as before). `e` may then call the functions being
+defined, and its result is finally printed to the screen.
 
 ## "Boxing" and assignment-conversion
 

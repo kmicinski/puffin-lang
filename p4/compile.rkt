@@ -31,11 +31,12 @@
 ;; +-> patched-program? -- Patch up problematic double-indirect moves
 ;; |
 ;; +-> x86-64? -- The final x86-program
-;; |
+;; |z
 ;; +-> string? -- Rendered as a string so we can print it to a file
 
 ;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
+  (define functions (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])))
   (define (render-op op)
     (match op
       [`(imm ,i) (format "$~a" i)]
@@ -68,16 +69,14 @@
       [`(goto ,l) (format "jmp ~a" (symbol->string  l))]
       ['(leave) "leave"]
       ;; NEW forms
-      [`(leaq (fun-ref ,f) ,dst)
-       (format "leaq ~a(%rip), ~a" f (render-op dst))]
+      [`(leaq (fun-ref ,f) ,dst) ;; make sure to call (rt-sym f) when rendering f here!
+       (format "leaq ~a(%rip), ~a" (rt-sym f) (render-op dst))]
       [`(indirect-callq ,a) (format "callq *~a" (render-op a))]))
   (define (render-block block name)
+    (define txt-label (if (set-member? functions name) (format "~a:\n" (rt-sym name)) (format "~a:\n" name)))
     (apply string-append
-           (cons (format "~a:\n" name)
+           (cons txt-label
                  (map (λ (instr) (format "    ~a\n" (render-instr instr))) block))))
-  ;; which block names are top-level functions? In this language, this
-  ;; is only `main`.
-  (define (function-name? block-name) (equal? block-name (entry-symbol)))
   (define (per-defn defn)
     (match-define `(define ,_ (,f ,formals ...) ,blocks) defn)
     (foldl (lambda (k acc) (string-append acc (render-block (hash-ref blocks k) k)))
@@ -141,8 +140,10 @@
                (popq (reg rbp))
                ;; transfer back to caller
                (retq))
-             ;; else, just retq
-             `((retq))))
+             ;; else, just return...
+             `((movq (reg rbp) (reg rsp))
+               (popq (reg rbp))
+               (retq))))
        (define my-conclusion-block (gensym 'conclusion))
        (define blocks+ 
          (rename-conclusion
@@ -610,6 +611,15 @@
       [`(make-vector ,i) e]
       ;; new forms
       [`(fun-ref ,g) e]
+      [`(app ,es ...) 
+       (define xs (map (lambda (_) (gensym 'param)) (range (length es))))
+       (foldr (lambda (x e acc)
+                `(let ([,x (make-vector 1)])
+                   (let ([_ (vector-set! ,x 0 ,e)])
+                     ,acc)))
+              `(app ,@xs)
+              xs
+              es)]
       [`(app ,es ...) `(app ,@(map a-c es))]
       ;; put original let last to avoid matching _
       [`(let ([,x ,e]) ,e-b)
@@ -617,9 +627,17 @@
           (let ([_ (vector-set! ,x 0 ,(a-c e))])
             ,(a-c e-b)))]))
   (define (per-defn definition)
+    (define (box-formals genformals realformals e-body)
+      (match genformals
+        ['() e-body]
+        [`(,x . ,rst)
+         `(let ([,(first realformals) (make-vector 1)])
+            (let ([_ (vector-set! ,(first realformals) 0 ,x)])
+              ,(box-formals rst (rest realformals) e-body)))]))
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
-       `(define (,fname ,@formals) ,(a-c e-body))]))
+       (define genformals (map (lambda (x) (gensym x)) formals))
+       `(define (,fname ,@genformals) ,(box-formals genformals formals (a-c e-body)))]))
   (match p
     [`(program ,info ,defns ...)
      `(program ,info ,@(map per-defn defns))]))
@@ -986,33 +1004,16 @@
 
 #;
 (pretty-print 
- (limit-functions
-  (lift-lambdas
-   (reveal-functions
-    (uniqueify
-     (shrink
-      '(program (define (f x) (+ x 1))
-                (f 5))
-      #;
-      '(program (define (f x) (lambda (y) (+ x y)))
-                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                (g (read)))))))))
-
-#;
-(pretty-print 
- (anf-convert
-  (limit-functions
-   (lift-lambdas
-    (reveal-functions
-     (uniqueify
-      (shrink
-       '(program (define (f x) (+ x 1))
-                 (f 5))
-       #;
-       '(program (define (f x) (lambda (y) (+ x y)))
-                 (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                 (g (read))))))))))
-
+ (assignment-convert
+  (reveal-functions
+   (uniqueify
+    (shrink
+     '(program (define (f x) x)
+               (f (read)))
+     #;
+     '(program (define (f x) (lambda (y) (+ x y)))
+               (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+               (g (read))))))))
 
 (displayln 
  (dump-x86-64
@@ -1023,18 +1024,17 @@
       (uncover-locals
        (explicate-control
         (anf-convert
-         (assignment-convert
-          (limit-functions
-           (lift-lambdas
+         (limit-functions
+          (lift-lambdas
+           (assignment-convert
             (reveal-functions
              (uniqueify
               (shrink
-               '(program (define (f x) (+ x 1))
-                         (f 5))
+               '(program (define (f x) x)
+                         (f (read)))
                #;
                '(program (define (f x) (lambda (y) (+ x y)))
                          (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
                          (g (read))))))))))))))))))
-
 
 
