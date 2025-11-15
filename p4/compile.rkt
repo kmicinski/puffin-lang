@@ -611,15 +611,6 @@
       [`(make-vector ,i) e]
       ;; new forms
       [`(fun-ref ,g) e]
-      [`(app ,es ...) 
-       (define xs (map (lambda (_) (gensym 'param)) (range (length es))))
-       (foldr (lambda (x e acc)
-                `(let ([,x (make-vector 1)])
-                   (let ([_ (vector-set! ,x 0 ,e)])
-                     ,acc)))
-              `(app ,@xs)
-              xs
-              es)]
       [`(app ,es ...) `(app ,@(map a-c es))]
       ;; put original let last to avoid matching _
       [`(let ([,x ,e]) ,e-b)
