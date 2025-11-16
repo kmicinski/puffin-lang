@@ -221,6 +221,7 @@
         [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
         [`(imm ,i) a]
         [`(reg ,r) a]
+        [`(byte-reg ,al) a]
         [`(deref ,rest ...) a]))    
     (define (h block)
       (match block
@@ -237,6 +238,10 @@
          `((negq ,(home a)) ,@(h rest))]
         [`((jmp ,l) ,rest ...)
          `((jmp ,l) ,@(h rest))]
+        [`((jmp-if ,cc ,l) ,rest ...)
+         `((jmp-if ,cc ,l) ,@(h rest))]
+        [`((set ,cc ,a) ,rest ...)
+         `((set ,cc ,a) ,@(h rest))]
         ;; new 
         [`((indirect-callq ,a) ,rest ...)
          `((indirect-callq ,(home a)) ,@(h rest))]
@@ -580,6 +585,17 @@
 
 ;; New: map over all the definitions
 (define (assignment-convert p)
+  ;; box-formals: helper function (use for defines and lambdas)
+  ;; transform (lambda (x y z) ...) => (lambda (x123 y235 z523) (let ([x (vector x12)]) ...)
+  ;; genformals and realformals are lists of symbols
+  ;; e-body is an expression which will be used when no vars left
+  (define (box-formals genformals realformals e-body)
+    (match genformals
+      ['() e-body]
+      [`(,x . ,rst)
+       `(let ([,(first realformals) (make-vector 1)])
+          (let ([_ (vector-set! ,(first realformals) 0 ,x)])
+            ,(box-formals rst (rest realformals) e-body)))]))
   (define (a-c e)
     (match e
       [(? boolean? b) e]
@@ -612,19 +628,15 @@
       ;; new forms
       [`(fun-ref ,g) e]
       [`(app ,es ...) `(app ,@(map a-c es))]
+      [`(lambda (,xs ...) ,e)
+       (define new-xs (map (lambda (x) (gensym x)) xs))
+       `(lambda ,new-xs ,(box-formals new-xs xs (a-c e)))]
       ;; put original let last to avoid matching _
       [`(let ([,x ,e]) ,e-b)
        `(let ([,x (make-vector 1)])
           (let ([_ (vector-set! ,x 0 ,(a-c e))])
             ,(a-c e-b)))]))
   (define (per-defn definition)
-    (define (box-formals genformals realformals e-body)
-      (match genformals
-        ['() e-body]
-        [`(,x . ,rst)
-         `(let ([,(first realformals) (make-vector 1)])
-            (let ([_ (vector-set! ,(first realformals) 0 ,x)])
-              ,(box-formals rst (rest realformals) e-body)))]))
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
        (define genformals (map (lambda (x) (gensym x)) formals))
@@ -654,7 +666,7 @@
       [`(void) e]
       [`(read) e]
       [`(fun-ref ,f) e]
-      [`(- ,e+) `(- ,(walk-expr e))]
+      [`(- ,e+) `(- ,(walk-expr e+))]
       [`(+ ,e0 ,e1) `(+ ,(walk-expr e0) ,(walk-expr e1))]
       [(? symbol? x) x] ;; variable reference
       [`(if ,e0 ,e1 ,e2) `(if ,(walk-expr e0)
@@ -761,7 +773,7 @@
        `(let ([,v (make-vector 1)])
           (let ([_ (vector-set! ,v 0 (fun-ref ,f))])
             ,v))]
-      [`(- ,e+) `(- ,(walk-expr e))]
+      [`(- ,e+) `(- ,(walk-expr e+))]
       [`(+ ,e0 ,e1) `(+ ,(walk-expr e0) ,(walk-expr e1))]
       [(? symbol? x) x] ;; variable reference
       [`(if ,e0 ,e1 ,e2) `(if ,(walk-expr e0)
@@ -1021,7 +1033,8 @@
             (reveal-functions
              (uniqueify
               (shrink
-               '(program (define (f x) x)
+               '(program (define (mul n k) (if (eq? n 1) k (+ k (mul (- n 1) k))))
+                         (define (f x) (if (eq? x 0) 1 (mul x (f (- x 1)))))
                          (f (read)))
                #;
                '(program (define (f x) (lambda (y) (+ x y)))
