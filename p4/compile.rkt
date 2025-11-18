@@ -4,35 +4,41 @@
 ;; Compiling R4 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
-(require "interpreters.rkt") ;; XXX
+(require "interpreters.rkt")
 
 (provide (all-defined-out)) ;; export everything for testing
 
 ;; The compiler is designed in passes, which go:
 ;;
-;; --> R4? -- Source program
+;; --> R4/R5? -- Source program (R5 is extra credit)                                         <INPUT>
 ;; |
-;; +-> shrunk-R4? -- Shrunken R4 (removes several forms)
+;; +-> shrunk-R5? -- Core R4/5 (removes syntactic sugar / extra forms)                       [shrink]
 ;; |
-;; +-> unique-source-tree? -- every bound identifier is written exactly once
+;; +-> unique-source-tree? -- Every bound identifier is written exactly once                 [uniqueify]
 ;; |
-;; +-> assignment-converted-program? -- eliminates set!, replaces variable references by vector-ref
+;; +-> revealed-functions-program? -- Makes all calls explicit via fun-ref and app           [reveal-functions]
 ;; |
-;; +-> anf-program? -- A-Normal form (flattening nested expressions)
+;; +-> assignment-converted-program? -- Eliminates set!; variables become 1-slot vectors     [assignment-convert]
 ;; |
-;; +-> c2-program? -- The C2 IR: blocks of sequences of commands, if, and gotos
+;; +-> closure-converted-program? -- Lift lambdas to top-level defines, allocate closures    [lift-lambdas]
 ;; |
-;; +-> locals-program? -- Uncovering local variables
+;; +-> limited-arity-program? -- Rewrites >6-arg functions to pass the rest in a vector      [limit-functions]
 ;; |
-;; +-> instr-program? -- Pseudo-x86, flattened (blocks of lists) IR
+;; +-> anf-program? -- A-Normal form (flattening nested expressions)                         [anf-convert]
 ;; |
-;; +-> homes-assigned-program? -- Assign variables to stack locations
+;; +-> blocks-program? -- (Formerly C2) blocks of sequences of commands, if, gotos, calls    [explicate-control]
 ;; |
-;; +-> patched-program? -- Patch up problematic double-indirect moves
+;; +-> locals-program? -- Uncovering local variables for each function                       [uncover-locals]
 ;; |
-;; +-> x86-64? -- The final x86-program
-;; |z
-;; +-> string? -- Rendered as a string so we can print it to a file
+;; +-> instr-program? -- Pseudo-x86, flattened blocks of instructions over pseudo-vars       [select-instructions]
+;; |
+;; +-> homes-assigned-program? -- Assigns variables to stack locations (rbp-relative homes)  [assign-homes]
+;; |
+;; +-> patched-program? -- Patches illegal x86 forms (e.g., mem-mem moves, bad leaq forms)   [patch-instructions]
+;; |
+;; +-> x86-64? -- Final x86-64 IR with prologue/epilogue and printing logic                  [prelude-and-conclusion]
+;; |
+;; +-> string? -- Rendered as GAS assembly text suitable for writing to a .s file            [dump-x86-64]
 
 ;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
@@ -83,7 +89,7 @@
            ""
            (hash-keys blocks)))
   (match p
-    [`(program ,_ ,defns ...)
+    [`(program ,defns ...)
      (string-append
       ;; Tells the ABI that we're OK with non-executable stacks (security enhancement)
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
@@ -158,8 +164,8 @@
        ;; printed!
        `(define ,locals (,f ,@args) ,blocks+)]))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 ;; new:
 ;; - the destination of leaq must be a register
@@ -201,11 +207,12 @@
              (hash-keys blocks)))
     `(define ,info (,f ,@formals) ,blocks+))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 ;; Take variables into either the stack/registers
 (define (assign-homes p)
+  (pretty-print p)
   ;; traverse each instruction in the block to replace (var x) with
   ;; the appropriate stack position. Note: this will leave some
   ;; instructions
@@ -242,7 +249,9 @@
          `((jmp-if ,cc ,l) ,@(h rest))]
         [`((set ,cc ,a) ,rest ...)
          `((set ,cc ,a) ,@(h rest))]
-        ;; new 
+        [`((goto ,l) ,rest ...) `((goto ,l) ,@(h rest))]
+        [`((xorq ,a0 ,a1) ,rest ...) `((xorq ,(home a0) ,(home a1)) ,@(h rest))]
+        ;; new
         [`((indirect-callq ,a) ,rest ...)
          `((indirect-callq ,(home a)) ,@(h rest))]
         [`((callq ,f ,i) ,rest ...)
@@ -253,8 +262,8 @@
                            (hash-set acc blk (h (hash-ref blocks blk)))) blocks (hash-keys blocks)))
     `(define ,var->stackloc (,f ,@args) ,blocks+))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 
 ;; The output of this pass is almost x86, but there will still be an
@@ -383,9 +392,9 @@
     `(define ,locals (,f ,@args) ,blocks++))
   ;; the input is C0: h is (hash 'start '(let ...))
   (match p
-    [`(program ,info ,defns ...)
+    [`(program ,defns ...)
       ;; also add an empty conclusion block
-     `(program ,info ,@(map per-defn defns))]))
+     `(program ,@(map per-defn defns))]))
 
 (define (uncover-locals p)
   (define (h seq)
@@ -407,8 +416,8 @@
                                         (hash-keys blocks))))
        `(define ,locals (,fname ,@formals) ,blocks)]))
   (match p
-    [`(program ,info ,definitions ...)
-     `(program ,info ,@(map per-defn definitions))]))
+    [`(program ,definitions ...)
+     `(program ,@(map per-defn definitions))]))
 
 ;; Convert p (in ANF) to  C-style IR consisting consisting of labeled blocks
 (define (explicate-control p)
@@ -491,8 +500,8 @@
       [`(define (,fname ,formals ...) ,e-body)
        `(define (,fname ,@formals) ,(expr->blocks e-body fname (lambda (a) `(return ,a))))]))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 (define (anf-convert p)
   (define (convert-expr e k)
@@ -580,8 +589,8 @@
       [`(define (,fname ,formals ...) ,e-body)
        `(define (,fname ,@formals) ,(convert-expr e-body (lambda (x) x)))]))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 ;; New: map over all the definitions
 (define (assignment-convert p)
@@ -642,8 +651,8 @@
        (define genformals (map (lambda (x) (gensym x)) formals))
        `(define (,fname ,@genformals) ,(box-formals genformals formals (a-c e-body)))]))
   (match p
-    [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+    [`(program ,defns ...)
+     `(program ,@(map per-defn defns))]))
 
 ;; NEW: pass -- limit-functions
 ;;
@@ -716,8 +725,8 @@
       [`(define (,fname ,formals ...) ,e-body)
        `(define (,fname ,@formals) ,(walk-expr e-body))]))
   (match p
-    [`(program ,info ,definitions ...)
-     `(program ,info ,@(map per-defn definitions))]))
+    [`(program ,definitions ...)
+     `(program ,@(map per-defn definitions))]))
 
 ;; NEW: pass -- lift-lambdas
 ;;
@@ -733,6 +742,8 @@
 ;; two-element list consisting of the lifted expression and also a set
 ;; of definitions which resulted from the lifting of lambdas.
 (define (lift-lambdas p)
+  (pretty-print p)
+
   (define emitted-defines (set))
   (define (emit-define! defn) (set! emitted-defines (set-add emitted-defines defn)))
   ;; calculate the free variables of an expression e...
@@ -834,8 +845,8 @@
        (define maybe-env (if (equal? fname (entry-symbol)) '() '(env)))
        `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
   (match p
-    [`(program ,info ,definitions ...)
-     `(program ,info ,@(map per-defn definitions) ,@(set->list emitted-defines))]))
+    [`(program ,definitions ...)
+     `(program ,@(map per-defn definitions) ,@(set->list emitted-defines))]))
 
 
 ;; NEW: pass -- reveal-functions
@@ -881,13 +892,12 @@
       [`(lambda (,xs ...) ,e) `(lambda ,xs ,(walk e assignment))]
       [`(,e-f ,e-args ...) `(app ,(walk e-f assignment) ,@(map (lambda (e-arg) (walk e-arg assignment)) e-args))]))
   (match p
-    [`(program () (define (,names ,params ...) ,bodies) ...)
+    [`(program (define (,names ,params ...) ,bodies) ...)
      (define name-set
        (foldl (lambda (name acc) (hash-set acc name `(fun-ref ,name)))
               (hash)
               names))
      `(program
-       ()
        ,@(map (lambda (name params body) `(define (,name ,@params) ,(walk body name-set)))
               names
               params
@@ -928,6 +938,18 @@
       [`(vector-ref ,e ,i) `(vector-ref ,(rename e assignment) ,i)]
       [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(rename e assignment) ,i ,(rename e-v assignment))]
       [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
+      ;; NEW case: for any x ∈ xs, rename any one previously used...
+      [`(lambda (,xs ...) ,e-b)
+       (let* ([assignment+
+               (foldl (lambda (x acc)
+                        (if (hash-has-key? acc x)
+                            (let ([x+ (gensym x)])
+                              (hash-set acc x x+))
+                            (hash-set acc x x)))
+                      assignment
+                      xs)]
+              [new-xs (map (lambda (x) (hash-ref assignment+ x)) xs)])
+         `(lambda ,new-xs ,(rename e-b assignment+)))]
       [`(,e-f ,e-args ...) `(,(rename e-f assignment) ,@(map (lambda (e-arg) (rename e-arg assignment)) e-args))]))
   (define (per-defn def)
     (match def
@@ -942,7 +964,7 @@
   (match p
     [`(program ,defns ...)
      ;; empty info
-     `(program () ,@(map per-defn defns))]))
+     `(program ,@(map per-defn defns))]))
 
 ;; Takes p and...
 ;; - Removes binary minus
@@ -999,46 +1021,140 @@
      `(program ,@(cons `(define (main) ,(h expr)) (map per-defn defns)))]))
 
 
-(define ex0
-  '(program
-    (define (f x)
-      (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
-    (f (read))))
+;; (define ex0
+;;   '(program
+;;     (define (f x)
+;;       (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
+;;     (f (read))))
 
-#;
-(pretty-print 
- (assignment-convert
-  (reveal-functions
-   (uniqueify
-    (shrink
-     '(program (define (f x) x)
-               (f (read)))
-     #;
-     '(program (define (f x) (lambda (y) (+ x y)))
-               (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-               (g (read))))))))
+;; #;
+;; (pretty-print 
+;;  (assignment-convert
+;;   (reveal-functions
+;;    (uniqueify
+;;     (shrink
+;;      '(program (define (f x) x)
+;;                (f (read)))
+;;      #;
+;;      '(program (define (f x) (lambda (y) (+ x y)))
+;;                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+;;                (g (read))))))))
 
-(displayln 
- (dump-x86-64
-  (prelude-and-conclusion
-   (patch-instructions
-    (assign-homes
-     (select-instructions
-      (uncover-locals
-       (explicate-control
-        (anf-convert
-         (limit-functions
-          (lift-lambdas
-           (assignment-convert
-            (reveal-functions
-             (uniqueify
-              (shrink
-               '(program (define (mul n k) (if (eq? n 1) k (+ k (mul (- n 1) k))))
-                         (define (f x) (if (eq? x 0) 1 (mul x (f (- x 1)))))
-                         (f (read)))
-               #;
-               '(program (define (f x) (lambda (y) (+ x y)))
-                         (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-                         (g (read))))))))))))))))))
+;; (define nq
+;;   '(program
+;;      ;; =========================
+;;      ;; List primitives (as in your ex3)
+;;      ;; =========================
+;;      (define (is_nil x) (eq? x (void)))
+
+;;      ;; cons cell as 2-element vector: [0] = head, [1] = tail
+;;      (define (cons h t)
+;;        (let ([c (make-vector 2)])
+;;          (let ([_ (vector-set! c 0 h)])
+;;            (let ([_ (vector-set! c 1 t)])
+;;              c))))
+
+;;      (define (head c) (vector-ref c 0))
+;;      (define (tail c) (vector-ref c 1))
+
+;;      ;; absolute value
+;;      (define (abs x)
+;;        (if (< x 0)
+;;            (- 0 x)
+;;            x))
+
+;;      ;; =========================
+;;      ;; Check if placing a queen in column `col`
+;;      ;; is safe w.r.t. existing queens list `qs`.
+;;      ;; `qs` holds columns of queens in previous rows,
+;;      ;; most recent queen first.
+;;      ;; =========================
+;;      (define (safe? col qs)
+;;        (let ([ok #t])
+;;          (let ([d 1])        ;; row-distance from new queen
+;;            (let ([lst qs])
+;;              (begin
+;;                (while (if (is_nil lst) #f #t)
+;;                  (begin
+;;                    (let ([c (head lst)])
+;;                      (if (eq? c col)
+;;                          ;; same column -> conflict
+;;                          (begin
+;;                            (set! ok #f)
+;;                            ;; force loop exit
+;;                            (set! lst (void)))
+;;                          (if (eq? (abs (- c col)) d)
+;;                              ;; diag conflict
+;;                              (begin
+;;                                (set! ok #f)
+;;                                (set! lst (void)))
+;;                              ;; no conflict with this queen, move on
+;;                              (begin
+;;                                (set! lst (tail lst))
+;;                                (set! d (+ d 1))))))))
+;;                ok)))))
+
+;;      ;; =========================
+;;      ;; Recursive solver:
+;;      ;; row: current row index (0..n)
+;;      ;; n: board size
+;;      ;; queens: list of columns for previously placed queens
+;;      ;;         (most recent row at the head)
+;;      ;; Returns:
+;;      ;;   - a list of columns for all rows 0..n-1
+;;      ;;   - or (void) if no solution from this state.
+;;      ;; =========================
+;;      (define (solve_row row n queens)
+;;        (if (eq? row n)
+;;            ;; all rows placed, solution found
+;;            queens
+;;            (let ([col 0])
+;;              (let ([solution (void)])
+;;                (begin
+;;                  (while (< col n)
+;;                    (begin
+;;                      (if (safe? col queens)
+;;                          (let ([s (solve_row (+ row 1) n (cons col queens))])
+;;                            (if (eq? s (void))
+;;                                (set! solution solution)
+;;                                (set! solution s)))
+;;                          (set! solution solution))
+;;                      (set! col (+ col 1))))
+;;                  solution)))))
+
+;;      ;; Helper: top-level solver
+;;      (define (solve_n_queens n)
+;;        (solve_row 0 n (void)))
+
+;;      ;; =========================
+;;      ;; Entry expression:
+;;      ;;   - read n
+;;      ;;   - solve N-Queens
+;;      ;;   - return solution list (columns, last row first)
+;;      ;; =========================
+;;      (let* ([n (read)]
+;;             [solution (solve_n_queens n)])
+;;        solution)))
+
+;; (displayln
+;;  (dump-x86-64
+;;   (prelude-and-conclusion
+;;    (patch-instructions
+;;     (assign-homes
+;;      (select-instructions
+;;       (uncover-locals
+;;        (explicate-control
+;;         (anf-convert
+;;          (limit-functions
+;;           (lift-lambdas
+;;            (assignment-convert
+;;             (reveal-functions
+;;              (uniqueify
+;;               (shrink
+;;                nq
+;;                #;
+;;                '(program (define (f x) (lambda (y) (+ x y)))
+;;                          (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
+;;                          (g (read))))))))))))))))))
 
 

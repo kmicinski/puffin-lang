@@ -1,2 +1,2 @@
-(define (f x) 1)
-(f 2)
+(program (define (f x) 1)
+	 (f 2))

@@ -5,7 +5,7 @@ implement. We'll implement a language, R4, which includes functions
 `(define (f ...) ...)` and `(lambda () ...)`, and application of
 user-defined functions `(f ...)`.
 
-## Input Language (R4/R5)
+## Input Language (R4)
 
 All students must implement the language R4, which extends our
 language to include top-level (but not nested) `define`s. Compared to
@@ -19,49 +19,27 @@ defn ::= (define (f x ...) e) ;; Fixed-arity top-level definitions
 program ::= (program defn* e)
 ```
 
-As an example of an R3 program...
+As an example of an R4 program...
 
 ```scheme
- (program
-              (let* ([x (read)]
-                     [i 0]
-                     [acc 0])
-                (begin
-                  (while (< i x)
-                         (begin
-                           (set! acc (+ acc i))
-                           (set! i (+ i 1))))
-                  acc)))
+(define (fac x)
+  (if (eq? 0 x)
+      1
+      (mul 
 ```
 
 The major extensions are these:
 
-- We have a new literal, called `(void)`. This is sometimes called the
-  "unit value," and carries no computational information, i.e.,
-  control-flow never depends on the value of its contents; in an ideal
-  world we would eliminate voids entirely via optimization, but their
-  inclusion allows us to answer questions like: "what should
-  vector-set! return?"
+- We include a new thing, `(fun-ref ,f)` 
 
-- Programs may allocate vectors using `(make-vector i)`, which zeros
-  all entries of the vector. These get translated into calls to an
-  allocation function in `runtime.c`.
-
-- Programs may perform vector operations, but these operations are
-  limited to constant indices (i.e., we can't compute the index that
-  we want to write / read via `vector-ref`/`vector-set!`))--we may
-  generalize this in subsequent projects. 
-
-- *All* variables may be mutated via set!, our language is no longer
-  pure. We handle this by "boxing" every variable, a process we
-  describe below.
+- To handle top-level functions, we need to extend all passes of the
+  compiler to work on a per-definition basis. This is a pervasive
+  change, but the amount of intellectual work is rather small:
+  compilation happens on a per-function basis, and so it's as simple
+  as ensuring we map a per-function handler across each definition
+  (more details about this below).
 
 
-- Mutability goes hand-in-hand with loops, in the sense that mutable
-  variables are not much fun unless you add loops. So we add a form,
-  `(while e-g e-b)`, which continually evaluates the loop guard `e-g`
-  and executes the body `e-b` (discarding its result) until the loop
-  is finished. `(while ...)` reduces to `(void)`.
 
 ## Repository Layout
 
@@ -156,95 +134,6 @@ is wrapped in a special top-level `main` block (you should use
 `(entry-symbol)`, as before). `e` may then call the functions being
 defined, and its result is finally printed to the screen.
 
-## "Boxing" and assignment-conversion
-
-In this project we embrace mutability by enabling `set!`, which allows
-us to make mutable updates to variables:
-
-```
-(program
- (let* ([x (read)]
-        [y (read)]
-        [tmp 0])
-   (begin
-     (set! tmp x)
-     (set! x y)
-     (set! y tmp)
-     y)))
-```
-
-Notice that we can use `set!`, which mutably updates a variable; this
-is not possible in "pure" functional programs, and mutation is simply
-not provided in those languages (at least as a builtin). The question
-is how to implement `set!`. It may seem like an obvious choice: each
-variable becomes a single register-sized (8-byte) value on the
-stack. However, this approach starts to fall apart when variables
-outlive their stack frames (which will happen when we add functions /
-procedures). Instead, we use this as an opportunity to discuss another
-necessary challenge to work towards a general-purpose programming
-language: heap-allocated data. You likely know about the heap from
-programming in C with `malloc` (or C++ with `new`). These procedures
-allow us to allocate memory from a large block of available memory
-(the heap), with the obligation that we later release ("free") it back
-to the operating system.
-
-To enable mutability and `set!`, we will employ a technique called
-"boxing." In short, we assume that _all_ data is put in a vector
-("box") on the heap. In our case, we will use a very simple
-representation of vectors:
-
-```
-typedef struct {
-    int64_t len;
-    int64_t data[];
-} TinyVecPacked;
-```
-
-In terms of memory representation, a `TinyVecPacked` struct has a very
-simple layout: a single 64-bit value representing the length, followed
-by a data array of 8-byte values. For example, the vector containing
-the sequence `5` followed by `20` (starting at the address `0xAAAA00`)
-would be represented as:
-
-```
-   lower addresses →                                       higher addresses →
-   ┌───────────────────────┬───────────────────────┬───────────────────────┐
-   │  len (int64)          │  data[0] (int64)      │  data[1] (int64)      │ 
-   │  8 bytes              │  8 bytes              │  8 bytes              │
-   ├───────── ─ 0xAAAA00 ──┼────────── 0xAAAA08  ──┼──────── 0xAAAA10  ────┤
-   │ e.g., 2               │ e.g., 5               │ e.g., 20              │
-   └───────────────────────┴───────────────────────┴───────────────────────┘
-```
-
-The length can be used to avoid accesses outside of the buffer: we
-don't want to be able to write outside of the bounds of a buffer
-because it could contain junk data, we want to be able to write
-outside of the bounds of a buffer because we could mess up *other*
-data, unrelated to this vector (but still within our same address
-space, assuming the OS provides virtual memory). To handle this, we
-could take one of three positions:
-
-(a) don't worry about it--just be unsafe, and let the program crash.
-
-(b) check the bound before each access, if a bad access would occur,
-jump to an exception handler.
-
-(c) use a static type system to ensure this could never happen.
-
-Each of these approaches has different trade offs: C, C++, and similar
-languages opt for (a), which is fast but risky--the program might
-crash in a subtle or even exploitable way. Managed languages like
-Java, C#, etc. often opt for (b), but can sometimes optimize to avoid
-checks if certain conditions are met (e.g., using profiling data and
-just-in time compilation). The issue with (b) is that it is slow:
-every single access necessitates a branch, compared with (a) which
-might just be as simple as `movq`. Languages like Rust use (c), which
-enables the benefits of (b) as a zero-cost abstraction, often matching
-(or even exceeding) the performance of (a).
-
-In this project we will do (a)/(b): 
-
-## C2 
 
 ## IR Predicates and Interpreters
 

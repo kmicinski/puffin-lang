@@ -36,9 +36,15 @@
 ;; Turn a string into its "runtime symbol" version: on OSX, names need
 ;; to be prefixed with _, but not on Linux.
 (define (rt-sym s)
+  (define (sanitize sym)
+    (string->symbol
+     (list->string
+      (map (λ (ch)
+             (if (char=? ch #\-) #\_ ch))
+           (string->list (symbol->string sym))))))
   (if (equal? (host-os) 'macosx)
-      (macify s)
-      (linuxify s)))
+      (macify (sanitize s))
+      (linuxify (sanitize s))))
 
 ;; have to include these extern definitions at the top of the file 
 (define (runtime-function-externs)

@@ -19,12 +19,15 @@
  ;; NOTE: first/last pass has to stay in sync with the parameters in system.rkt
  (define all-passes
    (list 
-    `(,shrink                 "shrink"                 ,R3?                           ,shrunk-R3?                    ,interpret-R3)
-    `(,uniqueify              "uniqueify"              ,shrunk-R3?                    ,unique-source-tree?           ,interpret-R3)
-    `(,assignment-convert     "assignment-convert"     ,unique-source-tree?           ,assignment-converted-program? ,interpret-R3)
-    `(,anf-convert            "anf-convert"            ,assignment-converted-program? ,anf-program?                  ,interpret-R3)
-    `(,explicate-control      "explicate-control"      ,anf-program?                  ,c2-program?                   ,interpret-c2)
-    `(,uncover-locals         "uncover-locals"         ,c2-program?                   ,locals-program?               ,interpret-c2)
+    `(,shrink                 "shrink"                 ,R5?                           ,shrunk-R5?                    ,interpret-R5)
+    `(,uniqueify              "uniqueify"              ,shrunk-R5?                    ,unique-source-tree?           ,interpret-R5)
+    `(,reveal-functions       "reveal-functions"       ,unique-source-tree?           ,revealed-functions-program?   ,interpret-R5)
+    `(,assignment-convert     "assignment-convert"     ,revealed-functions-program?   ,assignment-converted-program? ,interpret-R5)
+    `(,lift-lambdas           "lift-lambdas"           ,assignment-converted-program? ,closure-converted-program?    ,interpret-R5)
+    `(,limit-functions        "limit-functions"        ,closure-converted-program?    ,limited-arity-program?        ,interpret-R5)
+    `(,anf-convert            "anf-convert"            ,limited-arity-program?        ,anf-program?                  ,interpret-R5)
+    `(,explicate-control      "explicate-control"      ,anf-program?                  ,blocks-program?               ,interpret-blocks)
+    `(,uncover-locals         "uncover-locals"         ,blocks-program?               ,locals-program?               ,interpret-blocks)
     `(,select-instructions    "select-instructions"    ,locals-program?               ,instr-program?                ,interpret-instr)
     `(,assign-homes           "assign-homes"           ,instr-program?                ,homes-assigned-program?       ,interpret-instr)
     `(,patch-instructions     "patch-instructions"     ,homes-assigned-program?       ,patched-program?              ,interpret-instr)
