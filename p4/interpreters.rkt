@@ -148,11 +148,23 @@
     [_ (error 'interpret "malformed R5 expression: ~a" e)]))
 
 (define (interpret-R5 p [in '()])
-  (define e (match p
-              [`(program ,e)      e]
-              [`(program () ,e)   e]
-              [_ (error 'interpret-R5 "bad program ~a" p)]))
-  (define res (eval-R5-exp e (hash) in))
+  (define (build-env defn env)
+    (match defn
+      [`(define (,f ,args ...) ,e-b)
+       (hash-set env f `(clo (lambda (,f ,args ...) ,e-b) ,(hash)))]))
+  (define (build-env* defns)
+    (foldl build-env (hash) defns))
+  (define defns (match p
+                  [`(program ,defns ...) defns]
+                  [`(program ,defns ... ,(? R5-exp? main)) defns]))
+  (define env (build-env* defns))
+  ;; interpret the program
+  (define res
+    (match p
+      [`(program ,defns ...)
+       (eval-R5-exp `(main) env in)]
+      [`(program ,defns ... ,(? R5-exp? main))
+       (eval-R5-exp main env in)]))
   (display-return (car res)))
 
 ;; ────────────────────────────────────────────────────────────────────────────

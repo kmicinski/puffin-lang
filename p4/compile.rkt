@@ -42,7 +42,7 @@
 
 ;; Dump x86-64 code to GAS assmbler
 (define (dump-x86-64 p)
-  (define functions (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])))
+  (define functions (set-add (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])) 'main))
   (define (render-op op)
     (match op
       [`(imm ,i) (format "$~a" i)]
