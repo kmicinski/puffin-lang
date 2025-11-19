@@ -1,6 +1,6 @@
 #lang racket
 ;;
-;; CIS531 Fall '25: Project 3 -- R4 with vectors, set!, and while
+;; CIS531 Fall '25: Project 5 -- Functions and Lambdas
 ;;
 ;; Interface (predicates) for every IR used across the pipeline.
 ;; Keep these aligned with compile.rkt’s expectations.

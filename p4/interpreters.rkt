@@ -46,6 +46,9 @@
     ['>=  (>= (expect-int v0 who) (expect-int v1 who))]
     [_ (error who "unsupported binary op ~a" op)]))
 
+  (define (merge h0 h1)
+    (foldl (λ (k0 h1) (hash-set h1 k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
+
 ;; ────────────────────────────────────────────────────────────────────────────
 ;; R5 / shrunk-R5 / unique-source-tree / ANF (source-level interpreter)
 ;;   - Supports while, begin, set!, make-vector, vector-ref, vector-set!
@@ -145,19 +148,51 @@
        [(cons v in*)
         (vector-set! (hash-ref env x) 0 v)
         '(void)])]
+    [`(app ,e-f ,args ...)
+     (eval-R5-exp `(,e-f ,@args) env in)]
+    [`(fun-ref ,f) (eval-R5-exp f env in)]
+    [`(,e-f ,e-args ...)
+     (match-define `((clo (lambda (,xs ...) ,e-b) ,env+) . ,in+) (eval-R5-exp e-f env in))
+     (match-define `(,reversed-vs ,in++)
+       (foldl (lambda (e-arg acc)
+                (match-define `(,acc-vs ,in) acc)
+                (match-define `(,v-result . ,in+) (eval-R5-exp e-arg env in))
+                `(,(cons v-result acc-vs) ,in+))
+              `(() ,in)
+              e-args))
+     (define vs (map (lambda (x) (vector x)) (reverse reversed-vs)))
+     (define env++ (foldl (lambda (x v h) (hash-set h x v)) env+ xs vs))
+     (eval-R5-exp e-b env++ in++)]
     [_ (error 'interpret "malformed R5 expression: ~a" e)]))
 
 (define (interpret-R5 p [in '()])
   (define (build-env defn env)
     (match defn
       [`(define (,f ,args ...) ,e-b)
-       (hash-set env f `(clo (lambda (,f ,args ...) ,e-b) ,(hash)))]))
+       (hash-set env f (vector `(clo (lambda (,@args) ,e-b) ,(hash))))]))
   (define (build-env* defns)
     (foldl build-env (hash) defns))
   (define defns (match p
                   [`(program ,defns ...) defns]
                   [`(program ,defns ... ,(? R5-exp? main)) defns]))
-  (define env (build-env* defns))
+  (define env
+    (let* ([cells
+            ;; List of (f . cell)
+            (for/list ([defn defns])
+              (match defn
+                [`(define (,f ,args ...) ,e-b)
+                 (cons f (make-vector 1))]))]
+           [env
+            ;; Immutable hash: f ↦ cell
+            (for/fold ([h (hash)]) ([fc cells])
+              (hash-set h (car fc) (cdr fc)))])
+      ;; Second pass: fill each cell with a closure that captures the whole env.
+      (for ([defn defns])
+        (match defn
+          [`(define (,f ,args ...) ,e-b)
+           (define cell (hash-ref env f))
+           (vector-set! cell 0 `(clo (lambda (,@args) ,e-b) ,env))]))
+      env))
   ;; interpret the program
   (define res
     (match p
@@ -197,21 +232,38 @@
     [`(vector-ref ,a0 ,i)
      (cons (vector-ref (atom-val a0 env)
                        (expect-int (atom-val i env) 'BLOCKS/vector-ref)) in)]
+    [`(fun-ref ,f)     (cons rhs in)]
     [_                                    (error 'interpret "bad BLOCKS rhs ~a" rhs)]))
 
-(define (exec-blocks blocks label env in)
-  (define (go s env in)
+(define (exec-blocks blocks name->args label toplevel-env in)
+  (define (go s env stack in)
     (match s
-      [`(return ,a)                         (cons (atom-val a env) in)]
+      [`(return ,a)                         
+       (match stack
+         ['(top-stack) 
+          (match (rhs-val a env in) [(cons v in*) (cons v in)])]
+         [`((,x ,env+ ,rst) . ,stack+)
+          (match (rhs-val a env in)
+            [(cons v in*) (go rst (hash-set env+ x v) stack+ in*)])])]
+      [`(seq (assign ,x (app ,f ,args ...)) ,rst)
+       (match-define (cons `(fun-ref ,fptr) _) (rhs-val f env in))
+       (define vs (map (lambda (a) (atom-val a env)) args))
+       (define env+
+         (foldl
+          (lambda (x v acc) (hash-set acc x v))
+          toplevel-env
+          (hash-ref name->args fptr)
+          vs))
+       (go (hash-ref blocks fptr) env+ (cons `(,x ,env ,rst) stack) in)]
       [`(seq (assign ,(? symbol? x) ,rhs) ,rest)
        (match (rhs-val rhs env in)
-         [(cons v in*) (go rest (hash-set env x v) in*)])]
+         [(cons v in*) (go rest (hash-set env x v) stack in*)])]
       ;; side-effect statement
       [`(seq (vector-set! ,av ,i ,aval) ,rest)
        (vector-set! (atom-val av env) 
               (expect-int (atom-val i env) 'BLOCKS/vector-set!)
               (atom-val aval env))
-       (go rest env in)]
+       (go rest env stack in)]
       ;; generic IF on eq?/</etc.
       [`(if (,cmp ,a0 ,a1) (goto ,(? label? l-t)) (goto ,(? label? l-f)))
        (define v0 (atom-val a0 env))
@@ -221,14 +273,24 @@
            ['eq? (equal? v0 v1)]
            ['<   (< (expect-int v0 'BLOCKS/<) (expect-int v1 'BLOCKS/<))]
            [else (error 'interpret "unsupported cmp ~a in BLOCKS if" cmp)]))
-       (go (hash-ref blocks (if truth l-t l-f)) env in)]
-      [`(goto ,(? label? l))               (go (hash-ref blocks l) env in)]
+       (go (hash-ref blocks (if truth l-t l-f)) env stack in)]
+      [`(goto ,(? label? l))               (go (hash-ref blocks l) env stack in)]
       [_                                   (error 'interpret "bad BLOCKS tail ~a" s)]))
-  (go (hash-ref blocks label) env in))
+  (go (hash-ref blocks label) toplevel-env '(top-stack) in))
 
 (define (interpret-blocks p [in '()])
-  (match-define `(program ,_ ,blocks) p)
-  (display-return (car (exec-blocks blocks (entry-symbol) (hash) in))))
+  (match-define `(program ,defns ...) p)
+  (define name->args
+    (foldl (lambda (defn acc) (match defn
+                                [`(define (,f ,args ...) ,_) (hash-set acc f args)]
+                                [`(define ,_ (,f ,args ...) ,_) (hash-set acc f args)]))
+           (hash)
+           defns))
+  (define blocks (match p 
+                   [`(program (define (,f ,args ...) ,blocks) ...) blocks]
+                   [`(program (define ,_ (,f ,args ...) ,blocks) ...) blocks]))
+  (define flattened-blocks (foldl merge (hash) blocks))
+  (display-return (car (exec-blocks flattened-blocks name->args (entry-symbol) (hash) in))))
 
 ;; ────────────────────────────────────────────────────────────────────────────
 ;; (Pseudo-)x86-64 Interpreter
@@ -343,6 +405,8 @@
      (if (cc-true? cc (last st))
          (interp-tail (hash-ref blocks lab) blocks st in)
          (interp-tail rst blocks st in))]
+    [`((leaq (fun-ref ,f) ,dst) . ,rst)
+     (interp-tail rst blocks (write-op dst `(fun-ref ,f) st) in)]
     [`((callq ,lbl ,_) . ,rst)
      (match (linuxify lbl) 
        ['read_int64
@@ -357,12 +421,25 @@
         (define vec (make-vector i))
         (interp-tail rst blocks (write-op '(reg rax) vec st) in)]
        [_ (error 'interp-instrs "unknown call ~a" lbl)])]
+    ;; Indirect calls via function pointers
+    [`((indirect-callq ,op) . ,rst)
+     (match-define `(,regs ,vars ,mem ,stack ,flags) st)
+     (define fp (read-op op st))
+     (match-define `(fun-ref ,f) fp)
+     (interp-tail (hash-ref blocks f)
+                  blocks
+                  `(,regs ,(hash) ,mem ,(cons `(,vars ,rst) stack) ,flags)
+                  in)]
     [_ (error 'interp-instrs "unknown instruction sequence ~a" instrs)]))
 
 (define (interpret-instr prog [in '()])
   (set! out? #f)
   (match prog
-    [`(program ,_ ,blocks)
+    [`(program ,_ ,defns ...)
+     (define raw-blocks (match prog
+                      [`(program (define (,f ,args ...) ,blocks) ...) blocks]
+                      [`(program (define ,_ (,f ,args ...) ,blocks) ...) blocks]))
+     (define blocks (foldl merge (hash) raw-blocks))
      (define instrs (hash-ref blocks (entry-symbol)))
      (define init-regs (hash 'rsp '(stack-addr #xAA000000)
                              'rbp '(stack-addr #xAA000000)))
@@ -389,3 +466,37 @@
         [(patched-program? p)                    (interpret-instr p in)]
         [(x86-64? p)                             (interpret-instr p in)]
         [else (error 'interpret "unknown IR kind")]))
+
+(interpret-blocks '(program
+                    (define (main)
+                      #hash((main
+                             .
+                             (seq
+                              (assign vec4858 (make-vector 1))
+                              (seq
+                               (assign v4850 vec4858)
+                               (seq
+                                (assign funref4859 (fun-ref f))
+                                (seq
+                                 (vector-set! v4850 0 funref4859)
+                                 (seq
+                                  (assign clo4849 v4850)
+                                  (seq
+                                   (assign ref4860 (vector-ref clo4849 0))
+                                   (seq
+                                    (assign read4861 (read))
+                                    (seq
+                                     (assign x4862 (app ref4860 clo4849 read4861))
+                                     (return x4862))))))))))))
+                    (define (f env x4846)
+                      #hash((f
+                             .
+                             (seq
+                              (assign vec4863 (make-vector 1))
+                              (seq
+                               (assign x vec4863)
+                               (seq
+                                (vector-set! x 0 x4846)
+                                (seq (assign ref4864 (vector-ref x 0))
+                                     (return ref4864)))))))))
+                  (range 100))

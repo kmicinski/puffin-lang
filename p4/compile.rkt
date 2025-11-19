@@ -695,23 +695,40 @@
       [`(vector-ref ,e ,i) `(vector-ref ,(walk-expr e) ,i)]
       [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(walk-expr e) ,i ,(walk-expr e-v))]
       [`(set! ,x ,e) `(set! ,x ,(walk-expr e))]
-      ;; > six arguments
+
+      ;; > six arguments: build a vector for the rest, pass it as last arg.
       [`(app ,e-f ,ea0 ,ea1 ,ea2 ,ea3 ,ea4 ,ea5 ,ea-rest ...)
+       (define e-f* (walk-expr e-f))
+       (define ea0* (walk-expr ea0))
+       (define ea1* (walk-expr ea1))
+       (define ea2* (walk-expr ea2))
+       (define ea3* (walk-expr ea3))
+       (define ea4* (walk-expr ea4))
        (define rest-es (cons ea5 ea-rest))
-       (define v (gensym 'vec))
-       (define (rest-stack es i)
+       (define v (gensym 'rest-args))
+       (define k (length rest-es))
+       ;; build nested lets that fill v[0..k-1], then call
+       (define (fill-rest es i body)
          (match es
-           ['()
-            `(app ,e-f ,ea0 ,ea1 ,ea2 ,ea3 ,ea4 ,v)]
-           [`(,hd . ,rest)
-            `(let ([_ (vector-set! ,v ,i ,hd)])
-               ,(rest-stack rest (+ i 1)))]))
-       (rest-stack rest-es 0)]
-      ;; <= six arguments
+           ['() body]
+           [`(,hd . ,tl)
+            (fill-rest
+             tl
+             (add1 i)
+             `(let ([_ (vector-set! ,v ,i ,(walk-expr hd))])
+                ,body))]))
+       (define call-expr
+         `(app ,e-f* ,ea0* ,ea1* ,ea2* ,ea3* ,ea4* ,v))
+       `(let ([,v (make-vector ,k)])
+          ,(fill-rest rest-es 0 call-expr))]
+
+      ;; ≤ six arguments: just recurse on all subexpressions
       [`(app ,e-f ,e-args ...)
-       `(app ,e-f ,@(map walk-expr e-args))]))
+       `(app ,(walk-expr e-f) ,@(map walk-expr e-args))]))
+
   (define (per-defn definition)
     (match definition
+      ;; > 6 formals: (f a0 a1 a2 a3 a4 a5 a-rest...)
       [`(define (,fname ,a0 ,a1 ,a2 ,a3 ,a4 ,a5 ,a-rest ...) ,e-body)
        (define args-vec (gensym 'rest-args))
        (define (args-vec-stack formals i)
@@ -720,10 +737,14 @@
            [`(,hd . ,tl)
             `(let ([,hd (vector-ref ,args-vec ,i)])
                ,(args-vec-stack tl (add1 i)))]))
+       ;; New signature: last arg is the vector of "rest" args
        `(define (,fname ,a0 ,a1 ,a2 ,a3 ,a4 ,args-vec)
-          ,(args-vec-stack (cons a5 a-rest) 1))]
+          ,(args-vec-stack (cons a5 a-rest) 0))]  ;; start indexing at 0 (matches call-site)
+
+      ;; ≤ 6 formals: unchanged except recursive walk
       [`(define (,fname ,formals ...) ,e-body)
        `(define (,fname ,@formals) ,(walk-expr e-body))]))
+
   (match p
     [`(program ,definitions ...)
      `(program ,@(map per-defn definitions))]))
@@ -742,8 +763,6 @@
 ;; two-element list consisting of the lifted expression and also a set
 ;; of definitions which resulted from the lifting of lambdas.
 (define (lift-lambdas p)
-  (pretty-print p)
-
   (define emitted-defines (set))
   (define (emit-define! defn) (set! emitted-defines (set-add emitted-defines defn)))
   ;; calculate the free variables of an expression e...
