@@ -19,14 +19,15 @@
    (let ([sum 0])
      (let ([i 0])
        (let ([last (mk_pair 0 0)])
-         (set_pair_first last 0)
-         (set_pair_second last 0)
-         (let ([_ (while (<= i n)
-                         (begin
-                           (set! sum (+ sum i))
-                           (set_pair_first last sum)
-                           (set_pair_second last i)
-                           (set! i (+ i 1))))])
+	 (begin 
+           (set_pair_first last 0)
+           (set_pair_second last 0)
+           (let ([_ (while (<= i n)
+                           (begin
+                             (set! sum (+ sum i))
+                             (set_pair_first last sum)
+                             (set_pair_second last i)
+                             (set! i (+ i 1))))]))
            last)))))
 
  (define (diff_of_pair v)

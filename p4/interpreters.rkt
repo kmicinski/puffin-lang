@@ -358,9 +358,14 @@
 (define out? #f)
 
 (define (interp-tail instrs blocks st in)
+  (match-define `(,regs ,vars ,mem ,stack ,flags) st)
   (match instrs
     ['() (read-op '(reg rax) st)]
-    [`((retq) . ,_) (read-op '(reg rax) st)]
+    [`((retq) . ,_) 
+     (match stack
+       ['(top-stack) 
+        (read-op '(reg rax) st)]
+       [`((,env+ ,rst) . ,stack+) (interp-tail rst env+ stack+ in)])]
     [`((goto ,l) . ,_)
      (interp-tail (hash-ref blocks l) blocks st in)]
     [`((movq ,src ,dst) . ,rst) 
@@ -467,36 +472,4 @@
         [(x86-64? p)                             (interpret-instr p in)]
         [else (error 'interpret "unknown IR kind")]))
 
-(interpret-blocks '(program
-                    (define (main)
-                      #hash((main
-                             .
-                             (seq
-                              (assign vec4858 (make-vector 1))
-                              (seq
-                               (assign v4850 vec4858)
-                               (seq
-                                (assign funref4859 (fun-ref f))
-                                (seq
-                                 (vector-set! v4850 0 funref4859)
-                                 (seq
-                                  (assign clo4849 v4850)
-                                  (seq
-                                   (assign ref4860 (vector-ref clo4849 0))
-                                   (seq
-                                    (assign read4861 (read))
-                                    (seq
-                                     (assign x4862 (app ref4860 clo4849 read4861))
-                                     (return x4862))))))))))))
-                    (define (f env x4846)
-                      #hash((f
-                             .
-                             (seq
-                              (assign vec4863 (make-vector 1))
-                              (seq
-                               (assign x vec4863)
-                               (seq
-                                (vector-set! x 0 x4846)
-                                (seq (assign ref4864 (vector-ref x 0))
-                                     (return ref4864)))))))))
-                  (range 100))
+
