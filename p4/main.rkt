@@ -83,7 +83,7 @@
           (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
         (displayln "Input:")
         (pretty-print (hash-ref h 'input))
-        (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
+        (displayln (format "Satisfies input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
         (displayln "Output:")
         (displayln (hash-ref h 'pretty-output))
         (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))

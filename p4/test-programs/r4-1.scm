@@ -1,2 +1,3 @@
 (program (define (f x) x)
-         (f (read)))
+	 (define (g y) (+ (f y) 1))
+         (g (read)))

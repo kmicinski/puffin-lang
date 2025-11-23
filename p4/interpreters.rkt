@@ -1,4 +1,4 @@
-#lang racket
+ #lang racket
 
 ;; Interpreters for each IR in irs.rkt -- updated for the new R5 pipeline.
 (require "irs.rkt")
@@ -147,7 +147,7 @@
      (match (eval-R5-exp rhs env in)
        [(cons v in*)
         (vector-set! (hash-ref env x) 0 v)
-        '(void)])]
+        (cons '(void) in*)])]
     [`(app ,e-f ,args ...)
      (eval-R5-exp `(,e-f ,@args) env in)]
     [`(fun-ref ,f) (eval-R5-exp f env in)]
@@ -165,7 +165,7 @@
      (eval-R5-exp e-b env++ in++)]
     [_ (error 'interpret "malformed R5 expression: ~a" e)]))
 
-(define (interpret-R5 p [in '()])
+(define (interpret-R5 p [in (range 10000)])
   (define (build-env defn env)
     (match defn
       [`(define (,f ,args ...) ,e-b)
@@ -278,7 +278,7 @@
       [_                                   (error 'interpret "bad BLOCKS tail ~a" s)]))
   (go (hash-ref blocks label) toplevel-env '(top-stack) in))
 
-(define (interpret-blocks p [in '()])
+(define (interpret-blocks p [in (range 10000)])
   (match-define `(program ,defns ...) p)
   (define name->args
     (foldl (lambda (defn acc) (match defn
@@ -297,44 +297,46 @@
 ;; ────────────────────────────────────────────────────────────────────────────
 
 ;; State is:
-;; `(,regs ,vars ,mem ,stack ,flags)
+;; `(,regs ,locals ,stack ,heap ,flags)
 ;; 
 ;; Pointers are represented as `(pointer-to addr)`
 ;; Addresses are either '(stack-addr i) or '(heap-addr i)
 ;; Primitive operations are updated to work on pointers
 
 (define (read-op op st)
-  (match-define `(,regs ,vars ,mem ,stack ,flags) st)
+  (match-define `(,regs ,locals ,stack ,flags) st)
   (match op
     [`(imm ,n)                    n]
     [`(reg ,r)                    (hash-ref regs r 0)]
     [`(byte-reg ,r)               (hash-ref regs r 0)]
-    [`(var ,x)                    (hash-ref vars x (λ () (error 'interp-instrs "unbound var ~a" x)))]
-    [`(deref (reg rbp) ,off)      (hash-ref mem off 0)]
+    [`(var ,x)                    (hash-ref locals x (λ () (error 'interp-instrs "unbound var ~a" x)))]
+    [`(deref (reg rbp) ,off)      (hash-ref locals off)]
     [`(deref (reg ,r) ,off)
      (match (read-op `(reg ,r) st)
        [(? vector? v) (vector-ref v (/ (- off 8) 8))])]))
 
 (define (write-op op v st)
-  (match-define `(,regs ,vars ,mem ,stack ,flags) st)
+  (match-define `(,regs ,locals ,stack ,flags) st)
   (match op
-    [`(reg ,r)                    `(,(hash-set regs r v) ,vars ,mem ,stack ,flags)]
-    [`(byte-reg ,r)               `(,(hash-set regs r (bitwise-and v #xFF)) ,vars ,mem ,stack ,flags)]
-    [`(var ,x)                    `(,regs ,(hash-set vars x v) ,mem ,stack ,flags)]
-    [`(deref (reg rbp) ,off)      `(,regs ,vars ,(hash-set mem off v) ,stack ,flags)]
-    [`(deref (reg ,r) ,off)
+    [`(reg ,r)                    `(,(hash-set regs r v) ,locals ,stack  ,flags)]
+    [`(byte-reg ,r)               `(,(hash-set regs r (bitwise-and v #xFF)) ,locals ,stack ,flags)]
+    [`(var ,x)                    `(,regs ,(hash-set locals x v)  ,stack ,flags)]
+    [`(deref (reg rbp) ,off)      `(,regs ,(hash-set locals off v) ,stack ,flags)]
+    [`(deref (reg ,r) ,off)        
      (define vec (read-op `(reg ,r) st))
      (define idx (/ (- off 8) 8))
      (match vec
        [(? vector?) (vector-set! vec idx v)])
-     `(,regs ,vars ,mem ,stack ,flags)]
+     `(,regs ,locals ,stack ,flags)]
     [_ (error 'interp-instrs "cannot write to ~a" op)]))
 
 (define (cmp-flags srcv dstv)
-  (define res (- dstv srcv))
+  (define src+ (if (number? srcv) srcv (equal-hash-code srcv)))
+  (define dst+ (if (number? dstv) dstv (equal-hash-code dstv)))
+  (define res (- dst+ src+))
   (define sign (λ (x) (if (< x 0) 1 0)))
-  (define of? (and (not (= (sign dstv) (sign srcv)))
-                   (not (= (sign dstv) (sign res)))))
+  (define of? (and (not (= (sign dst+) (sign src+)))
+                   (not (= (sign dst+) (sign res)))))
   (hash 'ZF (= res 0) 'SF (< res 0) 'OF of?))
 
 (define (cc-true? cc flags)
@@ -358,14 +360,14 @@
 (define out? #f)
 
 (define (interp-tail instrs blocks st in)
-  (match-define `(,regs ,vars ,mem ,stack ,flags) st)
+  (match-define `(,regs ,locals ,stack ,flags) st)
   (match instrs
     ['() (read-op '(reg rax) st)]
     [`((retq) . ,_) 
      (match stack
-       ['(top-stack) 
+       ['(the-stack-stops-here)
         (read-op '(reg rax) st)]
-       [`((,env+ ,rst) . ,stack+) (interp-tail rst env+ stack+ in)])]
+       [`((,locals+ ,rst) . ,stack+) (interp-tail rst blocks `(,regs ,locals+ ,stack+ ,flags) in)])]
     [`((goto ,l) . ,_)
      (interp-tail (hash-ref blocks l) blocks st in)]
     [`((movq ,src ,dst) . ,rst) 
@@ -381,26 +383,23 @@
      (interp-tail rst blocks (write-op dst sum st) in)]
     [`((xorq ,src ,dst) . ,rst)
      (define res (bitwise-xor (read-op dst st) (read-op src st)))
-     (match-define `(,regs ,vars ,mem ,stack ,_) (write-op dst res st))
-     (define flags* (hash 'ZF (= res 0) 'SF (< res 0) 'OF #f))
-     (interp-tail rst blocks `(,regs ,vars ,mem ,stack ,flags*) in)]
+     (match-define `(,regs+ ,locals+ ,stack+ ,_) (write-op dst res st))
+     (define flags+ (hash 'ZF (= res 0) 'SF (< res 0) 'OF #f))
+     (interp-tail rst blocks `(,regs+ ,locals+ ,stack+ ,flags+) in)]
     [`((negq ,op) . ,rst)
      (interp-tail rst blocks (write-op op (- (read-op op st)) st) in)]
     [`((pushq ,src) . ,rst)
-     (match-define `(,regs ,vars ,mem ,stack ,flags) st)
-     (interp-tail rst blocks `(,regs ,vars ,mem ,(cons (read-op src st) stack) ,flags) in)]
+     (interp-tail rst blocks `(,regs ,locals ,(cons (read-op src st) stack) ,flags) in)]
     [`((popq ,dst) . ,rst)
-     (match-define `(,regs ,vars ,mem ,stack ,flags) st)
      (match stack
        ['() (error 'interp-instrs "pop from empty stack")]
        [`(,top . ,rest)
         (define st* (write-op dst top st))
-        (match-define `(,regs* ,vars* ,mem* ,_ ,flags*) st*)
-        (interp-tail rst blocks `(,regs* ,vars* ,mem* ,rest ,flags*) in)])]
+        (match-define `(,regs+ ,locals+ ,_ ,flags+) st*)
+        (interp-tail rst blocks `(,regs+ ,locals+ ,rest ,flags+) in)])]
     [`((cmpq ,a0 ,a1) . ,rst)
-     (match-define `(,regs ,vars ,mem ,stack ,flags) st)
      (define flags* (cmp-flags (read-op a0 st) (read-op a1 st)))
-     (interp-tail rst blocks `(,regs ,vars ,mem ,stack ,flags*) in)]
+     (interp-tail rst blocks `(,regs ,locals ,stack ,flags*) in)]
     [`((set ,cc ,dst) . ,rst)
      (define b (if (cc-true? cc (last st)) 1 0))
      (interp-tail rst blocks (write-op dst b st) in)]
@@ -428,27 +427,27 @@
        [_ (error 'interp-instrs "unknown call ~a" lbl)])]
     ;; Indirect calls via function pointers
     [`((indirect-callq ,op) . ,rst)
-     (match-define `(,regs ,vars ,mem ,stack ,flags) st)
      (define fp (read-op op st))
      (match-define `(fun-ref ,f) fp)
      (interp-tail (hash-ref blocks f)
                   blocks
-                  `(,regs ,(hash) ,mem ,(cons `(,vars ,rst) stack) ,flags)
+                  `(,regs ,(hash) ,(cons `(,locals ,rst) stack) ,flags)
                   in)]
     [_ (error 'interp-instrs "unknown instruction sequence ~a" instrs)]))
 
-(define (interpret-instr prog [in '()])
+
+(define (interpret-instr prog [in (range 10000)])
   (set! out? #f)
   (match prog
     [`(program ,_ ,defns ...)
      (define raw-blocks (match prog
-                      [`(program (define (,f ,args ...) ,blocks) ...) blocks]
-                      [`(program (define ,_ (,f ,args ...) ,blocks) ...) blocks]))
+                          [`(program (define (,f ,args ...) ,blocks) ...) blocks]
+                          [`(program (define ,_ (,f ,args ...) ,blocks) ...) blocks]))
      (define blocks (foldl merge (hash) raw-blocks))
      (define instrs (hash-ref blocks (entry-symbol)))
      (define init-regs (hash 'rsp '(stack-addr #xAA000000)
                              'rbp '(stack-addr #xAA000000)))
-     (define init-state `(,init-regs ,(hash) ,(hash) () ,(hash 'ZF #f 'SF #f 'OF #f)))
+     (define init-state `(,init-regs ,(hash) (the-stack-stops-here) ,(hash 'ZF #f 'SF #f 'OF #f)))
      (define result (interp-tail instrs blocks init-state in))
      (if out? result (begin (displayln result) result))]))
 
@@ -459,17 +458,15 @@
 ;; Dispatcher
 ;; ────────────────────────────────────────────────────────────────────────────
 
-(define (interpret p [in (range 100)])
+(define (interpret p [in (range 10000)])
   (cond [(R5? p)                                 (interpret-R5 p in)]
         [(shrunk-R5? p)                          (interpret-R5 p in)]
         [(unique-source-tree? p)                 (interpret-R5 p in)]
         [(anf-program? p)                        (interpret-R5 p in)]
-        [(blocks-program? p)                         (interpret-blocks p in)]
+        [(blocks-program? p)                     (interpret-blocks p in)]
         [(locals-program? p)                     (interpret-blocks p in)]
         [(instr-program? p)                      (interpret-instr p in)]
         [(homes-assigned-program? p)             (interpret-instr p in)]
         [(patched-program? p)                    (interpret-instr p in)]
         [(x86-64? p)                             (interpret-instr p in)]
         [else (error 'interpret "unknown IR kind")]))
-
-

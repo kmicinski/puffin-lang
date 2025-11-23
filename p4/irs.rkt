@@ -518,6 +518,7 @@
 
 (define (instr/vars? i)
   (match i
+    [`(retq)                                                   #t]
     [`(movq ,(? operand/vars? src) ,(? operand/vars? dst))     #t]
     [`(movzbq ,(? byte-reg? src) ,(? operand/vars? dst))       #t]
     [`(addq ,(? operand/vars? src) ,(? operand/vars? dst))     #t]
@@ -525,7 +526,6 @@
     [`(pushq ,(? operand/vars? op))                            #t]
     [`(popq ,(? operand/vars? op))                             #t]
     [`(callq ,(? symbol?) ,(? integer?))                       #t]
-    [`(retq)                                                   #t]
     [`(xorq ,(? operand/vars?) ,(? operand/vars?))             #t]
     [`(cmpq ,(? operand/vars?) ,(? operand/vars?))             #t]
     [`(set  ,(? cc?) ,(? byte-reg? dst))                       #t]
@@ -535,8 +535,7 @@
     ;; NEW
     [`(indirect-callq ,(? operand/vars?))                      #t]
     [`(leaq (fun-ref ,f) ,(? operand/vars? dst))               #t]
-    [_                                                         #f]
-    ))
+    [_                                                         #f]))
 
 (define (instr-program? p)      ; after select-instructions
   (define (per-defn defn)

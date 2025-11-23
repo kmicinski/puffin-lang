@@ -1,7 +1,7 @@
 (program
  (define (mul x y)
    (if (<= y 0)
-       0
+       (let ([z 0]) z)
        (+ x (mul x (- y 1)))))
 
  (define (square x)

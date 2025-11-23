@@ -68,7 +68,7 @@
  ;;  - read n numbers into a list
  ;;  - quicksort the list
  ;;  - return sum of sorted list
- (let* ([n (read)]
+ (let* ([n (+ 5 (read))]
         [xs (read_list n)]
         [sorted (qsort xs)]
         [j (read)]

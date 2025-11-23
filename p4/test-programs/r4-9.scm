@@ -27,8 +27,10 @@
                              (set! sum (+ sum i))
                              (set_pair_first last sum)
                              (set_pair_second last i)
-                             (set! i (+ i 1))))]))
-           last)))))
+                             (set! i (+ i 1))))])
+	     last))))))
+
+           
 
  (define (diff_of_pair v)
    ;; returns first - second

@@ -5,4 +5,4 @@
        (if (eq? x 1)
 	   1
 	   (+ (fib (- x 1)) (fib (- x 2))))))
- (fib (read)))
+ (+ 20 (fib (read))))
