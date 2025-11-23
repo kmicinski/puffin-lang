@@ -107,8 +107,7 @@
     ;; new forms
     [`(,(? R5-exp? e-f) ,(? R5-exp? a-args) ...) #t]
     [`(lambda (,(? symbol? xs) ...) ,(? R5-exp? e-body)) #t]
-    #;[_ #f]
-    ))
+    [_ #f]))
 
 (define (R5-defn? defn)
   (match defn

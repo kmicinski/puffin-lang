@@ -1,10 +1,9 @@
 #lang racket
 
-;; CIS531 Fall '25 Project 3
-;; Compiling R4 -> x86-64
+;; CIS531 Fall '25 Project 5
+;; Compiling R4/5 -> x86-64
 (require "irs.rkt") ;; Definition of each IR (please read)
 (require "system.rkt") ;; System-specific details
-(require "interpreters.rkt")
 
 (provide (all-defined-out)) ;; export everything for testing
 
@@ -212,20 +211,18 @@
 
 ;; Take variables into either the stack/registers
 (define (assign-homes p)
-  (pretty-print p)
   ;; traverse each instruction in the block to replace (var x) with
   ;; the appropriate stack position. Note: this will leave some
   ;; instructions
   (define (per-defn definition)
     (match-define `(define ,locals (,f ,args ...) ,blocks) definition)
-    (print definition)
     (define var->stackloc
       (let ([l (set->list locals)])
         (foldl (lambda (v i h) (hash-set h v (* -8 i))) (hash) l (range 1 (add1 (length l))))))
     ;; map (var x) to its home (an offset of rbp)
     (define (home a)
       (match a
-        [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x))]
+        [`(var ,x) `(deref (reg rbp) ,(hash-ref var->stackloc x 'unknown))]
         [`(imm ,i) a]
         [`(reg ,r) a]
         [`(byte-reg ,al) a]
@@ -248,10 +245,12 @@
         [`((jmp-if ,cc ,l) ,rest ...)
          `((jmp-if ,cc ,l) ,@(h rest))]
         [`((set ,cc ,a) ,rest ...)
-         `((set ,cc ,a) ,@(h rest))]
+         `((set ,cc ,(home a)) ,@(h rest))]
         [`((goto ,l) ,rest ...) `((goto ,l) ,@(h rest))]
         [`((xorq ,a0 ,a1) ,rest ...) `((xorq ,(home a0) ,(home a1)) ,@(h rest))]
         ;; new
+        [`((retq) ,rest ...)
+         `((retq) ,@(h rest))]
         [`((indirect-callq ,a) ,rest ...)
          `((indirect-callq ,(home a)) ,@(h rest))]
         [`((callq ,f ,i) ,rest ...)
@@ -382,7 +381,7 @@
     (define blocks+ (hash-set
                      (foldl (λ (block acc) (hash-set acc block (c1->block (hash-ref blocks block)))) (hash) (hash-keys blocks))
                      (conclusion-block-name)
-                     '()))
+                     '((retq))))
     (define entry (hash-ref blocks+ f))
     (define moves
       (map (λ (a r) `(movq (reg ,r) (var ,a)))
@@ -649,7 +648,8 @@
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
        (define genformals (map (lambda (x) (gensym x)) formals))
-       `(define (,fname ,@genformals) ,(box-formals genformals formals (a-c e-body)))]))
+       (define ret (gensym 'ret))
+       `(define (,fname ,@genformals) ,(box-formals genformals formals (a-c `(let ([,ret ,e-body]) ,ret))))]))
   (match p
     [`(program ,defns ...)
      `(program ,@(map per-defn defns))]))
@@ -1039,141 +1039,5 @@
     [`(program ,defns ... ,expr)
      `(program ,@(cons `(define (main) ,(h expr)) (map per-defn defns)))]))
 
-
-;; (define ex0
-;;   '(program
-;;     (define (f x)
-;;       (if (eq? x 0) 1 (+ 5 (f (- x 1)))))
-;;     (f (read))))
-
-;; #;
-;; (pretty-print 
-;;  (assignment-convert
-;;   (reveal-functions
-;;    (uniqueify
-;;     (shrink
-;;      '(program (define (f x) x)
-;;                (f (read)))
-;;      #;
-;;      '(program (define (f x) (lambda (y) (+ x y)))
-;;                (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-;;                (g (read))))))))
-
-;; (define nq
-;;   '(program
-;;      ;; =========================
-;;      ;; List primitives (as in your ex3)
-;;      ;; =========================
-;;      (define (is_nil x) (eq? x (void)))
-
-;;      ;; cons cell as 2-element vector: [0] = head, [1] = tail
-;;      (define (cons h t)
-;;        (let ([c (make-vector 2)])
-;;          (let ([_ (vector-set! c 0 h)])
-;;            (let ([_ (vector-set! c 1 t)])
-;;              c))))
-
-;;      (define (head c) (vector-ref c 0))
-;;      (define (tail c) (vector-ref c 1))
-
-;;      ;; absolute value
-;;      (define (abs x)
-;;        (if (< x 0)
-;;            (- 0 x)
-;;            x))
-
-;;      ;; =========================
-;;      ;; Check if placing a queen in column `col`
-;;      ;; is safe w.r.t. existing queens list `qs`.
-;;      ;; `qs` holds columns of queens in previous rows,
-;;      ;; most recent queen first.
-;;      ;; =========================
-;;      (define (safe? col qs)
-;;        (let ([ok #t])
-;;          (let ([d 1])        ;; row-distance from new queen
-;;            (let ([lst qs])
-;;              (begin
-;;                (while (if (is_nil lst) #f #t)
-;;                  (begin
-;;                    (let ([c (head lst)])
-;;                      (if (eq? c col)
-;;                          ;; same column -> conflict
-;;                          (begin
-;;                            (set! ok #f)
-;;                            ;; force loop exit
-;;                            (set! lst (void)))
-;;                          (if (eq? (abs (- c col)) d)
-;;                              ;; diag conflict
-;;                              (begin
-;;                                (set! ok #f)
-;;                                (set! lst (void)))
-;;                              ;; no conflict with this queen, move on
-;;                              (begin
-;;                                (set! lst (tail lst))
-;;                                (set! d (+ d 1))))))))
-;;                ok)))))
-
-;;      ;; =========================
-;;      ;; Recursive solver:
-;;      ;; row: current row index (0..n)
-;;      ;; n: board size
-;;      ;; queens: list of columns for previously placed queens
-;;      ;;         (most recent row at the head)
-;;      ;; Returns:
-;;      ;;   - a list of columns for all rows 0..n-1
-;;      ;;   - or (void) if no solution from this state.
-;;      ;; =========================
-;;      (define (solve_row row n queens)
-;;        (if (eq? row n)
-;;            ;; all rows placed, solution found
-;;            queens
-;;            (let ([col 0])
-;;              (let ([solution (void)])
-;;                (begin
-;;                  (while (< col n)
-;;                    (begin
-;;                      (if (safe? col queens)
-;;                          (let ([s (solve_row (+ row 1) n (cons col queens))])
-;;                            (if (eq? s (void))
-;;                                (set! solution solution)
-;;                                (set! solution s)))
-;;                          (set! solution solution))
-;;                      (set! col (+ col 1))))
-;;                  solution)))))
-
-;;      ;; Helper: top-level solver
-;;      (define (solve_n_queens n)
-;;        (solve_row 0 n (void)))
-
-;;      ;; =========================
-;;      ;; Entry expression:
-;;      ;;   - read n
-;;      ;;   - solve N-Queens
-;;      ;;   - return solution list (columns, last row first)
-;;      ;; =========================
-;;      (let* ([n (read)]
-;;             [solution (solve_n_queens n)])
-;;        solution)))
-
-;; (displayln
-;;  (dump-x86-64
-;;   (prelude-and-conclusion
-;;    (patch-instructions
-;;     (assign-homes
-;;      (select-instructions
-;;       (uncover-locals
-;;        (explicate-control
-;;         (anf-convert
-;;          (limit-functions
-;;           (lift-lambdas
-;;            (assignment-convert
-;;             (reveal-functions
-;;              (uniqueify
-;;               (shrink
-;;                nq
-;;                #;
-;;                '(program (define (f x) (lambda (y) (+ x y)))
-;;                          (define (g x) (lambda (y) (lambda (z) ((f z) (+ y x)))))
-;;                          (g (read))))))))))))))))))
 
 

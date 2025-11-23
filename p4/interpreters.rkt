@@ -151,6 +151,7 @@
     [`(app ,e-f ,args ...)
      (eval-R5-exp `(,e-f ,@args) env in)]
     [`(fun-ref ,f) (eval-R5-exp f env in)]
+    [`(lambda (,xs ...) ,e+) `((clo ,e ,env) ,in)]
     [`(,e-f ,e-args ...)
      (match-define `((clo (lambda (,xs ...) ,e-b) ,env+) . ,in+) (eval-R5-exp e-f env in))
      (match-define `(,reversed-vs ,in++)
