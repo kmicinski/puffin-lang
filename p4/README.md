@@ -10,9 +10,8 @@ is extra credit, but the R4 baseline is a seriously impressive
 language, with an impressive degree of expressivity.
 
 Still, however, there are some painfully obvious things this language
-omits, which represent very trivial extensions I encourage you to
-implement on your own (as part of your final project, if you are in
-CIS531):
+omits, which represent extensions I encourage you to implement on your
+own (as part of your final project, if you are in CIS531):
 
 - On the easier end, we don't even have things like multiplication
   `*`, modulo `/`, etc. built into the language. Adding these would be
@@ -20,7 +19,7 @@ CIS531):
 
 - Our program can *still* display only a single value: generalizing
   this would require either (a) adding strings (which has its own set
-  of runtime choices, if allow ourselves to dynamically allocate
+  of runtime choices, if we allow ourselves to dynamically allocate
   strings) or (b) adding some primitives like `(print_int ...)` and
   `(print_char ...)`. Adding just these two could allow us to print
   whole lines. To get format strings, the easiest way is to write a
@@ -29,14 +28,16 @@ CIS531):
 - On the more concerning end, we have no real type/memory safety in
   this language, even still--making it a very poor choice for 2025. In
   the last language, typechecking was easy because we didn't have
-  functions. For this languag, the obvious "safe" choice is to do
+  functions. For this language, the obvious "safe" choice is to do
   runtime type tagging and dynamic types, which would be the subject
   of the next mandatory project (if we had time). You could also
   imagine using a typechecker, but it starts to get complicated once
   we mix functions, vectors, etc. unless we are okay doing type
-  annotations and skipping polymoprhism, which is a practical
+  annotations and skipping polymorphism, which is a practical
   limitation as we must monomorphize.
 
+Congrats on making it to this point, by the end of this project you'll
+have completed the whole (core) language!
 
 ## Input Language (R4/5)
 
@@ -157,7 +158,124 @@ The rest of the passes are *updated* in a _very systematic manner_:
 generally speaking, you need to map your previously-single-function
 logic across multiple functions.
 
-### `shrink` 
+## Implementing `define`s and applications
+
+The major innovation of this project is to enable
+functions at the top level and (optionally) to perform lambda
+lifting. The most common change that our compiler will face is this:
+in our previous IR, we had an IR like `(program ,info ,code), where
+info and code got filled in throughout the compilation to be
+increasingly lower-level--but at each pass, we always matched with
+this pattern. But now, we can't do that anymore--we need to generalize
+every pass. This sounds like a lot of work, but generally it ends up
+amounting to changing our code from something like this:
+
+```
+(match p
+  [`(program ,info ,e)
+   `(program ,info ,(process e))))
+```
+
+to something like this:
+
+```
+(define (per-defn defn)
+  (match-defne defn `(define ,info (,f ,formals ...) ,code))
+  `(define ,info (,f ,@formals) ,(process code)))
+(match p
+  [`(program ,info ,defns ...)
+   `(program ,info ,(map per-defn defns))])
+```
+
+See what we did? We wrote a per-definition handler, `(per-defn ...)`,
+which does the bulk of the processing that we did before--then, we
+mapped over that per-definition function for each of the
+definitions. This trick is very common, and basically I suggest you
+use this idea for every single pass. It seems like a lot of work, but
+it's not so bad once you get used to it, and almost all of the logic
+from the previous project is isolated to the per-function
+translation. That makes sense, because in general compilation happens
+on a per-function basis.
+
+The `shrink` pass assumes that the program has the structure `(program
+(define (f ...) ...) ... e-main)`, and transforms it so that `e-main`
+is wrapped in a special top-level `main` block (you should use
+`(entry-symbol)`, as before). `e` may then call the functions being
+defined, and its result is finally printed to the screen. `uniqueify`
+works in mostly the expected way, adapted to map a `per-defn` function
+across each. The new stuff is the following three passes:
+
+- `reveal-functions` -- Syntactically distinguishes calls to
+  user-defined functions like `(f x ...)` from builtin functions like
+  `(+ ...)`. We often want to handle these different ways, so
+  `reveal-functions` collects up all of the function names, forms a
+  big set, and walks over the program to replace any call to `f` with
+  an `(app (fun-ref f) ...)`. Later on, `(fun-ref f)` will be
+  translated into a `lea` instruction to get the function pointer
+  (which has to be determined once the program is loaded)
+
+- `lift-lambdas` (EXTRA CREDIT) -- Does closure conversion. Closure
+  conversion is a topic we have covered a lot in class, there is also
+  a course video, so I will skip the explanation here: closure
+  conversion eliminates lambdas by lifting them to top-level defines,
+  but it also allocates / unpacks closures: syntactic lambdas in the
+  input language get translated into closure (vector) allocations in
+  the output.
+
+- `limit-functions` -- Converts functions with greater than six
+  arguments into functions of exactly six arguments, by passing the
+  rest of the arguments through a vector. This is easier than the
+  typical calling convention, which locates the rest of the arguments
+  on the stack
+
+Assignment conversion performs boxing and unboxing, eliminating `set!`
+as usual. It sits between `reveal-functions` and `lift-lambdas`. There
+are some concerns in `assignment-convert` to be mindful of, in this
+project: we need to make sure that arguments to functions (and
+lambdas) *also* get copied into a box. 
+
+ANF conversion is mostly the same, now dealing with only top-level
+definitions (no need to handle lambdas). Explicate-control does not
+significantly change: we handle calls to functions just as we handled
+calls to things like `read` before. In emitting code at the lower
+passes, we generally only need to handle new instructions. The main
+significant intellectual change happens in `select-instructions`,
+which needs to move all of the function's arguments into the
+appropriate registers. Arguments (at most six, due to
+`limit-functions`) are passed _in order_ in the registers
+`(argument-registers-list)` (defined in `system.rkt`). You should use
+that function, rather than hardcoding a list of registers (but they
+are rdi, rsi, rdx, rcx, r8, and r9). At the `select-instructions`
+phase, I instruct you to emit a function named `conclusion` in every
+function of the form `'((retq))` (i.e., a single return
+instruction). In the pass `prelude-and-conclusion`, we fix this up by
+calculating the requisite stack space to allocate, allocating it and
+uniqueifying the block name from `conclusion` to `conclusion183...`
+(i.e., a gensym).
+
+One last point: check out the new `irs.rkt`. Notice how there is no
+top-level metadata in the program anymore: no `(program ,info
+...)`. That's because in this project, all information is either (a)
+function-specific or (b) can easily be figured out by looking at the
+definitions (e.g., collecting up all function names, since you know
+they're all of the form `(define (,f ...) ...)`). So in general, the
+IRs will look like:
+
+```
+'(program (define (f x0 x1 ...) e-b0) (define (g y0 ...) e-b1) ...)
+```
+
+As mentioned above (this is such a key point I feel I have to repeat
+it), the general idea is to either map / fold over this list of
+definitions. 
+
+## Pass-by-Pass Implementation Guide
+
+Looking at my reference implementation, compared to my solution for
+the previous project, I will call out the major things that I see as
+relevant to know on a pass-by-pass basis.
+
+#### `shrink` 
 
 First, shrink needs to support both function calls and (R5 only)
 lambdas. Second, this pass expects an input like:
@@ -175,7 +293,7 @@ this in a `main` function:
 (program (define (f x ...) e) ... (define (main) e-main))
 ```
 
-### `uniqueify` 
+#### `uniqueify` 
 
 This pass needs to change in two ways: it needs to map the `rename`
 function across each definition, taking the variable names into
@@ -184,7 +302,7 @@ map `rename` across each argument / the function expression) and
 lambdas: be sure to be mindful that lambdas establish bindings and
 thus need to be handled similarly to `let`.
 
-### `reveal-functions`
+#### `reveal-functions`
 
 This is a new pass: the purpose of this pass is to change function
 applications like `(f x y z)` into `(app (fun-ref f) x y z)`. The
@@ -215,7 +333,7 @@ This pass is pretty straightforward to write, it has two basic steps:
   same name will already have been uniquified, so this is not too hard
   to write as a recursive function.
 
-### `assignment-convert`
+#### `assignment-convert`
 
 - Supporting `app` is easy: we map `a-c` across all the things being applied. 
 
@@ -236,26 +354,25 @@ This pass is pretty straightforward to write, it has two basic steps:
             ,(box-formals rst (rest realformals) e-body)))]))
 ```
 
-### `lift-lambdas`
+#### `lift-lambdas`
 
 This is the closure conversion pass. The closure conversion pass is
-explained fairly thorougly in this video:
-https://www.youtube.com/watch?v=zMtaXO_xHYU Additionally, the course
-slides give some detailed coverage of the ideas. The basic idea is
-this: every function in your program is annotated with an extra `clo`
-argument. We will implement flat closures, where a closure is a vector
-of (a) a function pointer followed by (b) the closure's free variables
-in some canonical order. I recommend implementing bottom-up closure
-conversion, you walk over each expression (in each definition, don't
-forget that) to emit a set of "lifted" lambdas (top-level `define`s
-which accept a `clo` argument along with the rest of the lambda's
-arguments) which are then spliced on to the program. Additionally,
-lambda lifting ensures that each syntactic lambda in the program is
-compiled into an allocation of a vector and then population of it with
-the function pointer and free variables (properly allocating /
-building the closure).
+explained in this video: https://www.youtube.com/watch?v=zMtaXO_xHYU
+Additionally, the course slides give some detailed coverage of the
+ideas. The basic idea is this: every function in your program is
+annotated with an extra `clo` argument. We will implement flat
+closures, where a closure is a vector of (a) a function pointer
+followed by (b) the closure's free variables in some canonical
+order. I recommend implementing bottom-up closure conversion, you walk
+over each expression (in each definition, don't forget that) to emit a
+set of "lifted" lambdas (top-level `define`s which accept a `clo`
+argument along with the rest of the lambda's arguments) which are then
+spliced on to the program. Additionally, lambda lifting ensures that
+each syntactic lambda in the program is compiled into an allocation of
+a vector and then population of it with the function pointer and free
+variables (properly allocating / building the closure).
 
-### `limit-functions`
+#### `limit-functions`
 
 This pass is relatively small as well, it has a very simple purpose:
 
@@ -268,7 +385,7 @@ This pass is relatively small as well, it has a very simple purpose:
   allocate a vector, populate it, and pass it as the last argument.
 
 
-### `anf-convert` 
+#### `anf-convert` 
 
 - ANF conversion needs to be extended to support application: `(app
   ,e0 ,e-rest ...)` needs to first convert `e0` to an atom, then
@@ -288,7 +405,7 @@ This pass is relatively small as well, it has a very simple purpose:
              (lambda (a) (handle-rest rest (cons a as))))]))
 ```
 
-### `explicate-control`
+#### `explicate-control`
 
 This pass has almost no changes:
 
@@ -298,19 +415,19 @@ This pass has almost no changes:
 - `expr->blocks` simply turns the `(let ([x (app ...)]) ...)` into
   `(assign ,x (app ,a-f ,@a-args))`
 
-### `uncover-locals`
+#### `uncover-locals`
 
 - I gave this pass to you again, it is fairly simply, I have updated
   it in the expected manner.
 
-### `select-instructions` 
+#### `select-instructions` 
 
 - This pass needs to be updated to support `(seq (assign ,lhs (app
   ,a-f ,args ...)) ,next)`. This should:
 
     - Copy all arguments into registers. Use the list
       `(argument-registers-list)` in `system.rkt`, which gives the
-      list of regisers<->arguments in order.
+      list of registers<->arguments in order.
     - Make an `(indirect-callq ...)` to the function atom
     - Move the result register `%rax` into `lhs`
 
@@ -325,17 +442,17 @@ This pass has almost no changes:
   `(retq)`). In the `prelude-and-conclusion` pass we will generate the
   prelude / conclusion.
 
-### `assign-homes`
+#### `assign-homes`
 
 - This pass needs to be updated to support `leaq` (which will always
   have a fun-ref as its argument) and `indirect-callq`
 
-### `patch-instructions`
+#### `patch-instructions`
 
 - Also needs to be updated to handle `leaq`, which requires its
   destination is a register.
 
-### `prelude-and-conclusion`
+#### `prelude-and-conclusion`
 
 This pass needs a bit more work, due to the following reason: in our
 previous pass, we used a block name `conclusion`. We rename the block
@@ -397,7 +514,7 @@ So, I have code that looks something like this:
        `(define ,locals (,f ,@args) ,blocks+)
 ```
 
-### `dump-x86-64`
+#### `dump-x86-64`
 
 - As all other passes do, this needs to map across all
   definitions. But in this case, all of the blocks in every definition
@@ -406,7 +523,7 @@ So, I have code that looks something like this:
   that the blocks that get generated sit next to each other in the
   emitted source code (though it may make debugging easier).
 
-- We need to physicaly render two new assembly insructions: `leaq` and
+- We need to physically render two new assembly instructions: `leaq` and
   `indirect-callq`. Both of these are fairly easy, for `leaq` you want to use 
   `(format "leaq ~a(%rip), ~a" (rt-sym f) ...)`.
 
@@ -423,47 +540,6 @@ So, I have code that looks something like this:
 
 - In the `leaq` instruction, I call `rt-sym` as well (as I do in the
   regular `call` instruction for things from `runtime.c`).
-
-## Implementing `define`s and applications
-
-The major innovation of this project is to enable functions at the top
-level and (optionally) to perform lambda lifting. The most common
-change that our compiler will face is this: in our previous IR, we had
-an IR like `(program ,info ,code), where info and code got filled in
-throughout the compilation to be increasingly lower-level--but at each
-pass, we always matched with this pattern. But now, we can't do that
-anymore--we need to generalize every pass. This sounds like a lot of
-work, but generally it ends up amounting to changing our code from
-something like this:
-
-```
-(match p
-  [`(program ,info ,e)
-   `(program ,info ,(process e))))
-```
-
-to something like this:
-
-```
-(define (per-defn defn)
-  (match-defne defn `(define ,info (,f ,formals ...) ,code))
-  `(define ,info (,f ,@formals) ,(process code)))
-(match p
-  [`(program ,info ,defns ...)
-   `(program ,info ,(map per-defn defns))])
-```
-
-See what we did? We wrote a per-definition handler, `(per-defn ...)`,
-which does the bulk of the processing that we did before--then, we
-mapped over that per-definition function for each of the
-definitions. This trick is very common is the best way to start
-transforming your passes to accomodate definitions.
-
-The `shrink` pass now assumes that the program has the structure
-`(program (define (f ...) ...) ... e)`, and transforms it so that `e`
-is wrapped in a special top-level `main` block (you should use
-`(entry-symbol)`, as before). `e` may then call the functions being
-defined, and its result is finally printed to the screen.
 
 ## IR Predicates and Interpreters
 
@@ -512,113 +588,12 @@ Programs that `(read)` input will prompt or consume stdin. You can use
 input redirection:  
 `./output < input-files/1.in`
 
-## Debugging Guide
-
-This is a tricky project, and it is really important that you lean
-into a debugging methodology that works for you. Let me share with you
-some advice I used when I was writing the compiler myself.
-
-- First, I started by writing a single manual test in the top-level of
-  `compile.rkt`, so that I could easily just sit at the command line
-  (or Dr. Racket) and run `compile.rkt` (with no command-line
-  arguments) and see if the test would pass. At the early stages of
-  debugging, this is an excellent strategy, since it means
-  fully-pushbutton test. For example, I had (appended to
-  `compile.rkt`) something like:
-
-```
-(displayln ;; or pretty-print 
- (dump-x86-64
-  (prelude-and-conclusion
-   (patch-instructions
-    (assign-homes
-     (select-instructions
-      (uncover-locals
-       (explicate-control
-        (anf-convert
-         (uniqueify
-          (shrink
-           (typecheck '(program (let ([a (read)])
-                                  (let ([b (read)]) (if (or (> a b) (eq? (+ b 1) 0))
-                                                        (+ a b)
-                                                        (- b a)))))))))))))))))
-```
-
-- I started with a fairly large test in my case--since I was merely
-  adding forms not present in my previous implementation. In this
-  case, I would often be hitting match failures--this is a *good*
-  thing, it allows me to trace down exactly where I need to add match
-  cases and handle new behavior. Of course, the issue is that I also
-  need to mix that with thinking holistically about the specs of each
-  IR.
-
-- After I thought I had each pass of the compiler working, I started
-  switching over to `main.rkt`, which will run all passes of the
-  compiler and will report their outputs. I also needed to write the
-  interpreters (you do not), and so I debugged some of those using
-  `main.rkt`.
-
-- Last, once things are acutally working, I used `test.rkt`, which I
-  adjusted to account for the possibility of expected type errors in
-  malformed inputs.
-
-- My advice to you is similar: start with something where you can
-  press "Run" (or continually reinvoke `racket compile.rkt`). It will
-  facilitate rapid testing, and it is really important to build some
-  skill and intuition for how to accomplish that exercise.
-
-- Remember, debugging is a key concept that you are practicing in this
-  class. The worst possible thing you can do is "guess and check"
-  debugging (running the tests and hoping they pass)--the issue is
-  that doing this gives you very little observability into why the
-  code is broken. To fix this, you need to have some way of
-  interacting with the code. Experts debug their code using an
-  iterative, hypothesis-driven methodology, where they (a) articulate
-  a falsifiable hypothesis ("this match pattern never matches
-  anything"), (b) change their code to observe the bug ("add a
-  displayln at every match handler"), and (c) 
-
-## Tricky Parts of this Project
-
-**BE CAREFUL** of the following:
-
-- In the event of a type error, raise `(error (type-error-tag) "Error here...")`
-
-- In the previous implementation, we had only a single block, and
-  `prelude-and-conclusion` sandwiched the generated code between code
-  to set up the function and code to print the value and exit the
-  function. In this case, that will not work so well. Instead, I
-  recommend the following approach: in the `select-instructions` pass,
-  assume the existence of a special block named `conclusion`, which
-  assumes the return value (to be printed) is in `%rax`, and jump to
-  that label. Then, in `prelude-and-conclusion`, add this label to the
-  program with the right code to print the value of `%rax`. 
-
-- On Mac OSX, you need to prefix labels for functions, meaning `_main`
-  instead of `main`. To facilitate this, I provide a function `(rt-sym
-  s)`, which converts a symbol to a system-specific variant (based on
-  the OS). However, you only need to worry about this for labels that
-  correspond to exported *function* entrypoints, not other labels that
-  are internal to the program (e.g., the target of a jump, or even
-  `conclusion`). This is important, because you don't want to call
-  `(rt-sym ...)` until the *very last pass* (it is ugly to make the
-  previous passes OSX/Linux-specific). The issue is this: if you
-  naively rename every label from `foo` to `_foo`, then you also need
-  to ensure that you clean up jumps so that instead of jumping to
-  `foo`, they go to `_foo`. In my implementation, I handled this as
-  follows: I simply used `(rt-sym ...)` on the `(entry-symbol)` (i.e.,
-  `main`), which is the *only* function in this project.
-
-- Ensure 16-byte stack alignment before `callq`
-
 ## Testing Infrastructure
 
-The file `test.rkt` runs a set of formal tests, as in the last
-project.
+I've cut out the `middleend` option in this project.
 
-- `frontend` – runs `typecheck` → `anf-convert`, checks ANF via interpreter
-- `middleend` – runs `explicate-control` → `uncover-locals`, checks via `interpret-c1`
-- `backend` – runs `select-instructions` → `patch-instructions`, checks via `interpret-instr`
+- `frontend` – runs `shrink` → `anf-convert`, runs the frontend
+- `backend` – runs `explicate-control` → `patch-instructions`, checks via `interpret-instr`
 - `native` – full compile → build binary → run with stdin → compare stdout to golden
 
 Usage:
@@ -651,22 +626,10 @@ Layout:
 
 Instructor-only `gengoldens` mode regenerates these.
 
-## FAQ
-
-- **Do I need register allocation?**  
-  No. Stack-based only.
-
-- **Can I write helpers?**  
-  Yes—keep pass signatures unchanged.
-
-- **Can I call arbitrary C functions?**  
-  No. Only use `read_int64` / `print_int64`.
-
-- **How are inputs fed?**  
-  Via stdin; `.in` files are whitespace-separated integers.
-
 ## Autograder Tests
 
 The autograder invokes `test.rkt` in JSON mode. Your job is to make
 each pass satisfy its predicates and produce semantically equivalent
-IRs until final native code passes all tests.
+IRs until final native code passes all tests. Autograder tests can be
+tough to debug, so if one is failing, you should use tools like
+`main.rkt` or even `debug-server`.

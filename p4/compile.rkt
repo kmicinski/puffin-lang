@@ -264,7 +264,6 @@
     [`(program ,defns ...)
      `(program ,@(map per-defn defns))]))
 
-
 ;; The output of this pass is almost x86, but there will still be an
 ;; issue: we won't be using *registers*, we'll keep using variables
 ;; for now.
@@ -457,8 +456,7 @@
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (void)))]
       [`(let ([,x (fun-ref ,f)]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x (fun-ref ,f)))]
-      [`(let ([,x (app ,a-f ,a-args ...)]) ,e+)
-       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (app ,a-f ,@a-args)))]
+      
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        (define l-rest (gensym 'rest))
        (define l-header (gensym 'header))
@@ -492,6 +490,10 @@
                       (goto ,l-f)
                       ;; take the true branch...
                       (goto ,l-t)))]
+      
+      ;; NEW 
+      [`(let ([,x (app ,a-f ,a-args ...)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x (app ,a-f ,@a-args)))]
       [(? atom? a)
        (hash current-block (k a))]))
   (define (per-defn definition)
@@ -592,6 +594,9 @@
      `(program ,@(map per-defn defns))]))
 
 ;; New: map over all the definitions
+;; Optimized assignment-convert, per-function:
+;; - For each function, compute which vars are ever mutated with set!
+;; - Only those vars are boxed in that function.
 (define (assignment-convert p)
   ;; box-formals: helper function (use for defines and lambdas)
   ;; transform (lambda (x y z) ...) => (lambda (x123 y235 z523) (let ([x (vector x12)]) ...)

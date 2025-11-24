@@ -5,4 +5,5 @@
        (if (eq? x 1)
 	   1
 	   (+ (fib (- x 1)) (fib (- x 2))))))
- (+ 20 (fib (read))))
+ (let ([x (read)])
+   (if (< x 8) (fib x) (fib 8))))

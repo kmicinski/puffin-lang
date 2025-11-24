@@ -15,6 +15,28 @@ rsync -av . starter/ \
   --exclude 'runtime.o' \
   --exclude '__pycache__/' \
   --exclude '#*#' \
-  --exclude 'starter/' 
-
+  --exclude 'starter/' \
+  --exclude 'bad-programs/' \
+  --exclude 'canonical-testcase/' \
+  --exclude '#out#' \
+  --exclude '.#example.s' \
+  --exclude 'compile.rkt' \
+  --exclude 'all-tests/' \
+  --exclude 'all-tests.sh' \
+  --exclude 'old-programs/' \
+  --exclude 'ex.o' \
+  --exclude 'ex.s' \
+  --exclude 'ex0' \
+  --exclude 'example.o' \
+  --exclude 'exin' \
+  --exclude 'out' \
+  --exclude 'out1' \
+  --exclude 'out1clear' \
+  --exclude 'maketests.sh' \
+  --exclude 'maketests.sh~' \
+  --exclude 'clear' \
+  --exclude 'replace.sh' \
+  --exclude 'repro.sh' \
+  --exclude 'selected-tests.txt' \
+  
 mv starter/compile-starter.rkt starter/compile.rkt

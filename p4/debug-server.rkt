@@ -64,11 +64,11 @@
              #:exists 'replace)
            p)))
   (define response
-    (if (R3? sexpr)
+    (if (R5? sexpr)
         (parameterize ([input-file (if no-input-file? temp-input-path input-file-path)])
           (let ([trace (compile-verbose sexpr)]) ; inputs may be #f
             (trace->jsexpr trace)))
-        (hasheq 'error "Input does not match R3? (see irs.rkt)")))
+        (hasheq 'error "Input does not match R5? (see irs.rkt)")))
   (response/full
    200 #"OK" (current-seconds)
    #"application/json"
