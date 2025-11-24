@@ -37,10 +37,9 @@
 ;; mode → metadata: synced with main.rkt
 (define modes
   (hash
-   "frontend"    (list "typecheck"           "anf-convert"        R2?              interpret-anf)
-   "middleend"   (list "explicate-control"   "uncover-locals"     locals-program?  interpret-c1)
-   "backend"     (list "select-instructions" "patch-instructions" patched-program? interpret-instr)
-   "native"      (list "typecheck"           "render-x86"         string?          dummy-interp-x86-64)))
+   "frontend"    (list "shrink"              "anf-convert"        anf-program?      interpret-R5)
+   "backend"     (list "explicate-control"   "patch-instructions" patched-program?  interpret-instr)
+   "native"      (list "shrink"              "render-x86"        anf-program?      dummy-interp-x86-64)))
 
 (define (file->ints p)
   (map string->number (file->lines p)))
@@ -89,15 +88,16 @@
         (displayln "Compiling...")
         (define output-string (open-output-string))
         (define trace
-          (parameterize (;;[current-output-port output-string]
+          (parameterize ([current-output-port output-string]
                          [start-pass (first  (hash-ref modes mode))]
                          [end-pass   (second (hash-ref modes mode))])
             (match (run-assembler-linker program)
               [`(err ,trace)
-               ;;(displayln (get-output-string output-string))
+               (displayln (get-output-string output-string))
                (return 'failed)]
               ;; succes
-              [trace trace])))
+              [trace
+               trace])))
         (unless (file-exists? (executable-file))
           (error (format "Executable ~a not found; did the build fail?" (executable-file))))
         (displayln (format "Executable ~a found, running native tests..." (executable-file)))
@@ -107,7 +107,7 @@
           ;; run the test
           (set! all-passed? (and all-passed? (equal? 'passed (run-native-test infile golden)))))
         (if all-passed? 'passed 'failed)]
-       [_ ;; one of "frontend", "middleend" or "backend"
+       [_ ;; one of "frontend", or "backend"
         (match-define (list start-pass-name end-pass-name entry-pred out-interp)
           (hash-ref modes mode #f))
         (define passed #t)
@@ -120,7 +120,7 @@
           (define program (with-input-from-file prog-file (λ () (deserialize (read)))))
           (define output-string (open-output-string))
           (define trace
-            (parameterize (;;[current-output-port output-string]
+            (parameterize ([current-output-port output-string]
                            [start-pass (first  (hash-ref modes mode))]
                            [end-pass   (second (hash-ref modes mode))]
                            [input-file in-file])
@@ -237,6 +237,8 @@
      (define cfg (with-input-from-file prog-file read)) ;; use prog-file for cfg
      (match cfg
        [(list mode prog-file input-files goldens)
+        (define result (with-handlers ([exn:fail? (λ (e) (cons 'failed (exn-message e)))])
+                         (run/capture (λ () (run-test mode prog-file input-files goldens)))))
         ;; run testcase...
         (match (with-handlers ([exn:fail? (λ (e) (cons 'failed (exn-message e)))])
                  (run/capture (λ () (run-test mode prog-file input-files goldens))))

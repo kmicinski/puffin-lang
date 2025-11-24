@@ -1,1 +1,0 @@
-((3) 0 () 0 () () (q program (let ((n (+ 25 (read)))) (let ((i 0)) (let ((acc 0)) (let ((_ (while (< i n) (let ((_ (set! acc (+ acc i)))) (set! i (+ i 1)))))) acc))))))

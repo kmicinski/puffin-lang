@@ -1,9 +1,0 @@
-(list
- 'program
- (set 'x 'x7647 'x7648)
- '#hash((_main
-         .
-         ((movq (imm 2) (var x))
-          (movq (var x) (var x7647))
-          (movq (var x7647) (var x7648))
-          (movq (var x7648) (reg rax))))))

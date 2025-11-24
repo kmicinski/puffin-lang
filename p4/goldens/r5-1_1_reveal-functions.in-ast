@@ -1,0 +1,1 @@
+((3) 0 () 0 () () (q program (define (main) (((f 1 2 3) 4 5) 6)) (define (f a b c) (lambda (x y) (lambda (z) (+ (+ (+ a b) c) (+ (+ x y) z)))))))

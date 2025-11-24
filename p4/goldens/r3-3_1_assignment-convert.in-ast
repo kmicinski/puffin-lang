@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q read)) () (c program c () c (c let c (c (c x c (? . 0))) c (c let c (c (c y c (? . 0))) q (let ((vx (make-vector 1))) (let ((vy (make-vector 1))) (let ((_ (vector-set! vx 0 x))) (let ((_ (vector-set! vy 0 y))) (if (if (< (vector-ref vy 0) (vector-ref vx 0)) #t (eq? (vector-ref vx 0) (vector-ref vy 0))) (vector-ref vx 0) (vector-ref vy 0))))))))))

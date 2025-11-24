@@ -16,20 +16,23 @@
 (require "interpreters.rkt")
 
  ;; Lists of all of the passes, their names, input predicates, output predicates, and interpreters
- ;; NOTE: first/lass pass has to stay in sync with the parameters in system.rkt
+ ;; NOTE: first/last pass has to stay in sync with the parameters in system.rkt
  (define all-passes
    (list 
-    `(,typecheck              "typecheck"           ,R2?                       ,R2?                     ,interpret-R2)
-    `(,shrink                 "shrink"              ,R2?                       ,shrunk-R2?              ,interpret-R2)
-    `(,uniqueify              "uniqueify"           ,shrunk-R2?                ,unique-source-tree?     ,interpret-R2)
-    `(,anf-convert            "anf-convert"         ,unique-source-tree?       ,anf-program?            ,interpret-anf)
-    `(,explicate-control      "explicate-control"   ,anf-program?              ,c1-program?             ,interpret-c1)
-    `(,uncover-locals         "uncover-locals"      ,c1-program?               ,locals-program?         ,interpret-c1)
-    `(,select-instructions    "select-instructions" ,locals-program?           ,instr-program?          ,interpret-instr)
-    `(,assign-homes           "assign-homes"        ,instr-program?            ,homes-assigned-program? ,interpret-instr)
-    `(,patch-instructions     "patch-instructions"  ,homes-assigned-program?   ,patched-program?        ,interpret-instr)
-    `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?       ,x86-64?                 ,interpret-instr)
-    `(,dump-x86-64            "render-x86"             ,x86-64?                ,string?                 ,dummy-interp-x86-64)))
+    `(,shrink                 "shrink"                 ,R5?                           ,shrunk-R5?                    ,interpret-R5)
+    `(,uniqueify              "uniqueify"              ,shrunk-R5?                    ,unique-source-tree?           ,interpret-R5)
+    `(,reveal-functions       "reveal-functions"       ,unique-source-tree?           ,revealed-functions-program?   ,interpret-R5)
+    `(,assignment-convert     "assignment-convert"     ,revealed-functions-program?   ,assignment-converted-program? ,interpret-R5)
+    `(,lift-lambdas           "lift-lambdas"           ,assignment-converted-program? ,closure-converted-program?    ,interpret-R5)
+    `(,limit-functions        "limit-functions"        ,closure-converted-program?    ,limited-arity-program?        ,interpret-R5)
+    `(,anf-convert            "anf-convert"            ,limited-arity-program?        ,anf-program?                  ,interpret-R5)
+    `(,explicate-control      "explicate-control"      ,anf-program?                  ,blocks-program?               ,interpret-blocks)
+    `(,uncover-locals         "uncover-locals"         ,blocks-program?               ,locals-program?               ,interpret-blocks)
+    `(,select-instructions    "select-instructions"    ,locals-program?               ,instr-program?                ,interpret-instr)
+    `(,assign-homes           "assign-homes"           ,instr-program?                ,homes-assigned-program?       ,interpret-instr)
+    `(,patch-instructions     "patch-instructions"     ,homes-assigned-program?       ,patched-program?              ,interpret-instr)
+    `(,prelude-and-conclusion "prelude-and-conclusion" ,patched-program?              ,x86-64?                       ,interpret-instr)
+    `(,dump-x86-64            "render-x86"             ,x86-64?                       ,string?                       ,dummy-interp-x86-64)))
 
 ;; Make each column available
 (match-define (list passes
@@ -51,7 +54,7 @@
   (define output (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
                    (pass input)))
   ;; Build an object of metadata
-  (define h (hash 'input (pretty-format input)
+  (define h (hash 'input input
                   'orig-input input
                   'pass-name pass-name
                   'satisfies-input-predicate (input-pred input)
@@ -75,12 +78,13 @@
         (displayln "!!! This pass crashed!!! !!!")
         (displayln (hash-ref h 'error)))
       (begin
+        (displayln (format "Running pass ~a." (hash-ref h 'pass-name)))
         (when (hash-ref h 'golden-input #f)
           (displayln (format "Golden input:\n~a" (hash-ref h 'golden-input))))
         (displayln "Input:")
-        (pretty-print (hash-ref h 'output))
-        (displayln (format "Satsifes input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
-        (displayln (format "Ran pass ~a. Output:" (hash-ref h 'pass-name)))
+        (pretty-print (hash-ref h 'input))
+        (displayln (format "Satisfies input predicate: ~a" (yesno (hash-ref h 'satisfies-input-predicate))))
+        (displayln "Output:")
         (displayln (hash-ref h 'pretty-output))
         (displayln (format "Satisfies output predicate: ~a" (yesno (hash-ref h 'satisfies-output-predicate))))
         (displayln "Evaluation of your output:")
@@ -197,6 +201,11 @@
     (if (input-file)
         (map string->number (file->lines (input-file)))
         (range 100)))
+  (define interp-functions (slice-list interpreters our-range))
+  (define interpreters-to-use
+    (if (write-stdout-mode)
+        interp-functions
+        (map (λ (_) (λ (p in) "skipping interpretation...")) (range (length interp-functions))))) 
   ;; all of these defines used for verbose mode (to record each pass
   ;; and print its value)
   (let ([trace (run-chain source-tree
@@ -204,7 +213,7 @@
                           (slice-list pass-names our-range)
                           (slice-list input-predicates our-range)
                           (slice-list output-predicates our-range)
-                          (slice-list interpreters our-range)
+                          interpreters-to-use
                           our-input-stream)])
     (when (write-stdout-mode)
       (trace->stdout trace))
@@ -298,6 +307,8 @@
    (start-pass pass)]
   [("-e" "--end-pass") pass "End at pass <pass>"
    (end-pass pass)]
+  [("-f" "--fast") "Skip interpretation / dumping, just compile"
+                   (write-stdout-mode #f)]
   #:args leftover
   (match leftover
     ['()        (error 'main "expected a <filename>")]    

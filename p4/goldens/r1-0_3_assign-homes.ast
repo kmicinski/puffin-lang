@@ -1,6 +1,0 @@
-'(program
-  #hash((a . -8))
-  #hash((_main
-         .
-         ((movq (imm 1) (deref (reg rbp) -8))
-          (movq (deref (reg rbp) -8) (reg rax))))))

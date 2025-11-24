@@ -14,7 +14,7 @@
 (define runtime-file (make-parameter "./runtime.c"))
 (define runtime-object-file (make-parameter "./runtime.o"))
 (define run-test-mode (make-parameter #f))
-(define start-pass (make-parameter "typecheck")) ;; synced with main.rkt
+(define start-pass (make-parameter "shrink")) ;; synced with main.rkt
 (define end-pass (make-parameter "render-x86"))  ;; synced with main.rkt
 (define write-stdout-mode (make-parameter #t))
 (define debug-server-mode (make-parameter #f))
@@ -31,12 +31,20 @@
 (define (entry-symbol) 'main)
 (define (conclusion-block-name)   'conclusion)
 
+(define (void-magic-value) 67) ;; our void value
+
 ;; Turn a string into its "runtime symbol" version: on OSX, names need
 ;; to be prefixed with _, but not on Linux.
 (define (rt-sym s)
+  (define (sanitize sym)
+    (string->symbol
+     (list->string
+      (map (λ (ch)
+             (if (char=? ch #\-) #\_ ch))
+           (string->list (symbol->string sym))))))
   (if (equal? (host-os) 'macosx)
-      (macify s)
-      (linuxify s)))
+      (macify (sanitize s))
+      (linuxify (sanitize s))))
 
 ;; have to include these extern definitions at the top of the file 
 (define (runtime-function-externs)
@@ -80,3 +88,6 @@
   (cons v (string-append (get-output-string out) (if (equal? (get-output-string err) "")
                                                      ""
                                                      (format " stderr: ~a" (get-output-string err))))))
+
+(define (argument-registers-list)
+  '(rdi rsi rdx rcx r8 r9))
