@@ -1,0 +1,32 @@
+#lang racket
+
+(define (tree? t)
+  (cond
+    [(equal? t 'empty) #t]
+    [(and (list? t)
+          (= (length t) 4)
+          (equal? (first t) 'node)
+          (number? (second t))
+          (tree? (third t))
+          (tree? (fourth t)))
+     #t]
+    [_ #f]))
+
+(define empty-tree 'empty)
+
+;; check if the tree is empty
+(define (empty? e)
+  'todo)
+
+;; walk over the tree e, turn it into a list of its elements
+(define (tree->list t)
+  'todo)
+
+(define (tree->string t)
+  'todo)
+
+(define (tree-insert t e)
+  ;; what possibilities are there for t?
+  ;; - 'empty
+  ;; - '(tree t0 t1) where t0 and t1 are trees
+  'todo)
