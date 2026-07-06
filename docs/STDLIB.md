@@ -64,6 +64,19 @@ they are listed in `src/irs.rkt`.
 | `symbol?` | 1 | `pf_symbol_huh` | Is this value a symbol? |
 | `void?` | 1 | `pf_void_huh` | Is this value void? |
 | `procedure?` | 1 | `pf_procedure_huh` | Is this value a procedure (closure)? |
+| `gensym` | 1 | `pf_gensym` | A fresh symbol whose name extends the given one. |
+| `value->string` | 1 | `pf_to_string` | Render any value exactly as display would, into a string. |
+| `read-all` | 0 | `pf_read_all` | The rest of standard input, as one string. |
+| `substring` | 3 | `pf_substring` | Bytes [i, j) of a string (checked). |
+| `string<?` | 2 | `pf_string_lt` | Lexicographic byte order on strings. |
+| `string-byte` | 2 | `pf_string_byte` | The byte at an index (checked; strings are byte strings, ASCII-friendly). |
+| `number->string` | 1 | `pf_number_to_string` | Decimal rendering of an integer. |
+| `string->number` | 1 | `pf_string_to_number` | The integer a string spells, or #f. |
+| `bitwise-and` | 2 | `pf_bitwise_and` | Bitwise AND of two integers. |
+| `bitwise-ior` | 2 | `pf_bitwise_ior` | Bitwise inclusive OR of two integers. |
+| `bitwise-xor` | 2 | `pf_bitwise_xor` | Bitwise exclusive OR of two integers. |
+| `arithmetic-shift` | 2 | `pf_arith_shift` | Shift left (positive count) or right (negative count). |
+| `modulo` | 2 | `pf_modulo` | Integer modulus; the result's sign follows the divisor (checked). |
 
 ## Compiler-internal primitives
 

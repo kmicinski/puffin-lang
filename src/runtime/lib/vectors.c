@@ -47,13 +47,13 @@ pf pf_vector_length(pf v) {
 
 pf pf_vector_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_VECTOR)); }
 
-static void display_vector(pf v) {
-  printf("#(");
+static void display_vector(pf v, FILE *out) {
+  fprintf(out, "#(");
   for (int64_t i = 0; i < pf_len_of(v); i++) {
-    if (i) printf(" ");
-    pf_display_value(pf_heap_ptr(v)[1 + i]);
+    if (i) fprintf(out, " ");
+    pf_display_value_to(pf_heap_ptr(v)[1 + i], out);
   }
-  printf(")");
+  fprintf(out, ")");
 }
 
 static pf equal_vector(pf a, pf b) {

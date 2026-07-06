@@ -247,6 +247,35 @@
    (prim-spec 'procedure? 1 'pf_procedure_huh #t (λ (v) (procedure? v))
               "Is this value a procedure (closure)?")
 
+   ;; ---- bootstrap batch (see docs/BOOTSTRAP.md) --------------------------
+   (prim-spec 'gensym   1 'pf_gensym #t (λ (s) (gensym s))
+              "A fresh symbol whose name extends the given one.")
+   (prim-spec 'value->string 1 'pf_to_string #t render-value
+              "Render any value exactly as display would, into a string.")
+   (prim-spec 'read-all 0 'pf_read_all #t 'read-all
+              "The rest of standard input, as one string.")
+   (prim-spec 'substring 3 'pf_substring #t substring
+              "Bytes [i, j) of a string (checked).")
+   (prim-spec 'string<? 2 'pf_string_lt #t string<?
+              "Lexicographic byte order on strings.")
+   (prim-spec 'string-byte 2 'pf_string_byte #t (λ (s i) (char->integer (string-ref s i)))
+              "The byte at an index (checked; strings are byte strings, ASCII-friendly).")
+   (prim-spec 'number->string 1 'pf_number_to_string #t number->string
+              "Decimal rendering of an integer.")
+   (prim-spec 'string->number 1 'pf_string_to_number #t
+              (λ (s) (let ([n (string->number s)]) (if (exact-integer? n) n #f)))
+              "The integer a string spells, or #f.")
+   (prim-spec 'bitwise-and 2 'pf_bitwise_and #t bitwise-and
+              "Bitwise AND of two integers.")
+   (prim-spec 'bitwise-ior 2 'pf_bitwise_ior #t bitwise-ior
+              "Bitwise inclusive OR of two integers.")
+   (prim-spec 'bitwise-xor 2 'pf_bitwise_xor #t bitwise-xor
+              "Bitwise exclusive OR of two integers.")
+   (prim-spec 'arithmetic-shift 2 'pf_arith_shift #t arithmetic-shift
+              "Shift left (positive count) or right (negative count).")
+   (prim-spec 'modulo   2 'pf_modulo #t modulo
+              "Integer modulus; the result's sign follows the divisor (checked).")
+
    ;; ---- compiler-internal ----------------------------------------------
    ;; make-closure allocates a closure record (kind 4): slot 0 holds
    ;; the code pointer, the rest capture the environment. Only

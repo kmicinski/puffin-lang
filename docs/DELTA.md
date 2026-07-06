@@ -334,7 +334,44 @@ for `(read)`. The JS interpreter (BigInt fixnums, `Symbol.for`
 symbols, Map/Set-backed hashes/sets) is held to the *same 168
 goldens* via `node web/test-corpus.mjs`. See `web/README.md`.
 
-## 9. Bugs found along the way (the log)
+## 9. IR provenance and the pipeline visualizer
+
+Every pass's walker is wrapped (one line per pass) to tag each node
+it constructs with the input node it came from, in a global weak
+eq-hash (`src/provenance.rkt`) -- the IRs stay plain s-expressions
+and no pattern anywhere changed. Because run-chain feeds each
+pass's actual output object forward, provenance composes across all
+17 layers by object identity. Nodes may carry a few candidate
+origins (CPS-shaped passes construct nodes inside continuations);
+resolution tries them in order, and untagged structural nodes
+inherit their ancestor's origin.
+
+`src/ir-json.rkt` serializes a trace for the web: a span-tracking
+IR printer (per-node character ranges), per-layer back-edge maps,
+and per-LINE provenance for the rendered assembly (both backends
+export `render-lines-*`). `src/ir-server.rkt` -- the descendant of
+the class debug-server.rkt -- serves `POST /trace` for the web app
+and has a `--dump` mode (the bundled demo trace).
+
+The web app's **Pipeline** mode shows any layer pair side by side:
+click a node to highlight its origin in the previous layer (with
+ancestor fallback), click left to see everything it *became*
+(reverse edges), and follow a breadcrumb chain from an assembly
+line all the way to the source expression.
+
+## 10. Bootstrapping (see docs/BOOTSTRAP.md)
+
+The report covers the compiler evaluation, the Racket-facility
+inventory, and the feature batch it demanded -- quasiquote
+expressions, internal defines/letrec, gensym, value->string/format,
+read-all, the string/bit-work/list-utility/set-algebra batch,
+apply/sort/map2 -- each implemented across the C runtime, the
+manifest, the reference interpreters, and the web interpreter, all
+under golden tests. `puffin-10` in the corpus is the bootstrap
+seed: shrink + uniqueify written in Puffin, byte-identical on every
+route.
+
+## 11. Bugs found along the way (the log)
 
 In the course projects:
 
@@ -388,7 +425,7 @@ frame-layout bug — `#<unknown:195>` garbage was the symptom);
 `main` originally tail-jumped past its own conclusion; prim shadowing
 was originally re-decided per pass instead of settled in desugar.
 
-## 10. Where to take it next (agreed direction + loose ends)
+## 12. Where to take it next (agreed direction + loose ends)
 
 - **Gradual types** — the planned next step. The natural seam: a
   `typecheck` pass between desugar and shrink, annotations via

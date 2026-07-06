@@ -104,8 +104,8 @@ pf pf_hash_keys(pf hv) {
 
 pf pf_hash_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_HASH) || pf_ihash_is(v)); }
 
-static void display_hash(pf v) {
-  printf("#<hash:%" PRId64 ">", (int64_t)pf_heap_ptr(v)[1]);
+static void display_hash(pf v, FILE *out) {
+  fprintf(out, "#<hash:%" PRId64 ">", (int64_t)pf_heap_ptr(v)[1]);
 }
 
 void pf_lib_hashes_init(void) {

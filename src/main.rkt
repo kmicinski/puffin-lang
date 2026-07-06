@@ -307,7 +307,10 @@
 
 ;; The Puffin-written stdlib layer (map/filter/append/...): injected
 ;; into every program, minus any definition the program supplies
-;; itself, so class programs with their own `length` are untouched.
+;; itself (class programs with their own `length` are untouched),
+;; pruned to the definitions the program transitively mentions --
+;; prelude functions are pure, so unreferenced ones can't matter,
+;; and pruning keeps binaries and pipeline traces lean.
 (define (prelude-forms user-forms)
   (define user-names
     (list->set
@@ -316,10 +319,39 @@
                           [`(define ,(? symbol? x) ,_) x]
                           [_ #f]))
                  user-forms)))
-  (filter (λ (f) (match f
-                   [`(define (,g ,_ ...) ,_ ...) (not (set-member? user-names g))]
-                   [`(define ,(? symbol? x) ,_) (not (set-member? user-names x))]))
-          (read-forms (build-path src-dir "prelude.puf"))))
+  (define candidates
+    (filter (λ (f) (match f
+                     [`(define (,g ,_ ...) ,_ ...) (not (set-member? user-names g))]
+                     [`(define ,(? symbol? x) ,_) (not (set-member? user-names x))]))
+            (read-forms (build-path src-dir "prelude.puf"))))
+  (define (defn-name f)
+    (match f [`(define (,g ,_ ...) ,_ ...) g] [`(define ,(? symbol? x) ,_) x]))
+  ;; conservative name-based reachability: any symbol occurring
+  ;; anywhere counts as a mention
+  (define (mentions form)
+    (let walk ([v form] [acc (set)])
+      (cond [(symbol? v) (set-add acc v)]
+            [(pair? v) (walk (cdr v) (walk (car v) acc))]
+            [else acc])))
+  (define by-name (for/hash ([f candidates]) (values (defn-name f) f)))
+  (define user-mentions
+    (foldl (λ (f acc) (set-union acc (mentions f))) (set) user-forms))
+  ;; desugared forms reach for helpers the raw text doesn't name:
+  ;; unquote-splicing expands into calls to `append`
+  (define seeded
+    (if (set-member? user-mentions 'unquote-splicing)
+        (set-add user-mentions 'append)
+        user-mentions))
+  (let grow ([needed seeded]
+             [included (set)])
+    (define new-names
+      (filter (λ (n) (and (hash-has-key? by-name n) (not (set-member? included n))))
+              (set->list needed)))
+    (if (null? new-names)
+        (filter (λ (f) (set-member? included (defn-name f))) candidates)
+        (grow (foldl (λ (n acc) (set-union acc (mentions (hash-ref by-name n))))
+                     needed new-names)
+              (foldl (λ (n acc) (set-add acc n)) included new-names)))))
 
 (define (read-program-file file-name)
   (define forms

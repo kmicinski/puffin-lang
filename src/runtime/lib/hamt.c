@@ -331,8 +331,8 @@ static pf equal_iset(pf a, pf b) {
   return PF_BOOL(acc.ok);
 }
 
-static void display_ihash(pf v) { printf("#<hash:%" PRId64 ">", root_count(v)); }
-static void display_iset(pf v)  { printf("#<set:%" PRId64 ">", root_count(v)); }
+static void display_ihash(pf v, FILE *out) { fprintf(out, "#<hash:%" PRId64 ">", root_count(v)); }
+static void display_iset(pf v, FILE *out)  { fprintf(out, "#<set:%" PRId64 ">", root_count(v)); }
 
 void pf_lib_hamt_init(void) {
   static const pf_kind_desc hdesc = { "hash", display_ihash, equal_ihash };

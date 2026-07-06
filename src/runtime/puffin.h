@@ -46,6 +46,7 @@
 #define PUFFIN_H
 
 #include <stdint.h>
+#include <stdio.h>
 
 typedef int64_t pf; // a tagged Puffin value
 
@@ -114,9 +115,11 @@ static inline void pf_expect_kind(pf v, int kind) {
   if (!pf_is_kind(v, kind)) pf_die_kind();
 }
 
-// Display a value (no newline) to stdout; recursively dispatches
-// through the kind registry.
-void pf_display_value(pf v);
+// Display a value (no newline) to `out`; recursively dispatches
+// through the kind registry. (Streams, not stdout, so value->string
+// can render into a memory buffer.)
+void pf_display_value_to(pf v, FILE *out);
+#define pf_display_value(v) pf_display_value_to((v), stdout)
 
 // Structural equality (Puffin's equal?); dispatches through the
 // kind registry. Returns PF_TRUE / PF_FALSE.
@@ -134,9 +137,9 @@ const char *pf_symbol_name(pf sym);
 // (called from stdlib_init.c, before user code runs).
 
 typedef struct {
-  const char *name;            // e.g. "hash" -> prints #<hash ...> by default
-  void (*display)(pf v);       // NULL: print #<name>
-  pf (*equal)(pf a, pf b);     // NULL: identity only
+  const char *name;              // e.g. "hash" -> prints #<hash ...> by default
+  void (*display)(pf v, FILE *); // NULL: print #<name>
+  pf (*equal)(pf a, pf b);       // NULL: identity only
 } pf_kind_desc;
 
 void pf_register_kind(int kind, const pf_kind_desc *desc);

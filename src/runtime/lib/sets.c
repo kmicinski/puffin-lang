@@ -74,8 +74,8 @@ pf pf_set_to_list(pf sv) {
 
 pf pf_set_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_SET) || pf_iset_is(v)); }
 
-static void display_set(pf v) {
-  printf("#<set:%" PRId64 ">", (int64_t)pf_heap_ptr(v)[1]);
+static void display_set(pf v, FILE *out) {
+  fprintf(out, "#<set:%" PRId64 ">", (int64_t)pf_heap_ptr(v)[1]);
 }
 
 void pf_lib_sets_init(void) {

@@ -156,31 +156,31 @@ pf pf_make_closure(pf len) {
 // Display / equal, dispatching through the registry
 // ---------------------------------------------------------------
 
-void pf_display_value(pf v) {
+void pf_display_value_to(pf v, FILE *out) {
   switch (v & PF_TAG_MASK) {
   case PF_TAG_FIXNUM:
-    printf("%" PRId64, PF_UNFIX(v));
+    fprintf(out, "%" PRId64, PF_UNFIX(v));
     return;
   case PF_TAG_SYMBOL:
-    printf("%s", pf_symbol_name(v));
+    fprintf(out, "%s", pf_symbol_name(v));
     return;
   case PF_TAG_IMM:
     switch (v) {
-    case PF_FALSE: printf("#f"); return;
-    case PF_TRUE:  printf("#t"); return;
-    case PF_VOID:  printf("#<void>"); return;
-    case PF_NIL:   printf("()"); return;
-    default:       printf("#<imm:%" PRId64 ">", v); return;
+    case PF_FALSE: fprintf(out, "#f"); return;
+    case PF_TRUE:  fprintf(out, "#t"); return;
+    case PF_VOID:  fprintf(out, "#<void>"); return;
+    case PF_NIL:   fprintf(out, "()"); return;
+    default:       fprintf(out, "#<imm:%" PRId64 ">", v); return;
     }
   case PF_TAG_HEAP: {
     int k = pf_kind_of(v);
-    if (k == PF_KIND_CLOSURE) { printf("#<procedure>"); return; }
+    if (k == PF_KIND_CLOSURE) { fprintf(out, "#<procedure>"); return; }
     if (k > 0 && k < PF_KIND_MAX && kinds[k].name) {
-      if (kinds[k].display) kinds[k].display(v);
-      else printf("#<%s>", kinds[k].name);
+      if (kinds[k].display) kinds[k].display(v, out);
+      else fprintf(out, "#<%s>", kinds[k].name);
       return;
     }
-    printf("#<unknown:%d>", k);
+    fprintf(out, "#<unknown:%d>", k);
     return;
   }
   }
@@ -218,6 +218,57 @@ pf pf_println(pf v) { pf_display_value(v); printf("\n"); return PF_VOID; }
 pf pf_print_result(pf v) {
   if (v != PF_VOID) pf_println(v);
   return PF_VOID;
+}
+
+// (gensym base): a fresh symbol, interned as base + a counter that
+// skips names already taken (so gensyms survive read-back).
+pf pf_gensym(pf base) {
+  static int64_t counter = 0;
+  if ((base & PF_TAG_MASK) != PF_TAG_SYMBOL) pf_die_kind();
+  const char *b = pf_symbol_name(base);
+  char buf[256];
+  for (;;) {
+    counter++;
+    snprintf(buf, sizeof buf, "%s%" PRId64, b, counter);
+    int64_t before = symbol_count;
+    int64_t id = pf_intern_symbol(buf);
+    if (symbol_count > before) return (id << 3) | PF_TAG_SYMBOL; // fresh
+  }
+}
+
+// (value->string v): render exactly as display would, into a string.
+pf pf_to_string(pf v) {
+  char *buf = NULL;
+  size_t len = 0;
+  FILE *mem = open_memstream(&buf, &len);
+  if (!mem) pf_fatal("value->string: out of memory");
+  pf_display_value_to(v, mem);
+  fclose(mem);
+  pf s = pf_string_from_bytes(buf, (int64_t)len);
+  free(buf);
+  return s;
+}
+
+// (read-all): the rest of standard input, as one string (the seed
+// for a Puffin-written reader).
+pf pf_read_all(void) {
+  char *buf = NULL;
+  size_t cap = 0, len = 0;
+  char chunk[4096];
+  size_t got;
+  while ((got = fread(chunk, 1, sizeof chunk, stdin)) > 0) {
+    if (len + got > cap) {
+      cap = (cap ? cap * 2 : 8192);
+      if (cap < len + got) cap = len + got;
+      buf = realloc(buf, cap);
+      if (!buf) pf_fatal("read-all: out of memory");
+    }
+    memcpy(buf + len, chunk, got);
+    len += got;
+  }
+  pf s = pf_string_from_bytes(buf ? buf : "", (int64_t)len);
+  free(buf);
+  return s;
 }
 
 // (error v): display the value and abort with exit code 1. The

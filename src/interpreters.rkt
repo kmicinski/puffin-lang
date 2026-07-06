@@ -42,6 +42,14 @@
     ['() (error 'interpret "input exhausted for (read)")]
     [`(,hd . ,tl) (set-box! inbox tl) hd]))
 
+;; (read-all): the rest of the input, rendered the way it would look
+;; on stdin (whitespace-separated integers)
+(define (rest-of-input! inbox)
+  (match (unbox inbox)
+    ['stdin (port->string (current-input-port))]
+    [ints (set-box! inbox '())
+          (string-join (map number->string ints) " ")]))
+
 ;; The REPL's persistent top-level: consulted when a variable isn't
 ;; lexically bound, letting definitions arrive one at a time (and be
 ;; mutually recursive across inputs).
@@ -130,6 +138,7 @@
        (define impl (stdlib-ref-impl op))
        (match impl
          ['read (next-input! inbox)]
+         ['read-all (rest-of-input! inbox)]
          [_ (apply impl (map (λ (e) (ev e env)) es))])]
       [`(,e-f ,e-args ...)
        (define f (ev e-f env))
@@ -241,6 +250,7 @@
        (define impl (stdlib-ref-impl op))
        (match impl
          ['read (next-input! inbox)]
+         ['read-all (rest-of-input! inbox)]
          [_ (apply impl (map (λ (a) (atom-val a env)) as))])]
       [a (atom-val a env)]))
   (define (go s env stack)

@@ -40,8 +40,19 @@ Binding & functions:
 (let ([x 1] [y 2]) body ...)          ;; parallel
 (let* ([x 1] [y (+ x 1)]) body ...)   ;; sequential
 (let loop ([i 0]) ... (loop (+ i 1))) ;; named let; tail calls run in O(1) stack
+(letrec ([odd? ...] [even? ...]) ...) ;; mutual recursion
 (lambda (x y) body ...)               ;; or λ; closures are first-class
 (set! x e)                            ;; mutation (locals and globals)
+```
+
+Bodies support **internal defines**, scoped letrec\*-style over the
+whole body — inner helpers can be mutually recursive:
+
+```scheme
+(define (outer n)
+  (define (ev? k) (if (eq? k 0) #t (od? (- k 1))))
+  (define (od? k) (if (eq? k 0) #f (ev? (- k 1))))
+  (list (ev? n) (od? n)))
 ```
 
 Control:
@@ -63,6 +74,8 @@ Data:
 
 ```scheme
 '(a 1 (b 2))                          ;; quoted data (symbols, ints, lists)
+`(let ([,x ,e]) ,@body)               ;; quasiquote CONSTRUCTION, with splicing
+(gensym 'tmp)                         ;; fresh interned symbols
 (list 1 2 3)  (cons 1 '())  (car p) (cdr p) (pair? p) (null? p)
 (vector 1 2 3) (make-vector n) (vector-ref v i) (vector-set! v i x) (vector-length v)
 (hash k v ...)      an immutable hash; the default. eq?-keyed.
@@ -94,8 +107,16 @@ and (interned) symbols.
 Predicates: `fixnum? boolean? symbol? void? procedure? pair? null?
 vector? string? hash? set?`.
 
-I/O: `(read)` reads an integer from stdin; `(println e)`,
-`(display e)`, `(newline)`; `(error e)` prints `error: <e>` and halts.
+I/O: `(read)` reads an integer from stdin; `(read-all)` the rest of
+stdin as a string; `(println e)`, `(display e)`, `(newline)`,
+`(displayln e)`; `(error e)` prints `error: <e>` and halts.
+
+For writing compilers (see docs/BOOTSTRAP.md): `value->string`,
+`(format "~a ~a" (list x y))`, `number->string`, `string->number`,
+`substring`, `string-byte`, `string<?`, `string-join`, `sort`,
+`symbol<?`, `apply` (≤5 args), `map2`, set algebra
+(`set-union`/`set-subtract`/`set-intersect`/`list->set`),
+`bitwise-and/ior/xor`, `arithmetic-shift`, `modulo`.
 
 Primitives are first-class-ish: naming one in value position
 eta-expands it, so `(map car xs)` works.
@@ -158,3 +179,7 @@ The web REPL (`web/`) runs the same language in the browser.
   interpreters — stay under ±2^60.
 - `set-car!`/`set-cdr!` don't exist (pairs are immutable).
 - A REPL define can't shadow a primitive name (files can).
+- `main` is reserved for the program entry point (defining it is a
+  clear compile-time error).
+- No variadic user functions yet: `format` and `apply` take their
+  arguments as a list.

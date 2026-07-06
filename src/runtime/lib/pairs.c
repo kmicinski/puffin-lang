@@ -22,20 +22,20 @@ pf pf_cdr(pf v) { pf_expect_kind(v, PF_KIND_PAIR); return pf_heap_ptr(v)[2]; }
 pf pf_pair_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_PAIR)); }
 pf pf_null_huh(pf v) { return PF_BOOL(v == PF_NIL); }
 
-static void display_pair(pf v) {
-  printf("(");
-  pf_display_value(pf_heap_ptr(v)[1]);
+static void display_pair(pf v, FILE *out) {
+  fprintf(out, "(");
+  pf_display_value_to(pf_heap_ptr(v)[1], out);
   pf rest = pf_heap_ptr(v)[2];
   while (pf_is_kind(rest, PF_KIND_PAIR)) {
-    printf(" ");
-    pf_display_value(pf_heap_ptr(rest)[1]);
+    fprintf(out, " ");
+    pf_display_value_to(pf_heap_ptr(rest)[1], out);
     rest = pf_heap_ptr(rest)[2];
   }
   if (rest != PF_NIL) {
-    printf(" . ");
-    pf_display_value(rest);
+    fprintf(out, " . ");
+    pf_display_value_to(rest, out);
   }
-  printf(")");
+  fprintf(out, ")");
 }
 
 static pf equal_pair(pf a, pf b) {

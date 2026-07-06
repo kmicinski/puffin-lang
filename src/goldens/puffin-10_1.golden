@@ -1,0 +1,4 @@
+(program (define (choose a b) (if (eq? (< a b) #f) a b)) (define (clamp x) (let ((y (+ x (- 1)))) (let ((y (if (< 0 y) y #f))) (if y y 0)))) (define (main) (choose (clamp (read)) (+ 10 (- (read))))))
+(program (define (choose a b) (if (eq? (< a b) #f) a b)) (define (clamp x) (let ((y (+ x (- 1)))) (let ((y.1 (if (< 0 y) y #f))) (if y.1 y.1 0)))) (define (main) (choose (clamp (read)) (+ 10 (- (read))))))
+(#t #t)
+bootstrap-seed-ok
