@@ -40,6 +40,7 @@
 (require "system.rkt")
 (require "stdlib.rkt")
 (require "regalloc.rkt")
+(require "provenance.rkt")
 
 (provide (all-defined-out))
 (provide arm64-backend-passes)
@@ -57,6 +58,9 @@
   (define (scan-rhs rhs)
     (match rhs
       [`(string-lit ,s) (set-add! strings s)]
+      ;; an atom rhs (e.g. a bare (quote s)) must not be
+      ;; destructured by the generic operation pattern below
+      [(? atom? a) (scan-atom a)]
       [`(,_ ,as ...) (for-each scan-atom as)]
       [a (scan-atom a)]))
   (define (scan-tail t)
@@ -96,7 +100,8 @@
     (map (λ (a r) `(mov ,(h-atom a) (reg ,r)))
          as (take (argument-registers-list) (length as))))
   ;; `sink` stores x0 (the result register) into the target
-  (define (rhs->instrs rhs sink)
+  (define (rhs->instrs rhs sink) (prov-each (rhs->instrs-core rhs sink) rhs))
+  (define (rhs->instrs-core rhs sink)
     (match rhs
       [`(+ ,a0 ,a1)
        `((mov ,(h-atom a0) (reg x0))
@@ -146,6 +151,11 @@
        `((mov ,(h-atom a) (reg x0))
          ,@sink)]))
   (define (h seq)
+    ;; instructions not already tagged (by rhs->instrs) belong to
+    ;; the head statement of this tail
+    (prov-each (h-core seq)
+               (match seq [`(seq ,s ,_) s] [_ seq])))
+  (define (h-core seq)
     (match seq
       [`(return ,a)
        `((mov ,(h-atom a) (reg x0))
@@ -247,7 +257,8 @@
                      (values `((ldr-imm ,op (reg ,scratch))) `(reg ,scratch)))]
       [`(deref ,_ ,_) (values `((ldr ,op (reg ,scratch))) `(reg ,scratch))]
       [`(global ,i) (values `((ldr-global ,i (reg ,scratch))) `(reg ,scratch))]))
-  (define (patch-instr instr)
+  (define (patch-instr instr) (prov-each (patch-instr-core instr) instr))
+  (define (patch-instr-core instr)
     (match instr
       ;; mov: memory and large immediates get staged
       [`(mov ,src ,dst)
@@ -408,11 +419,12 @@
          (append-map
           (λ (i)
             (match i
-              [`(tail-jmp ,op ,_)
-               `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
+              [(and tj `(tail-jmp ,op ,_))
+               (prov-each `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
                  ,@restores
                  (frame-pop)
-                 (indirect-jmp ,op))]
+                 (indirect-jmp ,op))
+                tj)]
               [_ (list i)]))
           instrs))
        (define my-conclusion (gensym 'conclusion))
@@ -436,19 +448,18 @@
 ;; render
 ;; ---------------------------------------------------------------------
 
-(define (render-arm64 p)
-  (define functions (set-add (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])) (entry-symbol)))
-  (define globals-sym (rt-sym 'puffin_globals))
-  (define (reg-name op) (match op [`(reg ,r) (symbol->string r)]))
-  (define (render-op op)
+;; instruction rendering, shared by render-arm64 and the pipeline
+;; serializer's per-line provenance (ir-json.rkt)
+(define (reg-name op) (match op [`(reg ,r) (symbol->string r)]))
+(define (render-op-arm op)
     (match op
       [`(imm ,i) (format "#~a" i)]
       [`(reg ,x) (symbol->string x)]))
-  (define (render-cc cc)
-    (match cc ['e "eq"] ['ne "ne"] ['l "lt"] ['ae "hs"]))
-  ;; an fp-relative slot: ldur/stur handle +-255 directly; farther
-  ;; slots compute the address in x16 (the linker-scratch register)
-  (define (render-mem-access ldr? op mem)
+(define (render-cc-arm cc)
+  (match cc ['e "eq"] ['ne "ne"] ['l "lt"] ['ae "hs"]))
+;; an fp-relative slot: ldur/stur handle +-255 directly; farther
+;; slots compute the address in x16 (the linker-scratch register)
+(define (render-mem-access ldr? op mem)
     (match mem
       [`(deref (reg ,base) ,off)
        (cond
@@ -459,22 +470,23 @@
          [else
           (format "mov x16, #~a\n    add x16, x16, ~a\n    ~a ~a, [x16]"
                   off base (if ldr? "ldr" "str") (reg-name op))])]))
-  (define (render-instr instr)
-    (match instr
-      [`(mov ,src ,dst) (format "mov ~a, ~a" (reg-name dst) (render-op src))]
+(define (render-instr-arm instr)
+  (define globals-sym (rt-sym 'puffin_globals))
+  (match instr
+      [`(mov ,src ,dst) (format "mov ~a, ~a" (reg-name dst) (render-op-arm src))]
       [`(ldr-imm (imm ,i) ,dst) (format "ldr ~a, =~a" (reg-name dst) i)]
       [`(ldr ,mem ,dst) (render-mem-access #t dst mem)]
       [`(str ,src ,mem) (render-mem-access #f src mem)]
-      [`(add ,src ,dst) (format "add ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
-      [`(sub ,src ,dst) (format "sub ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
-      [`(mul ,src ,dst) (format "mul ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
+      [`(add ,src ,dst) (format "add ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op-arm src))]
+      [`(sub ,src ,dst) (format "sub ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op-arm src))]
+      [`(mul ,src ,dst) (format "mul ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op-arm src))]
       [`(neg ,dst) (format "neg ~a, ~a" (reg-name dst) (reg-name dst))]
       [`(asr (imm ,k) ,dst) (format "asr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(lsl (imm ,k) ,dst) (format "lsl ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(orr (imm ,k) ,dst) (format "orr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
-      [`(cmp ,a ,b) (format "cmp ~a, ~a" (reg-name a) (render-op b))]
-      [`(cset ,cc ,dst) (format "cset ~a, ~a" (reg-name dst) (render-cc cc))]
-      [`(jmp-if ,cc ,lab) (format "b.~a ~a" (render-cc cc) lab)]
+      [`(cmp ,a ,b) (format "cmp ~a, ~a" (reg-name a) (render-op-arm b))]
+      [`(cset ,cc ,dst) (format "cset ~a, ~a" (reg-name dst) (render-cc-arm cc))]
+      [`(jmp-if ,cc ,lab) (format "b.~a ~a" (render-cc-arm cc) lab)]
       [`(jmp ,lab) (format "b ~a" lab)]
       [`(goto ,l) (format "b ~a" (symbol->string l))]
       [`(callq ,(? label? l) ,_) (format "bl ~a" (symbol->string (rt-sym l)))]
@@ -500,18 +512,24 @@
       [`(ldp ,a ,b) (if b
                         (format "ldp ~a, ~a, [sp], #16" a b)
                         (format "ldr ~a, [sp], #16" a))]))
-  (define (render-block block name)
-    (define txt-label (if (set-member? functions name) (format "~a:\n" (rt-sym name)) (format "~a:\n" name)))
-    (apply string-append
-           (cons txt-label
-                 (map (λ (instr) (format "    ~a\n" (render-instr instr))) block))))
+;; the code segment as (line-text . instr-node-or-#f) pairs
+(define (render-lines-arm64 p)
+  (define functions (set-add (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])) (entry-symbol)))
+  (define (block-lines block name)
+    (cons (cons (if (set-member? functions name) (format "~a:" (rt-sym name)) (format "~a:" name)) #f)
+          (map (λ (instr)
+                 ;; several arm instructions render as multiple lines
+                 (cons (format "    ~a" (render-instr-arm instr)) instr))
+               block)))
   (define (per-defn defn)
     (match-define `(define ,_ (,f ,formals ...) ,blocks) defn)
     (define rest-keys (sort (filter (λ (k) (not (equal? k f))) (hash-keys blocks))
                             symbol<?))
-    (foldl (lambda (k acc) (string-append acc (render-block (hash-ref blocks k) k)))
-           ""
-           (cons f rest-keys)))
+    (append-map (λ (k) (block-lines (hash-ref blocks k) k)) (cons f rest-keys)))
+  (match p
+    [`(program ,_ ,defns ...) (append-map per-defn defns)]))
+
+(define (render-arm64 p)
   (define (escape-c s)
     (apply string-append
            (map (λ (ch)
@@ -546,15 +564,14 @@
      (apply string-append
             (for/list ([_ strings] [i (in-naturals)]) (format "    .quad Lpfstr~a\n" i)))
      (format "~a: .quad ~a\n" (rt-sym 'puffin_string_const_count) (length strings))
-     (format "~a: .space ~a\n" globals-sym (max 8 (* 8 n-globals)))))
+     (format "~a: .space ~a\n" (rt-sym 'puffin_globals) (max 8 (* 8 n-globals)))))
   (match p
     [`(program ,info ,defns ...)
      (string-append
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
       ".text\n.p2align 2\n"
-      (foldl (λ (defn acc) (string-append acc (per-defn defn)))
-             ""
-             defns)
+      (apply string-append
+             (map (λ (ln) (string-append (car ln) "\n")) (render-lines-arm64 p)))
       (data-segment info))]))
 
 ;; the pass table main.rkt splices in for --target arm64

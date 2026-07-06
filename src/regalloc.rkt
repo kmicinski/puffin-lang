@@ -34,6 +34,7 @@
 
 (require "system.rkt")
 (require "irs.rkt")
+(require "provenance.rkt")
 
 (provide allocate-registers-with)
 
@@ -181,7 +182,7 @@
         [_ op]))
     (define (rewrite-instr i)
       (match i
-        [`(,op ,operands ...) `(,op ,@(map home operands))]))
+        [`(,op ,operands ...) (prov `(,op ,@(map home operands)) i)]))
     (define (useless-move? i)
       (match i
         [`(movq ,a ,b) (equal? a b)]

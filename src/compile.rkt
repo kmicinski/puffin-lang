@@ -45,6 +45,7 @@
 (require "irs.rkt")     ;; Definition of each IR (please read)
 (require "system.rkt")  ;; System-specific details
 (require "stdlib.rkt")  ;; The standard library manifest
+(require "provenance.rkt") ;; IR provenance tags (see docs/DELTA.md)
 
 (provide (all-defined-out)) ;; export everything for testing
 
@@ -84,11 +85,58 @@
           [(pair? d)    `(cons ,(quote->expr (car d)) ,(quote->expr (cdr d)))]
           [else (error 'desugar "unsupported quoted datum: ~a" d)]))
 
-  ;; (body...) with implicit begin
+  ;; quasiquote expression expansion (depth-aware; nested quasiquote
+  ;; increments, unquote decrements; splicing only at depth 1)
+  ;; (built with `list` where the template would mention unquote /
+  ;; unquote-splicing as data -- Racket's quasiquote reads those as
+  ;; escapes even under quote)
+  (define (qq->expr q depth)
+    (match q
+      [(list 'unquote e)
+       (if (= depth 1)
+           e
+           (list 'list (list 'quote 'unquote) (qq->expr e (sub1 depth))))]
+      [(list 'quasiquote e)
+       (list 'list (list 'quote 'quasiquote) (qq->expr e (add1 depth)))]
+      [(cons (list 'unquote-splicing e) rest)
+       (if (= depth 1)
+           (list 'append e (qq->expr rest depth))
+           (list 'cons
+                 (list 'list (list 'quote 'unquote-splicing) (qq->expr e (sub1 depth)))
+                 (qq->expr rest depth)))]
+      [(cons a rest) (list 'cons (qq->expr a depth) (qq->expr rest depth))]
+      ['() ''()]
+      [(? symbol? s) (list 'quote s)]
+      [d d]))
+
+  ;; (body...) with implicit begin; internal defines are scoped over
+  ;; the whole body, letrec*-style (bound first, initialized in
+  ;; sequence position -- so mutual recursion between inner helpers
+  ;; works, as in every pass of this very compiler)
   (define (body->expr es bound)
-    (match es
-      [`(,e) (h e bound)]
-      [`(,es ...) `(begin ,@(map (λ (e) (h e bound)) es))]))
+    (define def-names
+      (filter-map (λ (e) (match e
+                           [`(define (,f ,_ ...) ,_ ...) f]
+                           [`(define ,(? symbol? x) ,_) x]
+                           [_ #f]))
+                  es))
+    (cond
+      [(null? def-names)
+       (match es
+         [`(,e) (h e bound)]
+         [`(,es ...) `(begin ,@(map (λ (e) (h e bound)) es))])]
+      [else
+       (define-values (bound+ names+) (bind* bound def-names))
+       (define (step e)
+         (match e
+           [`(define (,f ,xs ...) ,dbody ...)
+            (h `(set! ,f (lambda ,xs ,@dbody)) bound+)]
+           [`(define ,(? symbol? x) ,e0)
+            (h `(set! ,x ,e0) bound+)]
+           [e (h e bound+)]))
+       (foldr (λ (n acc) `(let ([,n (void)]) ,acc))
+              `(begin ,@(map step es))
+              names+)]))
 
   ;; -----------------------------------------------------------------
   ;; match expansion. compile-clause chains clauses through `fail`
@@ -294,7 +342,8 @@
   ;; the expression walker
   ;; -----------------------------------------------------------------
 
-  (define (h e bound)
+  (define (h e bound) (prov (h-core e bound) e))
+  (define (h-core e bound)
     (match e
       [#t #t]
       [#f #f]
@@ -303,6 +352,12 @@
       ['(void) '(void)]
       ['(read) '(read)]
       [(list 'quote d) (quote->expr d)]
+      ;; quasiquote EXPRESSIONS (the compiler-construction idiom:
+      ;; `(let ([,x ,e]) ,body)). Standard depth-aware expansion into
+      ;; cons/append; unquote-splicing supported. The emitted `cons`
+      ;; and `append` are the primitives/prelude (desugar has already
+      ;; renamed any user shadowing of them at binder sites).
+      [(list 'quasiquote q) (h (qq->expr q 1) bound)]
       [(? symbol? x)
        (cond
          [(hash-has-key? bound x) (hash-ref bound x)]
@@ -349,6 +404,11 @@
                      (body->expr body bound+)
                      xs+ ts)
               ts es)]
+      [`(letrec ([,xs ,es] ...) ,body ...)
+       (h `(let ,(map (λ (x) `[,x (void)]) xs)
+             ,@(map (λ (x e0) `(set! ,x ,e0)) xs es)
+             ,@body)
+          bound)]
       [`(let* () ,body ...) (body->expr body bound)]
       [`(let* ([,x ,e0] ,rest ...) ,body ...)
        (define-values (bound+ x+) (bind bound x))
@@ -452,7 +512,8 @@
 ;; ---------------------------------------------------------------------
 
 (define (shrink p)
-  (define (h e)
+  (define (h e) (prov (h-core e) e))
+  (define (h-core e)
     (match e
       ;; base cases
       [`(void) e]
@@ -518,7 +579,8 @@
     (if (set-member? used x)
         (gensym x)
         (begin (set-add! used x) x)))
-  (define (rename e assignment)
+  (define (rename e assignment) (prov (rename-core e assignment) e))
+  (define (rename-core e assignment)
     (match e
       [(? fixnum? n) n]
       [(? boolean? b) b]
@@ -563,6 +625,9 @@
     ;; uniqueness is per definition (matching unique-source-tree?)
     (set-clear! used)
     (for ([n top-names]) (set-add! used n))
+    ;; the entry symbol doesn't exist yet (collect-globals synthesizes
+    ;; it next), but locals must not collide with it either
+    (set-add! used (entry-symbol))
     (match form
       [`(define (,f ,xs ...) ,e-b)
        (define new-xs (map fresh! xs))
@@ -600,6 +665,17 @@
 
 (define (collect-globals p)
   (match-define `(program ,forms ...) p)
+  ;; the entry symbol is synthesized here; a user definition of it
+  ;; would collide silently, so reject it loudly
+  (for ([form forms])
+    (match form
+      [`(define (,f ,_ ...) ,_)
+       #:when (equal? f (entry-symbol))
+       (error 'collect-globals "~a is reserved for the program entry point" f)]
+      [`(define ,(? symbol? x) ,_)
+       #:when (equal? x (entry-symbol))
+       (error 'collect-globals "~a is reserved for the program entry point" x)]
+      [_ (void)]))
   (define global-names
     (foldl (λ (form acc)
              (match form
@@ -611,7 +687,8 @@
   (define name->idx
     (foldl (λ (x acc) (hash-set acc x (hash-count acc))) (hash) global-names))
   ;; rewrite global reads/writes; `shadowed` holds locally-bound names
-  (define (walk e shadowed)
+  (define (walk e shadowed) (prov (walk-core e shadowed) e))
+  (define (walk-core e shadowed)
     (match e
       [(? fixnum?) e]
       [(? boolean?) e]
@@ -677,7 +754,8 @@
 ;; ---------------------------------------------------------------------
 
 (define (reveal-functions p)
-  (define (walk e assignment)
+  (define (walk e assignment) (prov (walk-core e assignment) e))
+  (define (walk-core e assignment)
     (match e
       [(? fixnum? n) n]
       [(? boolean? b) b]
@@ -751,7 +829,8 @@
        `(let ([,(first realformals) (make-vector 1)])
           (let ([_ (unsafe-vector-set! ,(first realformals) 0 ,x)])
             ,(box-formals rst (rest realformals) e-body)))]))
-  (define (a-c e boxed)
+  (define (a-c e boxed) (prov (a-c-core e boxed) e))
+  (define (a-c-core e boxed)
     (match e
       [(? literal?) e]
       [`(read) e]
@@ -838,7 +917,8 @@
       [`(lambda (,xs ...) ,e) (foldl (lambda (x acc) (set-remove acc x)) (free-vars e) xs)]
       [`(,(? prim?) ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]
       [`(app ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]))
-  (define (walk-expr e)
+  (define (walk-expr e) (prov (walk-expr-core e) e))
+  (define (walk-expr-core e)
     (match e
       [(? literal?) e]
       [`(read) e]
@@ -880,8 +960,9 @@
            ['()
             converted-expr]))
        (define newly-created-define
-         `(define (,f-name ,env-param ,@xs)
-            ,(letstack canonical-vars 1)))
+         (prov `(define (,f-name ,env-param ,@xs)
+                  ,(letstack canonical-vars 1))
+               e))
        (emit-define! newly-created-define)
        ;; now, return an expression that creates the closure...
        (define v (gensym 'clo))
@@ -921,7 +1002,8 @@
 
 (define (limit-functions p)
   (define max-args (length (argument-registers-list)))
-  (define (walk-expr e)
+  (define (walk-expr e) (prov (walk-expr-core e) e))
+  (define (walk-expr-core e)
     (match e
       [(? literal?) e]
       [`(read) e]
@@ -998,25 +1080,26 @@
       ['() (k '())]
       [`(,hd . ,tl)
        (convert-expr hd (λ (a) (convert-args tl (λ (as) (k (cons a as))))))]))
-  (define (convert-expr e k)
+  (define (convert-expr e k) (prov (convert-expr-core e k) e))
+  (define (convert-expr-core e k)
     (match e
       [(? literal?) (k e)]
       [(? symbol? x) (k x)]
       ['(read)
        (let ([x (gensym 'read)])
-         `(let ([,x (read)]) ,(k x)))]
+         (prov `(let ([,x (read)]) ,(k x)) e))]
       [`(string-lit ,s)
        (let ([x (gensym 'str)])
-         `(let ([,x (string-lit ,s)]) ,(k x)))]
+         (prov `(let ([,x (string-lit ,s)]) ,(k x)) e))]
       [`(fun-ref ,f)
        (define x (gensym 'funref))
-       `(let ([,x (fun-ref ,f)]) ,(k x))]
+       (prov `(let ([,x (fun-ref ,f)]) ,(k x)) e)]
       [`(global-ref ,i)
        (define x (gensym 'glob))
-       `(let ([,x (global-ref ,i)]) ,(k x))]
+       (prov `(let ([,x (global-ref ,i)]) ,(k x)) e)]
       [`(global-set! ,i ,e+)
        (convert-expr e+ (λ (a)
-                          `(let ([_ (global-set! ,i ,a)]) ,(k '(void)))))]
+                          (prov `(let ([_ (global-set! ,i ,a)]) ,(k '(void))) e)))]
       [`(if ,e0 ,e1 ,e2)
        (convert-expr
         e0
@@ -1028,24 +1111,24 @@
       [`(unsafe-vector-ref ,e0 ,i)
        (convert-expr e0 (λ (a0)
                           (define x (gensym 'uref))
-                          `(let ([,x (unsafe-vector-ref ,a0 ,i)]) ,(k x))))]
+                          (prov `(let ([,x (unsafe-vector-ref ,a0 ,i)]) ,(k x)) e)))]
       [`(unsafe-vector-set! ,e0 ,i ,e1)
        (convert-expr e0
                      (λ (a0)
                        (convert-expr e1 (λ (a1)
-                                          `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(k '(void)))))))]
+                                          (prov `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(k '(void))) e)))))]
       [`(app ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym 'app))
-                          `(let ([,x (app ,@as)]) ,(k x))))]
+                          (prov `(let ([,x (app ,@as)]) ,(k x)) e)))]
       [`(,(? prim? op) ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym op))
-                          `(let ([,x (,op ,@as)]) ,(k x))))]
+                          (prov `(let ([,x (,op ,@as)]) ,(k x)) e)))]
       ;; let (place after the special _ forms)
-      [`(let ([,x ,e]) ,e-b)
-       (convert-expr e (lambda (atom)
-                         `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
+      [`(let ([,x ,e0]) ,e-b)
+       (convert-expr e0 (lambda (atom)
+                          (prov `(let ([,x ,atom]) ,(convert-expr e-b k)) e)))]))
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
@@ -1068,6 +1151,11 @@
   ;;
   ;; k is a continuation which gets called on the ultimate return value
   (define (expr->blocks e current-block k)
+    ;; tag the tail this expression contributes to its block
+    (define r (expr->blocks-core e current-block k))
+    (when (hash? r) (prov (hash-ref r current-block #f) e))
+    r)
+  (define (expr->blocks-core e current-block k)
     (match e
       ;; effect-position statements
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)

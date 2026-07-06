@@ -20,6 +20,7 @@
 (require "system.rkt")
 (require "stdlib.rkt")
 (require "regalloc.rkt")
+(require "provenance.rkt")
 
 (provide (all-defined-out))
 
@@ -39,6 +40,9 @@
   (define (scan-rhs rhs)
     (match rhs
       [`(string-lit ,s) (set-add! strings s)]
+      ;; an atom rhs (e.g. a bare (quote s)) must not be
+      ;; destructured by the generic operation pattern below
+      [(? atom? a) (scan-atom a)]
       [`(,_ ,as ...) (for-each scan-atom as)]
       [a (scan-atom a)]))
   (define (scan-tail t)
@@ -84,7 +88,8 @@
          as (take (argument-registers-list) (length as))))
   ;; one rhs; `sink` is instructions storing %rax into the target
   ;; (empty for effect position)
-  (define (rhs->instrs rhs sink)
+  (define (rhs->instrs rhs sink) (prov-each (rhs->instrs-core rhs sink) rhs))
+  (define (rhs->instrs-core rhs sink)
     (match rhs
       ;; intrinsics
       [`(+ ,a0 ,a1)
@@ -143,6 +148,11 @@
        `((movq ,(h-atom a) (reg rax))
          ,@sink)]))
   (define (h seq)
+    ;; instructions not already tagged (by rhs->instrs) belong to
+    ;; the head statement of this tail
+    (prov-each (h-core seq)
+               (match seq [`(seq ,s ,_) s] [_ seq])))
+  (define (h-core seq)
     (match seq
       [`(return ,a)
        `((movq ,(h-atom a) (reg rax))
@@ -226,7 +236,8 @@
   (define (mem? op) (or (deref? op) (global? op)))
   (define (big-imm? op)
     (match op [`(imm ,i) (or (> i 2147483647) (< i -2147483648))] [_ #f]))
-  (define (patch-instr instr)
+  (define (patch-instr instr) (prov-each (patch-instr-core instr) instr))
+  (define (patch-instr-core instr)
     (match instr
       ;; imm64: stage through r11 (movq straight to a register is fine
       ;; via movabsq)
@@ -351,11 +362,12 @@
          (append-map
           (λ (i)
             (match i
-              [`(tail-jmp ,op ,_)
-               `(,@(if (zero? frame-bytes) '() `((addq (imm ,frame-bytes) (reg rsp))))
+              [(and tj `(tail-jmp ,op ,_))
+               (prov-each `(,@(if (zero? frame-bytes) '() `((addq (imm ,frame-bytes) (reg rsp))))
                  ,@(map (λ (r) `(popq (reg ,r))) (reverse callee-saved))
                  (popq (reg rbp))
-                 (indirect-jmp ,op))]
+                 (indirect-jmp ,op))
+                tj)]
               [_ (list i)]))
           instrs))
        (define blocks+
@@ -380,59 +392,65 @@
 ;; zeroed space in __DATA so the Boehm GC scans it as roots).
 ;; ---------------------------------------------------------------------
 
-(define (render-x86 p)
-  (define functions (set-add (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])) (entry-symbol)))
-  (define globals-sym (rt-sym 'puffin_globals))
-  (define (render-op op)
+;; instruction rendering, shared by render-x86 and the pipeline
+;; serializer's per-line provenance (ir-json.rkt)
+(define (render-op-x86 op)
     (match op
       [`(imm ,i) (format "$~a" i)]
       [`(reg ,x) (format "%~a" (symbol->string x))]
       [`(byte-reg ,x) (format "%~a" (symbol->string x))]
       [`(deref (reg ,reg) ,i) (format "~a(%~a)" i (symbol->string reg))]
-      [`(global ,i) (format "~a+~a(%rip)" globals-sym (* 8 i))]))
-  (define (render-cc cc)
-    (match cc ['e "e"] ['ne "ne"] ['l "l"] ['ae "ae"]))
-  (define (render-instr instr)
+      [`(global ,i) (format "~a+~a(%rip)" (rt-sym 'puffin_globals) (* 8 i))]))
+(define (render-cc-x86 cc)
+  (match cc ['e "e"] ['ne "ne"] ['l "l"] ['ae "ae"]))
+(define (render-instr-x86 instr)
     (match instr
-      [`(xorq ,src ,dst) (format "xorq ~a, ~a" (render-op src) (render-op dst))]
-      [`(orq ,src ,dst) (format "orq ~a, ~a" (render-op src) (render-op dst))]
-      [`(andq ,src ,dst) (format "andq ~a, ~a" (render-op src) (render-op dst))]
-      [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
-      [`(imulq ,src ,dst) (format "imulq ~a, ~a" (render-op src) (render-op dst))]
-      [`(sarq ,src ,dst) (format "sarq ~a, ~a" (render-op src) (render-op dst))]
-      [`(shlq ,src ,dst) (format "shlq ~a, ~a" (render-op src) (render-op dst))]
-      [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
-      [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op src) (render-op dst))]
-      [`(movabsq ,src ,dst) (format "movabsq ~a, ~a" (render-op src) (render-op dst))]
-      [`(movzbq ,src ,dst) (format "movzbq ~a, ~a" (render-op src) (render-op dst))]
-      [`(pushq ,src) (format "pushq ~a" (render-op src))]
-      [`(popq ,dst) (format "popq ~a" (render-op dst))]
-      [`(cmpq ,op0 ,op1) (format "cmpq ~a, ~a" (render-op op0) (render-op op1))]
-      [`(jmp-if ,cc ,lab) (format "j~a ~a" (render-cc cc) lab)]
+      [`(xorq ,src ,dst) (format "xorq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(orq ,src ,dst) (format "orq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(andq ,src ,dst) (format "andq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(imulq ,src ,dst) (format "imulq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(sarq ,src ,dst) (format "sarq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(shlq ,src ,dst) (format "shlq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(negq ,srcdst) (format "negq ~a" (render-op-x86 srcdst))]
+      [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(movabsq ,src ,dst) (format "movabsq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(movzbq ,src ,dst) (format "movzbq ~a, ~a" (render-op-x86 src) (render-op-x86 dst))]
+      [`(pushq ,src) (format "pushq ~a" (render-op-x86 src))]
+      [`(popq ,dst) (format "popq ~a" (render-op-x86 dst))]
+      [`(cmpq ,op0 ,op1) (format "cmpq ~a, ~a" (render-op-x86 op0) (render-op-x86 op1))]
+      [`(jmp-if ,cc ,lab) (format "j~a ~a" (render-cc-x86 cc) lab)]
       [`(jmp ,lab) (format "jmp ~a" lab)]
-      [`(set ,cc ,byte-reg) (format "set~a ~a" (render-cc cc) (render-op byte-reg))]
+      [`(set ,cc ,byte-reg) (format "set~a ~a" (render-cc-x86 cc) (render-op-x86 byte-reg))]
       [`(callq ,(? label? l) ,(? nonnegative-integer? num-args))
        ;; must call rt-sym here!
        (format "call ~a" (symbol->string (rt-sym l)))]
       ['(retq) "ret"]
       [`(goto ,l) (format "jmp ~a" (symbol->string l))]
       [`(leaq (fun-ref ,f) ,dst) ;; make sure to call (rt-sym f) when rendering f here!
-       (format "leaq ~a(%rip), ~a" (rt-sym f) (render-op dst))]
-      [`(indirect-callq ,a) (format "callq *~a" (render-op a))]
-      [`(indirect-jmp ,a) (format "jmp *~a" (render-op a))]))
-  (define (render-block block name)
-    (define txt-label (if (set-member? functions name) (format "~a:\n" (rt-sym name)) (format "~a:\n" name)))
-    (apply string-append
-           (cons txt-label
-                 (map (λ (instr) (format "    ~a\n" (render-instr instr))) block))))
+       (format "leaq ~a(%rip), ~a" (rt-sym f) (render-op-x86 dst))]
+      [`(indirect-callq ,a) (format "callq *~a" (render-op-x86 a))]
+      [`(indirect-jmp ,a) (format "jmp *~a" (render-op-x86 a))]))
+;; the code segment as (line-text . instr-node-or-#f) pairs -- the
+;; pipeline serializer maps asm lines back to instructions with this
+(define (render-lines-x86 p)
+  (define functions (set-add (list->set (match p [`(program ,_ (define ,_ (,fs ,_ ...) ,_) ...) fs])) (entry-symbol)))
+  (define (block-lines block name)
+    (cons (cons (if (set-member? functions name) (format "~a:" (rt-sym name)) (format "~a:" name)) #f)
+          (map (λ (instr)
+                 ;; a rendered instruction may span several source
+                 ;; lines (none do today on x86, but keep it robust)
+                 (cons (format "    ~a" (string-replace (render-instr-x86 instr) "\n" "\n    ")) instr))
+               block)))
   (define (per-defn defn)
     (match-define `(define ,_ (,f ,formals ...) ,blocks) defn)
-    ;; the function's entry block must come first
     (define rest-keys (sort (filter (λ (k) (not (equal? k f))) (hash-keys blocks))
                             symbol<?))
-    (foldl (lambda (k acc) (string-append acc (render-block (hash-ref blocks k) k)))
-           ""
-           (cons f rest-keys)))
+    (append-map (λ (k) (block-lines (hash-ref blocks k) k)) (cons f rest-keys)))
+  (match p
+    [`(program ,_ ,defns ...) (append-map per-defn defns)]))
+
+(define (render-x86 p)
   (define (escape-c s)
     (apply string-append
            (map (λ (ch)
@@ -468,13 +486,12 @@
      (apply string-append
             (for/list ([_ strings] [i (in-naturals)]) (format "    .quad Lpfstr~a\n" i)))
      (format "~a: .quad ~a\n" (rt-sym 'puffin_string_const_count) (length strings))
-     (format "~a: .space ~a\n" globals-sym (max 8 (* 8 n-globals)))))
+     (format "~a: .space ~a\n" (rt-sym 'puffin_globals) (max 8 (* 8 n-globals)))))
   (match p
     [`(program ,info ,defns ...)
      (string-append
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
       ".text\n"
-      (foldl (λ (defn acc) (string-append acc (per-defn defn)))
-             ""
-             defns)
+      (apply string-append
+             (map (λ (ln) (string-append (car ln) "\n")) (render-lines-x86 p)))
       (data-segment info))]))
