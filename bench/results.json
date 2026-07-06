@@ -1,0 +1,278 @@
+{
+ "benchmarks": [
+  {
+   "name": "fib",
+   "desc": "fib(35), naive recursion",
+   "group": "calls",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.2591755830217153,
+     "min": 0.2549630419816822,
+     "max": 0.4254772919230163,
+     "rss": 2113536,
+     "output": "9227465"
+    },
+    "puffin-x86": {
+     "median": 0.3987937499769032,
+     "min": 0.39147441601380706,
+     "max": 0.7468217918649316,
+     "rss": 3657728,
+     "output": "9227465"
+    },
+    "racket": {
+     "median": 0.1651632501743734,
+     "min": 0.1634557091165334,
+     "max": 0.16996429185383022,
+     "rss": 113426432,
+     "output": "9227465"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "tail-loop",
+   "desc": "200M-iteration tail loop",
+   "group": "loops",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.4090731251053512,
+     "min": 0.4068375830538571,
+     "max": 0.6471178750507534,
+     "rss": 1769472,
+     "output": "19999999900000000"
+    },
+    "puffin-x86": {
+     "median": 0.5217204999644309,
+     "min": 0.5157010420225561,
+     "max": 0.7976929580327123,
+     "rss": 3407872,
+     "output": "19999999900000000"
+    },
+    "racket": {
+     "median": 0.30260350019671023,
+     "min": 0.2895684998948127,
+     "max": 0.3098467090167105,
+     "rss": 113360896,
+     "output": "19999999900000000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "hamt",
+   "desc": "1M persistent hash (HAMT) inserts + lookups",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.9007087501231581,
+     "min": 0.8470618750434369,
+     "max": 1.0098743750713766,
+     "rss": 78315520,
+     "output": "1499998500000"
+    },
+    "puffin-x86": {
+     "median": 1.3686656248755753,
+     "min": 1.3333900000434369,
+     "max": 1.644389791879803,
+     "rss": 74862592,
+     "output": "1499998500000"
+    },
+    "racket": {
+     "median": 0.3991939998231828,
+     "min": 0.3978873749729246,
+     "max": 0.42412674985826015,
+     "rss": 177782784,
+     "output": "1499998500000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "mut-hash",
+   "desc": "5M mutable hash inserts + lookups",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.4600648330524564,
+     "min": 0.4464775419328362,
+     "max": 0.6471365420147777,
+     "rss": 270450688,
+     "output": "37499992500000"
+    },
+    "puffin-x86": {
+     "median": 0.6351963749621063,
+     "min": 0.6128081658389419,
+     "max": 1.023560208035633,
+     "rss": 266031104,
+     "output": "37499992500000"
+    },
+    "racket": {
+     "median": 0.6477403331082314,
+     "min": 0.6422881251201034,
+     "max": 0.6600207919254899,
+     "rss": 773685248,
+     "output": "37499992500000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "lists",
+   "desc": "3M-element list build/reverse/map/fold",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.30164974997751415,
+     "min": 0.2971782498061657,
+     "max": 0.47536079096607864,
+     "rss": 688193536,
+     "output": "4500001500000"
+    },
+    "puffin-x86": {
+     "median": 0.5332079578656703,
+     "min": 0.5289598749950528,
+     "max": 0.8766281669959426,
+     "rss": 689774592,
+     "output": "4500001500000"
+    },
+    "racket": {
+     "median": 0.2760497920680791,
+     "min": 0.2594859581440687,
+     "max": 0.28218541597016156,
+     "rss": 374898688,
+     "output": "4500001500000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "sort",
+   "desc": "merge sort of 1M pseudorandom ints",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 1.675291124964133,
+     "min": 1.6690975411329418,
+     "max": 1.8368444580119103,
+     "rss": 312115200,
+     "output": "(0 134455 1000000)"
+    },
+    "puffin-x86": {
+     "median": 1.9862006669864058,
+     "min": 1.9581544590182602,
+     "max": 2.2494486670475453,
+     "rss": 310493184,
+     "output": "(0 134455 1000000)"
+    },
+    "racket": {
+     "median": 0.48706558416597545,
+     "min": 0.4713430830743164,
+     "max": 0.5037889590021223,
+     "rss": 247136256,
+     "output": "(0 134455 1000000)"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "vectors",
+   "desc": "50M-slot vector fill + sum",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.27912141708657146,
+     "min": 0.27766545792110264,
+     "max": 0.44412337499670684,
+     "rss": 402702336,
+     "output": "2499999950000000"
+    },
+    "puffin-x86": {
+     "median": 0.4278905421961099,
+     "min": 0.3958180828485638,
+     "max": 0.7424666250590235,
+     "rss": 404258816,
+     "output": "2499999950000000"
+    },
+    "racket": {
+     "median": 0.3630009579937905,
+     "min": 0.355390208074823,
+     "max": 0.3727281659375876,
+     "rss": 938147840,
+     "output": "2499999950000000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "strings",
+   "desc": "quadratic string-append builder (60k)",
+   "group": "data",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.14640166703611612,
+     "min": 0.14206474996171892,
+     "max": 0.3358665411360562,
+     "rss": 2424832,
+     "output": "60000"
+    },
+    "puffin-x86": {
+     "median": 0.20763175003230572,
+     "min": 0.2049575001001358,
+     "max": 0.4899432919919491,
+     "rss": 3932160,
+     "output": "60000"
+    },
+    "racket": {
+     "median": 0.30745445913635194,
+     "min": 0.29889787500724196,
+     "max": 0.30996512481942773,
+     "rss": 158220288,
+     "output": "60000"
+    }
+   },
+   "outputs_agree": true
+  },
+  {
+   "name": "lc-interp",
+   "desc": "eval/apply interpreter running Z-fib(25)",
+   "group": "meta",
+   "routes": {
+    "puffin-arm64": {
+     "median": 0.636971791042015,
+     "min": 0.6300602920819074,
+     "max": 0.8211379591375589,
+     "rss": 2211840,
+     "output": "75025"
+    },
+    "puffin-x86": {
+     "median": 0.8945684169884771,
+     "min": 0.8760449590627104,
+     "max": 1.165687208995223,
+     "rss": 3751936,
+     "output": "75025"
+    },
+    "racket": {
+     "median": 0.24243837501853704,
+     "min": 0.2413462088443339,
+     "max": 0.24490062496624887,
+     "rss": 136937472,
+     "output": "75025"
+    }
+   },
+   "outputs_agree": true
+  }
+ ],
+ "meta": {
+  "racket_startup": 0.13091562502086163,
+  "puffin_startup": 0.007418583845719695,
+  "n_runs": 5,
+  "machine": "Apple M4 Pro",
+  "racket_version": "Welcome to Racket v8.15 [cs]."
+ },
+ "compile_time": {
+  "hosted, fib (16 passes + clang)": 1.5738446249160916,
+  "puffincc, fib (asm only)": 0.01581191597506404,
+  "hosted, puffincc.puf (2972 lines)": 32.055944917025045,
+  "puffincc self-compile (stage 2)": 25.93686202110257
+ }
+}

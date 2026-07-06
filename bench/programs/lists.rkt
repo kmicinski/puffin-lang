@@ -1,0 +1,4 @@
+#lang racket
+(define xs (let loop ([i 0] [acc '()]) (if (< i 3000000) (loop (+ i 1) (cons i acc)) acc)))
+(define ys (reverse xs))
+(displayln (foldl + 0 (map add1 ys)))

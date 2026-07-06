@@ -1,0 +1,6 @@
+#lang racket
+(define h (make-hasheqv))
+(let loop ([i 0])
+  (when (< i 5000000) (hash-set! h i (* i 3)) (loop (+ i 1))))
+(let loop ([i 0] [acc 0])
+  (if (< i 5000000) (loop (+ i 1) (+ acc (hash-ref h i))) (displayln acc)))

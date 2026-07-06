@@ -1,0 +1,8 @@
+;; same hand-written stable merge sort on both sides
+(define xs (let loop ([i 0] [seed 12345] [acc '()])
+             (if (< i 1000000)
+                 (loop (+ i 1) (remainder (+ (* seed 8121) 28411) 134456)
+                       (cons seed acc))
+                 acc)))
+(define sorted (sort xs <))
+(println (list (car sorted) (last sorted) (length sorted)))

@@ -1,0 +1,3 @@
+#lang racket
+(let loop ([i 0] [acc 0])
+  (if (< i 200000000) (loop (+ i 1) (+ acc i)) (displayln acc)))

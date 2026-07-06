@@ -1,0 +1,5 @@
+;; quadratic append builder, same on both sides
+(let loop ([i 0] [acc ""])
+  (if (< i 60000)
+      (loop (+ i 1) (string-append acc (number->string (remainder i 10))))
+      (println (string-length acc))))

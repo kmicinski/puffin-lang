@@ -262,6 +262,10 @@
          (define cc   (or (getenv "CC") "/usr/bin/clang"))
          (define target-flag      (if (string=? tgt "") "" (format "-target ~a" tgt)))
          (define common-cc-flags  "-Wall -O2")
+         ;; deep non-tail recursion (a 1M-element map) needs more than
+         ;; the default 8MB stack; reserve 1GB of address space (only
+         ;; touched pages are committed)
+         (define stack-flag (if (eq? (host-os) 'macosx) "-Wl,-stack_size,0x20000000" ""))
          (define linux-extra (if (eq? (host-os) 'unix) "-no-pie" ""))
          (displayln (format "-> Host: ~a/~a  Target: ~a  Entry: ~a"
                             (host-os) (host-arch) (target) (entry-symbol)))
@@ -272,7 +276,7 @@
          (define link-cmd
            (string-append cc " "
                           (flag-list->string
-                           (list target-flag common-cc-flags linux-extra))
+                           (list target-flag common-cc-flags linux-extra stack-flag))
                           " " (object-file) " " (runtime-archive)
                           " -o " (executable-file)))
          (with-handlers ([exn:fail? (λ (e) (void))]) (delete-file (executable-file)))

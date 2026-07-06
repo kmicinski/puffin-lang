@@ -30,6 +30,14 @@ self-hosting.
 
 ### Performance (Apple M-series, this machine)
 
+> A full nine-benchmark head-to-head suite with plots now lives in
+> **`bench/report.html`** (regenerate: `python3 bench/run-benchmarks.py
+> && python3 bench/build-report.py`). Headline: geometric-mean wall
+> time **1.32× Racket** on arm64; Puffin outright faster on mutable
+> hashes, vectors, and strings; Racket ahead on allocation-heavy
+> symbolic work (sort 3.4×, meta-interpreter 2.6×, HAMT 2.3×). The
+> table below is the earlier spot-check kept for history.
+
 Generated code, `fib(35)` (call-heavy worst case):
 
 | route | time (user) |
