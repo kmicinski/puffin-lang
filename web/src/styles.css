@@ -1,0 +1,253 @@
+/* Puffin web — Solarized Light chrome */
+
+:root {
+  --base3: #fdf6e3;
+  --base2: #eee8d5;
+  --base1: #93a1a1;
+  --base0: #839496;
+  --base00: #657b83;
+  --base01: #586e75;
+  --base02: #073642;
+  --yellow: #b58900;
+  --orange: #cb4b16;
+  --red: #dc322f;
+  --magenta: #d33682;
+  --violet: #6c71c4;
+  --blue: #268bd2;
+  --cyan: #2aa198;
+  --green: #859900;
+  --mono: 'SF Mono', Menlo, Monaco, 'Cascadia Code', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--base3);
+  color: var(--base00);
+  font-family: var(--sans);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---------- header ---------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--base2);
+  border-bottom: 1px solid #d9d2c2;
+  flex: none;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-right: 8px;
+}
+.brand .logo { font-size: 20px; }
+.brand .name {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--base01);
+  letter-spacing: 0.5px;
+}
+.brand .target-note {
+  font-size: 12px;
+  color: var(--base1);
+  border: 1px solid var(--base1);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.btn {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 5px;
+  border: 1px solid #d9d2c2;
+  background: var(--base3);
+  color: var(--base01);
+  cursor: pointer;
+}
+.btn:hover { background: #f7f0dd; }
+.btn:active { transform: translateY(1px); }
+.btn.run {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--base3);
+}
+.btn.run:hover { background: #97ad00; }
+.btn.stop {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--base3);
+}
+.btn.small { font-size: 12px; padding: 3px 10px; font-weight: 500; }
+
+select.examples {
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid #d9d2c2;
+  background: var(--base3);
+  color: var(--base01);
+}
+
+.running-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--base1);
+  margin-left: auto;
+}
+.running-indicator .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--yellow);
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* ---------- main split ---------- */
+
+.main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-pane {
+  flex: 3 1 60%;
+  min-width: 0;
+  border-right: 1px solid #d9d2c2;
+}
+.editor-pane .monaco-host { width: 100%; height: 100%; }
+
+.right-pane {
+  flex: 2 1 40%;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--base3);
+}
+
+.pane-title {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--base1);
+  padding: 7px 12px 5px;
+  border-bottom: 1px solid var(--base2);
+}
+.pane-title .spacer { flex: 1; }
+
+/* ---------- output console ---------- */
+
+.console {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.console .line { min-height: 1.45em; }
+.console .line.echo { color: var(--violet); }
+.console .line.err { color: var(--red); }
+.console .line.sys { color: var(--base1); font-style: italic; }
+.console .line.val { color: var(--blue); }
+.console .truncated {
+  color: var(--base1);
+  font-style: italic;
+  border-bottom: 1px dashed var(--base2);
+  margin-bottom: 4px;
+}
+
+/* ---------- stdin ---------- */
+
+.stdin-box {
+  flex: none;
+  border-top: 1px solid var(--base2);
+}
+.stdin-box summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--base1);
+  padding: 6px 12px;
+  user-select: none;
+  list-style-position: inside;
+}
+.stdin-box summary:hover { color: var(--base01); }
+.stdin-box textarea {
+  display: block;
+  width: 100%;
+  height: 64px;
+  resize: vertical;
+  border: none;
+  border-top: 1px solid var(--base2);
+  background: #fbf4de;
+  color: var(--base00);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 6px 12px;
+  outline: none;
+}
+
+/* ---------- REPL ---------- */
+
+.repl {
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-top: 1px solid #d9d2c2;
+  background: var(--base2);
+  padding: 6px 12px;
+  gap: 8px;
+}
+.repl .prompt {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green);
+  flex: none;
+}
+.repl input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--base01);
+}
+.repl input::placeholder { color: var(--base1); }
