@@ -787,7 +787,7 @@
       [`(or ,e0 ,e1)  (set-union (free-vars e0) (free-vars e1))]
       [`(not ,e) (free-vars e)]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       (set-union (free-vars e-g) (free-vars e-b) (free-vars e-b))]
+       (set-union (free-vars e-g) (free-vars e-b) (free-vars e-r))]
       [`(let ([,x ,e]) ,e-b)
        (set-union (free-vars e) (set-remove (free-vars e-b) x))]
       [`(make-vector ,i) (set)]
@@ -928,6 +928,12 @@
               bodies))]))
 
 (define (uniqueify p)
+  ;; names used so far in the current definition (see the let case)
+  (define used (mutable-set))
+  (define (fresh! x)
+    (if (set-member? used x)
+        (gensym x)
+        (begin (set-add! used x) x)))
   (define (rename e assignment)
     (match e
       [(? fixnum? n) n]
@@ -952,39 +958,28 @@
       [`(let ([_ ,e]) ,e-b)
        `(let ([_ ,(rename e assignment)]) ,(rename e-b assignment))]
       [`(let ([,x ,e]) ,e-b)
-       (if (hash-has-key? assignment x)
-           (let* ([x+ (gensym x)]
-                  [assignment+ (hash-set assignment x x+)])
-             `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))
-           (let ([assignment+ (hash-set assignment x x)])
-             `(let ([,x ,(rename e assignment+)]) ,(rename e-b assignment+))))]
+       ;; rename if x was used ANYWHERE in this definition before
+       ;; (sibling scopes count), not just in the enclosing scope
+       (let* ([x+ (fresh! x)]
+              [assignment+ (hash-set assignment x x+)])
+         `(let ([,x+ ,(rename e assignment)]) ,(rename e-b assignment+)))]
       [`(make-vector ,i) e]
       [`(vector-ref ,e ,i) `(vector-ref ,(rename e assignment) ,i)]
       [`(vector-set! ,e ,i ,e-v) `(vector-set! ,(rename e assignment) ,i ,(rename e-v assignment))]
       [`(set! ,x ,e) `(set! ,x ,(rename e assignment))]
       ;; NEW case: for any x ∈ xs, rename any one previously used...
       [`(lambda (,xs ...) ,e-b)
-       (let* ([assignment+
-               (foldl (lambda (x acc)
-                        (if (hash-has-key? acc x)
-                            (let ([x+ (gensym x)])
-                              (hash-set acc x x+))
-                            (hash-set acc x x)))
-                      assignment
-                      xs)]
-              [new-xs (map (lambda (x) (hash-ref assignment+ x)) xs)])
+       (let* ([new-xs (map fresh! xs)]
+              [assignment+ (foldl (lambda (x x+ acc) (hash-set acc x x+)) assignment xs new-xs)])
          `(lambda ,new-xs ,(rename e-b assignment+)))]
       [`(,e-f ,e-args ...) `(,(rename e-f assignment) ,@(map (lambda (e-arg) (rename e-arg assignment)) e-args))]))
   (define (per-defn def)
+    (set-clear! used) ;; uniqueness is per definition
     (match def
       [`(define (,f ,xs ...) ,e-b)
-       (define assignment+ (foldl (lambda (x acc)
-                                    (if (hash-has-key? acc x)
-                                        (let ([x+ (gensym x)]) (hash-set acc x x+))
-                                        (hash-set acc x x)))
-                                  (hash)
-                                  xs))
-       `(define (,f ,@xs) ,(rename e-b assignment+))]))
+       (define new-xs (map fresh! xs))
+       (define assignment+ (foldl (lambda (x x+ acc) (hash-set acc x x+)) (hash) xs new-xs))
+       `(define (,f ,@new-xs) ,(rename e-b assignment+))]))
   (match p
     [`(program ,defns ...)
      ;; empty info
@@ -1012,7 +1007,7 @@
       [`(not ,e) `(not ,(h e))]
       [`(<= ,e0 ,e1) (h `(or (< ,e0 ,e1) (eq? ,e0 ,e1)))]
       [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
-      [`(< ,e0 ,e1) `(< ,e0 ,e1)]
+      [`(< ,e0 ,e1) `(< ,(h e0) ,(h e1))]
       [`(>= ,e0 ,e1) (h `(or (< ,e1 ,e0) (eq? ,e0 ,e1)))]
       [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
       [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]

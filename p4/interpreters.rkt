@@ -151,7 +151,7 @@
     [`(app ,e-f ,args ...)
      (eval-R5-exp `(,e-f ,@args) env in)]
     [`(fun-ref ,f) (eval-R5-exp f env in)]
-    [`(lambda (,xs ...) ,e+) `((clo ,e ,env) ,in)]
+    [`(lambda (,xs ...) ,e+) `((clo ,e ,env) . ,in)]
     [`(,e-f ,e-args ...)
      (match-define `((clo (lambda (,xs ...) ,e-b) ,env+) . ,in+) (eval-R5-exp e-f env in))
      (match-define `(,reversed-vs ,in++)
@@ -159,7 +159,7 @@
                 (match-define `(,acc-vs ,in) acc)
                 (match-define `(,v-result . ,in+) (eval-R5-exp e-arg env in))
                 `(,(cons v-result acc-vs) ,in+))
-              `(() ,in)
+              `(() ,in+)
               e-args))
      (define vs (map (lambda (x) (vector x)) (reverse reversed-vs)))
      (define env++ (foldl (lambda (x v h) (hash-set h x v)) env+ xs vs))
@@ -242,7 +242,7 @@
       [`(return ,a)                         
        (match stack
          ['(top-stack) 
-          (match (rhs-val a env in) [(cons v in*) (cons v in)])]
+          (match (rhs-val a env in) [(cons v in*) (cons v in*)])]
          [`((,x ,env+ ,rst) . ,stack+)
           (match (rhs-val a env in)
             [(cons v in*) (go rst (hash-set env+ x v) stack+ in*)])])]
@@ -471,3 +471,8 @@
         [(patched-program? p)                    (interpret-instr p in)]
         [(x86-64? p)                             (interpret-instr p in)]
         [else (error 'interpret "unknown IR kind")]))
+
+#;
+(interpret-R5 '(program
+                (define (main) ((f (read)) (read)))
+                (define (f x) (lambda (y) (+ y x)))))
