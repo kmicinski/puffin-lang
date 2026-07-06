@@ -174,7 +174,29 @@ render; drive with the Racket main.rkt harness throughout (it can
 run a Puffin-compiled pass binary per stage and diff against the
 Racket pass — the golden machinery already knows how to compare).
 
-## 5. How this was validated
+## 5. SELF-HOSTING: achieved
+
+`puffincc-src/` contains the full compiler in Puffin (~3,000 lines:
+reader, desugar, middle passes, regalloc, both backends, driver),
+kept in lockstep with the reference via generated tables
+(src/gen-puffincc-tables.rkt) and per-pass cross-implementation
+diffing (src/diff-ir.rkt + the driver's (dump-after pass)
+directive). Results:
+
+- **Stage 1** (hosted build, `bin/build-puffincc`): the entire
+  corpus passes through puffincc — 189/189 golden checks on arm64
+  and 189/189 targeting x86-64.
+- **Stage 2**: puffincc compiles itself (24.6 s, 327k lines of
+  assembly out); the stage-2 binary passes the corpus 189/189.
+- **Stage 3 fixpoint**: stage-2-compiled puffincc produces
+  **byte-identical** assembly to stage 2. Determinism comes free:
+  the runtime's gensym counter starts fresh per process.
+
+The C runtime and the assemble/link step (clang) remain host-side
+by design; `bin/puffincc-compile prog out [target]` is the
+one-command path.
+
+## 6. How this was validated
 
 Every feature landed with: manifest entry (C entry point + Racket
 reference implementation + doc line), C implementation in the

@@ -224,9 +224,10 @@
         (define golden (golden-for prog input))
         (when golden
           (define-values (sp out in err) (subprocess #f #f #f exe))
-          (fprintf in "~a
-" (string-join (map number->string (input-ints input)) " "))
-          (close-output-port in)
+          ;; a crashing binary may close stdin before we write it
+          (with-handlers ([exn:fail? (lambda (_) (void))])
+            (fprintf in "~a\n" (string-join (map number->string (input-ints input)) " "))
+            (close-output-port in))
           (define program-out (port->string out))
           (define err-out (port->string err))
           (subprocess-wait sp)
