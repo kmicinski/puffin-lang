@@ -1,0 +1,3 @@
+#!/bin/sh
+# Puffin CLI: compiler, runner, and REPL. See src/puffin.rkt.
+exec racket "$(dirname "$0")/../src/puffin.rkt" "$@"

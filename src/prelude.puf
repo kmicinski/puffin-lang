@@ -1,0 +1,83 @@
+;; Puffin -- prelude.puf: the Puffin-written layer of the standard
+;; library. These are ordinary top-level defines, injected by the
+;; reader (read-program-file) into any program that doesn't define
+;; the same name itself -- so old class programs with their own
+;; `length` or `append` are untouched, and everything here is
+;; first-class and written in the language it serves.
+;;
+;; Everything below is deliberately tail-recursive where it matters:
+;; Puffin has proper tail calls.
+
+(define (length xs)
+  (let loop ([xs xs] [n 0])
+    (if (null? xs) n (loop (cdr xs) (+ n 1)))))
+
+(define (append xs ys)
+  (if (null? xs) ys (cons (car xs) (append (cdr xs) ys))))
+
+(define (reverse xs)
+  (let loop ([xs xs] [acc '()])
+    (if (null? xs) acc (loop (cdr xs) (cons (car xs) acc)))))
+
+(define (map f xs)
+  (if (null? xs) '() (cons (f (car xs)) (map f (cdr xs)))))
+
+(define (filter p xs)
+  (cond [(null? xs) '()]
+        [(p (car xs)) (cons (car xs) (filter p (cdr xs)))]
+        [else (filter p (cdr xs))]))
+
+(define (foldl f acc xs)
+  (if (null? xs) acc (foldl f (f (car xs) acc) (cdr xs))))
+
+(define (foldr f acc xs)
+  (if (null? xs) acc (f (car xs) (foldr f acc (cdr xs)))))
+
+(define (list-ref xs i)
+  (if (eq? i 0) (car xs) (list-ref (cdr xs) (- i 1))))
+
+(define (member v xs)
+  (cond [(null? xs) #f]
+        [(equal? v (car xs)) xs]
+        [else (member v (cdr xs))]))
+
+(define (assoc k ps)
+  (cond [(null? ps) #f]
+        [(equal? k (car (car ps))) (car ps)]
+        [else (assoc k (cdr ps))]))
+
+(define (range a b)
+  (if (< a b) (cons a (range (+ a 1) b)) '()))
+
+(define (andmap p xs)
+  (if (null? xs) #t (if (p (car xs)) (andmap p (cdr xs)) #f)))
+
+(define (ormap p xs)
+  (if (null? xs) #f (let ([v (p (car xs))]) (if v v (ormap p (cdr xs))))))
+
+(define (last xs)
+  (if (null? (cdr xs)) (car xs) (last (cdr xs))))
+
+(define (list->vector xs)
+  (let ([v (make-vector (length xs))])
+    (let loop ([xs xs] [i 0])
+      (if (null? xs)
+          v
+          (begin (vector-set! v i (car xs)) (loop (cdr xs) (+ i 1)))))))
+
+(define (vector->list v)
+  (let loop ([i (- (vector-length v) 1)] [acc '()])
+    (if (< i 0) acc (loop (- i 1) (cons (vector-ref v i) acc)))))
+
+(define (max a b) (if (< a b) b a))
+(define (min a b) (if (< a b) a b))
+(define (abs n) (if (< n 0) (- n) n))
+(define (add1 n) (+ n 1))
+(define (sub1 n) (- n 1))
+(define (zero? n) (eq? n 0))
+(define (even? n) (eq? (remainder n 2) 0))
+(define (odd? n) (not (eq? (remainder n 2) 0)))
+(define (list? v)
+  (cond [(null? v) #t]
+        [(pair? v) (list? (cdr v))]
+        [else #f]))

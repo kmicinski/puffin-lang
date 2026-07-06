@@ -1,4 +1,11 @@
+# build artifacts
+output
+output.s
+output.o
 *.o
-*~
-*#
-*.exe
+src/runtime/build/
+src/runtime/libpuffin.a
+web/node_modules/
+web/dist/
+intermediate-outputs/
+.DS_Store

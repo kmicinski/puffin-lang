@@ -1,0 +1,10 @@
+zero
+negative
+positive
+yes
+(pair-vec 1 2)
+greeting
+empty
+(singleton 42)
+other
+mid
