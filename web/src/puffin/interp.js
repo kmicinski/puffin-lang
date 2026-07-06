@@ -19,6 +19,7 @@ import {
   Pair, PStr, Closure, Native, VOID, NIL,
   PuffinHalt, PuffinError, eqv, puffinEqual, render,
   IHash, ISet,
+  splitFormals,
 } from './values.js';
 
 const S = Symbol.for;
@@ -534,8 +535,10 @@ export function evalExpr(expr0, env0, ctx) {
           continue;
         }
 
-        case S_LAMBDA: case S_LAMBDA2:
-          return new Closure(expr[1].slice(), expr.slice(2), env);
+        case S_LAMBDA: case S_LAMBDA2: {
+          const { fixed, rest } = splitFormals(expr[1]);
+          return new Closure(fixed, expr.slice(2), env, undefined, rest);
+        }
 
         case S_QUASIQUOTE:
           return evalQuasiExpr(expr[1], 1, env, ctx);
@@ -564,8 +567,11 @@ export function evalExpr(expr0, env0, ctx) {
             for (let i = 1; i < expr.length; i++) {
               const f = expr[i];
               if (isFunDefine(f)) {
-                frame.vars.get(f[1][0]).v =
-                  new Closure(f[1].slice(1), f.slice(2), frame, Symbol.keyFor(f[1][0]));
+                {
+                  const { fixed, rest } = splitFormals(f[1], 1);
+                  frame.vars.get(f[1][0]).v =
+                    new Closure(fixed, f.slice(2), frame, Symbol.keyFor(f[1][0]), rest);
+                }
                 last = VOID;
               } else if (isValDefine(f)) {
                 frame.vars.get(f[1]).v = evalExpr(f[2], frame, ctx);
@@ -698,11 +704,16 @@ export function evalExpr(expr0, env0, ctx) {
     for (let i = 1; i < expr.length; i++) args.push(evalExpr(expr[i], env, ctx));
 
     if (f instanceof Closure) {
-      if (f.params.length !== args.length)
+      if (f.rest ? args.length < f.params.length : f.params.length !== args.length)
         throw new PuffinError(
-          `arity mismatch: procedure of ${f.params.length} argument${f.params.length === 1 ? '' : 's'} applied to ${args.length}`);
+          `arity mismatch: procedure of ${f.rest ? 'at least ' : ''}${f.params.length} argument${f.params.length === 1 ? '' : 's'} applied to ${args.length}`);
       const frame = new Frame(f.env);
       for (let i = 0; i < f.params.length; i++) frame.vars.set(f.params[i], { v: args[i] });
+      if (f.rest) {
+        let lst = NIL;
+        for (let i = args.length - 1; i >= f.params.length; i--) lst = new Pair(args[i], lst);
+        frame.vars.set(f.rest, { v: lst });
+      }
       env = frame;
       expr = bodyToExpr(f.body);
       continue;
@@ -731,11 +742,16 @@ function bodyToExpr(body) {
 // Apply a value in a non-tail context (used by (? pred p) patterns).
 export function applyProcedure(f, args, ctx) {
   if (f instanceof Closure) {
-    if (f.params.length !== args.length)
+    if (f.rest ? args.length < f.params.length : f.params.length !== args.length)
       throw new PuffinError(
-        `arity mismatch: procedure of ${f.params.length} arguments applied to ${args.length}`);
+        `arity mismatch: procedure of ${f.rest ? 'at least ' : ''}${f.params.length} arguments applied to ${args.length}`);
     const frame = new Frame(f.env);
     for (let i = 0; i < f.params.length; i++) frame.vars.set(f.params[i], { v: args[i] });
+    if (f.rest) {
+      let lst = NIL;
+      for (let i = args.length - 1; i >= f.params.length; i--) lst = new Pair(args[i], lst);
+      frame.vars.set(f.rest, { v: lst });
+    }
     return evalExpr(bodyToExpr(f.body), frame, ctx);
   }
   if (f instanceof Native) {
@@ -963,7 +979,10 @@ export function evalProgram(forms, global, ctx) {
   for (const f of forms) {
     if (isFunDefine(f)) {
       const name = f[1][0];
-      global.define(name, new Closure(f[1].slice(1), f.slice(2), global, Symbol.keyFor(name)));
+      {
+        const { fixed, rest } = splitFormals(f[1], 1);
+        global.define(name, new Closure(fixed, f.slice(2), global, Symbol.keyFor(name), rest));
+      }
     }
   }
   let last = VOID;

@@ -127,6 +127,13 @@
          ,@sink)]
       [`(app ,a-f ,args ...)
        `(,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum (length args))) (reg r10))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      [`(papp ,n ,a-f ,args ...)
+       ;; packed call: the arity register carries the ORIGINAL count
+       `(,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum n)) (reg r10))
          (indirect-callq ,(h-atom a-f))
          ,@sink)]
       ;; globals
@@ -160,9 +167,10 @@
       ;; tail call: load the target into scratch %r11 *before* the
       ;; argument moves, then a tail-jmp pseudo-instruction that
       ;; prelude-and-conclusion expands into epilogue + jmp *%r11
-      [`(tail-app ,a-f ,args ...)
+      [`(tail-app ,n ,a-f ,args ...)
        `((movq ,(h-atom a-f) (reg r11))
          ,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum n)) (reg r10))
          (tail-jmp (reg r11) ,(length args)))]
       [`(seq (assign ,x ,rhs) ,rst)
        (append (rhs->instrs rhs `((movq (reg rax) (var ,x)))) (h rst))]
@@ -189,12 +197,30 @@
                      (conclusion-block-name)
                      '((retq))))
     (define entry (hash-ref blocks+ f))
+    (define mi (index-of args '#%rest))
     (define moves
-      (map (λ (a r) `(movq (reg ,r) (var ,a)))
-           args (take (argument-registers-list) (length args))))
+      (cond
+        [mi
+         ;; variadic prologue: spill the six argument registers to
+         ;; the runtime's arg area, build the rest list from the
+         ;; incoming arity (r10), then load the fixed formals back
+         (define fixed (take args mi))
+         (define rest-name (list-ref args (add1 mi)))
+         `(,@(map (λ (r i) `(movq (reg ,r) (argspill ,i)))
+                  (argument-registers-list) (range 6))
+           (movq (imm ,(tag-fixnum (length fixed))) (reg rdi))
+           (movq (reg r10) (reg rsi))
+           (callq pf_collect_rest 2)
+           (movq (reg rax) (var ,rest-name))
+           ,@(map (λ (a i) `(movq (argspill ,i) (var ,a)))
+                  fixed (range (length fixed))))]
+        [else
+         (map (λ (a r) `(movq (reg ,r) (var ,a)))
+              args (take (argument-registers-list) (length args)))]))
     (define blocks++
       (hash-set blocks+ f (append moves entry)))
-    `(define ,locals (,f ,@args) ,blocks++))
+    (define args+ (if mi (append (take args mi) (list (list-ref args (add1 mi)))) args))
+    `(define ,locals (,f ,@args+) ,blocks++))
   (match p
     [`(program ,info ,defns ...)
      `(program ,(hash-set (hash-set info 'symbols symbol-table) 'strings string-table)
@@ -233,7 +259,8 @@
 ;; ---------------------------------------------------------------------
 
 (define (patch-instructions-x86 p)
-  (define (mem? op) (or (deref? op) (global? op)))
+  (define (mem? op) (or (deref? op) (global? op)
+                        (match op [`(argspill ,_) #t] [_ #f])))
   (define (big-imm? op)
     (match op [`(imm ,i) (or (> i 2147483647) (< i -2147483648))] [_ #f]))
   (define (patch-instr instr) (prov-each (patch-instr-core instr) instr))
@@ -400,7 +427,8 @@
       [`(reg ,x) (format "%~a" (symbol->string x))]
       [`(byte-reg ,x) (format "%~a" (symbol->string x))]
       [`(deref (reg ,reg) ,i) (format "~a(%~a)" i (symbol->string reg))]
-      [`(global ,i) (format "~a+~a(%rip)" (rt-sym 'puffin_globals) (* 8 i))]))
+      [`(global ,i) (format "~a+~a(%rip)" (rt-sym 'puffin_globals) (* 8 i))]
+      [`(argspill ,i) (format "~a+~a(%rip)" (rt-sym 'pf_arg_spill) (* 8 i))]))
 (define (render-cc-x86 cc)
   (match cc ['e "e"] ['ne "ne"] ['l "l"] ['ae "ae"]))
 (define (render-instr-x86 instr)

@@ -134,6 +134,13 @@
          ,@sink)]
       [`(app ,a-f ,args ...)
        `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum (length args))) (reg x12))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      [`(papp ,n ,a-f ,args ...)
+       ;; packed call: the arity register carries the ORIGINAL count
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
          (indirect-callq ,(h-atom a-f))
          ,@sink)]
       [`(global-ref ,i)
@@ -160,10 +167,11 @@
       [`(return ,a)
        `((mov ,(h-atom a) (reg x0))
          (jmp ,(conclusion-block-name)))]
-      [`(tail-app ,a-f ,args ...)
+      [`(tail-app ,n ,a-f ,args ...)
        ;; x9 is scratch and survives the epilogue expansion
        `((mov ,(h-atom a-f) (reg x9))
          ,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
          (tail-jmp (reg x9) ,(length args)))]
       [`(seq (assign ,x ,rhs) ,rst)
        (append (rhs->instrs rhs `((mov (reg x0) (var ,x)))) (h rst))]
@@ -193,12 +201,29 @@
                      (conclusion-block-name)
                      '((retq))))
     (define entry (hash-ref blocks+ f))
+    (define mi (index-of args '#%rest))
     (define moves
-      (map (λ (a r) `(mov (reg ,r) (var ,a)))
-           args (take (argument-registers-list) (length args))))
+      (cond
+        [mi
+         ;; variadic prologue (see backend-x86.rkt): spill arg regs,
+         ;; call pf_collect_rest(k, n=x12), reload the fixed formals
+         (define fixed (take args mi))
+         (define rest-name (list-ref args (add1 mi)))
+         `(,@(map (λ (r i) `(str-argspill (reg ,r) ,i))
+                  (argument-registers-list) (range 6))
+           (mov (imm ,(tag-fixnum (length fixed))) (reg x0))
+           (mov (reg x12) (reg x1))
+           (callq pf_collect_rest 2)
+           (mov (reg x0) (var ,rest-name))
+           ,@(map (λ (a i) `(ldr-argspill ,i (var ,a)))
+                  fixed (range (length fixed))))]
+        [else
+         (map (λ (a r) `(mov (reg ,r) (var ,a)))
+              args (take (argument-registers-list) (length args)))]))
     (define blocks++
       (hash-set blocks+ f (append moves entry)))
-    `(define ,locals (,f ,@args) ,blocks++))
+    (define args+ (if mi (append (take args mi) (list (list-ref args (add1 mi)))) args))
+    `(define ,locals (,f ,@args+) ,blocks++))
   (match p
     [`(program ,info ,defns ...)
      `(program ,(hash-set (hash-set info 'symbols symbol-table) 'strings string-table)
@@ -217,6 +242,8 @@
     [`(str ,src ,dst)    (list (vars-of src dst) '())]
     [`(ldr-global ,_ ,dst) (list '() (vars-of dst))]
     [`(str-global ,src ,_) (list (vars-of src) '())]
+    [`(ldr-argspill ,_ ,dst) (list '() (vars-of dst))]
+    [`(str-argspill ,src ,_) (list (vars-of src) '())]
     [`(lea-fun ,_ ,dst)  (list '() (vars-of dst))]
     [`(,(or 'add 'sub 'mul 'orr) ,src ,dst)
      (list (vars-of src dst) (vars-of dst))]
@@ -325,6 +352,16 @@
            (list instr)
            (let-values ([(is r) (into-reg src 'x11)])
              `(,@is (str-global ,r ,i))))]
+      [`(ldr-argspill ,i ,dst)
+       (if (reg? dst)
+           (list instr)
+           `((ldr-argspill ,i (reg x11))
+             (str (reg x11) ,dst)))]
+      [`(str-argspill ,src ,i)
+       (if (reg? src)
+           (list instr)
+           (let-values ([(is r) (into-reg src 'x11)])
+             `(,@is (str-argspill ,r ,i))))]
       [i (list i)]))
   (define (per-defn defn)
     (match-define `(define ,info (,f ,formals ...) ,blocks) defn)
@@ -502,6 +539,12 @@
       [`(str-global ,src ,i)
        (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
                globals-sym globals-sym (reg-name src) (* 8 i))]
+      [`(ldr-argspill ,i ,dst)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    ldr ~a, [x16, #~a]"
+               (rt-sym 'pf_arg_spill) (rt-sym 'pf_arg_spill) (reg-name dst) (* 8 i))]
+      [`(str-argspill ,src ,i)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
+               (rt-sym 'pf_arg_spill) (rt-sym 'pf_arg_spill) (reg-name src) (* 8 i))]
       ['(frame-push) "stp x29, x30, [sp, #-16]!\n    mov x29, sp"]
       ['(frame-pop) "ldp x29, x30, [sp], #16"]
       [`(sp-sub ,n) (format "sub sp, sp, #~a" n)]

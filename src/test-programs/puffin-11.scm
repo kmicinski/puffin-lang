@@ -3,7 +3,7 @@
 (define g2 (gensym 'tmp))
 (println (list (symbol? g1) (eq? g1 g2)))                       ;; (#t #f)
 (println (value->string (list 1 'two (vector 3) "four")))             ;; (1 two #(3) four)
-(println (format "~a + ~a = ~a~%done~~" (list 1 2 (+ 1 2))))
+(println (format "~a + ~a = ~a~%done~~" 1 2 (+ 1 2)))
 (println (substring "hello world" 6 11))                        ;; world
 (println (list (string<? "apple" "banana") (string<? "b" "a")))
 (println (string-byte "A" 0))                                   ;; 65

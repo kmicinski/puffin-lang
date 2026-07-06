@@ -416,6 +416,17 @@
       [`(,(or 'lambda 'λ) (,xs ...) ,body ...)
        (define-values (bound+ xs+) (bind* bound xs))
        `(lambda ,xs+ ,(body->expr body bound+))]
+      ;; variadic lambdas: dotted formals normalize to a #%rest
+      ;; marker before the rest name ((lambda args ...) is all-rest)
+      [`(,(or 'lambda 'λ) ,formals ,body ...)
+       (define-values (fixed rest-name)
+         (let split ([f formals] [acc '()])
+           (cond [(symbol? f) (values (reverse acc) f)]
+                 [(pair? f) (split (cdr f) (cons (car f) acc))]
+                 [else (error 'desugar "bad lambda formals: ~a" formals)])))
+       (define-values (bound+ names+) (bind* bound (append fixed (list rest-name))))
+       `(lambda (,@(take names+ (length fixed)) #%rest ,(last names+))
+          ,(body->expr body bound+))]
       ;; sequencing / loops / mutation
       [`(begin ,es ... ,e-ret)
        `(begin ,@(map (λ (e) (h e bound)) es) ,(h e-ret bound))]
@@ -486,6 +497,7 @@
                 (filter-map (λ (form)
                               (match form
                                 [`(define (,f ,_ ...) ,_ ...) f]
+                                [`(define (,f . ,_) ,_ ...) f]
                                 [`(define ,(? symbol? x) ,_) x]
                                 [_ #f]))
                             forms)))
@@ -495,6 +507,16 @@
       [`(define (,f ,xs ...) ,body ...)
        (define-values (bound+ xs+) (bind* top-bound xs))
        `(define (,(hash-ref top-bound f f) ,@xs+) ,(body->expr body bound+))]
+      ;; variadic defines: (define (f a . r) body)
+      [`(define (,f . ,formals) ,body ...)
+       (define-values (fixed rest-name)
+         (let split ([fo formals] [acc '()])
+           (cond [(symbol? fo) (values (reverse acc) fo)]
+                 [(pair? fo) (split (cdr fo) (cons (car fo) acc))]
+                 [else (error 'desugar "bad define formals: ~a" formals)])))
+       (define-values (bound+ names+) (bind* top-bound (append fixed (list rest-name))))
+       `(define (,(hash-ref top-bound f f) ,@(take names+ (length fixed)) #%rest ,(last names+))
+          ,(body->expr body bound+))]
       [`(define ,(? symbol? x) ,e)
        `(define ,(hash-ref top-bound x x) ,(h e top-bound))]
       [e (h e top-bound)]))
@@ -576,9 +598,9 @@
   ;; branches produce duplicate writes.
   (define used (mutable-set))
   (define (fresh! x)
-    (if (set-member? used x)
-        (gensym x)
-        (begin (set-add! used x) x)))
+    (cond [(equal? x '#%rest) x]   ;; the variadic marker is not a binder
+          [(set-member? used x) (gensym x)]
+          [else (set-add! used x) x]))
   (define (rename e assignment) (prov (rename-core e assignment) e))
   (define (rename-core e assignment)
     (match e
@@ -870,9 +892,10 @@
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
        (define mut (mutated-vars e-body))
-       ;; boxed set for the whole body: every set! target
-       (define boxed-formals (filter (λ (x) (set-member? mut x)) formals))
-       (define genformals (map (λ (x) (if (set-member? mut x) (gensym x) x)) formals))
+       ;; boxed set for the whole body: every set! target (the
+       ;; variadic marker is never a variable)
+       (define boxed-formals (filter (λ (x) (and (not (equal? x '#%rest)) (set-member? mut x))) formals))
+       (define genformals (map (λ (x) (if (and (not (equal? x '#%rest)) (set-member? mut x)) (gensym x) x)) formals))
        (define gen-of (for/hash ([x formals] [gx genformals] #:when (set-member? mut x)) (values x gx)))
        `(define (,fname ,@genformals)
           ,(box-formals (map (λ (x) (hash-ref gen-of x)) boxed-formals)
@@ -916,7 +939,8 @@
       [`(unsafe-vector-set! ,e ,_ ,e-v) (set-union (free-vars e) (free-vars e-v))]
       [`(lambda (,xs ...) ,e) (foldl (lambda (x acc) (set-remove acc x)) (free-vars e) xs)]
       [`(,(? prim?) ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]
-      [`(app ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]))
+      [`(app ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]
+      [`(papp ,n ,es ...) (foldl (λ (e acc) (set-union acc (free-vars e))) (set) es)]))
   (define (walk-expr e) (prov (walk-expr-core e) e))
   (define (walk-expr-core e)
     (match e
@@ -980,6 +1004,10 @@
        (define clo (gensym 'clo))
        `(let ([,clo ,(walk-expr e-f)])
           (app (unsafe-vector-ref ,clo 0) ,clo ,@(map (lambda (e) (walk-expr e)) e-args)))]
+      [`(papp ,n ,e-f ,e-args ...)
+       (define clo (gensym 'clo))
+       `(let ([,clo ,(walk-expr e-f)])
+          (papp ,(add1 n) (unsafe-vector-ref ,clo 0) ,clo ,@(map (lambda (e) (walk-expr e)) e-args)))]
       [`(,(? prim? op) ,es ...) `(,op ,@(map walk-expr es))]))
   (define (per-defn definition)
     (match definition
@@ -1021,9 +1049,13 @@
        `(let ([,x ,(walk-expr e)]) ,(walk-expr e-b))]
       [`(unsafe-vector-ref ,e ,i) `(unsafe-vector-ref ,(walk-expr e) ,i)]
       [`(unsafe-vector-set! ,e ,i ,e-v) `(unsafe-vector-set! ,(walk-expr e) ,i ,(walk-expr e-v))]
-      ;; > six arguments: build a vector for the rest, pass it as last arg.
+      ;; > six arguments: build a vector for the rest, pass it as last
+      ;; arg. papp records the ORIGINAL arity, which call sites hand
+      ;; to the callee in the arity register: a variadic callee reads
+      ;; it to rebuild its rest list; fixed callees unpack the vector.
       [`(app ,e-f ,e-args ...)
-       #:when (> (add1 (length e-args)) max-args)
+       #:when (> (length e-args) max-args)
+       (define orig-n (length e-args))
        (define keep (take e-args (- max-args 1)))
        (define rest-es (drop e-args (- max-args 1)))
        (define v (gensym 'rest-args))
@@ -1039,7 +1071,7 @@
              `(let ([_ (unsafe-vector-set! ,v ,i ,(walk-expr hd))])
                 ,body))]))
        (define call-expr
-         `(app ,(walk-expr e-f) ,@(map walk-expr keep) ,v))
+         `(papp ,orig-n ,(walk-expr e-f) ,@(map walk-expr keep) ,v))
        `(let ([,v (make-vector ,k)])
           ,(fill-rest rest-es 0 call-expr))]
       ;; ≤ six arguments: just recurse on all subexpressions
@@ -1048,6 +1080,17 @@
       [`(,(? prim? op) ,es ...) `(,op ,@(map walk-expr es))]))
   (define (per-defn definition)
     (match definition
+      ;; variadic definitions keep their shape; the prologue builds
+      ;; the rest list from the arity register. Their fixed part must
+      ;; fit in the registers below the overflow slot.
+      [`(define (,fname ,formals ...) ,e-body)
+       #:when (member '#%rest formals)
+       (define fixed (- (length formals) 2))
+       (unless (<= fixed (- max-args 1))
+         (error 'limit-functions
+                "variadic ~a has ~a fixed parameters; at most ~a fit alongside the overflow slot"
+                fname fixed (- max-args 1)))
+       `(define (,fname ,@formals) ,(walk-expr e-body))]
       ;; > 6 formals: (f a0 ... a4 a-rest...) -> last arg becomes a vector
       [`(define (,fname ,formals ...) ,e-body)
        #:when (> (length formals) max-args)
@@ -1121,6 +1164,10 @@
        (convert-args es (λ (as)
                           (define x (gensym 'app))
                           (prov `(let ([,x (app ,@as)]) ,(k x)) e)))]
+      [`(papp ,n ,es ...)
+       (convert-args es (λ (as)
+                          (define x (gensym 'app))
+                          (prov `(let ([,x (papp ,n ,@as)]) ,(k x)) e)))]
       [`(,(? prim? op) ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym op))
@@ -1188,7 +1235,10 @@
       ;; epilogue + indirect jump, so loops run in constant stack)
       [`(let ([,x (app ,a-f ,a-args ...)]) ,body)
        #:when (and (equal? body x) (equal? (k x) `(return ,x)))
-       (hash current-block `(tail-app ,a-f ,@a-args))]
+       (hash current-block `(tail-app ,(length a-args) ,a-f ,@a-args))]
+      [`(let ([,x (papp ,n ,a-f ,a-args ...)]) ,body)
+       #:when (and (equal? body x) (equal? (k x) `(return ,x)))
+       (hash current-block `(tail-app ,n ,a-f ,@a-args))]
       [`(let ([,x ,rhs]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,rhs))]
       [`(if ,a ,e-t ,e-f)
@@ -1213,9 +1263,12 @@
              (hash-set acc l
                        (let untail-tail ([t (hash-ref blocks l)])
                          (match t
-                           [`(tail-app ,f ,args ...)
+                           [`(tail-app ,n ,f ,args ...)
                             (define tmp (gensym 'ret))
-                            `(seq (assign ,tmp (app ,f ,@args)) (return ,tmp))]
+                            `(seq (assign ,tmp ,(if (= n (length args))
+                                                    `(app ,f ,@args)
+                                                    `(papp ,n ,f ,@args)))
+                                  (return ,tmp))]
                            [`(seq ,s ,rest) `(seq ,s ,(untail-tail rest))]
                            [_ t]))))
            (hash)

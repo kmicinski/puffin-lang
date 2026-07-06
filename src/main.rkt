@@ -312,20 +312,21 @@
 ;; prelude functions are pure, so unreferenced ones can't matter,
 ;; and pruning keeps binaries and pipeline traces lean.
 (define (prelude-forms user-forms)
+  ;; a define's name, dotted (variadic) formals included
+  (define (defn-name f)
+    (match f
+      [`(define (,g ,_ ...) ,_ ...) g]
+      [`(define (,g . ,_) ,_ ...) g]
+      [`(define ,(? symbol? x) ,_) x]))
   (define user-names
     (list->set
      (filter-map (λ (f) (match f
-                          [`(define (,g ,_ ...) ,_ ...) g]
-                          [`(define ,(? symbol? x) ,_) x]
+                          [`(define ,_ ,_ ...) (defn-name f)]
                           [_ #f]))
                  user-forms)))
   (define candidates
-    (filter (λ (f) (match f
-                     [`(define (,g ,_ ...) ,_ ...) (not (set-member? user-names g))]
-                     [`(define ,(? symbol? x) ,_) (not (set-member? user-names x))]))
+    (filter (λ (f) (not (set-member? user-names (defn-name f))))
             (read-forms (build-path src-dir "prelude.puf"))))
-  (define (defn-name f)
-    (match f [`(define (,g ,_ ...) ,_ ...) g] [`(define ,(? symbol? x) ,_) x]))
   ;; conservative name-based reachability: any symbol occurring
   ;; anywhere counts as a mention
   (define (mentions form)

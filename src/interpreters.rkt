@@ -132,6 +132,14 @@
       ;; lambdas / application
       [`(lambda (,xs ...) ,e-b) (clo xs e-b env)]
       [`(app ,e-f ,e-args ...) (ev `(,e-f ,@e-args) env)]
+      [`(papp ,n ,e-f ,e-args ...)
+       ;; a papp is by construction packed: the last argument is the
+       ;; overflow vector holding arguments 6..n
+       (define vs (map (λ (e) (ev e env)) e-args))
+       (define full (append (take vs (sub1 (length vs)))
+                            (vector->list (last vs))))
+       (ev `(app ,e-f ,@(map (λ (v) `(quote-value ,v)) full)) env)]
+      [`(quote-value ,v) v]
       ;; stdlib primitives, straight from the manifest
       [`(,(? stdlib-prim? op) ,es ...)
        #:when (not (hash-has-key? env op))
@@ -147,11 +155,25 @@
   (define (apply-closure f args)
     (match f
       [(clo xs body cenv)
-       (unless (= (length xs) (length args))
-         (error 'interpret "arity mismatch: (λ ~a ...) applied to ~a arguments: ~a" xs (length args) args))
-       (eval-puffin-exp body
-                        (foldl (λ (x v acc) (hash-set acc x (box v))) cenv xs args)
-                        globals inbox)]
+       ;; a #%rest marker splits fixed formals from the rest binder
+       (define mi (index-of xs '#%rest))
+       (cond
+         [mi
+          (define fixed (take xs mi))
+          (define rest-name (list-ref xs (add1 mi)))
+          (unless (>= (length args) (length fixed))
+            (error 'interpret "arity mismatch: (λ ~a ...) applied to ~a arguments" xs (length args)))
+          (define env+ (foldl (λ (x v acc) (hash-set acc x (box v)))
+                              cenv fixed (take args (length fixed))))
+          (eval-puffin-exp body
+                           (hash-set env+ rest-name (box (drop args (length fixed))))
+                           globals inbox)]
+         [else
+          (unless (= (length xs) (length args))
+            (error 'interpret "arity mismatch: (λ ~a ...) applied to ~a arguments: ~a" xs (length args) args))
+          (eval-puffin-exp body
+                           (foldl (λ (x v acc) (hash-set acc x (box v))) cenv xs args)
+                           globals inbox)])]
       [_ (error 'interpret "application of a non-procedure: ~a" f)]))
   (ev e env))
 
@@ -260,24 +282,54 @@
          ['(top-stack) (atom-val a env)]
          [`((,x ,env+ ,rst) . ,stack+)
           (go rst (hash-set env+ x (atom-val a env)) stack+)])]
-      [`(seq (assign ,x (app ,f ,args ...)) ,rst)
+      [`(seq (assign ,x (,(or 'app 'papp) ,maybe-n ...)) ,rst)
+       (define-values (packed? f args)
+         (match `(dispatch ,@maybe-n)
+           [`(dispatch ,(? fixnum? _) ,f ,args ...) (values #t f args)]
+           [`(dispatch ,f ,args ...) (values #f f args)]))
        (match-define `(fun-ref ,fptr) (rhs-val f env))
        (define vs (map (λ (a) (atom-val a env)) args))
+       ;; rebuild the original arguments when the call was packed
+       (define full (if packed?
+                        (append (take vs (sub1 (length vs))) (vector->list (last vs)))
+                        vs))
+       (define formals (hash-ref name->args fptr))
+       (define mi (index-of formals '#%rest))
        (define env+
-         (foldl (λ (x v acc) (hash-set acc x v))
-                (hash)
-                (hash-ref name->args fptr)
-                vs))
+         (cond
+           [mi
+            (define fixed (take formals mi))
+            (define rest-name (list-ref formals (add1 mi)))
+            (hash-set (foldl (λ (x v acc) (hash-set acc x v))
+                             (hash) fixed (take full (length fixed)))
+                      rest-name (drop full (length fixed)))]
+           [(= (length formals) (length full))
+            (foldl (λ (x v acc) (hash-set acc x v)) (hash) formals full)]
+           [else ;; fixed >6-arg callee: it unpacks the vector itself
+            (foldl (λ (x v acc) (hash-set acc x v)) (hash) formals vs)]))
        (go (hash-ref blocks fptr) env+ (cons `(,x ,env ,rst) stack))]
       ;; a tail call reuses the caller's continuation: no stack growth
-      [`(tail-app ,f ,args ...)
+      [`(tail-app ,n ,f ,args ...)
        (match-define `(fun-ref ,fptr) (rhs-val f env))
        (define vs (map (λ (a) (atom-val a env)) args))
+       ;; packed iff the logical count exceeds what the registers held
+       (define full (if (> n (length vs))
+                        (append (take vs (sub1 (length vs))) (vector->list (last vs)))
+                        vs))
+       (define formals (hash-ref name->args fptr))
+       (define mi (index-of formals '#%rest))
        (define env+
-         (foldl (λ (x v acc) (hash-set acc x v))
-                (hash)
-                (hash-ref name->args fptr)
-                vs))
+         (cond
+           [mi
+            (define fixed (take formals mi))
+            (define rest-name (list-ref formals (add1 mi)))
+            (hash-set (foldl (λ (x v acc) (hash-set acc x v))
+                             (hash) fixed (take full (length fixed)))
+                      rest-name (drop full (length fixed)))]
+           [(= (length formals) (length full))
+            (foldl (λ (x v acc) (hash-set acc x v)) (hash) formals full)]
+           [else
+            (foldl (λ (x v acc) (hash-set acc x v)) (hash) formals vs)]))
        (go (hash-ref blocks fptr) env+ stack)]
       [`(seq (assign ,x ,rhs) ,rst)
        (go rst (hash-set env x (rhs-val rhs env)) stack)]

@@ -21,12 +21,23 @@ export class PStr {
   constructor(s) { this.s = s; }
 }
 
+// split raw formals (array possibly carrying a dotted .tail, or a
+// bare symbol for all-rest lambdas) into fixed params + rest binder
+export function splitFormals(raw, skip) {
+  if (typeof raw === 'symbol') return { fixed: [], rest: raw };
+  return {
+    fixed: raw.slice(skip || 0),
+    rest: raw.tail !== undefined ? raw.tail : null,
+  };
+}
+
 export class Closure {
-  constructor(params, body, env, name) {
+  constructor(params, body, env, name, rest) {
     this.params = params;   // array of JS symbols
     this.body = body;       // array of body forms (implicit begin)
     this.env = env;
     this.name = name || null;
+      this.rest = rest || null;
   }
 }
 

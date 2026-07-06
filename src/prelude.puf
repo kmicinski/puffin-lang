@@ -124,10 +124,9 @@
         [(null? (cdr xs)) (car xs)]
         [else (string-append (car xs) (string-append sep (string-join (cdr xs) sep)))]))
 
-;; format with its arguments as a list (Puffin has fixed arities):
-;;   (format "~a + ~a~%" (list 1 2))
+;; variadic format: (format "~a + ~a~%" 1 2)
 ;; ~a and ~s both render display-style; ~% newline; ~~ tilde.
-(define (format fmt args)
+(define (format fmt . args)
   (let loop ([i 0] [acc ""] [args args])
     (if (< i (string-length fmt))
         (let ([c (string-byte fmt i)])

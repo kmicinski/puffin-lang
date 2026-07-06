@@ -42,6 +42,7 @@
     (define raw-name
       (match form
         [`(define (,f ,_ ...) ,_ ...) f]
+        [`(define (,f . ,_) ,_ ...) f]   ;; variadic
         [`(define ,(? symbol? x) ,_) x]
         [_ #f]))
     (when (and raw-name (surface-prim? raw-name))

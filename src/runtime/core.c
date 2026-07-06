@@ -220,6 +220,34 @@ pf pf_print_result(pf v) {
   return PF_VOID;
 }
 
+// ---------------------------------------------------------------
+// Variadic support. Closure call sites pass their argument count in
+// a designated register; a variadic function's prologue spills the
+// six argument registers here and calls pf_collect_rest, which
+// builds the rest list (reading the arity-overflow vector when the
+// call packed >6 arguments). Single-threaded by design; the array
+// lives in the data segment so the GC scans it as roots.
+// ---------------------------------------------------------------
+
+pf pf_arg_spill[8];
+
+extern pf pf_cons(pf, pf); // lib/pairs.c
+
+pf pf_collect_rest(pf k_t, pf n_t) {
+  int64_t k = PF_UNFIX(k_t), n = PF_UNFIX(n_t);
+  pf rest = PF_NIL;
+  if (n <= 6) {
+    for (int64_t i = n - 1; i >= k; i--) rest = pf_cons(pf_arg_spill[i], rest);
+  } else {
+    // the call site packed arguments 5.. into a vector in slot 5
+    pf vec = pf_arg_spill[5];
+    int64_t m = pf_len_of(vec);
+    for (int64_t i = m - 1; i >= 0; i--) rest = pf_cons(pf_heap_ptr(vec)[1 + i], rest);
+    for (int64_t i = 4; i >= k; i--) rest = pf_cons(pf_arg_spill[i], rest);
+  }
+  return rest;
+}
+
 // (gensym base): a fresh symbol, interned as base + a counter that
 // skips names already taken (so gensyms survive read-back).
 pf pf_gensym(pf base) {

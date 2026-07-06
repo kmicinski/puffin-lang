@@ -155,6 +155,11 @@
     [`(let* ([,(? symbol?) ,(? puffin-exp?)] ...) ,(? puffin-exp?) ...) #t]
     [`(lambda (,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
     [`(λ (,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
+    ;; variadic lambdas: dotted or all-rest formals
+    [`(lambda ,(? symbol?) ,(? puffin-exp?) ...) #t]
+    [`(λ ,(? symbol?) ,(? puffin-exp?) ...) #t]
+    [`(lambda ,(? pair?) ,(? puffin-exp?) ...) #t]
+    [`(λ ,(? pair?) ,(? puffin-exp?) ...) #t]
     ;; sequences / loops / mutation
     [`(begin ,(? puffin-exp?) ... ,(? puffin-exp?)) #t]
     [`(while ,(? puffin-exp?) ,(? puffin-exp?) ...) #t]
@@ -174,6 +179,8 @@
 (define (puffin-defn? defn)
   (match defn
     [`(define (,(? symbol?) ,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
+    ;; variadic: dotted formals
+    [`(define (,(? symbol?) . ,_) ,(? puffin-exp?) ...) #t]
     [`(define ,(? symbol?) ,(? puffin-exp?)) #t]
     [_ #f]))
 
@@ -446,6 +453,7 @@
     [`(if ,(? closure-converted-exp?) ,(? closure-converted-exp?) ,(? closure-converted-exp?)) #t]
     [`(,(? prim?) ,(? closure-converted-exp?) ...) #t]
     [`(app ,(? closure-converted-exp?) ...) #t]
+    [`(papp ,(? fixnum?) ,(? closure-converted-exp?) ...) #t]
     [_ #f]))
 
 (define (closure-converted-program? p)
@@ -463,12 +471,20 @@
 ;; 9) Limited arity: every definition has at most six arguments
 ;; ---------------------------------------------------------------------
 
+;; effective register footprint of a formals list: a variadic's rest
+;; parameter arrives via the arity protocol, not a register
+(define (formals-register-count formals)
+  (if (member '#%rest formals)
+      (- (length formals) 1)   ;; fixed + the overflow slot allowance
+      (length formals)))
+
 (define (limited-arity-program? p)
   (match p
     [`(program ,n-globals ,defns ...)
      (andmap (λ (d) (match d
                       [`(define (,f ,formals ...) ,e-body)
-                       (and (<= (length formals) (length (argument-registers-list)))
+                       (and (<= (formals-register-count formals)
+                                (add1 (length (argument-registers-list))))
                             (closure-converted-exp? e-body))]
                       [_ #f]))
              defns)]
@@ -488,6 +504,7 @@
     [`(unsafe-vector-ref ,(? atom?) ,(? fixnum?)) #t]
     [`(unsafe-vector-set! ,(? atom?) ,(? fixnum?) ,(? atom?)) #t]
     [`(app ,(? atom?) ,args ...)         (andmap atom? args)]
+    [`(papp ,(? fixnum?) ,(? atom?) ,args ...) (andmap atom? args)]
     [`(,(? prim?) ,args ...)             (andmap atom? args)]
     [_                                   #f]))
 
@@ -522,6 +539,7 @@
     [`(global-ref ,_)                  #t]
     [`(unsafe-vector-ref ,(? atom?) ,(? fixnum?)) #t]
     [`(app ,a-f ,args ...)             (andmap atom? (cons a-f args))]
+    [`(papp ,(? fixnum?) ,a-f ,args ...) (andmap atom? (cons a-f args))]
     [`(,(? prim?) ,args ...)           (andmap atom? args)]
     [_                                 #f]))
 
@@ -536,7 +554,7 @@
 (define (blocks-tail? s)
   (match s
     [`(return ,a)                                   (atom? a)]
-    [`(tail-app ,a-f ,args ...)                     (andmap atom? (cons a-f args))]
+    [`(tail-app ,(? fixnum?) ,a-f ,args ...)        (andmap atom? (cons a-f args))]
     [`(seq ,(? blocks-stmt?) ,rest)                 (blocks-tail? rest)]
     [`(if (,(? shrunk-cmp?) ,(? atom?) ,(? atom?))
           (goto ,(? label?))

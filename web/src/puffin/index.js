@@ -10,7 +10,7 @@ import {
   Frame, evalExpr, evalProgram, unwrapProgram, isFunDefine, isValDefine,
   surfacePrimNames,
 } from './interp.js';
-import { VOID, PuffinHalt, PuffinError, render, Closure } from './values.js';
+import { VOID, PuffinHalt, PuffinError, render, Closure, splitFormals } from './values.js';
 import { preludeSource } from './prelude.js';
 
 // The Puffin-written stdlib layer: injected into every program,
@@ -86,7 +86,9 @@ export class Session {
     for (const f of preludeFormsFor([])) {
       if (isFunDefine(f)) {
         this.global.define(
-          f[1][0], new Closure(f[1].slice(1), f.slice(2), this.global, Symbol.keyFor(f[1][0])));
+          f[1][0],
+          (() => { const { fixed, rest } = splitFormals(f[1], 1);
+                   return new Closure(fixed, f.slice(2), this.global, Symbol.keyFor(f[1][0]), rest); })());
       }
     }
   }
@@ -102,7 +104,9 @@ export class Session {
         if (isFunDefine(f)) {
           const name = f[1][0];
           this.global.define(
-            name, new Closure(f[1].slice(1), f.slice(2), this.global, Symbol.keyFor(name)));
+            name,
+            (() => { const { fixed, rest } = splitFormals(f[1], 1);
+                     return new Closure(fixed, f.slice(2), this.global, Symbol.keyFor(name), rest); })());
         } else if (isValDefine(f)) {
           this.global.define(f[1], evalExpr(f[2], this.global, this.ctx));
         } else {
