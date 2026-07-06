@@ -1,6 +1,9 @@
-import { createSignal, onMount, onCleanup, For, Show } from 'solid-js';
+import { createSignal, onMount, onCleanup, For, Show, lazy, Suspense } from 'solid-js';
 import { createEditor, setupMonaco } from './monaco-setup.js';
 import { EXAMPLES } from './examples.js';
+
+// pipeline visualizer (and its 449KB sample trace) load on demand
+const Pipeline = lazy(() => import('./Pipeline.jsx'));
 
 const MAX_LINES = 2000; // capped ring so the console stays smooth
 
@@ -9,6 +12,14 @@ function parseStdin(text) {
 }
 
 export default function App() {
+  // ---------- mode ----------
+  const [mode, setMode] = createSignal('play'); // 'play' | 'pipeline'
+  const [pipelineOpened, setPipelineOpened] = createSignal(false); // lazy-mount once
+  function switchMode(m) {
+    setMode(m);
+    if (m === 'pipeline') setPipelineOpened(true);
+  }
+
   // ---------- console state ----------
   const [lines, setLines] = createSignal([]);
   const [truncated, setTruncated] = createSignal(false);
@@ -214,15 +225,21 @@ export default function App() {
           <span class="name">Puffin</span>
           <span class="target-note">interpreter</span>
         </div>
-        <button class="btn run" onClick={doRun} title="Run (Cmd/Ctrl+Enter)">Run ▸</button>
-        <Show when={running()}>
-          <button class="btn stop" onClick={doStop}>Stop</button>
+        <div class="mode-switch" role="tablist">
+          <button classList={{ active: mode() === 'play' }} onClick={() => switchMode('play')}>Playground</button>
+          <button classList={{ active: mode() === 'pipeline' }} onClick={() => switchMode('pipeline')}>Pipeline</button>
+        </div>
+        <Show when={mode() === 'play'}>
+          <button class="btn run" onClick={doRun} title="Run (Cmd/Ctrl+Enter)">Run ▸</button>
+          <Show when={running()}>
+            <button class="btn stop" onClick={doStop}>Stop</button>
+          </Show>
+          <select class="examples" onChange={loadExample} title="Load an example program">
+            <For each={EXAMPLES}>
+              {(ex) => <option value={ex.id}>{ex.label}</option>}
+            </For>
+          </select>
         </Show>
-        <select class="examples" onChange={loadExample} title="Load an example program">
-          <For each={EXAMPLES}>
-            {(ex) => <option value={ex.id}>{ex.label}</option>}
-          </For>
-        </select>
         <Show when={running()}>
           <div class="running-indicator">
             <span class="dot" />
@@ -231,7 +248,8 @@ export default function App() {
         </Show>
       </header>
 
-      <main class="main">
+      {/* Playground stays mounted (hidden) so the editor, workers and console survive mode switches */}
+      <main class="main" style={{ display: mode() === 'play' ? 'flex' : 'none' }}>
         <section class="editor-pane">
           <div class="monaco-host" ref={editorEl} />
         </section>
@@ -278,6 +296,14 @@ export default function App() {
           </div>
         </section>
       </main>
+
+      <Show when={pipelineOpened()}>
+        <div class="pipeline-host" style={{ display: mode() === 'pipeline' ? 'flex' : 'none' }}>
+          <Suspense fallback={<div class="pipeline-loading">loading pipeline visualizer…</div>}>
+            <Pipeline getSource={() => (editor ? editor.getValue() : '')} active={() => mode() === 'pipeline'} />
+          </Suspense>
+        </div>
+      </Show>
     </div>
   );
 }

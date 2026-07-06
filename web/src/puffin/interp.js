@@ -25,6 +25,8 @@ const S = Symbol.for;
 
 const S_QUOTE = S('quote');
 const S_QUASIQUOTE = S('quasiquote');
+const S_LETREC = S('letrec');
+const S_UNQUOTE_SPLICING = S('unquote-splicing');
 const S_UNQUOTE = S('unquote');
 const S_IF = S('if');
 const S_COND = S('cond');
@@ -274,6 +276,52 @@ defprim('set->list', 1, (a) => {
 });
 defprim('set?', 1, (a) => a[0] instanceof Set || a[0] instanceof ISet);
 
+// ---- bootstrap batch (see docs/BOOTSTRAP.md) --------------------------------
+let gensymCounter = 0;
+defprim('gensym', 1, (a) => {
+  if (typeof a[0] !== 'symbol') throw new PuffinError('gensym: expected a symbol');
+  return Symbol.for(`${Symbol.keyFor(a[0])}${++gensymCounter}\u2063`); // invisible separator: fresh vs source symbols
+});
+defprim('value->string', 1, (a) => new PStr(render(a[0])));
+defprim('read-all', 0, (a, ctx) => {
+  const rest = ctx.input.slice(ctx.inputPos).map((n) => n.toString()).join(' ');
+  ctx.inputPos = ctx.input.length;
+  return new PStr(rest);
+});
+defprim('substring', 3, (a) => {
+  const s = wantString(a[0], 'substring').s;
+  const i = Number(wantInt(a[1], 'substring')), j = Number(wantInt(a[2], 'substring'));
+  if (i < 0 || j < i || j > s.length) throw new PuffinError('substring: index out of range');
+  return new PStr(s.slice(i, j));
+});
+defprim('string<?', 2, (a) =>
+  wantString(a[0], 'string<?').s < wantString(a[1], 'string<?').s);
+defprim('string-byte', 2, (a) => {
+  const s = wantString(a[0], 'string-byte').s;
+  const i = Number(wantInt(a[1], 'string-byte'));
+  if (i < 0 || i >= s.length) throw new PuffinError('string-byte: index out of range');
+  return BigInt(s.charCodeAt(i));
+});
+defprim('number->string', 1, (a) => new PStr(wantInt(a[0], 'number->string').toString()));
+defprim('string->number', 1, (a) => {
+  const s = wantString(a[0], 'string->number').s;
+  return /^-?[0-9]+$/.test(s) ? BigInt(s) : false;
+});
+defprim('bitwise-and', 2, (a) => wantInt(a[0], 'bitwise-and') & wantInt(a[1], 'bitwise-and'));
+defprim('bitwise-ior', 2, (a) => wantInt(a[0], 'bitwise-ior') | wantInt(a[1], 'bitwise-ior'));
+defprim('bitwise-xor', 2, (a) => wantInt(a[0], 'bitwise-xor') ^ wantInt(a[1], 'bitwise-xor'));
+defprim('arithmetic-shift', 2, (a) => {
+  const n = wantInt(a[0], 'arithmetic-shift'), k = wantInt(a[1], 'arithmetic-shift');
+  return k >= 0n ? n << k : n >> -k;
+});
+defprim('modulo', 2, (a) => {
+  const x = wantInt(a[0], 'modulo'), y = wantInt(a[1], 'modulo');
+  if (y === 0n) throw new PuffinError('modulo: division by zero');
+  let r = x % y;
+  if (r !== 0n && (r < 0n) !== (y < 0n)) r += y;
+  return r;
+});
+
 // ---- type predicates ----------------------------------------------------------------
 defprim('fixnum?', 1, (a) => typeof a[0] === 'bigint');
 defprim('boolean?', 1, (a) => typeof a[0] === 'boolean');
@@ -489,8 +537,45 @@ export function evalExpr(expr0, env0, ctx) {
         case S_LAMBDA: case S_LAMBDA2:
           return new Closure(expr[1].slice(), expr.slice(2), env);
 
+        case S_QUASIQUOTE:
+          return evalQuasiExpr(expr[1], 1, env, ctx);
+
+        case S_LETREC: {
+          const frame = new Frame(env);
+          for (const b of expr[1]) frame.vars.set(b[0], { v: VOID });
+          for (const b of expr[1]) frame.vars.get(b[0]).v = evalExpr(b[1], frame, ctx);
+          env = frame;
+          expr = bodyToExpr(expr.slice(2));
+          continue;
+        }
+
         case S_BEGIN: {
           if (expr.length === 1) return VOID;
+          // internal defines: letrec*-scoped over the whole body
+          // (mirrors desugar's body->expr)
+          if (expr.some((f, i) => i > 0 && (isFunDefine(f) || isValDefine(f)))) {
+            const frame = new Frame(env);
+            for (let i = 1; i < expr.length; i++) {
+              const f = expr[i];
+              if (isFunDefine(f)) frame.vars.set(f[1][0], { v: VOID });
+              else if (isValDefine(f)) frame.vars.set(f[1], { v: VOID });
+            }
+            let last = VOID;
+            for (let i = 1; i < expr.length; i++) {
+              const f = expr[i];
+              if (isFunDefine(f)) {
+                frame.vars.get(f[1][0]).v =
+                  new Closure(f[1].slice(1), f.slice(2), frame, Symbol.keyFor(f[1][0]));
+                last = VOID;
+              } else if (isValDefine(f)) {
+                frame.vars.get(f[1]).v = evalExpr(f[2], frame, ctx);
+                last = VOID;
+              } else {
+                last = evalExpr(f, frame, ctx);
+              }
+            }
+            return last;
+          }
           for (let i = 1; i < expr.length - 1; i++) evalExpr(expr[i], env, ctx);
           expr = expr[expr.length - 1];
           continue;
@@ -714,6 +799,44 @@ function tryMatch(pat, v, binds, env, ctx) {
     }
   }
   throw new PuffinError(`unsupported match pattern: ${renderDatum(pat)}`);
+}
+
+// quasiquote EXPRESSIONS: build runtime data with unquote holes
+// (depth-aware, splicing at depth 1; mirrors desugar's qq->expr)
+function evalQuasiExpr(q, depth, env, ctx) {
+  if (Array.isArray(q)) {
+    if (q.length === 2 && q[0] === S_UNQUOTE && q.tail === undefined) {
+      if (depth === 1) return evalExpr(q[1], env, ctx);
+      return new Pair(S_UNQUOTE, new Pair(evalQuasiExpr(q[1], depth - 1, env, ctx), NIL));
+    }
+    if (q.length === 2 && q[0] === S_QUASIQUOTE && q.tail === undefined) {
+      return new Pair(S_QUASIQUOTE, new Pair(evalQuasiExpr(q[1], depth + 1, env, ctx), NIL));
+    }
+    // elements right-to-left, splicing as we go
+    let acc = q.tail !== undefined ? evalQuasiExpr(q.tail, depth, env, ctx) : NIL;
+    for (let i = q.length - 1; i >= 0; i--) {
+      const el = q[i];
+      if (Array.isArray(el) && el.length === 2 && el[0] === S_UNQUOTE_SPLICING && el.tail === undefined) {
+        if (depth === 1) {
+          const spliced = evalExpr(el[1], env, ctx);
+          // append spliced (a list) onto acc
+          const items = [];
+          let cur = spliced;
+          while (cur instanceof Pair) { items.push(cur.car); cur = cur.cdr; }
+          for (let j = items.length - 1; j >= 0; j--) acc = new Pair(items[j], acc);
+        } else {
+          acc = new Pair(
+            new Pair(S_UNQUOTE_SPLICING, new Pair(evalQuasiExpr(el[1], depth - 1, env, ctx), NIL)),
+            acc);
+        }
+      } else {
+        acc = new Pair(evalQuasiExpr(el, depth, env, ctx), acc);
+      }
+    }
+    return acc;
+  }
+  if (q instanceof PStr) return q;
+  return q; // symbols, bigints, booleans are self-representing data
 }
 
 function matchQuasi(q, v, binds, env, ctx) {
