@@ -113,7 +113,12 @@
 
 ;; ---- main -----------------------------------------------------------
 
-(define user-forms (strip-directives (read-forms-from-string (read-all))))
+(define raw-forms (strip-directives (read-forms-from-string (read-all))))
+;; class-style files wrap everything in one (program ...) form
+(define user-forms
+  (match raw-forms
+    [`((program ,inner ...)) inner]
+    [_ raw-forms]))
 (define full-program
   `(program ,@(prelude-inject user-forms) ,@user-forms))
 (let ([result (run-chain full-program)])

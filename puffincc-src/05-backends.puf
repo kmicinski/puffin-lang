@@ -1,0 +1,1292 @@
+;; puffincc -- 05-backends.puf: the two backends + register
+;; allocation (mirrors src/regalloc.rkt, src/backend-x86.rkt and
+;; src/backend-arm64.rkt).
+;;
+;; Everything after uncover-locals, for both targets:
+;;
+;;   select-instructions-*     blocks IR -> pseudo-asm over (var x)
+;;   allocate-registers-*      live-range linear scan (shared:
+;;                             allocate-registers-with)
+;;   patch-instructions-*      legalize per-target
+;;   prelude-and-conclusion-*  frames, callee-saved saves, pf_init,
+;;                             result printing, tail-jmp expansion
+;;   render-*                  GAS text (+ symbol/string/global data)
+;;
+;; Conventions: no structs, no multiple values (bk-scan-literals
+;; returns a two-element list), no parameters (current-target is a
+;; global; see 02-system.puf).
+
+;; ---- small shared helpers (bk- prefix = backend-internal) -----------
+
+(define (bk-for-each f xs)
+  (if (null? xs)
+      (void)
+      (begin (f (car xs)) (bk-for-each f (cdr xs)))))
+
+;; concatenate a list of strings (string-append is binary)
+(define (bk-cat xs)
+  (foldr string-append "" xs))
+
+(define (bk-imm? op)    (match op [`(imm ,n) (fixnum? n)] [_ #f]))
+(define (bk-reg? op)    (match op [`(reg ,r) (symbol? r)] [_ #f]))
+(define (bk-deref? op)  (match op [`(deref (reg ,r) ,i) #t] [_ #f]))
+(define (bk-global? op) (match op [`(global ,i) #t] [_ #f]))
+
+(define (bk-index-of-table lst v)
+  (let ([i (index-of lst v)])
+    (if i i (error (format "literal not in table: ~a" v)))))
+
+;; ---------------------------------------------------------------------
+;; Literal tables: symbols and strings are collected from the blocks
+;; IR in sorted order, so every pass that needs an id assigns the
+;; same one deterministically. Shared by both backends.
+;; (Strings are deduplicated after sorting: mutable sets are
+;; identity-keyed in Puffin, so they can't dedup equal strings.)
+;; ---------------------------------------------------------------------
+
+(define (bk-scan-literals p)
+  (define symbols (make-set))
+  (define strings '())
+  (define (scan-atom a)
+    (match a
+      [`(quote ,s) (set-add! symbols s)]
+      [_ (void)]))
+  (define (scan-rhs rhs)
+    (match rhs
+      [`(string-lit ,s) (set! strings (cons s strings))]
+      ;; an atom rhs (e.g. a bare (quote s)) must not be
+      ;; destructured by the generic operation pattern below
+      [(? ir-atom? a) (scan-atom a)]
+      [`(,_ ,as ...) (bk-for-each scan-atom as)]
+      [a (scan-atom a)]))
+  (define (scan-tail t)
+    (match t
+      [`(return ,a) (scan-atom a)]
+      [`(tail-app ,as ...) (bk-for-each scan-atom as)]
+      [`(goto ,_) (void)]
+      [`(if (,_ ,a0 ,a1) ,_ ,_) (scan-atom a0) (scan-atom a1)]
+      [`(seq (assign ,_ ,rhs) ,rest) (scan-rhs rhs) (scan-tail rest)]
+      [`(seq (effect ,rhs) ,rest) (scan-rhs rhs) (scan-tail rest)]
+      [`(seq (global-set! ,_ ,a) ,rest) (scan-atom a) (scan-tail rest)]
+      [`(seq (unsafe-vector-set! ,a0 ,_ ,a1) ,rest)
+       (scan-atom a0) (scan-atom a1) (scan-tail rest)]))
+  (define (dedup-sorted xs)
+    (cond [(null? xs) '()]
+          [(null? (cdr xs)) xs]
+          [(string=? (car xs) (car (cdr xs))) (dedup-sorted (cdr xs))]
+          [else (cons (car xs) (dedup-sorted (cdr xs)))]))
+  (match p
+    [`(program ,_ ,defns ...)
+     (bk-for-each
+      (lambda (d)
+        (match d
+          [`(define ,_ (,_ ,_ ...) ,blocks)
+           (bk-for-each (lambda (l) (scan-tail (hash-ref blocks l)))
+                        (hash-keys blocks))]))
+      defns)])
+  (list (sort (set->list symbols) symbol<?)
+        (dedup-sorted (sort strings string<?))))
+
+;; ---------------------------------------------------------------------
+;; allocate-registers-with: live-range register allocation, shared
+;; by both backends (mirrors src/regalloc.rkt).
+;;
+;;   1. per-instruction liveness by backward dataflow over the block
+;;      CFG (fixpoint at block granularity, then a backward walk
+;;      within each block);
+;;   2. one live *interval* per variable: the convex hull of every
+;;      point where it occurs or is live, over reverse postorder;
+;;   3. linear scan (Poletto & Sarkar) over the sorted intervals,
+;;      spilling whichever of {current, furthest active} ends last.
+;;
+;; Only callee-saved registers are handed out, so intervals crossing
+;; calls need no special casing. Spill slots live BELOW the
+;; callee-saved save area (fp-relative, materialized once its size
+;; is known). The backends pass in `uses+defs`, a function from an
+;; instruction to (list use-vars def-vars); this pass never inspects
+;; opcodes.
+;;
+;; Output per definition: (define ,info (,f ,args ...) ,blocks)
+;; where info is a hash with 'var->loc, 'callee-saved, 'spill-bytes.
+;; ---------------------------------------------------------------------
+
+
+;; Materialize an arbitrary 64-bit immediate with movz/movk (or
+;; movn/movk): no literal pools, whose fixups go out of range once
+;; .text exceeds +-1MB (puffincc itself does). Mirrors the reference
+;; renderer byte for byte.
+(define (render-mov-imm64 dst i)
+  (define mask16 65535)
+  (define (hw k) (bitwise-and (arithmetic-shift i (* -16 k)) mask16))
+  (define hws (list (hw 0) (hw 1) (hw 2) (hw 3)))
+  (define nz (length (filter (lambda (h) (not (eq? h 0))) hws)))
+  (define nf (length (filter (lambda (h) (not (eq? h mask16))) hws)))
+  (define (movks skip-idx skip-val)
+    (let loop ([hs hws] [k 0] [acc '()])
+      (cond [(null? hs) (reverse acc)]
+            [(or (eq? k skip-idx) (eq? (car hs) skip-val))
+             (loop (cdr hs) (+ k 1) acc)]
+            [else
+             (loop (cdr hs) (+ k 1)
+                   (cons (format "movk ~a, #~a, lsl #~a" dst (car hs) (* 16 k)) acc))])))
+  (define (first-not hs val k)
+    (cond [(null? hs) 0]
+          [(eq? (car hs) val) (first-not (cdr hs) val (+ k 1))]
+          [else k]))
+  (cond
+    [(eq? nz 0) (format "movz ~a, #0" dst)]
+    [(< nf nz)
+     (let* ([fi (first-not hws mask16 0)]
+            [fv (list-ref hws fi)])
+       (string-join
+        (cons (format "movn ~a, #~a, lsl #~a" dst (bitwise-and (bitwise-xor fv mask16) mask16) (* 16 fi))
+              (movks fi mask16))
+        "\n    "))]
+    [else
+     (let* ([fi (first-not hws 0 0)]
+            [fv (list-ref hws fi)])
+       (string-join
+        (cons (format "movz ~a, #~a, lsl #~a" dst fv (* 16 fi))
+              (movks fi 0))
+        "\n    "))]))
+
+(define (allocate-registers-with p uses+defs)
+  (define fp (frame-pointer))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,locals (,f ,args ...) ,blocks)
+       ;; block successors: labels named by control instructions
+       (define (block-successors instrs)
+         (foldl (lambda (i acc)
+                  (match i
+                    [`(jmp ,l) (cons l acc)]
+                    [`(jmp-if ,_ ,l) (cons l acc)]
+                    [`(goto ,l) (cons l acc)]
+                    [_ acc]))
+                '()
+                instrs))
+       ;; reverse postorder over blocks from the entry label
+       (define visited (make-set))
+       (define order '())
+       (define (dfs l)
+         (when (and (hash-has-key? blocks l) (not (set-member? visited l)))
+           (set-add! visited l)
+           (bk-for-each dfs (block-successors (hash-ref blocks l)))
+           (set! order (cons l order))))
+       (dfs f)
+       ;; append any unreachable blocks (shouldn't happen, but be total)
+       (set! order (append order
+                           (filter (lambda (l) (not (set-member? visited l)))
+                                   (hash-keys blocks))))
+
+       ;; ---- block-level liveness fixpoint ---------------------------
+       (define (instr-uses i) (first (uses+defs i)))
+       (define (instr-defs i) (second (uses+defs i)))
+       (define live-in (make-hash))   ;; label -> immutable set of vars
+       (define (block-live-in l live-out)
+         ;; walk the block backward from live-out
+         (foldr (lambda (i acc)
+                  (set-union (list->set (instr-uses i))
+                             (set-subtract acc (list->set (instr-defs i)))))
+                live-out
+                (hash-ref blocks l)))
+       (define (live-out-of l)
+         (foldl (lambda (s acc)
+                  (set-union acc (hash-ref/default live-in s (set))))
+                (set)
+                (block-successors (hash-ref blocks l))))
+       (let fixpoint ()
+         (define changed #f)
+         (bk-for-each
+          (lambda (l)
+            (define new-in (block-live-in l (live-out-of l)))
+            (unless (equal? new-in (hash-ref/default live-in l (set)))
+              (hash-set! live-in l new-in)
+              (set! changed #t)))
+          order)
+         (when changed (fixpoint)))
+
+       ;; ---- per-instruction live sets and intervals -----------------
+       ;; global linear numbering over `order`; extend each var's
+       ;; interval to cover every occurrence and every point of liveness
+       (define intervals (make-hash))  ;; var -> (cons start end)
+       (define (touch! v i)
+         (define cur (hash-ref/default intervals v (cons i i)))
+         (hash-set! intervals v (cons (min (car cur) i) (max (cdr cur) i))))
+       (define n 0)
+       (bk-for-each
+        (lambda (l)
+          (define instrs (hash-ref blocks l))
+          (define outs (live-out-of l))
+          ;; live-after set for each instruction: fold backward
+          ;; building (before_0 ... before_{n-1} outs); instruction
+          ;; k's live-after is before_{k+1}, i.e. the cdr, in order
+          (define live-afters
+            (cdr (foldr (lambda (i acc)
+                          (define after (car acc))
+                          (define before
+                            (set-union (list->set (instr-uses i))
+                                       (set-subtract after (list->set (instr-defs i)))))
+                          (cons before acc))
+                        (list outs)
+                        instrs)))
+          (let loop ([is instrs] [afters live-afters])
+            (unless (null? is)
+              (define i (car is))
+              (bk-for-each (lambda (v) (touch! v n)) (instr-uses i))
+              (bk-for-each (lambda (v) (touch! v n)) (instr-defs i))
+              (bk-for-each (lambda (v) (touch! v n)) (set->list (car afters)))
+              (set! n (add1 n))
+              (loop (cdr is) (cdr afters)))))
+        order)
+
+       ;; ---- linear scan ---------------------------------------------
+       (define regs (allocatable-registers))
+       ;; sort by interval start; keys pre-sorted so ties break
+       ;; deterministically (the merge sort is stable)
+       (define sorted
+         (sort (map (lambda (v) (cons v (hash-ref intervals v)))
+                    (sort (hash-keys intervals) symbol<?))
+               (lambda (a b) (< (car (cdr a)) (car (cdr b))))))
+       (define var->loc (make-hash))
+       (define active '())   ;; list of (end var reg), kept sorted by end
+       (define free-regs regs)
+       (define spill-count 0)
+       (define (by-end a b) (< (first a) (first b)))
+       (define (expire! start)
+         (define parts (partition (lambda (a) (< (first a) start)) active))
+         (bk-for-each (lambda (a) (set! free-regs (cons (third a) free-regs)))
+                      (car parts))
+         (set! active (cdr parts)))
+       ;; symbolic slot for now; materialized as an fp-relative offset
+       ;; *below* the callee-saved save area once we know its size
+       (define (spill-slot!)
+         (set! spill-count (add1 spill-count))
+         `(spill ,spill-count))
+       (bk-for-each
+        (lambda (iv)
+          (match iv
+            [(cons v (cons start end))
+             (expire! start)
+             (cond
+               [(pair? free-regs)
+                (define r (first free-regs))
+                (set! free-regs (rest free-regs))
+                (hash-set! var->loc v `(reg ,r))
+                (set! active (sort (cons (list end v r) active) by-end))]
+               [else
+                ;; no free register: spill whichever of {current,
+                ;; furthest active} ends last
+                (define furthest (if (pair? active) (last active) #f))
+                (cond
+                  [(and furthest (> (first furthest) end))
+                   ;; steal its register, spill it
+                   (match furthest
+                     [(list f-end f-var f-reg)
+                      (hash-set! var->loc f-var (spill-slot!))
+                      (hash-set! var->loc v `(reg ,f-reg))
+                      (set! active (sort (cons (list end v f-reg)
+                                               (remove furthest active))
+                                         by-end))])]
+                  [else
+                   (hash-set! var->loc v (spill-slot!))])])]))
+        sorted)
+
+       ;; ---- rewrite operands ------------------------------------------
+       ;; the frame below the frame pointer: [callee-saved saves][spills]
+       (define used-callee-saved
+         (filter (lambda (r)
+                   (ormap (lambda (v) (equal? (hash-ref var->loc v) `(reg ,r)))
+                          (hash-keys var->loc)))
+                 regs))
+       (define save-area-bytes (callee-save-area-bytes (length used-callee-saved)))
+       (define (materialize loc)
+         (match loc
+           [`(spill ,k) `(deref (reg ,fp) ,(- (+ save-area-bytes (* 8 k))))]
+           [_ loc]))
+       (define (home op)
+         (match op
+           [`(var ,x)
+            (if (hash-has-key? var->loc x)
+                (materialize (hash-ref var->loc x))
+                (error (format "allocate-registers: no home for ~a" x)))]
+           [_ op]))
+       (define (rewrite-instr i)
+         (match i
+           [`(,op ,operands ...) (cons op (map home operands))]))
+       (define (useless-move? i)
+         (match i
+           [`(movq ,a ,b) (equal? a b)]
+           [`(mov ,a ,b) (equal? a b)]
+           [_ #f]))
+       (define blocks+
+         (foldl (lambda (l acc)
+                  (hash-set acc l (filter (lambda (i) (not (useless-move? i)))
+                                          (map rewrite-instr (hash-ref blocks l)))))
+                (hash)
+                (hash-keys blocks)))
+       (define info
+         (hash 'var->loc (foldl (lambda (v acc)
+                                  (hash-set acc v (materialize (hash-ref var->loc v))))
+                                (hash)
+                                (hash-keys var->loc))
+               'callee-saved used-callee-saved
+               'spill-bytes (* 8 spill-count)))
+       `(define ,info (,f ,@args) ,blocks+)]))
+  (match p
+    [`(program ,n-globals ,defns ...)
+     `(program ,n-globals ,@(map per-defn defns))]))
+
+;; =====================================================================
+;; The x86-64 backend (mirrors src/backend-x86.rkt)
+;; =====================================================================
+
+;; ---------------------------------------------------------------------
+;; select-instructions
+;; ---------------------------------------------------------------------
+
+(define (select-instructions-x86 p)
+  (define tables (bk-scan-literals p))
+  (define symbol-table (first tables))
+  (define string-table (second tables))
+  ;; Translate an atom to an operand (tagging literals)
+  (define (h-atom a)
+    (match a
+      ['(void)        `(imm ,void-value)]
+      ['(nil)         `(imm ,nil-value)]
+      [(? fixnum? n)  `(imm ,(tag-fixnum n))]
+      [(? boolean? b) `(imm ,(if b true-value false-value))]
+      [`(quote ,s)    `(imm ,(tag-symbol (bk-index-of-table symbol-table s)))]
+      [(? symbol? x)  `(var ,x)]))
+  ;; move atoms into the argument registers
+  (define (copy-arguments as)
+    (map2 (lambda (a r) `(movq ,(h-atom a) (reg ,r)))
+          as (take (argument-registers) (length as))))
+  ;; one rhs; `sink` is instructions storing %rax into the target
+  ;; (empty for effect position)
+  (define (rhs->instrs rhs sink)
+    (match rhs
+      ;; intrinsics
+      [`(+ ,a0 ,a1)
+       `((movq ,(h-atom a0) (reg rax))
+         (addq ,(h-atom a1) (reg rax))
+         ,@sink)]
+      [`(- ,a)
+       `((movq ,(h-atom a) (reg rax))
+         (negq (reg rax))
+         ,@sink)]
+      [`(* ,a0 ,a1)
+       ;; (a>>3) * b == (a*b)<<3 for tagged fixnums
+       `((movq ,(h-atom a0) (reg rax))
+         (sarq (imm 3) (reg rax))
+         (imulq ,(h-atom a1) (reg rax))
+         ,@sink)]
+      [`(,(? shrunk-cmp? cmp) ,a0 ,a1)
+       ;; compare, set, then tag the boolean: (0|1)<<3 | 2
+       (define cc (match cmp ['eq? 'e] ['< 'l]))
+       `((cmpq ,(h-atom a1) ,(h-atom a0))
+         (set ,cc (byte-reg al))
+         (movzbq (byte-reg al) (reg rax))
+         (shlq (imm 3) (reg rax))
+         (orq (imm ,false-value) (reg rax))
+         ,@sink)]
+      ;; heap access the compiler controls: no checks, tagged ptr
+      ;; is object address + 1, header is 8 bytes -> offset 8i + 7
+      [`(unsafe-vector-ref ,a ,i)
+       `((movq ,(h-atom a) (reg rax))
+         (movq (deref (reg rax) ,(+ 7 (* 8 i))) (reg rax))
+         ,@sink)]
+      ;; functions and calls
+      [`(fun-ref ,f)
+       `((leaq (fun-ref ,f) (reg rax))
+         ,@sink)]
+      [`(app ,a-f ,args ...)
+       `(,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum (length args))) (reg r10))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      [`(papp ,n ,a-f ,args ...)
+       ;; packed call: the arity register carries the ORIGINAL count
+       `(,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum n)) (reg r10))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      ;; globals
+      [`(global-ref ,i)
+       `((movq (global ,i) (reg rax))
+         ,@sink)]
+      ;; string literals materialize via the runtime's constant table
+      [`(string-lit ,s)
+       `((movq (imm ,(tag-fixnum (bk-index-of-table string-table s))) (reg rdi))
+         (callq pf_string_const 1)
+         ,@sink)]
+      ;; every stdlib primitive is a call with args in registers
+      [`(,(? stdlib-prim? op) ,args ...)
+       `(,@(copy-arguments args)
+         (callq ,(stdlib-rt-sym op) ,(length args))
+         ,@sink)]
+      ;; atoms
+      [a
+       `((movq ,(h-atom a) (reg rax))
+         ,@sink)]))
+  (define (h seq)
+    (match seq
+      [`(return ,a)
+       `((movq ,(h-atom a) (reg rax))
+         (jmp ,conclusion-name))]
+      ;; tail call: load the target into scratch %r11 *before* the
+      ;; argument moves, then a tail-jmp pseudo-instruction that
+      ;; prelude-and-conclusion expands into epilogue + jmp *%r11
+      [`(tail-app ,n ,a-f ,args ...)
+       `((movq ,(h-atom a-f) (reg r11))
+         ,@(copy-arguments args)
+         (movq (imm ,(tag-fixnum n)) (reg r10))
+         (tail-jmp (reg r11) ,(length args)))]
+      [`(seq (assign ,x ,rhs) ,rst)
+       (append (rhs->instrs rhs `((movq (reg rax) (var ,x)))) (h rst))]
+      [`(seq (effect ,rhs) ,rst)
+       (append (rhs->instrs rhs '()) (h rst))]
+      [`(seq (global-set! ,i ,a) ,rst)
+       `((movq ,(h-atom a) (global ,i))
+         ,@(h rst))]
+      [`(seq (unsafe-vector-set! ,a0 ,i ,a-v) ,rst)
+       `((movq ,(h-atom a0) (reg rax))
+         (movq ,(h-atom a-v) (deref (reg rax) ,(+ 7 (* 8 i))))
+         ,@(h rst))]
+      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
+       (define cc (match cmp ['eq? 'e] ['< 'l]))
+       `((cmpq ,(h-atom a1) ,(h-atom a0))
+         (jmp-if ,cc ,l0)
+         (jmp ,l1))]
+      [`(goto ,l)
+       `((jmp ,l))]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,locals (,f ,args ...) ,blocks)
+       (define blocks+
+         (hash-set
+          (foldl (lambda (block acc) (hash-set acc block (h (hash-ref blocks block))))
+                 (hash) (hash-keys blocks))
+          conclusion-name
+          '((retq))))
+       (define entry (hash-ref blocks+ f))
+       (define mi (index-of args '#%rest))
+       (define moves
+         (cond
+           [mi
+            ;; variadic prologue: spill the six argument registers to
+            ;; the runtime's arg area, build the rest list from the
+            ;; incoming arity (r10), then load the fixed formals back
+            (define fixed (take args mi))
+            (define rest-name (list-ref args (add1 mi)))
+            `(,@(map2 (lambda (r i) `(movq (reg ,r) (argspill ,i)))
+                      (argument-registers) (range 0 6))
+              (movq (imm ,(tag-fixnum (length fixed))) (reg rdi))
+              (movq (reg r10) (reg rsi))
+              (callq pf_collect_rest 2)
+              (movq (reg rax) (var ,rest-name))
+              ,@(map2 (lambda (a i) `(movq (argspill ,i) (var ,a)))
+                      fixed (range 0 (length fixed))))]
+           [else
+            (map2 (lambda (a r) `(movq (reg ,r) (var ,a)))
+                  args (take (argument-registers) (length args)))]))
+       (define blocks++ (hash-set blocks+ f (append moves entry)))
+       (define args+ (if mi
+                         (append (take args mi) (list (list-ref args (add1 mi))))
+                         args))
+       `(define ,locals (,f ,@args+) ,blocks++)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,(hash-set (hash-set info 'symbols symbol-table) 'strings string-table)
+               ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; allocate-registers: uses/defs for pseudo-x86, then the shared
+;; live-range linear scan
+;; ---------------------------------------------------------------------
+
+(define (allocate-registers-x86 p)
+  (define (vars-of ops)
+    (append-map (lambda (op) (match op [`(var ,x) (list x)] [_ '()])) ops))
+  (define (uses+defs i)
+    (match i
+      [`(movq ,src ,dst)   (list (vars-of (list src)) (vars-of (list dst)))]
+      [`(movzbq ,src ,dst) (list (vars-of (list src)) (vars-of (list dst)))]
+      [`(leaq ,_ ,dst)     (list '() (vars-of (list dst)))]
+      [`(,op ,src ,dst) #:when (member op '(addq imulq xorq orq andq))
+       (list (vars-of (list src dst)) (vars-of (list dst)))]
+      [`(negq ,dst)        (list (vars-of (list dst)) (vars-of (list dst)))]
+      [`(,op ,_ ,dst) #:when (member op '(sarq shlq))
+       (list (vars-of (list dst)) (vars-of (list dst)))]
+      [`(cmpq ,a ,b)       (list (vars-of (list a b)) '())]
+      [`(indirect-callq ,a) (list (vars-of (list a)) '())]
+      [_ (list '() '())]))
+  (allocate-registers-with p uses+defs))
+
+;; ---------------------------------------------------------------------
+;; patch-instructions: legalize what linear scan and tagging produce
+;;   - no memory/memory two-operand forms ((deref ...), (global ...)
+;;     and (argspill ...) all count as memory)
+;;   - movzbq/leaq/imulq destinations must be registers
+;;   - cmpq's second operand must not be an immediate
+;;   - immediates beyond 32 bits go through movabsq + %r11
+;; ---------------------------------------------------------------------
+
+(define (patch-instructions-x86 p)
+  (define (mem? op)
+    (or (bk-deref? op) (bk-global? op)
+        (match op [`(argspill ,_) #t] [_ #f])))
+  (define (big-imm? op)
+    (match op [`(imm ,i) (or (> i 2147483647) (< i -2147483648))] [_ #f]))
+  (define (patch-instr instr)
+    (match instr
+      ;; imm64: stage through r11 (movq straight to a register is fine
+      ;; via movabsq)
+      [`(movq ,(? big-imm? src) ,(? bk-reg? dst))
+       `((movabsq ,src ,dst))]
+      [`(,op ,(? big-imm? src) ,dst)
+       `((movabsq ,src (reg r11))
+         ,@(patch-instr `(,op (reg r11) ,dst)))]
+      ;; memory/memory forms stage through r11
+      [`(movq ,(? mem? src) ,(? mem? dst))
+       `((movq ,src (reg r11))
+         (movq (reg r11) ,dst))]
+      [`(,op ,(? mem? src) ,(? mem? dst)) #:when (member op '(addq xorq orq andq))
+       `((movq ,src (reg r11))
+         (,op (reg r11) ,dst))]
+      [`(cmpq ,(? mem? a) ,(? mem? b))
+       `((movq ,b (reg r11))
+         (cmpq ,a (reg r11)))]
+      [`(cmpq ,a ,(? bk-imm? b))
+       `((movq ,b (reg r11))
+         (cmpq ,a (reg r11)))]
+      ;; imulq needs a register destination
+      [`(imulq ,src ,(? mem? dst))
+       `((movq ,dst (reg r11))
+         (imulq ,src (reg r11))
+         (movq (reg r11) ,dst))]
+      [`(movzbq ,src ,(? mem? dst))
+       `((movzbq ,src (reg rax))
+         (movq (reg rax) ,dst))]
+      [`(leaq ,src ,(? mem? dst))
+       `((leaq ,src (reg r11))
+         (movq (reg r11) ,dst))]
+      [i (list i)]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,formals ...) ,blocks)
+       (define blocks+
+         (foldl (lambda (k a) (hash-set a k (append-map patch-instr (hash-ref blocks k))))
+                (hash)
+                (hash-keys blocks)))
+       `(define ,info (,f ,@formals) ,blocks+)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; prelude-and-conclusion
+;;
+;; Per function: set up the frame, save the callee-saved registers
+;; the allocator used, reserve spill space (keeping the stack
+;; 16-byte aligned at call sites), and rewrite the placeholder
+;; conclusion. main additionally calls pf_init first and prints its
+;; result via pf_print_result.
+;; ---------------------------------------------------------------------
+
+;; walk over all blocks in a hash and replace (jmp conclusion) with
+;; (jmp ,name) -- shared by both backends
+(define (bk-rename-conclusion blocks name)
+  (define (h instr)
+    (match instr
+      [`(jmp ,blk) (if (equal? blk conclusion-name) `(jmp ,name) instr)]
+      [i i]))
+  (foldl (lambda (k acc) (hash-set acc k (map h (hash-ref blocks k))))
+         (hash)
+         (hash-keys blocks)))
+
+(define (prelude-and-conclusion-x86 p)
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,args ...) ,blocks)
+       (define callee-saved (hash-ref/default info 'callee-saved '()))
+       (define spill-bytes (hash-ref/default info 'spill-bytes 0))
+       ;; after ret-addr+rbp pushes rsp is 16-aligned; keep it that
+       ;; way past the callee-saved pushes and spill space
+       (define push-bytes (* 8 (length callee-saved)))
+       (define pad (modulo (- 16 (modulo (+ push-bytes spill-bytes) 16)) 16))
+       (define frame-bytes (+ spill-bytes pad))
+       (define start-block (hash-ref blocks f))
+       (define new-start-block
+         `((pushq (reg rbp))
+           (movq (reg rsp) (reg rbp))
+           ,@(map (lambda (r) `(pushq (reg ,r))) callee-saved)
+           ,@(if (zero? frame-bytes) '() `((addq (imm ,(- frame-bytes)) (reg rsp))))
+           ,@(if (equal? f entry-symbol) `((callq pf_init 0)) '())
+           ,@start-block))
+       (define restore
+         `(,@(if (zero? frame-bytes) '() `((addq (imm ,frame-bytes) (reg rsp))))
+           ,@(map (lambda (r) `(popq (reg ,r))) (reverse callee-saved))
+           (popq (reg rbp))
+           (retq)))
+       (define conclusion-block
+         (if (equal? f entry-symbol)
+             `(;; print the program's value (unless void), return 0
+               (movq (reg rax) (reg rdi))
+               (callq pf_print_result 0)
+               (movq (imm 0) (reg rax))
+               ,@restore)
+             restore))
+       (define my-conclusion (gensym 'conclusion))
+       ;; expand tail-jmp: restore the frame, then jump through r11
+       ;; (a scratch register, so untouched by the pops)
+       (define (expand-tail-jmp instrs)
+         (append-map
+          (lambda (i)
+            (match i
+              [`(tail-jmp ,op ,_)
+               `(,@(if (zero? frame-bytes) '() `((addq (imm ,frame-bytes) (reg rsp))))
+                 ,@(map (lambda (r) `(popq (reg ,r))) (reverse callee-saved))
+                 (popq (reg rbp))
+                 (indirect-jmp ,op))]
+              [_ (list i)]))
+          instrs))
+       (define blocks+
+         (bk-rename-conclusion
+          (hash-set (hash-remove (hash-set blocks f new-start-block)
+                                 conclusion-name)
+                    my-conclusion
+                    conclusion-block)
+          my-conclusion))
+       (define blocks++
+         (foldl (lambda (k acc) (hash-set acc k (expand-tail-jmp (hash-ref acc k))))
+                blocks+
+                (hash-keys blocks+)))
+       `(define ,info (,f ,@args) ,blocks++)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; render: shared data segment. Code, then the symbol table, the
+;; string-constant table, and the global array (BSS-ish zeroed space
+;; in __DATA so the Boehm GC scans it as roots). puffincc targets
+;; macOS (rt-sym already hardcodes the leading underscore), so the
+;; Mach-O section names are used unconditionally.
+;; ---------------------------------------------------------------------
+
+;; C-escape a string for .asciz, byte by byte (Puffin has no chars)
+(define (bk-escape-c s)
+  (define n (string-length s))
+  (let loop ([i 0] [acc ""])
+    (if (< i n)
+        (loop (+ i 1)
+              (string-append
+               acc
+               (let ([b (string-byte s i)])
+                 (cond [(eq? b 92) "\\\\"]     ;; backslash
+                       [(eq? b 34) "\\\""]     ;; double quote
+                       [(eq? b 10) "\\n"]      ;; newline
+                       [(eq? b 9)  "\\t"]      ;; tab
+                       [else (substring s i (+ i 1))]))))
+        acc)))
+
+(define (bk-data-segment info)
+  (define symbols (hash-ref/default info 'symbols '()))
+  (define strings (hash-ref/default info 'strings '()))
+  (define n-globals (hash-ref/default info 'globals 0))
+  (define (indexed-lines items f)
+    (let loop ([xs items] [i 0] [acc ""])
+      (if (null? xs)
+          acc
+          (loop (cdr xs) (+ i 1) (string-append acc (f (car xs) i))))))
+  (bk-cat
+   (list
+    ".section __TEXT,__cstring,cstring_literals\n"
+    (indexed-lines symbols
+                   (lambda (s i)
+                     (format "Lpfsym~a: .asciz \"~a\"\n" i (bk-escape-c (symbol->string s)))))
+    (indexed-lines strings
+                   (lambda (s i)
+                     (format "Lpfstr~a: .asciz \"~a\"\n" i (bk-escape-c s))))
+    ".section __DATA,__data\n"
+    ".p2align 3\n"
+    (bk-cat (map (lambda (s) (format ".globl ~a\n" (rt-sym s)))
+                 '(puffin_symbol_names puffin_symbol_count
+                   puffin_string_consts puffin_string_const_count
+                   puffin_globals)))
+    (format "~a:\n" (rt-sym 'puffin_symbol_names))
+    (indexed-lines symbols (lambda (s i) (format "    .quad Lpfsym~a\n" i)))
+    (format "~a: .quad ~a\n" (rt-sym 'puffin_symbol_count) (length symbols))
+    (format "~a:\n" (rt-sym 'puffin_string_consts))
+    (indexed-lines strings (lambda (s i) (format "    .quad Lpfstr~a\n" i)))
+    (format "~a: .quad ~a\n" (rt-sym 'puffin_string_const_count) (length strings))
+    (format "~a: .space ~a\n" (rt-sym 'puffin_globals) (max 8 (* 8 n-globals))))))
+
+;; the set of function names in a program (function labels render
+;; through rt-sym; plain block labels render as themselves)
+(define (bk-function-names p)
+  (foldl (lambda (d acc)
+           (match d [`(define ,_ (,g ,_ ...) ,_) (set-add acc g)]))
+         (set-add (set) entry-symbol)
+         (program-defns p)))
+
+;; ---------------------------------------------------------------------
+;; render-x86: GAS (AT&T) text
+;; ---------------------------------------------------------------------
+
+(define (render-x86 p)
+  (define (render-op op)
+    (match op
+      [`(imm ,i) (format "$~a" i)]
+      [`(reg ,x) (format "%~a" (symbol->string x))]
+      [`(byte-reg ,x) (format "%~a" (symbol->string x))]
+      [`(deref (reg ,r) ,i) (format "~a(%~a)" i (symbol->string r))]
+      [`(global ,i) (format "~a+~a(%rip)" (rt-sym 'puffin_globals) (* 8 i))]
+      [`(argspill ,i) (format "~a+~a(%rip)" (rt-sym 'pf_arg_spill) (* 8 i))]))
+  (define (render-cc cc)
+    (match cc ['e "e"] ['ne "ne"] ['l "l"] ['ae "ae"]))
+  (define (render-instr instr)
+    (match instr
+      [`(xorq ,src ,dst) (format "xorq ~a, ~a" (render-op src) (render-op dst))]
+      [`(orq ,src ,dst) (format "orq ~a, ~a" (render-op src) (render-op dst))]
+      [`(andq ,src ,dst) (format "andq ~a, ~a" (render-op src) (render-op dst))]
+      [`(addq ,src ,dst) (format "addq ~a, ~a" (render-op src) (render-op dst))]
+      [`(imulq ,src ,dst) (format "imulq ~a, ~a" (render-op src) (render-op dst))]
+      [`(sarq ,src ,dst) (format "sarq ~a, ~a" (render-op src) (render-op dst))]
+      [`(shlq ,src ,dst) (format "shlq ~a, ~a" (render-op src) (render-op dst))]
+      [`(negq ,srcdst) (format "negq ~a" (render-op srcdst))]
+      [`(movq ,src ,dst) (format "movq ~a, ~a" (render-op src) (render-op dst))]
+      [`(movabsq ,src ,dst) (format "movabsq ~a, ~a" (render-op src) (render-op dst))]
+      [`(movzbq ,src ,dst) (format "movzbq ~a, ~a" (render-op src) (render-op dst))]
+      [`(pushq ,src) (format "pushq ~a" (render-op src))]
+      [`(popq ,dst) (format "popq ~a" (render-op dst))]
+      [`(cmpq ,op0 ,op1) (format "cmpq ~a, ~a" (render-op op0) (render-op op1))]
+      [`(jmp-if ,cc ,lab) (format "j~a ~a" (render-cc cc) lab)]
+      [`(jmp ,lab) (format "jmp ~a" lab)]
+      [`(set ,cc ,byte-reg) (format "set~a ~a" (render-cc cc) (render-op byte-reg))]
+      [`(callq ,l ,num-args)
+       ;; must call rt-sym here!
+       (format "call ~a" (symbol->string (rt-sym l)))]
+      ['(retq) "ret"]
+      [`(goto ,l) (format "jmp ~a" (symbol->string l))]
+      [`(leaq (fun-ref ,f) ,dst)
+       (format "leaq ~a(%rip), ~a" (rt-sym f) (render-op dst))]
+      [`(indirect-callq ,a) (format "callq *~a" (render-op a))]
+      [`(indirect-jmp ,a) (format "jmp *~a" (render-op a))]))
+  (define functions (bk-function-names p))
+  (define (block-text name block)
+    (string-append
+     (if (set-member? functions name)
+         (format "~a:\n" (rt-sym name))
+         (format "~a:\n" name))
+     (bk-cat (map (lambda (instr) (format "    ~a\n" (render-instr instr))) block))))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,_ (,f ,formals ...) ,blocks)
+       (define rest-keys
+         (sort (filter (lambda (k) (not (equal? k f))) (hash-keys blocks))
+               symbol<?))
+       (bk-cat (map (lambda (k) (block-text k (hash-ref blocks k)))
+                    (cons f rest-keys)))]))
+  (match p
+    [`(program ,info ,defns ...)
+     (bk-cat
+      (list
+       (format ".globl ~a\n" (rt-sym entry-symbol))
+       ".text\n"
+       (bk-cat (map per-defn defns))
+       (bk-data-segment info)))]))
+
+;; =====================================================================
+;; The AArch64 backend (mirrors src/backend-arm64.rkt)
+;;
+;; ABI notes vs x86-64:
+;;  - args in x0-x5 (six of the eight, so limit-functions behaves
+;;    identically across targets), result in x0
+;;  - the return address lives in the link register x30, so the
+;;    prologue saves x29/x30 as a pair and tail calls jump through
+;;    scratch x9 (untouched by the epilogue restores)
+;;  - memory is only touched by ldr/str: the selector emits x86-ish
+;;    `mov`s freely and patch-instructions-arm64 turns memory movs
+;;    into loads/stores
+;;  - immediates: arithmetic takes 12-bit immediates; anything
+;;    bigger is staged through scratch x11 (`ldr xN, =imm`)
+;; =====================================================================
+
+;; ---------------------------------------------------------------------
+;; select-instructions
+;; ---------------------------------------------------------------------
+
+(define (select-instructions-arm64 p)
+  (define tables (bk-scan-literals p))
+  (define symbol-table (first tables))
+  (define string-table (second tables))
+  (define (h-atom a)
+    (match a
+      ['(void)        `(imm ,void-value)]
+      ['(nil)         `(imm ,nil-value)]
+      [(? fixnum? n)  `(imm ,(tag-fixnum n))]
+      [(? boolean? b) `(imm ,(if b true-value false-value))]
+      [`(quote ,s)    `(imm ,(tag-symbol (bk-index-of-table symbol-table s)))]
+      [(? symbol? x)  `(var ,x)]))
+  (define (copy-arguments as)
+    (map2 (lambda (a r) `(mov ,(h-atom a) (reg ,r)))
+          as (take (argument-registers) (length as))))
+  ;; `sink` stores x0 (the result register) into the target
+  (define (rhs->instrs rhs sink)
+    (match rhs
+      [`(+ ,a0 ,a1)
+       `((mov ,(h-atom a0) (reg x0))
+         (add ,(h-atom a1) (reg x0))
+         ,@sink)]
+      [`(- ,a)
+       `((mov ,(h-atom a) (reg x0))
+         (neg (reg x0))
+         ,@sink)]
+      [`(* ,a0 ,a1)
+       `((mov ,(h-atom a0) (reg x0))
+         (asr (imm 3) (reg x0))
+         (mul ,(h-atom a1) (reg x0))
+         ,@sink)]
+      [`(,(? shrunk-cmp? cmp) ,a0 ,a1)
+       (define cc (match cmp ['eq? 'e] ['< 'l]))
+       `((cmp ,(h-atom a0) ,(h-atom a1))
+         (cset ,cc (reg x0))
+         (lsl (imm 3) (reg x0))
+         (orr (imm ,false-value) (reg x0))
+         ,@sink)]
+      [`(unsafe-vector-ref ,a ,i)
+       ;; detag (-1) then an aligned, scaled load of slot i
+       `((mov ,(h-atom a) (reg x9))
+         (sub (imm 1) (reg x9))
+         (ldr (deref (reg x9) ,(* 8 (+ i 1))) (reg x0))
+         ,@sink)]
+      [`(fun-ref ,f)
+       `((lea-fun ,f (reg x0))
+         ,@sink)]
+      [`(app ,a-f ,args ...)
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum (length args))) (reg x12))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      [`(papp ,n ,a-f ,args ...)
+       ;; packed call: the arity register carries the ORIGINAL count
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
+         (indirect-callq ,(h-atom a-f))
+         ,@sink)]
+      [`(global-ref ,i)
+       `((ldr-global ,i (reg x0))
+         ,@sink)]
+      [`(string-lit ,s)
+       `((mov (imm ,(tag-fixnum (bk-index-of-table string-table s))) (reg x0))
+         (callq pf_string_const 1)
+         ,@sink)]
+      [`(,(? stdlib-prim? op) ,args ...)
+       `(,@(copy-arguments args)
+         (callq ,(stdlib-rt-sym op) ,(length args))
+         ,@sink)]
+      [a
+       `((mov ,(h-atom a) (reg x0))
+         ,@sink)]))
+  (define (h seq)
+    (match seq
+      [`(return ,a)
+       `((mov ,(h-atom a) (reg x0))
+         (jmp ,conclusion-name))]
+      [`(tail-app ,n ,a-f ,args ...)
+       ;; x9 is scratch and survives the epilogue expansion
+       `((mov ,(h-atom a-f) (reg x9))
+         ,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
+         (tail-jmp (reg x9) ,(length args)))]
+      [`(seq (assign ,x ,rhs) ,rst)
+       (append (rhs->instrs rhs `((mov (reg x0) (var ,x)))) (h rst))]
+      [`(seq (effect ,rhs) ,rst)
+       (append (rhs->instrs rhs '()) (h rst))]
+      [`(seq (global-set! ,i ,a) ,rst)
+       `((mov ,(h-atom a) (reg x10))
+         (str-global (reg x10) ,i)
+         ,@(h rst))]
+      [`(seq (unsafe-vector-set! ,a0 ,i ,a-v) ,rst)
+       `((mov ,(h-atom a0) (reg x9))
+         (sub (imm 1) (reg x9))
+         (mov ,(h-atom a-v) (reg x10))
+         (str (reg x10) (deref (reg x9) ,(* 8 (+ i 1))))
+         ,@(h rst))]
+      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
+       (define cc (match cmp ['eq? 'e] ['< 'l]))
+       `((cmp ,(h-atom a0) ,(h-atom a1))
+         (jmp-if ,cc ,l0)
+         (jmp ,l1))]
+      [`(goto ,l)
+       `((jmp ,l))]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,locals (,f ,args ...) ,blocks)
+       (define blocks+
+         (hash-set
+          (foldl (lambda (block acc) (hash-set acc block (h (hash-ref blocks block))))
+                 (hash) (hash-keys blocks))
+          conclusion-name
+          '((retq))))
+       (define entry (hash-ref blocks+ f))
+       (define mi (index-of args '#%rest))
+       (define moves
+         (cond
+           [mi
+            ;; variadic prologue (see the x86 backend): spill arg
+            ;; regs, call pf_collect_rest(k, n=x12), reload the
+            ;; fixed formals
+            (define fixed (take args mi))
+            (define rest-name (list-ref args (add1 mi)))
+            `(,@(map2 (lambda (r i) `(str-argspill (reg ,r) ,i))
+                      (argument-registers) (range 0 6))
+              (mov (imm ,(tag-fixnum (length fixed))) (reg x0))
+              (mov (reg x12) (reg x1))
+              (callq pf_collect_rest 2)
+              (mov (reg x0) (var ,rest-name))
+              ,@(map2 (lambda (a i) `(ldr-argspill ,i (var ,a)))
+                      fixed (range 0 (length fixed))))]
+           [else
+            (map2 (lambda (a r) `(mov (reg ,r) (var ,a)))
+                  args (take (argument-registers) (length args)))]))
+       (define blocks++ (hash-set blocks+ f (append moves entry)))
+       (define args+ (if mi
+                         (append (take args mi) (list (list-ref args (add1 mi))))
+                         args))
+       `(define ,locals (,f ,@args+) ,blocks++)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,(hash-set (hash-set info 'symbols symbol-table) 'strings string-table)
+               ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; allocate-registers
+;; ---------------------------------------------------------------------
+
+(define (allocate-registers-arm64 p)
+  (define (vars-of ops)
+    (append-map (lambda (op) (match op [`(var ,x) (list x)] [_ '()])) ops))
+  (define (uses+defs i)
+    (match i
+      [`(mov ,src ,dst)    (list (vars-of (list src)) (vars-of (list dst)))]
+      [`(ldr ,src ,dst)    (list (vars-of (list src)) (vars-of (list dst)))]
+      [`(str ,src ,dst)    (list (vars-of (list src dst)) '())]
+      [`(ldr-global ,_ ,dst) (list '() (vars-of (list dst)))]
+      [`(str-global ,src ,_) (list (vars-of (list src)) '())]
+      [`(ldr-argspill ,_ ,dst) (list '() (vars-of (list dst)))]
+      [`(str-argspill ,src ,_) (list (vars-of (list src)) '())]
+      [`(lea-fun ,_ ,dst)  (list '() (vars-of (list dst)))]
+      [`(,op ,src ,dst) #:when (member op '(add sub mul orr))
+       (list (vars-of (list src dst)) (vars-of (list dst)))]
+      [`(neg ,dst)         (list (vars-of (list dst)) (vars-of (list dst)))]
+      [`(,op ,_ ,dst) #:when (member op '(asr lsl))
+       (list (vars-of (list dst)) (vars-of (list dst)))]
+      [`(cmp ,a ,b)        (list (vars-of (list a b)) '())]
+      [`(cset ,_ ,dst)     (list '() (vars-of (list dst)))]
+      [`(indirect-callq ,a) (list (vars-of (list a)) '())]
+      [`(tail-jmp ,a ,_)   (list (vars-of (list a)) '())]
+      [_ (list '() '())]))
+  (allocate-registers-with p uses+defs))
+
+;; ---------------------------------------------------------------------
+;; patch-instructions: make every instruction encodable
+;;   - loads/stores become explicit (mov mem->x / x->mem)
+;;   - ALU operands must be registers (except small immediates)
+;;   - big immediates stage through x11 (ldr =imm)
+;; scratch discipline: x9/x10 are used by the selector inside a
+;; statement; the patcher uses x11 (and x10 for a second operand)
+;; so patched code never collides with selector scratch.
+;; ---------------------------------------------------------------------
+
+(define (patch-instructions-arm64 p)
+  (define (mem? op) (or (bk-deref? op) (bk-global? op)))
+  (define (small-imm? op)
+    (match op [`(imm ,i) (and (>= i 0) (< i 4096))] [_ #f]))
+  (define (mov-imm-ok? op)
+    ;; mov (wide immediate) handles 16-bit patterns; keep it simple
+    (match op [`(imm ,i) (and (>= i 0) (< i 65536))] [_ #f]))
+  ;; load operand into a given scratch register, returning
+  ;; (list instrs reg-op)
+  (define (into-reg op scratch)
+    (match op
+      [`(reg ,_) (list '() op)]
+      [`(imm ,_) (if (mov-imm-ok? op)
+                     (list `((mov ,op (reg ,scratch))) `(reg ,scratch))
+                     (list `((ldr-imm ,op (reg ,scratch))) `(reg ,scratch)))]
+      [`(deref ,_ ,_) (list `((ldr ,op (reg ,scratch))) `(reg ,scratch))]
+      [`(global ,i) (list `((ldr-global ,i (reg ,scratch))) `(reg ,scratch))]))
+  (define (patch-instr instr)
+    (match instr
+      ;; mov: memory and large immediates get staged
+      [`(mov ,src ,dst)
+       (cond
+         [(and (bk-reg? src) (bk-reg? dst)) (list instr)]
+         [(and (mov-imm-ok? src) (bk-reg? dst)) (list instr)]
+         [(and (bk-imm? src) (bk-reg? dst)) `((ldr-imm ,src ,dst))]
+         [(and (mem? src) (bk-reg? dst)) `((ldr ,src ,dst))]
+         [(mem? dst)
+          (define ir (into-reg src 'x11))
+          `(,@(first ir) (str ,(second ir) ,dst))]
+         [else (list instr)])]
+      ;; ALU: dst must be a register; src register or small imm
+      [`(,op ,src ,dst) #:when (member op '(add sub mul orr))
+       (cond
+         [(and (bk-reg? dst)
+               (or (bk-reg? src) (and (small-imm? src) (not (equal? op 'mul)))))
+          (list instr)]
+         [(bk-reg? dst)
+          (define ir (into-reg src 'x11))
+          `(,@(first ir) (,op ,(second ir) ,dst))]
+         [else
+          ;; dst in memory: load, operate, store back
+          (define ir (into-reg src 'x11))
+          `((ldr ,dst (reg x10))
+            ,@(first ir)
+            (,op ,(second ir) (reg x10))
+            (str (reg x10) ,dst))])]
+      [`(neg ,dst)
+       (if (bk-reg? dst)
+           (list instr)
+           `((ldr ,dst (reg x10))
+             (neg (reg x10))
+             (str (reg x10) ,dst)))]
+      [`(,op ,k ,dst) #:when (member op '(asr lsl))
+       (if (bk-reg? dst)
+           (list instr)
+           `((ldr ,dst (reg x10))
+             (,op ,k (reg x10))
+             (str (reg x10) ,dst)))]
+      [`(cset ,cc ,dst)
+       (if (bk-reg? dst)
+           (list instr)
+           `((cset ,cc (reg x10))
+             (str (reg x10) ,dst)))]
+      [`(cmp ,a ,b)
+       (define ir-a (into-reg a 'x10))
+       (if (or (bk-reg? b) (small-imm? b))
+           `(,@(first ir-a) (cmp ,(second ir-a) ,b))
+           (let ([ir-b (into-reg b 'x11)])
+             `(,@(first ir-a) ,@(first ir-b) (cmp ,(second ir-a) ,(second ir-b)))))]
+      [`(indirect-callq ,op)
+       (if (bk-reg? op)
+           (list instr)
+           (let ([ir (into-reg op 'x11)])
+             `(,@(first ir) (indirect-callq ,(second ir)))))]
+      [`(lea-fun ,f ,dst)
+       (if (bk-reg? dst)
+           (list instr)
+           `((lea-fun ,f (reg x11))
+             (str (reg x11) ,dst)))]
+      [`(ldr-global ,i ,dst)
+       (if (bk-reg? dst)
+           (list instr)
+           `((ldr-global ,i (reg x11))
+             (str (reg x11) ,dst)))]
+      [`(str-global ,src ,i)
+       (if (bk-reg? src)
+           (list instr)
+           (let ([ir (into-reg src 'x11)])
+             `(,@(first ir) (str-global ,(second ir) ,i))))]
+      [`(ldr-argspill ,i ,dst)
+       (if (bk-reg? dst)
+           (list instr)
+           `((ldr-argspill ,i (reg x11))
+             (str (reg x11) ,dst)))]
+      [`(str-argspill ,src ,i)
+       (if (bk-reg? src)
+           (list instr)
+           (let ([ir (into-reg src 'x11)])
+             `(,@(first ir) (str-argspill ,(second ir) ,i))))]
+      [i (list i)]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,formals ...) ,blocks)
+       (define blocks+
+         (foldl (lambda (k a) (hash-set a k (append-map patch-instr (hash-ref blocks k))))
+                (hash)
+                (hash-keys blocks)))
+       `(define ,info (,f ,@formals) ,blocks+)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; prelude-and-conclusion
+;; ---------------------------------------------------------------------
+
+(define (prelude-and-conclusion-arm64 p)
+  ;; pair up callee-saved registers for stp/ldp (odd tail uses str/ldr
+  ;; but still consumes a full 16-byte slot to keep sp aligned)
+  (define (save-pairs regs)
+    (match regs
+      ['() '()]
+      [`(,a) `((,a))]
+      [`(,a ,b . ,rest) (cons (list a b) (save-pairs rest))]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,args ...) ,blocks)
+       (define callee-saved (hash-ref/default info 'callee-saved '()))
+       (define spill-bytes (hash-ref/default info 'spill-bytes 0))
+       ;; sp stays 16-aligned: round the spill area up
+       (define frame-bytes (* 16 (quotient (+ spill-bytes 15) 16)))
+       (define pairs (save-pairs callee-saved))
+       (define saves
+         (append-map (lambda (pr)
+                       (match pr
+                         [`(,a ,b) `((stp ,a ,b))]
+                         [`(,a)    `((stp ,a #f))])) ;; str + pad
+                     pairs))
+       (define restores
+         (append-map (lambda (pr)
+                       (match pr
+                         [`(,a ,b) `((ldp ,a ,b))]
+                         [`(,a)    `((ldp ,a #f))]))
+                     (reverse pairs)))
+       (define start-block (hash-ref blocks f))
+       (define new-start-block
+         `((frame-push)               ;; stp x29, x30, [sp, #-16]!; mov x29, sp
+           ,@saves
+           ,@(if (zero? frame-bytes) '() `((sp-sub ,frame-bytes)))
+           ,@(if (equal? f entry-symbol) `((callq pf_init 0)) '())
+           ,@start-block))
+       (define restore
+         `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
+           ,@restores
+           (frame-pop)                ;; ldp x29, x30, [sp], #16
+           (retq)))
+       (define conclusion-block
+         (if (equal? f entry-symbol)
+             `(;; result already in x0: print it, then return 0
+               (callq pf_print_result 0)
+               (mov (imm 0) (reg x0))
+               ,@restore)
+             restore))
+       (define (expand-tail-jmp instrs)
+         (append-map
+          (lambda (i)
+            (match i
+              [`(tail-jmp ,op ,_)
+               `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
+                 ,@restores
+                 (frame-pop)
+                 (indirect-jmp ,op))]
+              [_ (list i)]))
+          instrs))
+       (define my-conclusion (gensym 'conclusion))
+       (define blocks+
+         (bk-rename-conclusion
+          (hash-set (hash-remove (hash-set blocks f new-start-block)
+                                 conclusion-name)
+                    my-conclusion
+                    conclusion-block)
+          my-conclusion))
+       (define blocks++
+         (foldl (lambda (k acc) (hash-set acc k (expand-tail-jmp (hash-ref acc k))))
+                blocks+
+                (hash-keys blocks+)))
+       `(define ,info (,f ,@args) ,blocks++)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; render-arm64
+;; ---------------------------------------------------------------------
+
+(define (render-arm64 p)
+  (define (reg-name op) (match op [`(reg ,r) (symbol->string r)]))
+  (define (render-op op)
+    (match op
+      [`(imm ,i) (format "#~a" i)]
+      [`(reg ,x) (symbol->string x)]))
+  (define (render-cc cc)
+    (match cc ['e "eq"] ['ne "ne"] ['l "lt"] ['ae "hs"]))
+  ;; an fp-relative slot: ldur/stur handle +-255 directly; farther
+  ;; slots compute the address in x16 (the linker-scratch register)
+  (define (render-mem-access ldr? op mem)
+    (match mem
+      [`(deref (reg ,base) ,off)
+       (cond
+         [(and (<= -256 off) (<= off 255))
+          (format "~a ~a, [~a, #~a]" (if ldr? "ldur" "stur") (reg-name op) base off)]
+         [(and (>= off 0) (zero? (modulo off 8)) (<= off 32760))
+          (format "~a ~a, [~a, #~a]" (if ldr? "ldr" "str") (reg-name op) base off)]
+         [else
+          (format "mov x16, #~a\n    add x16, x16, ~a\n    ~a ~a, [x16]"
+                  off base (if ldr? "ldr" "str") (reg-name op))])]))
+  (define globals-sym (rt-sym 'puffin_globals))
+  (define (render-instr instr)
+    (match instr
+      [`(mov ,src ,dst) (format "mov ~a, ~a" (reg-name dst) (render-op src))]
+      [`(ldr-imm (imm ,i) ,dst) (render-mov-imm64 (reg-name dst) i)]
+      [`(ldr ,mem ,dst) (render-mem-access #t dst mem)]
+      [`(str ,src ,mem) (render-mem-access #f src mem)]
+      [`(add ,src ,dst) (format "add ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
+      [`(sub ,src ,dst) (format "sub ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
+      [`(mul ,src ,dst) (format "mul ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op src))]
+      [`(neg ,dst) (format "neg ~a, ~a" (reg-name dst) (reg-name dst))]
+      [`(asr (imm ,k) ,dst) (format "asr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
+      [`(lsl (imm ,k) ,dst) (format "lsl ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
+      [`(orr (imm ,k) ,dst) (format "orr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
+      [`(cmp ,a ,b) (format "cmp ~a, ~a" (reg-name a) (render-op b))]
+      [`(cset ,cc ,dst) (format "cset ~a, ~a" (reg-name dst) (render-cc cc))]
+      [`(jmp-if ,cc ,lab) (format "b.~a ~a" (render-cc cc) lab)]
+      [`(jmp ,lab) (format "b ~a" lab)]
+      [`(goto ,l) (format "b ~a" (symbol->string l))]
+      [`(callq ,l ,_) (format "bl ~a" (symbol->string (rt-sym l)))]
+      [`(indirect-callq ,op) (format "blr ~a" (reg-name op))]
+      [`(indirect-jmp ,op) (format "br ~a" (reg-name op))]
+      ['(retq) "ret"]
+      [`(lea-fun ,f ,dst)
+       (format "adrp ~a, ~a@PAGE\n    add ~a, ~a, ~a@PAGEOFF"
+               (reg-name dst) (rt-sym f) (reg-name dst) (reg-name dst) (rt-sym f))]
+      [`(ldr-global ,i ,dst)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    ldr ~a, [x16, #~a]"
+               globals-sym globals-sym (reg-name dst) (* 8 i))]
+      [`(str-global ,src ,i)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
+               globals-sym globals-sym (reg-name src) (* 8 i))]
+      [`(ldr-argspill ,i ,dst)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    ldr ~a, [x16, #~a]"
+               (rt-sym 'pf_arg_spill) (rt-sym 'pf_arg_spill) (reg-name dst) (* 8 i))]
+      [`(str-argspill ,src ,i)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
+               (rt-sym 'pf_arg_spill) (rt-sym 'pf_arg_spill) (reg-name src) (* 8 i))]
+      ['(frame-push) "stp x29, x30, [sp, #-16]!\n    mov x29, sp"]
+      ['(frame-pop) "ldp x29, x30, [sp], #16"]
+      [`(sp-sub ,n) (format "sub sp, sp, #~a" n)]
+      [`(sp-add ,n) (format "add sp, sp, #~a" n)]
+      [`(stp ,a ,b) (if b
+                        (format "stp ~a, ~a, [sp, #-16]!" a b)
+                        (format "str ~a, [sp, #-16]!" a))]
+      [`(ldp ,a ,b) (if b
+                        (format "ldp ~a, ~a, [sp], #16" a b)
+                        (format "ldr ~a, [sp], #16" a))]))
+  (define functions (bk-function-names p))
+  (define (block-text name block)
+    (string-append
+     (if (set-member? functions name)
+         (format "~a:\n" (rt-sym name))
+         (format "~a:\n" name))
+     ;; several arm instructions render as multiple lines (they embed
+     ;; "\n    " themselves)
+     (bk-cat (map (lambda (instr) (format "    ~a\n" (render-instr instr))) block))))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,_ (,f ,formals ...) ,blocks)
+       (define rest-keys
+         (sort (filter (lambda (k) (not (equal? k f))) (hash-keys blocks))
+               symbol<?))
+       (bk-cat (map (lambda (k) (block-text k (hash-ref blocks k)))
+                    (cons f rest-keys)))]))
+  (match p
+    [`(program ,info ,defns ...)
+     (bk-cat
+      (list
+       (format ".globl ~a\n" (rt-sym entry-symbol))
+       ".text\n.p2align 2\n"
+       (bk-cat (map per-defn defns))
+       (bk-data-segment info)))]))

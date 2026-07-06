@@ -1,0 +1,777 @@
+;; puffincc -- 04-middle.puf: the middle-end (mirrors src/compile.rkt
+;; from shrink through uncover-locals; desugar lives in 03-desugar).
+;;
+;; Conventions (docs/BOOTSTRAP.md): no prov wrappers -- provenance is
+;; a Racket-side debugging aid; the h/h-core walker splits collapse
+;; into single functions. Racket mutable state becomes set! over
+;; immutable values; blocks are immutable Puffin hashes.
+
+;; ---------------------------------------------------------------------
+;; Pass: shrink
+;;
+;; Takes core Puffin and...
+;; - Removes binary minus (via unary minus)
+;; - Removes and/or (using if) and not (via Racket-style truthiness:
+;;   (not e) == (eq? e #f))
+;; - Removes all binary comparators except < and eq?
+;; - Turns begin into let chains, wraps while for the ANF passes
+;; ---------------------------------------------------------------------
+
+(define (shrink p)
+  (define (h e)
+    (match e
+      ;; base cases
+      [`(void) e]
+      [`(nil) e]
+      [`(quote ,_) e]
+      [`(string-lit ,_) e]
+      [(? symbol? _) e]
+      [(? fixnum? _) e]
+      [#t #t]
+      [#f #f]
+      [`(read) '(read)]
+      [`(- ,e0 ,e1) `(+ ,(h e0) (- ,(h e1)))]
+      [`(- ,e0) `(- ,(h e0))]
+      [`(and ,e0 ,e1) `(if ,(h e0) ,(h e1) #f)]
+      [`(or ,e0 ,e1)
+       ;; keep the first value when it is truthy (Racket semantics)
+       (define t (gensym 'or))
+       `(let ([,t ,(h e0)]) (if ,t ,t ,(h e1)))]
+      [`(not ,e0) `(eq? ,(h e0) #f)]
+      [`(<= ,e0 ,e1) (h `(not (< ,e1 ,e0)))]
+      [`(> ,e0 ,e1) (h `(< ,e1 ,e0))]
+      [`(>= ,e0 ,e1) (h `(not (< ,e0 ,e1)))]
+      [`(< ,e0 ,e1) `(< ,(h e0) ,(h e1))]
+      [`(eq? ,e0 ,e1) `(eq? ,(h e0) ,(h e1))]
+      [`(if ,e0 ,e1 ,e2) `(if ,(h e0) ,(h e1) ,(h e2))]
+      [`(begin ,e0) (h e0)]
+      [`(begin ,e0 ,e-rest ...) (h `(let ([_ ,e0]) (begin ,@e-rest)))]
+      [`(set! ,x ,e0) `(set! ,x ,(h e0))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(h e-g) ,(h e-b))]) ,(h e-r))]
+      [`(while ,e-g ,e-b) `(let ([_ (while ,(h e-g) ,(h e-b))]) (void))]
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(h e0)]) ,(h e-b))]
+      [`(lambda (,xs ...) ,e-b)
+       `(lambda ,xs ,(h e-b))]
+      [`(,(? prim? op) ,es ...)
+       `(,op ,@(map h es))]
+      [`(,e-f ,e-args ...)
+       `(,(h e-f) ,@(map h e-args))]))
+  (define (per-form form)
+    (match form
+      [`(define (,f ,xs ...) ,e-b)
+       `(define (,f ,@xs) ,(h e-b))]
+      [`(define ,(? symbol? x) ,e0)
+       `(define ,x ,(h e0))]
+      [e0 (h e0)]))
+  (match p
+    [`(program ,forms ...)
+     `(program ,@(map per-form forms))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: uniqueify -- every bound identifier written exactly once
+;; ---------------------------------------------------------------------
+
+(define (uniqueify p)
+  ;; Names used so far *in the current definition*: a binder is
+  ;; renamed if its name was ever used before, even in a sibling
+  ;; scope. An immutable set rebound with set! (the reference used a
+  ;; Racket mutable set).
+  (define used (set))
+  (define (fresh! x)
+    (cond [(equal? x '#%rest) x]   ;; the variadic marker is not a binder
+          [(set-member? used x) (gensym x)]
+          [else (begin (set! used (set-add used x)) x)]))
+  (define (rename e assignment)
+    (match e
+      [(? fixnum? n) n]
+      [(? boolean? b) b]
+      [`(void) e]
+      [`(nil) e]
+      [`(read) e]
+      [`(quote ,_) e]
+      [`(string-lit ,_) e]
+      [(? symbol? x) (hash-ref/default assignment x x)]
+      [`(if ,e0 ,e1 ,e2) `(if ,(rename e0 assignment)
+                              ,(rename e1 assignment)
+                              ,(rename e2 assignment))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(rename e-g assignment) ,(rename e-b assignment))]) ,(rename e-r assignment))]
+      [`(let ([_ ,e0]) ,e-b)
+       `(let ([_ ,(rename e0 assignment)]) ,(rename e-b assignment))]
+      [`(let ([,x ,e0]) ,e-b)
+       (define x+ (fresh! x))
+       `(let ([,x+ ,(rename e0 assignment)]) ,(rename e-b (hash-set assignment x x+)))]
+      [`(set! ,x ,e0) `(set! ,(hash-ref/default assignment x x) ,(rename e0 assignment))]
+      ;; for any x in xs, rename any one previously used...
+      [`(lambda (,xs ...) ,e-b)
+       (define new-xs (map fresh! xs))
+       (define assignment+ (foldl2 (lambda (x x+ acc) (hash-set acc x x+)) assignment xs new-xs))
+       `(lambda ,new-xs ,(rename e-b assignment+))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map (lambda (e0) (rename e0 assignment)) es))]
+      [`(,e-f ,e-args ...)
+       `(,(rename e-f assignment) ,@(map (lambda (e-arg) (rename e-arg assignment)) e-args))]))
+  ;; Top-level names count as used everywhere: a local that collides
+  ;; with a function or global name gets renamed.
+  (define top-names
+    (match p
+      [`(program ,forms ...)
+       (filter-map (lambda (form)
+                     (match form
+                       [`(define (,f ,_ ...) ,_) f]
+                       [`(define ,(? symbol? x) ,_) x]
+                       [_ #f]))
+                   forms)]))
+  (define (per-form form)
+    ;; uniqueness is per definition; the entry symbol doesn't exist
+    ;; yet (collect-globals synthesizes it next), but locals must not
+    ;; collide with it either
+    (set! used (set-add (list->set top-names) entry-symbol))
+    (match form
+      [`(define (,f ,xs ...) ,e-b)
+       (define new-xs (map fresh! xs))
+       (define assignment+ (foldl2 (lambda (x x+ acc) (hash-set acc x x+)) (hash) xs new-xs))
+       `(define (,f ,@new-xs) ,(rename e-b assignment+))]
+      [`(define ,(? symbol? x) ,e0)
+       `(define ,x ,(rename e0 (hash)))]
+      [e0 (rename e0 (hash))]))
+  (match p
+    [`(program ,forms ...)
+     `(program ,@(map per-form forms))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: collect-globals
+;;
+;; Top-level value defines claim slots in the runtime's global array;
+;; initializers and top-level expressions run in source order inside
+;; main. Reads become (global-ref i); writes (global-set! i e). The
+;; output program carries an info hash in slot one: (hash 'globals n).
+;; ---------------------------------------------------------------------
+
+(define (collect-globals p)
+  (define forms (match p [`(program ,fs ...) fs]))
+  ;; the entry symbol is synthesized here; a user definition of it
+  ;; would collide silently, so reject it loudly
+  (define (check-form form)
+    (match form
+      [`(define (,f ,_ ...) ,_)
+       #:when (equal? f entry-symbol)
+       (error (string-append "collect-globals: " (string-append (symbol->string f) " is reserved for the program entry point")))]
+      [`(define ,(? symbol? x) ,_)
+       #:when (equal? x entry-symbol)
+       (error (string-append "collect-globals: " (string-append (symbol->string x) " is reserved for the program entry point")))]
+      [_ (void)]))
+  (map check-form forms)
+  (define global-names
+    (foldl (lambda (form acc)
+             (match form
+               [`(define (,f ,_ ...) ,_) acc]
+               [`(define ,(? symbol? x) ,_) (append acc (list x))]
+               [_ acc]))
+           '()
+           forms))
+  (define name->idx
+    (foldl (lambda (x acc) (hash-set acc x (hash-count acc))) (hash) global-names))
+  ;; rewrite global reads/writes; `shadowed` holds locally-bound names
+  (define (walk e shadowed)
+    (match e
+      [(? fixnum? _) e]
+      [(? boolean? _) e]
+      [`(void) e]
+      [`(nil) e]
+      [`(read) e]
+      [`(quote ,_) e]
+      [`(string-lit ,_) e]
+      [(? symbol? x)
+       (if (and (hash-has-key? name->idx x) (not (set-member? shadowed x)))
+           `(global-ref ,(hash-ref name->idx x))
+           x)]
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk e0 shadowed) ,(walk e1 shadowed) ,(walk e2 shadowed))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk e-g shadowed) ,(walk e-b shadowed))]) ,(walk e-r shadowed))]
+      [`(let ([_ ,e0]) ,e-b)
+       `(let ([_ ,(walk e0 shadowed)]) ,(walk e-b shadowed))]
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(walk e0 shadowed)]) ,(walk e-b (set-add shadowed x)))]
+      [`(set! ,x ,e0)
+       (if (and (hash-has-key? name->idx x) (not (set-member? shadowed x)))
+           `(global-set! ,(hash-ref name->idx x) ,(walk e0 shadowed))
+           `(set! ,x ,(walk e0 shadowed)))]
+      [`(lambda (,xs ...) ,e-b)
+       `(lambda ,xs ,(walk e-b (set-union shadowed (list->set xs))))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map (lambda (e0) (walk e0 shadowed)) es))]
+      [`(,e-f ,e-args ...) `(,(walk e-f shadowed) ,@(map (lambda (e0) (walk e0 shadowed)) e-args))]))
+  ;; build main: initializers and expressions in source order
+  (define main-steps
+    (foldr (lambda (form acc)
+             (match form
+               [`(define (,_ ,_ ...) ,_) acc]
+               [`(define ,(? symbol? x) ,e0)
+                (cons `(global-set! ,(hash-ref name->idx x) ,(walk e0 (set))) acc)]
+               [e0 (cons (walk e0 (set)) acc)]))
+           '()
+           forms))
+  (define main-body
+    (match main-steps
+      ['() '(void)]
+      [_ (foldr (lambda (step acc) (if acc `(let ([_ ,step]) ,acc) step)) #f main-steps)]))
+  (define fun-defns
+    (foldr (lambda (form acc)
+             (match form
+               [`(define (,f ,xs ...) ,e-b)
+                (cons `(define (,f ,@xs) ,(walk e-b (list->set xs))) acc)]
+               [_ acc]))
+           '()
+           forms))
+  ;; From here down the program carries an *info hash* in slot one.
+  `(program ,(hash 'globals (length global-names))
+            (define (,entry-symbol) ,main-body)
+            ,@fun-defns))
+
+;; ---------------------------------------------------------------------
+;; Pass: reveal-functions
+;;
+;; Collect the set of top-level functions; mark references as
+;; (fun-ref f) and make application explicit via `app`.
+;; ---------------------------------------------------------------------
+
+(define (reveal-functions p)
+  (define (walk e assignment)
+    (match e
+      [(? fixnum? n) n]
+      [(? boolean? b) b]
+      [`(void) e]
+      [`(nil) e]
+      [`(read) e]
+      [`(quote ,_) e]
+      [`(string-lit ,_) e]
+      [`(global-ref ,_) e]
+      [`(global-set! ,i ,e0) `(global-set! ,i ,(walk e0 assignment))]
+      [(? symbol? x) (hash-ref/default assignment x x)]
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk e0 assignment)
+                              ,(walk e1 assignment)
+                              ,(walk e2 assignment))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk e-g assignment) ,(walk e-b assignment))]) ,(walk e-r assignment))]
+      [`(let ([,x ,e0]) ,e-b)
+       (define assignment+ (if (equal? x '_) assignment (hash-set assignment x x)))
+       `(let ([,x ,(walk e0 assignment+)]) ,(walk e-b assignment+))]
+      [`(set! ,x ,e0) `(set! ,x ,(walk e0 assignment))]
+      [`(lambda (,xs ...) ,e0)
+       (define assignment+ (foldl (lambda (x acc) (hash-set acc x x)) assignment xs))
+       `(lambda ,xs ,(walk e0 assignment+))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map (lambda (e0) (walk e0 assignment)) es))]
+      [`(,e-f ,e-args ...)
+       `(app ,(walk e-f assignment) ,@(map (lambda (e0) (walk e0 assignment)) e-args))]))
+  (match p
+    [`(program ,info ,defns ...)
+     (define name-set
+       (foldl (lambda (defn acc)
+                (match defn
+                  [`(define (,f ,_ ...) ,_) (hash-set acc f `(fun-ref ,f))]))
+              (hash)
+              defns))
+     (define (per-defn defn)
+       (match defn
+         [`(define (,f ,params ...) ,body)
+          `(define (,f ,@params) ,(walk body name-set))]))
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: assignment-convert
+;;
+;; Optimized per function: compute which vars are ever mutated with
+;; set!; only those are boxed (one-slot cells accessed with the
+;; unsafe vector ops--the cell is compiler-controlled, so no checks).
+;; ---------------------------------------------------------------------
+
+(define (assignment-convert p)
+  ;; the set of set!-ed variables in e
+  (define (mutated-vars e)
+    (match e
+      [(? ir-literal? _) (set)]
+      [`(read) (set)]
+      [`(string-lit ,_) (set)]
+      [(? symbol? _) (set)]
+      [`(fun-ref ,_) (set)]
+      [`(global-ref ,_) (set)]
+      [`(global-set! ,_ ,e0) (mutated-vars e0)]
+      [`(set! ,x ,e0) (set-add (mutated-vars e0) x)]
+      [`(lambda (,xs ...) ,e0) (mutated-vars e0)]
+      [`(if ,e0 ,e1 ,e2)
+       (set-union (set-union (mutated-vars e0) (mutated-vars e1)) (mutated-vars e2))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       (set-union (set-union (mutated-vars e-g) (mutated-vars e-b)) (mutated-vars e-r))]
+      [`(let ([,_ ,e0]) ,e-b) (set-union (mutated-vars e0) (mutated-vars e-b))]
+      [`(,(? prim? _) ,es ...) (foldl (lambda (e0 acc) (set-union acc (mutated-vars e0))) (set) es)]
+      [`(app ,es ...) (foldl (lambda (e0 acc) (set-union acc (mutated-vars e0))) (set) es)]))
+  ;; box-formals: wrap the body to box each mutated formal
+  (define (box-formals genformals realformals e-body)
+    (match genformals
+      ['() e-body]
+      [`(,x . ,rst)
+       `(let ([,(first realformals) (make-vector 1)])
+          (let ([_ (unsafe-vector-set! ,(first realformals) 0 ,x)])
+            ,(box-formals rst (rest realformals) e-body)))]))
+  (define (a-c e boxed)
+    (match e
+      [(? ir-literal? _) e]
+      [`(read) e]
+      [`(string-lit ,_) e]
+      [`(fun-ref ,_) e]
+      [`(global-ref ,_) e]
+      [`(global-set! ,i ,e0) `(global-set! ,i ,(a-c e0 boxed))]
+      [(? symbol? x)
+       (if (set-member? boxed x) `(unsafe-vector-ref ,x 0) x)]
+      [`(if ,e-g ,e-t ,e-f)
+       `(if ,(a-c e-g boxed) ,(a-c e-t boxed) ,(a-c e-f boxed))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(a-c e-g boxed) ,(a-c e-b boxed))]) ,(a-c e-r boxed))]
+      [`(let ([_ ,e0]) ,e-b)
+       `(let ([_ ,(a-c e0 boxed)]) ,(a-c e-b boxed))]
+      [`(set! ,x ,e0)
+       `(unsafe-vector-set! ,x 0 ,(a-c e0 boxed))]
+      [`(lambda (,xs ...) ,e0)
+       ;; boxed formals of the lambda itself
+       (define mut (set-intersect (mutated-vars e0) (list->set xs)))
+       (define new-xs (map (lambda (x) (if (set-member? mut x) (gensym x) x)) xs))
+       (define to-box (filter (lambda (x) (set-member? mut x)) xs))
+       (define gen-of
+         (foldl2 (lambda (x nx acc) (if (set-member? mut x) (hash-set acc x nx) acc))
+                 (hash) xs new-xs))
+       `(lambda ,new-xs
+          ,(box-formals (map (lambda (x) (hash-ref gen-of x)) to-box)
+                        to-box
+                        (a-c e0 (set-union boxed mut))))]
+      [`(let ([,x ,e0]) ,e-b)
+       (if (set-member? boxed x)
+           `(let ([,x (make-vector 1)])
+              (let ([_ (unsafe-vector-set! ,x 0 ,(a-c e0 boxed))])
+                ,(a-c e-b boxed)))
+           `(let ([,x ,(a-c e0 boxed)]) ,(a-c e-b boxed)))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map (lambda (e0) (a-c e0 boxed)) es))]
+      [`(app ,es ...) `(app ,@(map (lambda (e0) (a-c e0 boxed)) es))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       (define mut (mutated-vars e-body))
+       ;; boxed set for the whole body: every set! target (the
+       ;; variadic marker is never a variable)
+       (define boxed-formals
+         (filter (lambda (x) (and (not (equal? x '#%rest)) (set-member? mut x))) formals))
+       (define genformals
+         (map (lambda (x) (if (and (not (equal? x '#%rest)) (set-member? mut x)) (gensym x) x))
+              formals))
+       (define gen-of
+         (foldl2 (lambda (x gx acc) (if (set-member? mut x) (hash-set acc x gx) acc))
+                 (hash) formals genformals))
+       `(define (,fname ,@genformals)
+          ,(box-formals (map (lambda (x) (hash-ref gen-of x)) boxed-formals)
+                        boxed-formals
+                        (a-c e-body mut)))]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: lift-lambdas (closure conversion)
+;;
+;; Bottom-up: convert each lambda body, lift it to a top-level
+;; define taking `env` first, and replace the lambda with a closure
+;; record: (make-closure 1+|fvs|) whose slot 0 is the code pointer
+;; and remaining slots the captured values. Applications fetch slot
+;; 0 and pass the closure itself as env.
+;; ---------------------------------------------------------------------
+
+(define (lift-lambdas p)
+  ;; emitted defines accumulate on a list (the reference used a
+  ;; Racket set; gensym'd names keep entries distinct)
+  (define emitted-defines '())
+  (define (emit-define! defn) (set! emitted-defines (cons defn emitted-defines)))
+  ;; calculate the free variables of an expression e...
+  (define (free-vars e)
+    (match e
+      [(? ir-literal? _) (set)]
+      [`(read) (set)]
+      [`(string-lit ,_) (set)]
+      [`(fun-ref ,_) (set)]
+      [`(global-ref ,_) (set)]
+      [`(global-set! ,_ ,e0) (free-vars e0)]
+      [(? symbol? x) (set x)]
+      [`(if ,e0 ,e1 ,e2)
+       (set-union (set-union (free-vars e0) (free-vars e1)) (free-vars e2))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       (set-union (set-union (free-vars e-g) (free-vars e-b)) (free-vars e-r))]
+      [`(let ([_ ,e0]) ,e-b)
+       (set-union (free-vars e0) (free-vars e-b))]
+      [`(let ([,x ,e0]) ,e-b)
+       (set-union (free-vars e0) (set-remove (free-vars e-b) x))]
+      [`(unsafe-vector-ref ,e0 ,_) (free-vars e0)]
+      [`(unsafe-vector-set! ,e0 ,_ ,e-v) (set-union (free-vars e0) (free-vars e-v))]
+      [`(lambda (,xs ...) ,e0) (foldl (lambda (x acc) (set-remove acc x)) (free-vars e0) xs)]
+      [`(,(? prim? _) ,es ...) (foldl (lambda (e0 acc) (set-union acc (free-vars e0))) (set) es)]
+      [`(app ,es ...) (foldl (lambda (e0 acc) (set-union acc (free-vars e0))) (set) es)]
+      [`(papp ,n ,es ...) (foldl (lambda (e0 acc) (set-union acc (free-vars e0))) (set) es)]))
+  (define (walk-expr e)
+    (match e
+      [(? ir-literal? _) e]
+      [`(read) e]
+      [`(string-lit ,_) e]
+      [`(global-ref ,_) e]
+      [`(global-set! ,i ,e0) `(global-set! ,i ,(walk-expr e0))]
+      ;; a bare fun-ref becomes a (one-slot) closure record
+      [`(fun-ref ,f)
+       (define v (gensym 'v))
+       `(let ([,v (make-closure 1)])
+          (let ([_ (unsafe-vector-set! ,v 0 (fun-ref ,f))])
+            ,v))]
+      [(? symbol? x) x] ;; variable reference
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk-expr e0)
+                              ,(walk-expr e1)
+                              ,(walk-expr e2))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk-expr e-g) ,(walk-expr e-b))]) ,(walk-expr e-r))]
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(walk-expr e0)]) ,(walk-expr e-b))]
+      [`(unsafe-vector-ref ,e0 ,i) `(unsafe-vector-ref ,(walk-expr e0) ,i)]
+      [`(unsafe-vector-set! ,e0 ,i ,e-v)
+       `(unsafe-vector-set! ,(walk-expr e0) ,i ,(walk-expr e-v))]
+      [`(lambda (,xs ...) ,e0)
+       ;; first, convert the body
+       (define fv (foldl (lambda (x acc) (set-remove acc x)) (free-vars e0) xs))
+       (define canonical-vars (sort (set->list fv) symbol<?))
+       (define converted-expr (walk-expr e0))
+       (define f-name (gensym 'lam))
+       ;; The closure parameter gets a FRESH name: a literal `env`
+       ;; would capture (or duplicate) any user variable named env.
+       (define env-param (gensym 'env))
+       ;; generate a stack in the body to unwrap free vars
+       (define (letstack vars-in-order i)
+         (match vars-in-order
+           [`(,hd . ,tl)
+            `(let ([,hd (unsafe-vector-ref ,env-param ,i)])
+               ,(letstack tl (+ i 1)))]
+           ['() converted-expr]))
+       (emit-define! `(define (,f-name ,env-param ,@xs)
+                        ,(letstack canonical-vars 1)))
+       ;; now, return an expression that creates the closure...
+       (define v (gensym 'clo))
+       (define (init-stack vars-in-order i)
+         (match vars-in-order
+           [`(,hd . ,tl)
+            `(let ([_ (unsafe-vector-set! ,v ,i ,hd)])
+               ,(init-stack tl (+ i 1)))]
+           ['() ;; ultimate return point, return v
+            v]))
+       `(let ([,v (make-closure ,(+ (length canonical-vars) 1))])
+          (let ([_ (unsafe-vector-set! ,v 0 (fun-ref ,f-name))]) ;; function name
+            ,(init-stack canonical-vars 1)))]
+      [`(app ,e-f ,e-args ...)
+       (define clo (gensym 'clo))
+       `(let ([,clo ,(walk-expr e-f)])
+          (app (unsafe-vector-ref ,clo 0) ,clo ,@(map walk-expr e-args)))]
+      [`(papp ,n ,e-f ,e-args ...)
+       (define clo (gensym 'clo))
+       `(let ([,clo ,(walk-expr e-f)])
+          (papp ,(+ n 1) (unsafe-vector-ref ,clo 0) ,clo ,@(map walk-expr e-args)))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map walk-expr es))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       ;; add an env parameter (fresh name; see the lambda case), but
+       ;; only to non-main symbols
+       (define maybe-env (if (equal? fname entry-symbol) '() (list (gensym 'env))))
+       `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
+  (match p
+    [`(program ,info ,defns ...)
+     (define converted (map per-defn defns))
+     `(program ,info ,@converted ,@(reverse emitted-defines))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: limit-functions
+;;
+;; Rewrites functions of >6 arguments to pass the rest via a vector.
+;; Internal, so the vector is accessed unsafely.
+;; ---------------------------------------------------------------------
+
+(define (limit-functions p)
+  (define max-args (length (argument-registers)))
+  (define (walk-expr e)
+    (match e
+      [(? ir-literal? _) e]
+      [`(read) e]
+      [`(string-lit ,_) e]
+      [`(fun-ref ,_) e]
+      [`(global-ref ,_) e]
+      [`(global-set! ,i ,e0) `(global-set! ,i ,(walk-expr e0))]
+      [(? symbol? x) x] ;; variable reference
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk-expr e0)
+                              ,(walk-expr e1)
+                              ,(walk-expr e2))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk-expr e-g) ,(walk-expr e-b))]) ,(walk-expr e-r))]
+      [`(let ([,x ,e0]) ,e-b)
+       `(let ([,x ,(walk-expr e0)]) ,(walk-expr e-b))]
+      [`(unsafe-vector-ref ,e0 ,i) `(unsafe-vector-ref ,(walk-expr e0) ,i)]
+      [`(unsafe-vector-set! ,e0 ,i ,e-v)
+       `(unsafe-vector-set! ,(walk-expr e0) ,i ,(walk-expr e-v))]
+      ;; > six arguments: build a vector for the rest, pass it as last
+      ;; arg. papp records the ORIGINAL arity, which call sites hand
+      ;; to the callee in the arity register: a variadic callee reads
+      ;; it to rebuild its rest list; fixed callees unpack the vector.
+      [`(app ,e-f ,e-args ...)
+       #:when (> (length e-args) max-args)
+       (define orig-n (length e-args))
+       (define keep (take e-args (- max-args 1)))
+       (define rest-es (drop e-args (- max-args 1)))
+       (define v (gensym 'rest-args))
+       (define k (length rest-es))
+       ;; build nested lets that fill v[0..k-1], then call
+       (define (fill-rest es i body)
+         (match es
+           ['() body]
+           [`(,hd . ,tl)
+            (fill-rest
+             tl
+             (+ i 1)
+             `(let ([_ (unsafe-vector-set! ,v ,i ,(walk-expr hd))])
+                ,body))]))
+       (define call-expr
+         `(papp ,orig-n ,(walk-expr e-f) ,@(map walk-expr keep) ,v))
+       `(let ([,v (make-vector ,k)])
+          ,(fill-rest rest-es 0 call-expr))]
+      ;; <= six arguments: just recurse on all subexpressions
+      [`(app ,e-f ,e-args ...)
+       `(app ,(walk-expr e-f) ,@(map walk-expr e-args))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map walk-expr es))]))
+  (define (per-defn definition)
+    (match definition
+      ;; variadic definitions keep their shape; the prologue builds
+      ;; the rest list from the arity register. Their fixed part must
+      ;; fit in the registers below the overflow slot.
+      [`(define (,fname ,formals ...) ,e-body)
+       #:when (member '#%rest formals)
+       (define fixed (- (length formals) 2))
+       (when (> fixed (- max-args 1))
+         (error (string-append "limit-functions: variadic "
+                               (string-append (symbol->string fname)
+                                              " has too many fixed parameters for the overflow slot"))))
+       `(define (,fname ,@formals) ,(walk-expr e-body))]
+      ;; > 6 formals: (f a0 ... a4 a-rest...) -> last arg becomes a vector
+      [`(define (,fname ,formals ...) ,e-body)
+       #:when (> (length formals) max-args)
+       (define keep (take formals (- max-args 1)))
+       (define overflow (drop formals (- max-args 1)))
+       (define args-vec (gensym 'rest-args))
+       (define (args-vec-stack fs i)
+         (match fs
+           ['() (walk-expr e-body)]
+           [`(,hd . ,tl)
+            `(let ([,hd (unsafe-vector-ref ,args-vec ,i)])
+               ,(args-vec-stack tl (+ i 1)))]))
+       `(define (,fname ,@keep ,args-vec)
+          ,(args-vec-stack overflow 0))]
+      ;; <= 6 formals: unchanged except recursive walk
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(walk-expr e-body))]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: anf-convert -- flatten nested expressions
+;; ---------------------------------------------------------------------
+
+(define (anf-convert p)
+  ;; convert a list of expressions left-to-right, collecting atoms
+  (define (convert-args es k)
+    (match es
+      ['() (k '())]
+      [`(,hd . ,tl)
+       (convert-expr hd (lambda (a) (convert-args tl (lambda (as) (k (cons a as))))))]))
+  (define (convert-expr e k)
+    (match e
+      [(? ir-literal? _) (k e)]
+      [(? symbol? x) (k x)]
+      [`(read)
+       (define x (gensym 'read))
+       `(let ([,x (read)]) ,(k x))]
+      [`(string-lit ,s)
+       (define x (gensym 'str))
+       `(let ([,x (string-lit ,s)]) ,(k x))]
+      [`(fun-ref ,f)
+       (define x (gensym 'funref))
+       `(let ([,x (fun-ref ,f)]) ,(k x))]
+      [`(global-ref ,i)
+       (define x (gensym 'glob))
+       `(let ([,x (global-ref ,i)]) ,(k x))]
+      [`(global-set! ,i ,e0)
+       (convert-expr e0 (lambda (a)
+                          `(let ([_ (global-set! ,i ,a)]) ,(k '(void)))))]
+      [`(if ,e0 ,e1 ,e2)
+       (convert-expr
+        e0
+        (lambda (a-g)
+          `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(convert-expr e-g (lambda (a) a)) ,(convert-expr e-b (lambda (a) a)))])
+          ,(convert-expr e-r k))]
+      [`(unsafe-vector-ref ,e0 ,i)
+       (convert-expr e0 (lambda (a0)
+                          (define x (gensym 'uref))
+                          `(let ([,x (unsafe-vector-ref ,a0 ,i)]) ,(k x))))]
+      [`(unsafe-vector-set! ,e0 ,i ,e1)
+       (convert-expr e0
+                     (lambda (a0)
+                       (convert-expr e1 (lambda (a1)
+                                          `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(k '(void)))))))]
+      [`(app ,es ...)
+       (convert-args es (lambda (as)
+                          (define x (gensym 'app))
+                          `(let ([,x (app ,@as)]) ,(k x))))]
+      [`(papp ,n ,es ...)
+       (convert-args es (lambda (as)
+                          (define x (gensym 'app))
+                          `(let ([,x (papp ,n ,@as)]) ,(k x))))]
+      [`(,(? prim? op) ,es ...)
+       (convert-args es (lambda (as)
+                          (define x (gensym op))
+                          `(let ([,x (,op ,@as)]) ,(k x))))]
+      ;; let (place after the special _ forms)
+      [`(let ([,x ,e0]) ,e-b)
+       (convert-expr e0 (lambda (atom)
+                          `(let ([,x ,atom]) ,(convert-expr e-b k))))]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       `(define (,fname ,@formals) ,(convert-expr e-body (lambda (x) x)))]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: explicate-control -- ANF to labeled blocks
+;;
+;; Each definition's body becomes an immutable hash label -> tail.
+;; ---------------------------------------------------------------------
+
+(define (explicate-control p)
+  ;; merge two hashes, assume no common keys
+  (define (merge h0 h1)
+    (foldl (lambda (k0 acc) (hash-set acc k0 (hash-ref h0 k0))) h1 (hash-keys h0)))
+  (define (extend h label instruction)
+    (hash-set h label `(seq ,instruction ,(hash-ref h label))))
+  ;; basic idea: return a hash which maps blocks to a label name
+  ;;
+  ;; k is a continuation which gets called on the ultimate return value
+  (define (expr->blocks e current-block k)
+    (match e
+      ;; effect-position statements
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       (define l-rest (gensym 'rest))
+       (define l-header (gensym 'header))
+       (define l-body (gensym 'body))
+       (define rest-blocks (expr->blocks e-r l-rest k))
+       (define body-blocks (expr->blocks e-b l-body (lambda (a) `(goto ,l-header))))
+       (define header-blocks
+         (expr->blocks e-g
+                       l-header
+                       (lambda (a-g) `(if (eq? ,a-g #f) (goto ,l-rest) (goto ,l-body)))))
+       (define this-block (hash current-block `(goto ,l-header)))
+       (merge
+        (merge
+         (merge rest-blocks body-blocks)
+         header-blocks)
+        this-block)]
+      [`(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(unsafe-vector-set! ,a0 ,i ,a1))]
+      [`(let ([_ (global-set! ,i ,a)]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(global-set! ,i ,a))]
+      [`(let ([_ ,(? ir-atom? _)]) ,e+)
+       ;; pure and unused: drop it
+       (expr->blocks e+ current-block k)]
+      [`(let ([_ ,rhs]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(effect ,rhs))]
+      ;; proper tail calls: an app whose value is immediately
+      ;; returned becomes a tail-app (the backends turn it into an
+      ;; epilogue + indirect jump, so loops run in constant stack).
+      ;; tail-app carries the LOGICAL argument count.
+      [`(let ([,x (app ,a-f ,a-args ...)]) ,body)
+       #:when (and (equal? body x) (equal? (k x) `(return ,x)))
+       (hash current-block `(tail-app ,(length a-args) ,a-f ,@a-args))]
+      [`(let ([,x (papp ,n ,a-f ,a-args ...)]) ,body)
+       #:when (and (equal? body x) (equal? (k x) `(return ,x)))
+       (hash current-block `(tail-app ,n ,a-f ,@a-args))]
+      [`(let ([,x ,rhs]) ,e+)
+       (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,rhs))]
+      [`(if ,a ,e-t ,e-f)
+       (define l-t (gensym 'lab))
+       (define l-f (gensym 'lab))
+       (define true-blocks (expr->blocks e-t l-t k))
+       (define false-blocks (expr->blocks e-f l-f k))
+       (define all-blocks (merge true-blocks false-blocks))
+       (hash-set all-blocks
+                 current-block ;; the current block's label
+                 `(if (eq? ,a #f)
+                      ;; take the false branch
+                      (goto ,l-f)
+                      ;; take the true branch...
+                      (goto ,l-t)))]
+      [(? ir-atom? a)
+       (hash current-block (k a))]))
+  ;; main must run its conclusion (print the result, return 0 to the
+  ;; OS), so tail calls in the entry function become ordinary calls
+  (define (untail blocks)
+    (define (untail-tail t)
+      (match t
+        [`(tail-app ,n ,f ,args ...)
+         (define tmp (gensym 'ret))
+         `(seq (assign ,tmp ,(if (eq? n (length args))
+                                 `(app ,f ,@args)
+                                 `(papp ,n ,f ,@args)))
+               (return ,tmp))]
+        [`(seq ,s ,rst) `(seq ,s ,(untail-tail rst))]
+        [t t]))
+    (foldl (lambda (l acc) (hash-set acc l (untail-tail (hash-ref blocks l))))
+           (hash)
+           (hash-keys blocks)))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,e-body)
+       (define blocks (expr->blocks e-body fname (lambda (a) `(return ,a))))
+       `(define (,fname ,@formals)
+          ,(if (equal? fname entry-symbol) (untail blocks) blocks))]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; Pass: uncover-locals -- per-function local variable sets
+;;
+;; The locals travel as an immutable Puffin set in the defn's slot one.
+;; ---------------------------------------------------------------------
+
+(define (uncover-locals p)
+  (define (h seq)
+    (match seq
+      [`(return ,_) (set)]
+      [`(tail-app ,_ ...) (set)]
+      [`(goto ,l) (set)]
+      [`(if ,_ ,_ ,_) (set)]
+      [`(seq (assign ,x0 ,_) ,rst)
+       (set-add (h rst) x0)]
+      [`(seq ,_ ,rst)
+       (h rst)]))
+  (define (per-defn definition)
+    (match definition
+      [`(define (,fname ,formals ...) ,blocks)
+       (define locals
+         (set-union (list->set formals)
+                    (foldl (lambda (block acc) (set-union acc (h (hash-ref blocks block))))
+                           (set)
+                           (hash-keys blocks))))
+       `(define ,locals (,fname ,@formals) ,blocks)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))

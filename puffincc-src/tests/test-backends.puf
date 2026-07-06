@@ -1,0 +1,88 @@
+;; puffincc -- tests/test-backends.puf: drive the backends on
+;; locals-program inputs captured from the Racket frontend
+;; (src/compile.rkt passes through uncover-locals, serialized with
+;; sets->sorted lists, hashes->sorted alists, and -- since Puffin
+;; quote can't carry string data -- string literals pulled out into
+;; a (list ...) table with (%string i) placeholders).
+;;
+;; Run: cat puffincc-src/00-tables.puf puffincc-src/02-system.puf \
+;;          puffincc-src/05-backends.puf puffincc-src/tests/test-backends.puf \
+;;          > /tmp/tb.puf && bin/puffin -i /tmp/tb.puf
+;;
+;; test 1: factorial (recursion, tail calls, closures, comparisons)
+;; test 2: globals + set!, a variadic defn, register pressure/spills,
+;;         a returned closure, string + symbol literals, stdlib prims
+;; test 3: enough register pressure to spill on both targets
+
+(define test-strings-1
+  (list)
+)
+(define test-input-1
+  '(program ((globals . 0)) (defn (main) (clo9537 funref9543 make-closure9542 ret9554 uref9544 v9538) ((main seq (assign make-closure9542 (make-closure 1)) (seq (assign v9538 make-closure9542) (seq (assign funref9543 (fun-ref fact)) (seq (unsafe-vector-set! v9538 0 funref9543) (seq (assign clo9537 v9538) (seq (assign uref9544 (unsafe-vector-ref clo9537 0)) (seq (assign ret9554 (app uref9544 clo9537 10 1)) (return ret9554)))))))))) (defn (fact env9539 n acc) (*9552 |+9551| |-9550| <9546 acc clo9540 env9539 funref9548 make-closure9547 n uref9549 v9541) ((fact seq (assign <9546 (< n 1)) (if (eq? <9546 #f) (goto lab9556) (goto lab9555))) (lab9555 return acc) (lab9556 seq (assign make-closure9547 (make-closure 1)) (seq (assign v9541 make-closure9547) (seq (assign funref9548 (fun-ref fact)) (seq (unsafe-vector-set! v9541 0 funref9548) (seq (assign clo9540 v9541) (seq (assign uref9549 (unsafe-vector-ref clo9540 0)) (seq (assign |-9550| (- 1)) (seq (assign |+9551| (+ n |-9550|)) (seq (assign *9552 (* n acc)) (tail-app 3 uref9549 clo9540 |+9551| *9552)))))))))))))
+)
+
+(define test-strings-2
+  (list "hello, \"world\"")
+)
+(define test-input-2
+  '(program ((globals . 1)) (defn (main) (app9566 app9570 app9575 app9579 app9581 clo9544 clo9546 clo9548 clo9550 clo9551 cons9584 cons9585 cons9586 cons9587 cons9588 equal?9582 funref9564 funref9568 funref9572 funref9577 glob9574 make-closure9563 make-closure9567 make-closure9571 make-closure9576 println9561 println9562 str9560 str9583 uref9565 uref9569 uref9573 uref9578 uref9580 v9545 v9547 v9549 v9552) ((main seq (global-set! 0 0) (seq (assign str9560 (string-lit (%string 0))) (seq (assign println9561 (println str9560)) (seq (assign println9562 (println (quote a-symbol))) (seq (assign make-closure9563 (make-closure 1)) (seq (assign v9545 make-closure9563) (seq (assign funref9564 (fun-ref tick)) (seq (unsafe-vector-set! v9545 0 funref9564) (seq (assign clo9544 v9545) (seq (assign uref9565 (unsafe-vector-ref clo9544 0)) (seq (assign app9566 (app uref9565 clo9544 3)) (seq (assign make-closure9567 (make-closure 1)) (seq (assign v9547 make-closure9567) (seq (assign funref9568 (fun-ref sum1)) (seq (unsafe-vector-set! v9547 0 funref9568) (seq (assign clo9546 v9547) (seq (assign uref9569 (unsafe-vector-ref clo9546 0)) (seq (assign app9570 (app uref9569 clo9546 1 2 3)) (seq (assign make-closure9571 (make-closure 1)) (seq (assign v9549 make-closure9571) (seq (assign funref9572 (fun-ref many)) (seq (unsafe-vector-set! v9549 0 funref9572) (seq (assign clo9548 v9549) (seq (assign uref9573 (unsafe-vector-ref clo9548 0)) (seq (assign glob9574 (global-ref 0)) (seq (assign app9575 (app uref9573 clo9548 glob9574)) (seq (assign make-closure9576 (make-closure 1)) (seq (assign v9552 make-closure9576) (seq (assign funref9577 (fun-ref adder)) (seq (unsafe-vector-set! v9552 0 funref9577) (seq (assign clo9551 v9552) (seq (assign uref9578 (unsafe-vector-ref clo9551 0)) (seq (assign app9579 (app uref9578 clo9551 4)) (seq (assign clo9550 app9579) (seq (assign uref9580 (unsafe-vector-ref clo9550 0)) (seq (assign app9581 (app uref9580 clo9550 5)) (seq (assign equal?9582 (equal? (quote foo) (quote bar))) (seq (assign str9583 (string-lit (%string 0))) (seq (assign cons9584 (cons str9583 (nil))) (seq (assign cons9585 (cons equal?9582 cons9584)) (seq (assign cons9586 (cons app9581 cons9585)) (seq (assign cons9587 (cons app9575 cons9586)) (seq (assign cons9588 (cons app9570 cons9587)) (return cons9588)))))))))))))))))))))))))))))))))))))))))))))) (defn (tick env9553 k) (|+9590| env9553 glob9589 glob9591 k) ((tick seq (assign glob9589 (global-ref 0)) (seq (assign |+9590| (+ glob9589 k)) (seq (global-set! 0 |+9590|) (seq (assign glob9591 (global-ref 0)) (return glob9591))))))) (defn (sum1 env9554 a #%rest xs) (#%rest |+9594| a car9593 env9554 null?9592 xs) ((lab9612 return a) (lab9613 seq (assign car9593 (car xs)) (seq (assign |+9594| (+ a car9593)) (return |+9594|))) (sum1 seq (assign null?9592 (null? xs)) (if (eq? null?9592 #f) (goto lab9613) (goto lab9612))))) (defn (many env9555 n) (|+9595| |+9596| |+9597| |+9598| |+9599| |+9600| |+9601| |+9602| |+9603| |+9604| |+9605| |+9606| |+9607| a a9537 b b9538 c c9539 d d9540 e2 e29541 env9555 f2 f29542 g2 g29543 n) ((many seq (assign |+9595| (+ n 1)) (seq (assign a9537 |+9595|) (seq (assign |+9596| (+ n 2)) (seq (assign b9538 |+9596|) (seq (assign |+9597| (+ n 3)) (seq (assign c9539 |+9597|) (seq (assign |+9598| (+ n 4)) (seq (assign d9540 |+9598|) (seq (assign |+9599| (+ n 5)) (seq (assign e29541 |+9599|) (seq (assign |+9600| (+ n 6)) (seq (assign f29542 |+9600|) (seq (assign |+9601| (+ n 7)) (seq (assign g29543 |+9601|) (seq (assign a a9537) (seq (assign b b9538) (seq (assign c c9539) (seq (assign d d9540) (seq (assign e2 e29541) (seq (assign f2 f29542) (seq (assign g2 g29543) (seq (assign |+9602| (+ f2 g2)) (seq (assign |+9603| (+ e2 |+9602|)) (seq (assign |+9604| (+ d |+9603|)) (seq (assign |+9605| (+ c |+9604|)) (seq (assign |+9606| (+ b |+9605|)) (seq (assign |+9607| (+ a |+9606|)) (return |+9607|)))))))))))))))))))))))))))))) (defn (adder env9556 x) (clo9559 env9556 funref9609 make-closure9608 x) ((adder seq (assign make-closure9608 (make-closure 2)) (seq (assign clo9559 make-closure9608) (seq (assign funref9609 (fun-ref lam9557)) (seq (unsafe-vector-set! clo9559 0 funref9609) (seq (unsafe-vector-set! clo9559 1 x) (return clo9559)))))))) (defn (lam9557 env9558 y) (|+9611| env9558 uref9610 x y) ((lam9557 seq (assign uref9610 (unsafe-vector-ref env9558 1)) (seq (assign x uref9610) (seq (assign |+9611| (+ x y)) (return |+9611|)))))))
+)
+(define test-strings-3
+  (list))
+(define test-input-3
+  '(program ((globals . 0)) (defn (main) (clo9549 funref9553 make-closure9552 ret9579 uref9554 v9550) ((main seq (assign make-closure9552 (make-closure 1)) (seq (assign v9550 make-closure9552) (seq (assign funref9553 (fun-ref pressure)) (seq (unsafe-vector-set! v9550 0 funref9553) (seq (assign clo9549 v9550) (seq (assign uref9554 (unsafe-vector-ref clo9549 0)) (seq (assign ret9579 (app uref9554 clo9549 100)) (return ret9579)))))))))) (defn (pressure env9551 n) (|+9556| |+9557| |+9558| |+9559| |+9560| |+9561| |+9562| |+9563| |+9564| |+9565| |+9566| |+9567| |+9568| |+9569| |+9570| |+9571| |+9572| |+9573| |+9574| |+9575| |+9576| |+9577| |+9578| a a9537 b b9538 c c9539 d d9540 e2 e29541 env9551 f2 f29542 g2 g29543 h2 h29544 i2 i29545 j2 j29546 k2 k29547 l2 l29548 n) ((pressure seq (assign |+9556| (+ n 1)) (seq (assign a9537 |+9556|) (seq (assign |+9557| (+ n 2)) (seq (assign b9538 |+9557|) (seq (assign |+9558| (+ n 3)) (seq (assign c9539 |+9558|) (seq (assign |+9559| (+ n 4)) (seq (assign d9540 |+9559|) (seq (assign |+9560| (+ n 5)) (seq (assign e29541 |+9560|) (seq (assign |+9561| (+ n 6)) (seq (assign f29542 |+9561|) (seq (assign |+9562| (+ n 7)) (seq (assign g29543 |+9562|) (seq (assign |+9563| (+ n 8)) (seq (assign h29544 |+9563|) (seq (assign |+9564| (+ n 9)) (seq (assign i29545 |+9564|) (seq (assign |+9565| (+ n 10)) (seq (assign j29546 |+9565|) (seq (assign |+9566| (+ n 11)) (seq (assign k29547 |+9566|) (seq (assign |+9567| (+ n 12)) (seq (assign l29548 |+9567|) (seq (assign a a9537) (seq (assign b b9538) (seq (assign c c9539) (seq (assign d d9540) (seq (assign e2 e29541) (seq (assign f2 f29542) (seq (assign g2 g29543) (seq (assign h2 h29544) (seq (assign i2 i29545) (seq (assign j2 j29546) (seq (assign k2 k29547) (seq (assign l2 l29548) (seq (assign |+9568| (+ k2 l2)) (seq (assign |+9569| (+ j2 |+9568|)) (seq (assign |+9570| (+ i2 |+9569|)) (seq (assign |+9571| (+ h2 |+9570|)) (seq (assign |+9572| (+ g2 |+9571|)) (seq (assign |+9573| (+ f2 |+9572|)) (seq (assign |+9574| (+ e2 |+9573|)) (seq (assign |+9575| (+ d |+9574|)) (seq (assign |+9576| (+ c |+9575|)) (seq (assign |+9577| (+ b |+9576|)) (seq (assign |+9578| (+ a |+9577|)) (return |+9578|))))))))))))))))))))))))))))))))))))))))))))))))))))
+
+
+;; rebuild the locals-program: substitute the string table back in,
+;; alists -> immutable hashes, locals lists -> sets
+(define (tb-unstring v strs)
+  (match v
+    [`(%string ,i) (list-ref strs i)]
+    [(cons a d) (cons (tb-unstring a strs) (tb-unstring d strs))]
+    [_ v]))
+
+(define (tb-al->hash al)
+  (foldl (lambda (kv acc) (hash-set acc (car kv) (cdr kv))) (hash) al))
+
+(define (tb-mk-program ser strs)
+  (match (tb-unstring ser strs)
+    [`(program ,info-al ,defs ...)
+     `(program ,(tb-al->hash info-al)
+               ,@(map (lambda (d)
+                        (match d
+                          [`(defn (,f ,args ...) ,locals ,blocks-al)
+                           `(define ,(list->set locals) (,f ,@args)
+                              ,(tb-al->hash blocks-al))]))
+                      defs))]))
+
+(define (tb-run-x86 p)
+  (render-x86
+   (prelude-and-conclusion-x86
+    (patch-instructions-x86
+     (allocate-registers-x86
+      (select-instructions-x86 p))))))
+
+(define (tb-run-arm64 p)
+  (render-arm64
+   (prelude-and-conclusion-arm64
+    (patch-instructions-arm64
+     (allocate-registers-arm64
+      (select-instructions-arm64 p))))))
+
+(define (tb-section name body)
+  (display "=== BEGIN ")
+  (display name)
+  (display " ===\n")
+  (display body)
+  (display "=== END ")
+  (display name)
+  (display " ===\n"))
+
+(set! current-target 'x86-64)
+(tb-section "x86 test1" (tb-run-x86 (tb-mk-program test-input-1 test-strings-1)))
+(tb-section "x86 test2" (tb-run-x86 (tb-mk-program test-input-2 test-strings-2)))
+(tb-section "x86 test3" (tb-run-x86 (tb-mk-program test-input-3 test-strings-3)))
+(set! current-target 'arm64)
+(tb-section "arm64 test1" (tb-run-arm64 (tb-mk-program test-input-1 test-strings-1)))
+(tb-section "arm64 test2" (tb-run-arm64 (tb-mk-program test-input-2 test-strings-2)))
+(tb-section "arm64 test3" (tb-run-arm64 (tb-mk-program test-input-3 test-strings-3)))

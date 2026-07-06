@@ -81,6 +81,7 @@
     (cond [(symbol? d)  `(quote ,d)]
           [(fixnum? d)  d]
           [(boolean? d) d]
+          [(string? d)  `(string-lit ,d)]
           [(null? d)    '(nil)]
           [(pair? d)    `(cons ,(quote->expr (car d)) ,(quote->expr (cdr d)))]
           [else (error 'desugar "unsupported quoted datum: ~a" d)]))

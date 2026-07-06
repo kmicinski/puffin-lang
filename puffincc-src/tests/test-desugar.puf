@@ -1,0 +1,149 @@
+;; puffincc tests -- test-desugar.puf: exercise 03-desugar.puf.
+;; Run: cat puffincc-src/00-tables.puf puffincc-src/02-system.puf \
+;;          puffincc-src/03-desugar.puf puffincc-src/tests/test-desugar.puf \
+;;          > /tmp/td.puf && bin/puffin -i /tmp/td.puf
+;; Each test prints one desugared program per line, in order, for
+;; comparison against the Racket reference desugar.
+
+;; the #:when marker as a symbol (the host Racket reader would read
+;; a literal #:when as a keyword, which quoted data cannot carry)
+(define kw-when-sym (string->symbol "#:when"))
+
+;; t1: cond + prims (gensym-free)
+(define t1
+  '(program
+    (define (f x) (cond [(eq? x 0) 'zero] [(< x 10) 'small] [else 'big]))
+    (f (read))))
+
+;; t2: named let
+(define t2
+  '(program
+    (let loop ([i 0] [acc 1])
+      (if (eq? i 5) acc (loop (+ i 1) (* acc 2))))))
+
+;; t3: case
+(define t3
+  '(program
+    (define (g k) (case k [(1 2) 'lo] [(3) 'mid] [else 'hi]))
+    (g 2)))
+
+;; t4: internal defines, mutually recursive (gensym-free)
+(define t4
+  '(program
+    (define (f n)
+      (define (ev? k) (if (eq? k 0) #t (od? (- k 1))))
+      (define (od? k) (if (eq? k 0) #f (ev? (- k 1))))
+      (list (ev? n) (od? n)))
+    (f 3)))
+
+;; t5: variadic define + all-rest lambda (gensym-free)
+(define t5
+  '(program
+    (define (f a . r) (cons a r))
+    (define g (lambda args args))
+    (f 1 2 3)))
+
+;; t6: quasiquote construction with splicing + nested quasiquote
+;; (gensym-free)
+(define t6
+  '(program
+    (define (f x ys) (list `(let ([tmp ,x]) ,@ys) `(a `(b ,(c ,x)))))
+    (f 1 '(2 3))))
+
+;; t7: n-ary ops, and/or/not (gensym-free)
+(define t7
+  '(program (+ 1 2 3 4) (- 10 3 2) (* 2 3 4) (and 1 2 3) (or #f 2 3) (not #f)))
+
+;; t8: hash/set n-ary constructors, incl. the 0-ary prims (gensym-free)
+(define t8
+  '(program (hash 'a 1 'b 2) (set 1 2 3) (hash) (set)))
+
+;; t9: eta-expansion of bare prims in value position
+(define t9
+  '(program
+    (define (composeg g f) (lambda (x) (g (f x))))
+    ((composeg car cdr) '(1 2 3))))
+
+;; t10: string literals (gensym-free). Built with quasiquote: plain
+;; quote cannot carry string data in Puffin, but strings pass through
+;; quasiquote as themselves.
+(define t10
+  `(program
+    (define (f s) (string-append s "!"))
+    (f "hi")))
+
+;; t11: prim shadowing -- a user define of cons is renamed
+(define t11
+  '(program
+    (define (cons a b) (list a b))
+    (cons 1 2)))
+
+;; t12: match with #:when guard, quasiquote patterns, ellipsis,
+;; cons/literal/wildcard patterns
+(define t12
+  `(program
+    (define (evalx e)
+      (match e
+        [`(add ,a ,b) ,kw-when-sym (< a b) (+ a b)]
+        [`(neg ,a) (- a)]
+        [`(call ,f ,args ...) (cons f args)]
+        [(cons hd tl) hd]
+        ['() 99]
+        [_ 0]))
+    (evalx '(add 1 2))))
+
+;; t13: nested ellipsis (per-element lists)
+(define t13
+  `(program
+    (define (names p)
+      (match p
+        [`(program (define (,ns ,ps ...) ,bs) ...) (list ns ps bs)]))
+    (names '(program (define (f x) x)))))
+
+;; t14: let / let* / letrec
+(define t14
+  '(program
+    (let ([x 1] [y 2])
+      (let* ([z (+ x y)] [w z])
+        (letrec ([fact (lambda (n) (if (eq? n 0) 1 (* n (fact (- n 1)))))])
+          (fact w))))))
+
+;; t15: vector constructor + vector/pred/list/string/boolean/fixnum
+;; patterns, while/begin/set!
+(define t15
+  `(program
+    (define (f v)
+      (match v
+        [(vector a b) (+ a b)]
+        [(? fixnum? n) n]
+        [(list x) x]
+        ["str" 7]
+        [#t 8]
+        [5 9]
+        [_ 0]))
+    (define (g) (let ([i 0]) (begin (while (< i 3) (set! i (+ i 1))) i)))
+    (f (vector 1 2))))
+
+;; t16: when / unless (gensym-free)
+(define t16
+  '(program
+    (define (g k) (when (< k 2) 'small))
+    (define (hh k) (unless (< k 2) 'big))
+    (g 1)))
+
+(println (desugar t1))
+(println (desugar t2))
+(println (desugar t3))
+(println (desugar t4))
+(println (desugar t5))
+(println (desugar t6))
+(println (desugar t7))
+(println (desugar t8))
+(println (desugar t9))
+(println (desugar t10))
+(println (desugar t11))
+(println (desugar t12))
+(println (desugar t13))
+(println (desugar t14))
+(println (desugar t15))
+(println (desugar t16))

@@ -97,8 +97,8 @@
 ;; ---------------------------------------------------------------------
 
 (define (quoted-datum? d)
-  (or (symbol? d) (fixnum? d) (boolean? d) (null? d)
-      (and (list? d) (andmap quoted-datum? d))))
+  (or (symbol? d) (fixnum? d) (boolean? d) (null? d) (string? d)
+      (and (pair? d) (quoted-datum? (car d)) (quoted-datum? (cdr d)))))
 
 ;; Note: quote/quasiquote/unquote are *special* inside Racket match's
 ;; quasiquote patterns, so these meta-level matches (matching Puffin

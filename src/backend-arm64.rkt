@@ -485,6 +485,37 @@
 ;; render
 ;; ---------------------------------------------------------------------
 
+;; Materialize an arbitrary 64-bit immediate with movz/movk (or
+;; movn/movk for mostly-ones values). No literal pools: `ldr =imm`
+;; fixups go out of range once .text exceeds +-1MB, which large
+;; programs (puffincc itself) hit.
+(define (render-mov-imm64 dst i)
+  (define u (bitwise-and i #xFFFFFFFFFFFFFFFF))
+  (define hws (for/list ([k 4]) (bitwise-and (arithmetic-shift u (* -16 k)) #xFFFF)))
+  (define nz (for/sum ([h hws]) (if (= h 0) 0 1)))
+  (define nf (for/sum ([h hws]) (if (= h #xFFFF) 0 1)))
+  (define (movks skip-idx skip-val)
+    (for/list ([h hws] [k (in-naturals)]
+               #:when (and (not (= k skip-idx)) (not (= h skip-val))))
+      (format "movk ~a, #~a, lsl #~a" dst h (* 16 k))))
+  (cond
+    [(zero? nz) (format "movz ~a, #0" dst)]
+    [(< nf nz)
+     ;; mostly ffff: movn the first non-ffff halfword, movk the rest
+     (define first-idx (or (for/first ([h hws] [k (in-naturals)] #:when (not (= h #xFFFF))) k) 0))
+     (define first (list-ref hws first-idx))
+     (string-join
+      (cons (format "movn ~a, #~a, lsl #~a" dst (bitwise-and (bitwise-not first) #xFFFF) (* 16 first-idx))
+            (movks first-idx #xFFFF))
+      "\n    ")]
+    [else
+     (define first-idx (for/first ([h hws] [k (in-naturals)] #:when (not (= h 0))) k))
+     (define first (list-ref hws first-idx))
+     (string-join
+      (cons (format "movz ~a, #~a, lsl #~a" dst first (* 16 first-idx))
+            (movks first-idx 0))
+      "\n    ")]))
+
 ;; instruction rendering, shared by render-arm64 and the pipeline
 ;; serializer's per-line provenance (ir-json.rkt)
 (define (reg-name op) (match op [`(reg ,r) (symbol->string r)]))
@@ -511,7 +542,7 @@
   (define globals-sym (rt-sym 'puffin_globals))
   (match instr
       [`(mov ,src ,dst) (format "mov ~a, ~a" (reg-name dst) (render-op-arm src))]
-      [`(ldr-imm (imm ,i) ,dst) (format "ldr ~a, =~a" (reg-name dst) i)]
+      [`(ldr-imm (imm ,i) ,dst) (render-mov-imm64 (reg-name dst) i)]
       [`(ldr ,mem ,dst) (render-mem-access #t dst mem)]
       [`(str ,src ,mem) (render-mem-access #f src mem)]
       [`(add ,src ,dst) (format "add ~a, ~a, ~a" (reg-name dst) (reg-name dst) (render-op-arm src))]

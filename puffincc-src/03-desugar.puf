@@ -1,0 +1,496 @@
+;; puffincc -- 03-desugar.puf: full Puffin -> core Puffin (mirrors
+;; the desugar pass of src/compile.rkt).
+;;
+;; Turns full Puffin into core Puffin. Everything here is *surface*
+;; convenience: no new runtime concepts, only rewrites into forms
+;; the rest of the pipeline already understands. Scope-aware: we
+;; track bound variables so that a stdlib primitive used as a bare
+;; variable ((map car xs)-style) eta-expands to a lambda, while a
+;; let-bound `car` stays a variable reference.
+
+(define (desugar p)
+  ;; the #:when clause marker: puffincc's reader reads it as a
+  ;; symbol, but the host Racket reader would read a keyword, so it
+  ;; is built from its string here rather than written literally
+  (define kw-when (string->symbol "#:when"))
+
+  ;; foldr over two lists in lockstep (the prelude has foldl2 only
+  ;; in 02-system; the parallel-let clause folds right)
+  (define (foldr2 f acc xs ys)
+    (if (or (null? xs) (null? ys))
+        acc
+        (f (car xs) (car ys) (foldr2 f acc (cdr xs) (cdr ys)))))
+
+  ;; `bound` maps every lexically bound name to the name to use for
+  ;; it downstream. Binding a name that collides with a stdlib
+  ;; primitive renames it (gensym), so that after this pass a
+  ;; primitive name in operator position *always* means the
+  ;; primitive--later passes never re-litigate shadowing.
+  ;; bind returns (cons bound+ x+); bind* returns (cons bound+ xs+).
+  (define (bind bound x)
+    (if (surface-prim? x)
+        (let ([x+ (gensym x)]) (cons (hash-set bound x x+) x+))
+        (cons (hash-set bound x x) x)))
+  (define (bind* bound xs)
+    (let loop ([b bound] [acc '()] [xs xs])
+      (if (null? xs)
+          (cons b (reverse acc))
+          (match (bind b (car xs))
+            [(cons b+ x+) (loop b+ (cons x+ acc) (cdr xs))]))))
+
+  ;; dotted formals -> (cons fixed rest-name)
+  (define (split-formals formals)
+    (let split ([f formals] [acc '()])
+      (cond [(symbol? f) (cons (reverse acc) f)]
+            [(pair? f) (split (cdr f) (cons (car f) acc))]
+            [else (error (format "desugar: bad formals: ~a" formals))])))
+
+  ;; expand a quoted datum into constructors over atoms
+  (define (quote->expr d)
+    (cond [(symbol? d)  `(quote ,d)]
+          [(fixnum? d)  d]
+          [(boolean? d) d]
+          [(string? d)  `(string-lit ,d)]
+          [(null? d)    '(nil)]
+          [(pair? d)    `(cons ,(quote->expr (car d)) ,(quote->expr (cdr d)))]
+          [else (error (format "desugar: unsupported quoted datum: ~a" d))]))
+
+  ;; quasiquote expression expansion (depth-aware; nested quasiquote
+  ;; increments, unquote decrements; splicing only at depth 1)
+  ;; (built with `list` where the template would mention unquote /
+  ;; unquote-splicing as data -- both readers treat those as escapes)
+  (define (qq->expr q depth)
+    (match q
+      [(list 'unquote e)
+       (if (eq? depth 1)
+           e
+           (list 'list (list 'quote 'unquote) (qq->expr e (sub1 depth))))]
+      [(list 'quasiquote e)
+       (list 'list (list 'quote 'quasiquote) (qq->expr e (add1 depth)))]
+      [(cons (list 'unquote-splicing e) rest)
+       (if (eq? depth 1)
+           (list 'append e (qq->expr rest depth))
+           (list 'cons
+                 (list 'list (list 'quote 'unquote-splicing) (qq->expr e (sub1 depth)))
+                 (qq->expr rest depth)))]
+      [(cons a rest) (list 'cons (qq->expr a depth) (qq->expr rest depth))]
+      ['() ''()]
+      [(? symbol? s) (list 'quote s)]
+      [d d]))
+
+  ;; (body...) with implicit begin; internal defines are scoped over
+  ;; the whole body, letrec*-style (bound first, initialized in
+  ;; sequence position -- so mutual recursion between inner helpers
+  ;; works, as in every pass of this very compiler)
+  (define (body->expr es bound)
+    (define def-names
+      (filter-map (lambda (e) (match e
+                                [`(define (,f ,_ ...) ,_ ...) f]
+                                [`(define ,(? symbol? x) ,_) x]
+                                [_ #f]))
+                  es))
+    (cond
+      [(null? def-names)
+       (match es
+         [`(,e) (h e bound)]
+         [`(,es ...) `(begin ,@(map (lambda (e) (h e bound)) es))])]
+      [else
+       (define bn (bind* bound def-names))
+       (define bound+ (car bn))
+       (define names+ (cdr bn))
+       (define (step e)
+         (match e
+           [`(define (,f ,xs ...) ,dbody ...)
+            (h `(set! ,f (lambda ,xs ,@dbody)) bound+)]
+           [`(define ,(? symbol? x) ,e0)
+            (h `(set! ,x ,e0) bound+)]
+           [e (h e bound+)]))
+       (foldr (lambda (n acc) `(let ([,n (void)]) ,acc))
+              `(begin ,@(map step es))
+              names+)]))
+
+  ;; -----------------------------------------------------------------
+  ;; match expansion. compile-clause chains clauses through `fail`
+  ;; thunks so each clause's code appears exactly once.
+  ;; -----------------------------------------------------------------
+
+  ;; Compile pattern pat against subject (a variable), producing
+  ;; success on a match (with pattern variables bound) and fail-e
+  ;; otherwise. fail-e is duplicated only at test sites--it is
+  ;; always a tiny thunk call. `bound` already contains the pattern
+  ;; variables' (possibly renamed) bindings.
+  (define (compile-pattern pat subject success fail-e bound)
+    (match pat
+      ['_ success]
+      [(? symbol? x) `(let ([,(hash-ref/default bound x x) ,subject]) ,success)]
+      [(? fixnum? n) `(if (eq? ,subject ,n) ,success ,fail-e)]
+      [(? boolean? b) `(if (eq? ,subject ,b) ,success ,fail-e)]
+      [(? string? s) `(if (if (string? ,subject) (string=? ,subject (string-lit ,s)) #f)
+                          ,success ,fail-e)]
+      [(list 'quote (? symbol? s)) `(if (eq? ,subject (quote ,s)) ,success ,fail-e)]
+      [(list 'quote d) `(if (equal? ,subject ,(quote->expr d)) ,success ,fail-e)]
+      [(list 'quasiquote q) (compile-quasi q subject success fail-e bound)]
+      [(list 'cons p0 p1)
+       (define a (gensym 'mat-a))
+       (define d (gensym 'mat-d))
+       `(if (pair? ,subject)
+            (let ([,a (car ,subject)])
+              ,(compile-pattern p0 a
+                                `(let ([,d (cdr ,subject)])
+                                   ,(compile-pattern p1 d success fail-e bound))
+                                fail-e bound))
+            ,fail-e)]
+      [(cons 'list ps)
+       ;; (list p...) = nested cons ending in '()
+       (compile-pattern
+        (foldr (lambda (p acc) `(cons ,p ,acc)) ''() ps)
+        subject success fail-e bound)]
+      [(cons 'vector ps)
+       (define n (length ps))
+       (define (elems ps i success)
+         (match ps
+           ['() success]
+           [`(,p . ,rest)
+            (define x (gensym 'mat-v))
+            `(let ([,x (vector-ref ,subject ,i)])
+               ,(compile-pattern p x (elems rest (add1 i) success) fail-e bound))]))
+       `(if (if (vector? ,subject) (eq? (vector-length ,subject) ,n) #f)
+            ,(elems ps 0 success)
+            ,fail-e)]
+      [(list '? pred p)
+       `(if (,(hash-ref/default bound pred pred) ,subject)
+            ,(compile-pattern p subject success fail-e bound)
+            ,fail-e)]))
+
+  ;; quasiquote patterns: symbols/numbers match themselves as data;
+  ;; (unquote p) escapes back to pattern matching; lists match
+  ;; proper lists element-wise. Ellipsis is Racket-style: q0 matches
+  ;; each element of a middle segment (any fixed-shape patterns may
+  ;; follow), and each variable inside q0 collects a *list* of its
+  ;; per-element matches; nested ellipsis composes.
+  (define (compile-quasi q subject success fail-e bound)
+    (match q
+      [(list 'unquote p) (compile-pattern p subject success fail-e bound)]
+      [`(,q0 ,dots . ,q-rest)
+       #:when (equal? dots '...)
+       (define evars (sort (set->list (pattern-vars (list 'quasiquote q0))) symbol<?))
+       (define accs (map (lambda (v) (gensym 'mat-acc)) evars))
+       (define k (length q-rest))
+       ;; little recursive workers, tied with set! (assignment
+       ;; conversion boxes them)
+       (define len-f (gensym 'mat-len))
+       (define take-f (gensym 'mat-take))
+       (define drop-f (gensym 'mat-drop))
+       (define rev-f (gensym 'mat-rev))
+       (define walk-f (gensym 'mat-walk))
+       (define n-var (gensym 'mat-n))
+       (define suffix-var (gensym 'mat-suffix))
+       (define elem (gensym 'mat-elem))
+       (define elem-holder (gensym 'mat-l))
+       ;; per-element: match q0 against elem; on success push each
+       ;; var's value and keep walking; a non-matching element makes
+       ;; the whole walk produce #f
+       (define pushes
+         (map2 (lambda (v acc) `(set! ,acc (cons ,(hash-ref/default bound v v) ,acc)))
+               evars accs))
+       (define per-element
+         (compile-quasi q0 elem
+                        `(begin ,@pushes (,walk-f (cdr ,elem-holder)))
+                        #f bound))
+       ;; match the k suffix patterns element-wise against suffix-var
+       (define (suffix-chain qs subj success)
+         (match qs
+           ['() success]
+           [`(,q1 . ,rest)
+            (define a (gensym 'mat-a))
+            (define d (gensym 'mat-d))
+            `(let ([,a (car ,subj)])
+               ,(compile-quasi q1 a
+                               `(let ([,d (cdr ,subj)])
+                                  ,(suffix-chain rest d success))
+                               fail-e bound))]))
+       ;; bind each collected variable (reversing the pushes) around
+       ;; the suffix match + success
+       (define (bind-collected vs as body)
+         (match (list vs as)
+           [`(() ()) body]
+           [`((,v . ,vs+) (,a . ,as+))
+            `(let ([,(hash-ref/default bound v v) (,rev-f ,a (nil))])
+               ,(bind-collected vs+ as+ body))]))
+       `(let ([,len-f (void)])
+          (let ([,take-f (void)])
+            (let ([,drop-f (void)])
+              (let ([,rev-f (void)])
+                (let ([,walk-f (void)])
+                  ,(let nest-accs ([as accs])
+                     (match as
+                       ['()
+                        `(begin
+                           (set! ,len-f (lambda (l n) (if (pair? l) (,len-f (cdr l) (+ n 1)) (if (null? l) n -1))))
+                           (set! ,take-f (lambda (l i) (if (eq? i 0) (nil) (cons (car l) (,take-f (cdr l) (- i 1))))))
+                           (set! ,drop-f (lambda (l i) (if (eq? i 0) l (,drop-f (cdr l) (- i 1)))))
+                           (set! ,rev-f (lambda (l acc) (if (null? l) acc (,rev-f (cdr l) (cons (car l) acc)))))
+                           (set! ,walk-f (lambda (,elem-holder)
+                                           (if (null? ,elem-holder)
+                                               #t
+                                               (if (pair? ,elem-holder)
+                                                   (let ([,elem (car ,elem-holder)])
+                                                     ,per-element)
+                                                   #f))))
+                           (let ([,n-var (,len-f ,subject 0)])
+                             (if (< ,n-var ,k)
+                                 ,fail-e
+                                 (if (,walk-f (,take-f ,subject (- ,n-var ,k)))
+                                     ,(bind-collected
+                                       evars accs
+                                       `(let ([,suffix-var (,drop-f ,subject (- ,n-var ,k))])
+                                          ,(suffix-chain q-rest suffix-var success)))
+                                     ,fail-e))))]
+                       [`(,a . ,more) `(let ([,a (nil)]) ,(nest-accs more))])))))))]
+      [(? symbol? s) `(if (eq? ,subject (quote ,s)) ,success ,fail-e)]
+      [(? fixnum? n) `(if (eq? ,subject ,n) ,success ,fail-e)]
+      [(? boolean? b) `(if (eq? ,subject ,b) ,success ,fail-e)]
+      ['() `(if (null? ,subject) ,success ,fail-e)]
+      [`(,q0 . ,q-rest)
+       (define a (gensym 'mat-a))
+       (define d (gensym 'mat-d))
+       `(if (pair? ,subject)
+            (let ([,a (car ,subject)])
+              ,(compile-quasi q0 a
+                              `(let ([,d (cdr ,subject)])
+                                 ,(compile-quasi q-rest d success fail-e bound))
+                              fail-e bound))
+            ,fail-e)]))
+
+  ;; pattern variables bound by a pattern (needed to extend `bound`
+  ;; around clause bodies and guards)
+  (define (pattern-vars pat)
+    (match pat
+      ['_ (set)]
+      [(? symbol? x) (set x)]
+      [(? fixnum? _) (set)]
+      [(? boolean? _) (set)]
+      [(? string? _) (set)]
+      [(list 'quote _) (set)]
+      [(list 'quasiquote q)
+       (let quasi-vars ([q q])
+         (match q
+           [(list 'unquote p) (pattern-vars p)]
+           [`(,q0 . ,q1) (set-union (quasi-vars q0) (quasi-vars q1))]
+           [_ (set)]))]
+      [(list 'cons p0 p1) (set-union (pattern-vars p0) (pattern-vars p1))]
+      [(cons 'list ps) (foldl set-union (set) (map pattern-vars ps))]
+      [(cons 'vector ps) (foldl set-union (set) (map pattern-vars ps))]
+      [(list '? _ p) (pattern-vars p)]))
+
+  (define (compile-match e-subj clauses bound)
+    (define subject (gensym 'mat-subject))
+    (define (per-clause clauses)
+      (match clauses
+        ['() `(error (quote match-failure))]
+        [`((,pat ,kw ,guard ,body ...) . ,rest)
+         #:when (eq? kw kw-when)
+         (per-clause-guarded pat guard body rest)]
+        [`((,pat ,body ...) . ,rest)
+         (per-clause-guarded pat #t body rest)]))
+    (define (per-clause-guarded pat guard body rest)
+      (define fail (gensym 'mat-fail))
+      (define bound+ (car (bind* bound (set->list (pattern-vars pat)))))
+      (define success
+        (if (equal? guard #t)
+            (body->expr body bound+)
+            `(if ,(h guard bound+) ,(body->expr body bound+) (,fail))))
+      `(let ([,fail (lambda () ,(per-clause rest))])
+         ,(compile-pattern pat subject success `(,fail) bound+)))
+    `(let ([,subject ,(h e-subj bound)])
+       ,(per-clause clauses)))
+
+  ;; -----------------------------------------------------------------
+  ;; the expression walker
+  ;; -----------------------------------------------------------------
+
+  (define (lambda-head? s) (or (eq? s 'lambda) (eq? s 'λ)))
+
+  (define (h e bound)
+    (match e
+      [#t #t]
+      [#f #f]
+      [(? fixnum? n) n]
+      [(? string? s) `(string-lit ,s)]
+      ['(void) '(void)]
+      ['(read) '(read)]
+      [(list 'quote d) (quote->expr d)]
+      ;; quasiquote EXPRESSIONS (the compiler-construction idiom:
+      ;; `(let ([,x ,e]) ,body)). Standard depth-aware expansion into
+      ;; cons/append; unquote-splicing supported. The emitted `cons`
+      ;; and `append` are the primitives/prelude (desugar has already
+      ;; renamed any user shadowing of them at binder sites).
+      [(list 'quasiquote q) (h (qq->expr q 1) bound)]
+      [(? symbol? x)
+       (cond
+         [(hash-has-key? bound x) (hash-ref bound x)]
+         ;; a stdlib prim used as a value eta-expands
+         [(and (surface-prim? x) (not (member x '(list vector not))))
+          (let* ([arity (prim-arity x)]
+                 [xs (map (lambda (i) (gensym 'eta)) (range 0 arity))])
+            `(lambda ,xs (,x ,@xs)))]
+         [else x])]
+      ;; control
+      [`(if ,e0 ,e1 ,e2) `(if ,(h e0 bound) ,(h e1 bound) ,(h e2 bound))]
+      [`(cond) '(void)]
+      [`(cond [else ,body ...]) (body->expr body bound)]
+      [`(cond [,guard ,body ...] ,rest ...)
+       `(if ,(h guard bound) ,(body->expr body bound) ,(h `(cond ,@rest) bound))]
+      [`(when ,g ,body ...) `(if ,(h g bound) ,(body->expr body bound) (void))]
+      [`(unless ,g ,body ...) `(if ,(h g bound) (void) ,(body->expr body bound))]
+      [`(case ,e-k ,clauses ...)
+       (define k (gensym 'case-k))
+       (define (per-clause clauses)
+         (match clauses
+           ['() '(void)]
+           [`([else ,body ...]) (body->expr body bound)]
+           [`([(,ds ...) ,body ...] . ,rest)
+            `(if ,(foldr (lambda (d acc) `(or (eq? ,k ,(quote->expr d)) ,acc)) #f ds)
+                 ,(body->expr body bound)
+                 ,(per-clause rest))]))
+       `(let ([,k ,(h e-k bound)]) ,(per-clause clauses))]
+      [`(match ,e-subj ,clauses ...) (compile-match e-subj clauses bound)]
+      ;; binding
+      [`(let ,(? symbol? loop) ([,xs ,es] ...) ,body ...)
+       ;; named let: a self-referential closure via set! (assignment
+       ;; conversion boxes `loop`, so the closure sees itself)
+       (h `(let ([,loop (void)])
+             (begin (set! ,loop (lambda ,xs ,@body))
+                    (,loop ,@es)))
+          bound)]
+      [`(let ([,xs ,es] ...) ,body ...)
+       ;; parallel let: evaluate rhs into temps, then bind
+       (define ts (map (lambda (x) (gensym x)) xs))
+       (define bn (bind* bound xs))
+       (define bound+ (car bn))
+       (define xs+ (cdr bn))
+       (foldr2 (lambda (t e acc) `(let ([,t ,(h e bound)]) ,acc))
+               (foldr2 (lambda (x t acc) `(let ([,x ,t]) ,acc))
+                       (body->expr body bound+)
+                       xs+ ts)
+               ts es)]
+      [`(letrec ([,xs ,es] ...) ,body ...)
+       (h `(let ,(map (lambda (x) `[,x (void)]) xs)
+             ,@(map2 (lambda (x e0) `(set! ,x ,e0)) xs es)
+             ,@body)
+          bound)]
+      [`(let* () ,body ...) (body->expr body bound)]
+      [`(let* ([,x ,e0] ,rest ...) ,body ...)
+       (define bn (bind bound x))
+       `(let ([,(cdr bn) ,(h e0 bound)]) ,(h `(let* (,@rest) ,@body) (car bn)))]
+      [`(,lam (,xs ...) ,body ...)
+       #:when (lambda-head? lam)
+       (define bn (bind* bound xs))
+       `(lambda ,(cdr bn) ,(body->expr body (car bn)))]
+      ;; variadic lambdas: dotted formals normalize to a #%rest
+      ;; marker before the rest name ((lambda args ...) is all-rest)
+      [`(,lam ,formals ,body ...)
+       #:when (lambda-head? lam)
+       (define fr (split-formals formals))
+       (define fixed (car fr))
+       (define bn (bind* bound (append fixed (list (cdr fr)))))
+       (define names+ (cdr bn))
+       `(lambda (,@(take names+ (length fixed)) #%rest ,(last names+))
+          ,(body->expr body (car bn)))]
+      ;; sequencing / loops / mutation
+      [`(begin ,es ... ,e-ret)
+       `(begin ,@(map (lambda (e) (h e bound)) es) ,(h e-ret bound))]
+      [`(while ,g ,body ...) `(while ,(h g bound) ,(body->expr body bound))]
+      [`(set! ,x ,e) `(set! ,(hash-ref/default bound x x) ,(h e bound))]
+      ;; n-ary arithmetic / logic
+      [`(+ ,e0) (h e0 bound)]
+      [`(+ ,e0 ,e1) `(+ ,(h e0 bound) ,(h e1 bound))]
+      [`(+ ,e0 ,es ...) (h `(+ (+ ,e0 ,(first es)) ,@(rest es)) bound)]
+      [`(* ,e0) (h e0 bound)]
+      [`(* ,e0 ,e1) `(* ,(h e0 bound) ,(h e1 bound))]
+      [`(* ,e0 ,es ...) (h `(* (* ,e0 ,(first es)) ,@(rest es)) bound)]
+      [`(- ,e0) `(- ,(h e0 bound))]
+      [`(- ,e0 ,e1) `(- ,(h e0 bound) ,(h e1 bound))]
+      [`(- ,e0 ,es ...) (h `(- (- ,e0 ,(first es)) ,@(rest es)) bound)]
+      [`(and) #t]
+      [`(and ,e0) (h e0 bound)]
+      [`(and ,e0 ,es ...) `(and ,(h e0 bound) ,(h `(and ,@es) bound))]
+      [`(or) #f]
+      [`(or ,e0) (h e0 bound)]
+      [`(or ,e0 ,es ...) `(or ,(h e0 bound) ,(h `(or ,@es) bound))]
+      [`(not ,e0) `(not ,(h e0 bound))]
+      [`(,(? cmp? c) ,e0 ,e1)
+       #:when (not (hash-has-key? bound c))
+       `(,c ,(h e0 bound) ,(h e1 bound))]
+      ;; data constructors
+      [`(list ,es ...)
+       #:when (not (hash-has-key? bound 'list))
+       (foldr (lambda (e acc) `(cons ,(h e bound) ,acc)) '(nil) es)]
+      [`(vector ,es ...)
+       #:when (not (hash-has-key? bound 'vector))
+       (define v (gensym 'vec))
+       (define n (length es))
+       `(let ([,v (make-vector ,n)])
+          ,(let fill ([es es] [i 0])
+             (match es
+               ['() v]
+               [`(,e . ,rest)
+                `(begin (vector-set! ,v ,i ,(h e bound)) ,(fill rest (add1 i)))])))]
+      ;; n-ary constructors for the immutable collections:
+      ;; (hash k v ...) and (set v ...) chain their 0-ary prims
+      [`(hash ,es ...)
+       #:when (and (not (hash-has-key? bound 'hash)) (pair? es))
+       (unless (even? (length es))
+         (error (format "desugar: (hash ...) expects an even number of arguments in ~a" e)))
+       (h (let build ([es es] [acc '(hash)])
+            (match es
+              ['() acc]
+              [`(,k ,v . ,rest) (build rest `(hash-set ,acc ,k ,v))]))
+          bound)]
+      [`(set ,es ...)
+       #:when (and (not (hash-has-key? bound 'set)) (pair? es))
+       (h (foldl (lambda (v acc) `(set-add ,acc ,v)) '(set) es) bound)]
+      ;; stdlib prims in operator position (when not shadowed)
+      [`(,(? symbol? op) ,es ...)
+       #:when (and (not (hash-has-key? bound op)) (prim? op))
+       (unless (eq? (length es) (prim-arity op))
+         (error (format "desugar: ~a expects ~a arguments, got ~a in ~a"
+                        op (prim-arity op) (length es) e)))
+       `(,op ,@(map (lambda (e) (h e bound)) es))]
+      ;; application
+      [`(,e-f ,e-args ...)
+       `(,(h e-f bound) ,@(map (lambda (e) (h e bound)) e-args))]))
+
+  ;; Top-level definitions shadow stdlib primitives; colliding names
+  ;; are renamed here, once, for the whole program.
+  (define top-forms
+    (match p
+      [`(program ,forms ...) forms]))
+  (define top-bound
+    (car (bind* (hash)
+                (filter-map (lambda (form)
+                              (match form
+                                [`(define (,f ,_ ...) ,_ ...) f]
+                                [`(define (,f . ,_) ,_ ...) f]
+                                [`(define ,(? symbol? x) ,_) x]
+                                [_ #f]))
+                            top-forms))))
+  (define (per-form form)
+    (match form
+      [`(define (,f ,xs ...) ,body ...)
+       (define bn (bind* top-bound xs))
+       `(define (,(hash-ref/default top-bound f f) ,@(cdr bn))
+          ,(body->expr body (car bn)))]
+      ;; variadic defines: (define (f a . r) body)
+      [`(define (,f . ,formals) ,body ...)
+       (define fr (split-formals formals))
+       (define fixed (car fr))
+       (define bn (bind* top-bound (append fixed (list (cdr fr)))))
+       (define names+ (cdr bn))
+       `(define (,(hash-ref/default top-bound f f)
+                 ,@(take names+ (length fixed)) #%rest ,(last names+))
+          ,(body->expr body (car bn)))]
+      [`(define ,(? symbol? x) ,e)
+       `(define ,(hash-ref/default top-bound x x) ,(h e top-bound))]
+      [e (h e top-bound)]))
+  `(program ,@(map per-form top-forms)))
