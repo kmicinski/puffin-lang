@@ -1,0 +1,3 @@
+#!/bin/sh
+# Puffin LSP server (stdio). See tools/lsp/server.rkt.
+exec racket "$(dirname "$0")/../tools/lsp/server.rkt" "$@"
