@@ -33,6 +33,12 @@ BENCHMARKS = [
     ("vectors", "50M-slot vector fill + sum", "data"),
     ("strings", "quadratic string-append builder (60k)", "data"),
     ("lc-interp", "eval/apply interpreter running Z-fib(25)", "meta"),
+    # PL-course workloads (scaled from the pl-* test suite)
+    ("pl-rbtree", "red-black tree: 100k match-based inserts", "pl"),
+    ("pl-nqueens", "n-queens: count solutions, n=11", "pl"),
+    ("pl-regex", "NFA simulation over 250k symbols", "pl"),
+    ("pl-symdiff", "6th symbolic derivative + simplification, 300 rounds", "pl"),
+    ("pl-dpll", "DPLL SAT: pigeonhole PHP(7,6) unsat", "pl"),
 ]
 
 def sh(cmd, **kw):

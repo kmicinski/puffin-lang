@@ -1,0 +1,31 @@
+(define (d e x)
+  (match e
+    [(? fixnum? _) 0]
+    [(? symbol? y) (if (eq? y x) 1 0)]
+    [`(+ ,a ,b) (simp `(+ ,(d a x) ,(d b x)))]
+    [`(* ,a ,b) (simp `(+ (* ,(d a x) ,b) (* ,a ,(d b x))))]))
+(define (simp e)
+  (match e
+    [`(+ 0 ,b) (simp b)] [`(+ ,a 0) (simp a)]
+    [`(* 0 ,_) 0] [`(* ,_ 0) 0]
+    [`(* 1 ,b) (simp b)] [`(* ,a 1) (simp a)]
+    [`(+ ,(? fixnum? a) ,(? fixnum? b)) (+ a b)]
+    [`(* ,(? fixnum? a) ,(? fixnum? b)) (* a b)]
+    [`(,op ,a ,b)
+     (let ([a2 (simp a)] [b2 (simp b)])
+       (if (and (equal? a a2) (equal? b b2)) e (simp `(,op ,a2 ,b2))))]
+    [_ e]))
+(define (size e) (match e [`(,_ ,a ,b) (+ 1 (+ (size a) (size b)))] [_ 1]))
+(define (poly-of k)
+  `(* (+ x ,(+ k 1)) (* (+ x 2) (* (+ x 3) (* (+ x 4) (* (+ x 5) (+ x 6)))))))
+(define (d6-of p) (d (d (d (d (d (d p 'x) 'x) 'x) 'x) 'x) 'x))
+(define d6
+  (let loop ([i 0] [r 0])
+    (if (< i 300) (loop (+ i 1) (d6-of (poly-of (remainder i 3)))) r)))
+(println (size d6))
+(define (ev e v)
+  (match e
+    [(? fixnum? n) n] ['x v]
+    [`(+ ,a ,b) (+ (ev a v) (ev b v))]
+    [`(* ,a ,b) (* (ev a v) (ev b v))]))
+(println (ev d6 2))

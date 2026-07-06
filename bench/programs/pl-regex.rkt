@@ -1,0 +1,33 @@
+#lang racket
+;; Thompson NFA for (a|b)*abb: a:1->2, b:6->7, alt start 3 accept 8,
+;; star start 4 accept 9, then the literal abb tail 9->10->11->12
+(define edges
+  '((1 a 2) (6 b 7) (3 eps 1) (3 eps 6) (2 eps 8) (7 eps 8)
+    (4 eps 3) (4 eps 9) (8 eps 3) (8 eps 9)
+    (9 a 10) (10 b 11) (11 b 12)))
+(define start 4) (define accept 12)
+(define (eps-close states)
+  (let ([next (foldl (lambda (e acc)
+                       (match e
+                         [`(,f eps ,t)
+                          (if (and (member f acc) (not (member t acc))) (cons t acc) acc)]
+                         [_ acc]))
+                     states edges)])
+    (if (eqv? (length next) (length states)) states (eps-close next))))
+(define (move states c)
+  (foldl (lambda (e acc)
+           (match e
+             [`(,f ,l ,t) (if (and (eq? l c) (member f states) (not (member t acc)))
+                              (cons t acc) acc)]))
+         '() edges))
+(define input
+  (let loop ([i 0] [seed 999] [acc '(a b b)])
+    (if (< i 250000)
+        (loop (+ i 1) (remainder (+ (* seed 75) 74) 65537)
+              (cons (if (< (remainder seed 2) 1) 'a 'b) acc))
+        acc)))
+(define (run states in)
+  (match in
+    ['() (if (member accept states) 'match 'no-match)]
+    [(cons c rest) (run (eps-close (move states c)) rest)]))
+(displayln (run (eps-close (list start)) input))
