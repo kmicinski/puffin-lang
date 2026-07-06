@@ -1,0 +1,7 @@
+(-> a a)
+(-> (-> a b) (-> a b))
+(-> (-> a b) (-> (-> c a) (-> c b)))
+int
+occurs-fail
+(-> (-> int a) a)
+bool

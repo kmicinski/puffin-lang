@@ -1,0 +1,5 @@
+(app (app (lam (lam (var 1))) (lam (var 0))) (lam (lam (var 1))))
+(lam (var 0))
+(lam (var 0))
+#t
+(lam (lam (app (var 1) (app (var 1) (app (var 1) (app (var 1) (var 0)))))))

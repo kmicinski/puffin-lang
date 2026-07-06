@@ -443,8 +443,7 @@ export function evalExpr(expr0, env0, ctx) {
             }
           }
           if (chosen === null || chosen.length < 2) return VOID;
-          for (let i = 1; i < chosen.length - 1; i++) evalExpr(chosen[i], env, ctx);
-          expr = chosen[chosen.length - 1];
+          expr = bodyToExpr(chosen.slice(1));
           continue;
         }
 
@@ -452,8 +451,7 @@ export function evalExpr(expr0, env0, ctx) {
           const g = truthy(evalExpr(expr[1], env, ctx));
           const take = head === S_WHEN ? g : !g;
           if (!take || expr.length < 3) return VOID;
-          for (let i = 2; i < expr.length - 1; i++) evalExpr(expr[i], env, ctx);
-          expr = expr[expr.length - 1];
+          expr = bodyToExpr(expr.slice(2));
           continue;
         }
 
@@ -467,8 +465,7 @@ export function evalExpr(expr0, env0, ctx) {
             if (clause[0].some((d) => eqv(k, datumToValue(d)))) { chosen = clause; break; }
           }
           if (chosen === null || chosen.length < 2) return VOID;
-          for (let i = 1; i < chosen.length - 1; i++) evalExpr(chosen[i], env, ctx);
-          expr = chosen[chosen.length - 1];
+          expr = bodyToExpr(chosen.slice(1));
           continue;
         }
 
@@ -515,9 +512,8 @@ export function evalExpr(expr0, env0, ctx) {
           const vals = bindings.map((b) => evalExpr(b[1], env, ctx));
           const frame = new Frame(env);
           for (let i = 0; i < bindings.length; i++) frame.vars.set(bindings[i][0], { v: vals[i] });
-          for (let i = 2; i < expr.length - 1; i++) evalExpr(expr[i], frame, ctx);
           env = frame;
-          expr = expr[expr.length - 1];
+          expr = bodyToExpr(expr.slice(2));
           continue;
         }
 
@@ -529,9 +525,8 @@ export function evalExpr(expr0, env0, ctx) {
             frame = new Frame(frame);
             frame.vars.set(b[0], { v });
           }
-          for (let i = 2; i < expr.length - 1; i++) evalExpr(expr[i], frame, ctx);
           env = frame;
-          expr = expr[expr.length - 1];
+          expr = bodyToExpr(expr.slice(2));
           continue;
         }
 
@@ -828,25 +823,33 @@ function evalQuasiExpr(q, depth, env, ctx) {
     if (q.length === 2 && q[0] === S_QUASIQUOTE && q.tail === undefined) {
       return new Pair(S_QUASIQUOTE, new Pair(evalQuasiExpr(q[1], depth + 1, env, ctx), NIL));
     }
-    // elements right-to-left, splicing as we go
-    let acc = q.tail !== undefined ? evalQuasiExpr(q.tail, depth, env, ctx) : NIL;
-    for (let i = q.length - 1; i >= 0; i--) {
+    // evaluate elements LEFT-TO-RIGHT (unquote side effects must run
+    // in source order, matching the reference's cons-chain expansion),
+    // then build the list back-to-front from the computed values
+    const parts = [];   // {splice: bool, value}
+    for (let i = 0; i < q.length; i++) {
       const el = q[i];
       if (Array.isArray(el) && el.length === 2 && el[0] === S_UNQUOTE_SPLICING && el.tail === undefined) {
         if (depth === 1) {
-          const spliced = evalExpr(el[1], env, ctx);
-          // append spliced (a list) onto acc
-          const items = [];
-          let cur = spliced;
-          while (cur instanceof Pair) { items.push(cur.car); cur = cur.cdr; }
-          for (let j = items.length - 1; j >= 0; j--) acc = new Pair(items[j], acc);
+          parts.push({ splice: true, value: evalExpr(el[1], env, ctx) });
         } else {
-          acc = new Pair(
-            new Pair(S_UNQUOTE_SPLICING, new Pair(evalQuasiExpr(el[1], depth - 1, env, ctx), NIL)),
-            acc);
+          parts.push({ splice: false,
+            value: new Pair(S_UNQUOTE_SPLICING,
+                            new Pair(evalQuasiExpr(el[1], depth - 1, env, ctx), NIL)) });
         }
       } else {
-        acc = new Pair(evalQuasiExpr(el, depth, env, ctx), acc);
+        parts.push({ splice: false, value: evalQuasiExpr(el, depth, env, ctx) });
+      }
+    }
+    let acc = q.tail !== undefined ? evalQuasiExpr(q.tail, depth, env, ctx) : NIL;
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].splice) {
+        const items = [];
+        let cur = parts[i].value;
+        while (cur instanceof Pair) { items.push(cur.car); cur = cur.cdr; }
+        for (let j = items.length - 1; j >= 0; j--) acc = new Pair(items[j], acc);
+      } else {
+        acc = new Pair(parts[i].value, acc);
       }
     }
     return acc;

@@ -1,0 +1,4 @@
+(42 42)
+(7 7)
+(14 14)
+(lambda (k1) (k1 (lambda (x) (lambda (k2) (k2 x)))))

@@ -1,0 +1,3 @@
+(make-clo (code x () (make-clo (code y (x) (+ x y)) (x))) ())
+123
+41

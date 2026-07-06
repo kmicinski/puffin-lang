@@ -1,0 +1,36 @@
+;; Okasaki leftist heaps + heapsort, with the leftist invariant checked
+(define (rank h) (match h ['E 0] [`(,r ,_ ,_ ,_) r]))
+(define (mk v a b)
+  (if (< (rank a) (rank b))
+      `(,(+ 1 (rank a)) ,v ,b ,a)
+      `(,(+ 1 (rank b)) ,v ,a ,b)))
+(define (merge a b)
+  (match (list a b)
+    [`(E ,h) h]
+    [`(,h E) h]
+    [`((,_ ,x ,l1 ,r1) (,_ ,y ,l2 ,r2))
+     (if (<= x y)
+         (mk x l1 (merge r1 b))
+         (mk y l2 (merge a r2)))]))
+(define (h-insert h v) (merge h `(1 ,v E E)))
+(define (find-min h) (match h [`(,_ ,v ,_ ,_) v]))
+(define (delete-min h) (match h [`(,_ ,_ ,l ,r) (merge l r)]))
+(define (leftist? h)
+  (match h
+    ['E #t]
+    [`(,r ,_ ,l ,rt)
+     (and (>= (rank l) (rank rt))
+          (eq? r (+ 1 (rank rt)))
+          (leftist? l) (leftist? rt))]))
+(define (heap-sort xs)
+  (define h (foldl (lambda (v acc) (h-insert acc v)) 'E xs))
+  (let drain ([h h] [acc '()])
+    (if (equal? h 'E) (reverse acc) (drain (delete-min h) (cons (find-min h) acc)))))
+(define data (list 9 4 8 1 7 3 6 2 5 10 0 -3 12 11 -1))
+(println (heap-sort data))
+(define h (foldl (lambda (v acc) (h-insert acc v)) 'E data))
+(println (list 'min (find-min h) 'leftist (leftist? h)))
+;; merging two heaps preserves everything
+(define h2 (foldl (lambda (v acc) (h-insert acc v)) 'E '(100 -50 60)))
+(println (heap-sort (list -50 100 60)))
+(find-min (merge h h2))

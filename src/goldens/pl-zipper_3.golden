@@ -1,0 +1,5 @@
+(node 5 leaf leaf)
+(node 1 (node 2 (node 4 leaf leaf) (node 55 leaf leaf)) (node 3 leaf (node 7 leaf leaf)))
+(node 1 (node 2 (node 4 leaf leaf) (node 5 leaf leaf)) (node 3 leaf (node 7 leaf leaf)))
+(node 1 (node 2 (node 4 leaf leaf) (node 5 leaf leaf)) (node 3 leaf (node 7 (node 99 leaf leaf) leaf)))
+(node 2 (node 4 leaf leaf) (node 55 leaf leaf))

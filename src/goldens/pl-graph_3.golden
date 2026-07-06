@@ -1,0 +1,6 @@
+(a b d e c f2)
+(f a b d e c f2)
+#f
+#t
+(f a c f2 b d e)
+6

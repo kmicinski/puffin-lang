@@ -1,0 +1,6 @@
+((add 1 (mul 2 3)) => 7)
+((mul (add 1 2) 3) => 9)
+((sub (mul (mul 2 3) 4) 5) => 19)
+((mul (neg 4) (add 2 3)) => -20)
+(parse-error-leftover (rp))
+((sub (sub 10 2) 3) => 5)

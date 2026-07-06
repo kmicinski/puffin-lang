@@ -287,6 +287,29 @@ and every route must agree byte-for-byte:
 - `-m gen` — regenerate goldens (reports programs the reference
   rejects instead of writing bad goldens).
 
+**The PL-course suite** (`pl-*.scm`, 29 programs): the workloads a
+programming-languages course actually writes, as golden tests on
+every route — interpreters and semantics (Church encodings, de
+Bruijn + normalization, a CEK machine, an STLC checker,
+Hindley-Milner inference with unification + occurs check, big-step
+IMP, a small-step SOS stepper, the CBV CPS transform verified
+against direct evaluation), compilers (arithmetic→stack-VM with
+agreement checking, constant folding + DCE to fixpoint, ANF
+conversion, closure conversion, a peephole optimizer, regex→Thompson
+NFA simulation, recursive-descent parsing with precedence, SKI
+bracket abstraction + reduction), data structures (Okasaki red-black
+insertion with invariant validation, leftist heaps, batched
+persistent queues, tries over nested hashes, tree zippers, graph
+DFS/cycles/toposort), and the classics (n-queens, memoized edit
+distance, Huffman round-trips, symbolic differentiation, lazy
+streams + the sieve, a DPLL SAT solver, alpha-equivalence two ways).
+Writing it flushed out two real interpreter bugs: internal defines
+were only honored in lambda/begin bodies (not cond/case/when/
+unless/let bodies) in the web interpreter, and — subtler — the web
+interpreter evaluated quasiquote unquotes right-to-left, so side
+effects in `` `(-> ,(go x) ,(go y)) `` ran in reverse source order
+(caught by HM inference's canonical type naming).
+
 Corpus: all class examples (r0-* through r5-*) run **unmodified** —
 including the ones that define their own `cons` over vectors — plus
 `puffin-*` tests covering match/guards/quasiquote, closures,

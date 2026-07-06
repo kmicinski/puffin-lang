@@ -1,0 +1,8 @@
+((lambda (x) x) ≡? (lambda (y) y) => #t agree)
+((lambda (x) (lambda (y) (x y))) ≡? (lambda (a) (lambda (b) (a b))) => #t agree)
+((lambda (x) (lambda (y) (x y))) ≡? (lambda (a) (lambda (b) (b a))) => #f agree)
+((lambda (x) (x free)) ≡? (lambda (y) (y free)) => #t agree)
+((lambda (x) (x free)) ≡? (lambda (y) (y other)) => #f agree)
+((lambda (x) (lambda (x) x)) ≡? (lambda (y) (lambda (z) z)) => #t agree)
+((lambda (x) (lambda (x) x)) ≡? (lambda (y) (lambda (z) y)) => #f agree)
+#t

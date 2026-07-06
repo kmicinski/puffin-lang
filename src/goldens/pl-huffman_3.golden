@@ -1,0 +1,5 @@
+((a 1) (c 3) (b 3) (f 4) (e 4) (d 3))
+(bits 27 vs-fixed 33)
+(a b a c c a d f e a d)
+#t
+27

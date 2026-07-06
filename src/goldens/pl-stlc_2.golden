@@ -1,0 +1,7 @@
+(-> int int)
+int
+(-> (-> int bool) (-> int int))
+(type-error arg-mismatch expected int got bool)
+(type-error if-branches int bool)
+(-> bool (type-error not-a-function bool))
+int
