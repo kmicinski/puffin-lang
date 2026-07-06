@@ -1,0 +1,136 @@
+;; puffincc -- 01-reader.puf: the s-expression reader, in Puffin.
+;;
+;; (read-forms-from-string s) -> list of forms. Handles what Puffin
+;; sources need: symbols (including #%rest, #:when and |odd| chars),
+;; integers (negative too), strings with \\ \" \n \t escapes, #t/#f,
+;; parens and brackets, dotted pairs, the quote family sugar
+;; (' ` , ,@), and ;-comments. Byte-oriented via string-byte, so it
+;; is ASCII-faithful like the runtime's strings.
+
+;; byte constants, spelled once
+(define B-lparen 40) (define B-rparen 41)
+(define B-lbrack 91) (define B-rbrack 93)
+(define B-quote 39) (define B-backquote 96)
+(define B-comma 44) (define B-at 64)
+(define B-dquote 34) (define B-backslash 92)
+(define B-semi 59) (define B-hash 35)
+(define B-dot 46) (define B-minus 45)
+(define B-space 32) (define B-tab 9) (define B-nl 10) (define B-cr 13)
+
+(define (ws-byte? b) (or (eq? b B-space) (eq? b B-tab) (eq? b B-nl) (eq? b B-cr)))
+(define (digit-byte? b) (and (< 47 b) (< b 58)))
+(define (delim-byte? b)
+  (or (< b 0)  ;; EOF delimits
+      (ws-byte? b) (eq? b B-lparen) (eq? b B-rparen)
+      (eq? b B-lbrack) (eq? b B-rbrack) (eq? b B-dquote) (eq? b B-semi)))
+
+;; The reader threads (pos . value) pairs; src and its length are
+;; globals set by read-forms-from-string (one reader at a time --
+;; the compiler reads exactly one program).
+(define reader-src "")
+(define reader-len 0)
+
+(define (rd-peek i) (if (< i reader-len) (string-byte reader-src i) -1))
+
+;; skip whitespace and ;-comments
+(define (rd-skip i)
+  (let loop ([i i])
+    (cond [(>= i reader-len) i]
+          [(ws-byte? (rd-peek i)) (loop (+ i 1))]
+          [(eq? (rd-peek i) B-semi)
+           (let eat ([j i])
+             (if (or (>= j reader-len) (eq? (rd-peek j) B-nl))
+                 (loop j)
+                 (eat (+ j 1))))]
+          [else i])))
+
+;; a symbol-or-number token starting at i: scan to a delimiter
+(define (rd-token-end i)
+  (let loop ([j i])
+    (if (or (>= j reader-len) (delim-byte? (rd-peek j)))
+        j
+        (loop (+ j 1)))))
+
+(define (rd-atom i)
+  (define j (rd-token-end i))
+  (define text (substring reader-src i j))
+  (define n (string->number text))
+  (cons j
+        (cond [n n]
+              ;; a lone minus (or leading-minus non-number) is a symbol
+              [else (string->symbol text)])))
+
+(define (rd-string i)   ;; i points AT the opening quote
+  (let loop ([j (+ i 1)] [acc ""])
+    (define b (rd-peek j))
+    (cond
+      [(< b 0) (error 'reader-unterminated-string)]
+      [(eq? b B-dquote) (cons (+ j 1) acc)]
+      [(eq? b B-backslash)
+       (define e (rd-peek (+ j 1)))
+       (define ch
+         (cond [(eq? e 110) "\n"]
+               [(eq? e 116) "\t"]
+               [(eq? e B-backslash) "\\"]
+               [(eq? e B-dquote) "\""]
+               [else (error 'reader-bad-escape)]))
+       (loop (+ j 2) (string-append acc ch))]
+      [else (loop (+ j 1) (string-append acc (substring reader-src j (+ j 1))))])))
+
+;; a list whose opener was consumed; closer is the matching bracket
+(define (rd-list i closer)
+  (let loop ([i (rd-skip i)] [acc '()])
+    (define b (rd-peek i))
+    (cond
+      [(< b 0) (error 'reader-unterminated-list)]
+      [(eq? b closer) (cons (+ i 1) (reverse acc))]
+      ;; dotted tail: `.` followed by a delimiter
+      [(and (eq? b B-dot) (delim-byte? (rd-peek (+ i 1))))
+       (define tail (rd-form (rd-skip (+ i 1))))
+       (define after (rd-skip (car tail)))
+       (unless (eq? (rd-peek after) closer) (error 'reader-bad-dotted-tail))
+       (cons (+ after 1)
+             (foldl (lambda (x acc) (cons x acc)) (cdr tail) acc))]
+      [else
+       (define f (rd-form i))
+       (loop (rd-skip (car f)) (cons (cdr f) acc))])))
+
+;; one form at i (i already past whitespace) -> (next-pos . form)
+(define (rd-form i)
+  (define b (rd-peek i))
+  (cond
+    [(< b 0) (error 'reader-unexpected-eof)]
+    [(eq? b B-lparen) (rd-list (+ i 1) B-rparen)]
+    [(eq? b B-lbrack) (rd-list (+ i 1) B-rbrack)]
+    [(or (eq? b B-rparen) (eq? b B-rbrack)) (error 'reader-unexpected-closer)]
+    [(eq? b B-dquote) (rd-string i)]
+    [(eq? b B-quote)
+     (let ([f (rd-form (rd-skip (+ i 1)))])
+       (cons (car f) (list 'quote (cdr f))))]
+    [(eq? b B-backquote)
+     (let ([f (rd-form (rd-skip (+ i 1)))])
+       (cons (car f) (list 'quasiquote (cdr f))))]
+    [(eq? b B-comma)
+     (if (eq? (rd-peek (+ i 1)) B-at)
+         (let ([f (rd-form (rd-skip (+ i 2)))])
+           (cons (car f) (list 'unquote-splicing (cdr f))))
+         (let ([f (rd-form (rd-skip (+ i 1)))])
+           (cons (car f) (list 'unquote (cdr f)))))]
+    [(eq? b B-hash)
+     (define n (rd-peek (+ i 1)))
+     (cond
+       ;; #t / #f (must stand alone)
+       [(and (eq? n 116) (delim-byte? (rd-peek (+ i 2)))) (cons (+ i 2) #t)]
+       [(and (eq? n 102) (delim-byte? (rd-peek (+ i 2)))) (cons (+ i 2) #f)]
+       ;; anything else (#%rest, #:when, ...) reads as a symbol
+       [else (rd-atom i)])]
+    [else (rd-atom i)]))
+
+(define (read-forms-from-string s)
+  (set! reader-src s)
+  (set! reader-len (string-length s))
+  (let loop ([i (rd-skip 0)] [acc '()])
+    (if (>= i reader-len)
+        (reverse acc)
+        (let ([f (rd-form i)])
+          (loop (rd-skip (car f)) (cons (cdr f) acc))))))

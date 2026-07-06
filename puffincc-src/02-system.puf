@@ -1,0 +1,130 @@
+;; puffincc -- 02-system.puf: the shared vocabulary (mirrors
+;; src/system.rkt + the predicate layer of src/irs.rkt).
+;;
+;; puffincc is the Puffin compiler written in Puffin. One namespace,
+;; concatenated from puffincc-src/*.puf in order by
+;; bin/build-puffincc; this file defines what every pass leans on.
+;;
+;; Conventions vs the Racket reference (docs/BOOTSTRAP.md):
+;;  - no structs: tagged lists; no multiple values: return lists
+;;  - no parameters: plain top-level defines (+ set! where needed)
+;;  - the target is a global, set by the driver
+
+;; ---- target ---------------------------------------------------------
+
+(define current-target 'arm64)   ;; driver may (set! current-target 'x86-64)
+
+(define (argument-registers)
+  (if (eq? current-target 'x86-64)
+      '(rdi rsi rdx rcx r8 r9)
+      '(x0 x1 x2 x3 x4 x5)))
+
+(define (allocatable-registers)
+  (if (eq? current-target 'x86-64)
+      '(rbx r12 r13 r14 r15)
+      '(x19 x20 x21 x22 x23 x24 x25 x26)))
+
+(define (frame-pointer) (if (eq? current-target 'x86-64) 'rbp 'x29))
+
+(define (callee-save-area-bytes n)
+  (if (eq? current-target 'x86-64)
+      (* 8 n)
+      (* 16 (quotient (+ n 1) 2))))
+
+(define entry-symbol 'main)
+(define conclusion-name 'conclusion)
+
+;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
+
+(define (tag-fixnum n) (arithmetic-shift n 3))
+(define false-value 2)
+(define true-value 10)
+(define void-value 18)
+(define nil-value 26)
+
+;; symbol ids are assigned from the sorted literal table (see the
+;; backends); (tag-symbol id) mirrors system.rkt
+(define (tag-symbol id) (bitwise-ior (arithmetic-shift id 3) 3))
+
+;; ---- primitive vocabulary (prim-table comes from 00-tables.puf) ----
+
+(define intrinsic-unary '(-))
+(define intrinsic-binary '(+ * eq? <))
+
+(define (cmp? op) (if (member op '(eq? < <= > >=)) #t #f))
+(define (shrunk-cmp? op) (if (member op '(eq? <)) #t #f))
+
+(define (prim? op)
+  (and (symbol? op)
+       (or (stdlib-prim? op)
+           (if (member op intrinsic-unary) #t #f)
+           (if (member op intrinsic-binary) #t #f))))
+
+(define (prim-arity op)
+  (cond [(member op intrinsic-unary) 1]
+        [(member op intrinsic-binary) 2]
+        [else (stdlib-arity op)]))
+
+(define (surface-prim? op)
+  (and (symbol? op)
+       (or (surface-stdlib-prim? op)
+           (if (member op intrinsic-unary) #t #f)
+           (if (member op intrinsic-binary) #t #f)
+           (cmp? op)
+           (if (member op '(not list vector)) #t #f))))
+
+;; ---- atoms across the IRs ------------------------------------------
+
+(define (fixnum-atom? a) (fixnum? a))
+(define (ir-atom? a)
+  (or (fixnum? a) (symbol? a) (boolean? a)
+      (equal? a '(void)) (equal? a '(nil))
+      (match a [`(quote ,s) (symbol? s)] [_ #f])))
+
+(define (ir-literal? a) (and (ir-atom? a) (not (symbol? a))))
+
+;; ---- assembler-symbol sanitization (mirrors rt-sym) -----------------
+
+(define (rt-sym s)
+  (define str (symbol->string s))
+  (define n (string-length str))
+  (define (enc-byte b)
+    (cond [(and (< 47 b) (< b 58)) (substring "0123456789" (- b 48) (- b 47))]
+          [(or (and (< 64 b) (< b 91)) (and (< 96 b) (< b 123)) (eq? b 95))
+           ;; alphabetic / underscore: keep
+           #f]
+          [(eq? b 45) "_"]
+          [(eq? b 63) "_huh"]
+          [(eq? b 33) "_bang"]
+          [(eq? b 62) "_to"]
+          [(eq? b 60) "_lt"]
+          [(eq? b 61) "_eq"]
+          [(eq? b 42) "_star"]
+          [(eq? b 47) "_slash"]
+          [(eq? b 43) "_plus"]
+          [else (string-append "_u" (number->string b))]))
+  (define body
+    (let loop ([i 0] [acc ""])
+      (if (< i n)
+          (let* ([b (string-byte str i)]
+                 [e (enc-byte b)])
+            (loop (+ i 1)
+                  (string-append acc (if e e (substring str i (+ i 1))))))
+          acc)))
+  ;; macOS symbols carry a leading underscore
+  (string->symbol (string-append "_" body)))
+
+;; ---- misc helpers used across passes --------------------------------
+
+(define (hash-keys-sorted h)
+  (sort (hash-keys h) symbol<?))
+
+;; fold over two lists in lockstep
+(define (foldl2 f acc xs ys)
+  (if (or (null? xs) (null? ys))
+      acc
+      (foldl2 f (f (car xs) (car ys) acc) (cdr xs) (cdr ys))))
+
+;; number range of block/program info: (program ,info ,defns ...)
+(define (program-info p) (car (cdr p)))
+(define (program-defns p) (cdr (cdr p)))

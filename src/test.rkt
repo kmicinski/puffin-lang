@@ -200,12 +200,47 @@
    #:args progs
    (if (empty? progs) (program-names) progs)))
 
+;; ---------------------------------------------------------------------
+;; puffincc mode: compile each program with the Puffin-written
+;; compiler (build/puffincc; see bin/build-puffincc) and hold the
+;; result to the same goldens
+;; ---------------------------------------------------------------------
+
+(define (run-puffincc-tests progs tgt)
+  (define exe (build-path (find-system-path 'temp-dir) "puffincc-test"))
+  (for ([prog progs])
+    (define compiled?
+      (match (run/capture
+              (λ () (system (format "~a ~a ~a ~a"
+                                    (build-path here 'up "bin" "puffincc-compile")
+                                    (program-path prog) exe tgt))))
+        [(cons #t _) #t]
+        [(cons _ out)
+         (check! 'puffincc/compile prog "-" (string-append "compile failed
+" out) "compiles")
+         #f]))
+    (when compiled?
+      (for ([input (input-names)])
+        (define golden (golden-for prog input))
+        (when golden
+          (define-values (sp out in err) (subprocess #f #f #f exe))
+          (fprintf in "~a
+" (string-join (map number->string (input-ints input)) " "))
+          (close-output-port in)
+          (define program-out (port->string out))
+          (define err-out (port->string err))
+          (subprocess-wait sp)
+          (close-input-port out) (close-input-port err)
+          (check! 'puffincc prog input (string-append program-out err-out) golden))))))
+
 (match (mode)
   [(or "gen") (generate-goldens chosen-progs)]
   ["interp" (run-interp-tests chosen-progs)]
   ["chain"  (run-chain-tests chosen-progs)]
   ["x86-64" (run-native-tests chosen-progs 'x86-64)]
   ["arm64"  (run-native-tests chosen-progs 'arm64)]
+  ["puffincc" (run-puffincc-tests chosen-progs 'arm64)]
+  ["puffincc-x86" (run-puffincc-tests chosen-progs 'x86-64)]
   ["all"
    (run-interp-tests chosen-progs)
    (run-native-tests chosen-progs 'x86-64)

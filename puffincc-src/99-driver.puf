@@ -1,0 +1,106 @@
+;; puffincc -- 99-driver.puf: the entry point.
+;;
+;;   puffincc < prog.puf > prog.s
+;;
+;; Reads a Puffin program from stdin, runs the full pass chain, and
+;; writes assembly to stdout (link it against src/runtime/libpuffin.a
+;; -- see bin/puffincc-compile). Two optional leading directives, for
+;; the harness and for chain-style debugging:
+;;
+;;   (target x86-64)         pick the backend (default arm64)
+;;   (dump-after shrink)     print the IR after a pass and stop
+
+(define dump-after-pass #f)
+
+(define (strip-directives forms)
+  (match forms
+    [`((target ,t) . ,rest)
+     (begin (set! current-target t) (strip-directives rest))]
+    [`((dump-after ,p) . ,rest)
+     (begin (set! dump-after-pass p) (strip-directives rest))]
+    [_ forms]))
+
+;; prelude injection, mirroring src/main.rkt: prune to definitions
+;; the program transitively mentions (unquote-splicing implies append)
+(define (defn-name f)
+  (match f
+    [`(define (,g . ,_) ,_ ...) g]
+    [`(define ,g ,_) g]
+    [_ #f]))
+
+(define (mentions-of form)
+  (let walk ([v form] [acc (set)])
+    (cond [(symbol? v) (set-add acc v)]
+          [(pair? v) (walk (cdr v) (walk (car v) acc))]
+          [else acc])))
+
+(define (prelude-inject user-forms)
+  (define user-names
+    (foldl (lambda (f acc)
+             (let ([n (defn-name f)]) (if n (set-add acc n) acc)))
+           (set) user-forms))
+  (define candidates
+    (filter (lambda (f) (not (set-member? user-names (defn-name f))))
+            prelude-forms-data))
+  (define by-name
+    (foldl (lambda (f acc) (hash-set acc (defn-name f) f)) (hash) candidates))
+  (define seeded
+    (let ([m (foldl (lambda (f acc) (set-union acc (mentions-of f))) (set) user-forms)])
+      (if (set-member? m 'unquote-splicing) (set-add m 'append) m)))
+  (let grow ([needed seeded] [included (set)])
+    (define new-names
+      (filter (lambda (n) (and (hash-has-key? by-name n)
+                               (not (set-member? included n))))
+              (set->list needed)))
+    (if (null? new-names)
+        (filter (lambda (f) (set-member? included (defn-name f))) candidates)
+        (grow (foldl (lambda (n acc) (set-union acc (mentions-of (hash-ref by-name n))))
+                     needed new-names)
+              (foldl (lambda (n acc) (set-add acc n)) included new-names)))))
+
+;; the pass chain (pairs of name + function; both backends share the
+;; frontend, mirroring src/main.rkt)
+(define (frontend-chain)
+  (list (cons 'desugar desugar)
+        (cons 'shrink shrink)
+        (cons 'uniqueify uniqueify)
+        (cons 'collect-globals collect-globals)
+        (cons 'reveal-functions reveal-functions)
+        (cons 'assignment-convert assignment-convert)
+        (cons 'lift-lambdas lift-lambdas)
+        (cons 'limit-functions limit-functions)
+        (cons 'anf-convert anf-convert)
+        (cons 'explicate-control explicate-control)
+        (cons 'uncover-locals uncover-locals)))
+
+(define (backend-chain)
+  (if (eq? current-target 'x86-64)
+      (list (cons 'select-instructions select-instructions-x86)
+            (cons 'allocate-registers allocate-registers-x86)
+            (cons 'patch-instructions patch-instructions-x86)
+            (cons 'prelude-and-conclusion prelude-and-conclusion-x86)
+            (cons 'render-asm render-x86))
+      (list (cons 'select-instructions select-instructions-arm64)
+            (cons 'allocate-registers allocate-registers-arm64)
+            (cons 'patch-instructions patch-instructions-arm64)
+            (cons 'prelude-and-conclusion prelude-and-conclusion-arm64)
+            (cons 'render-asm render-arm64))))
+
+(define (run-chain program)
+  (let loop ([chain (append (frontend-chain) (backend-chain))] [ir program])
+    (match chain
+      ['() ir]
+      [`((,name . ,pass) . ,rest)
+       (let ([out (pass ir)])
+         (if (eq? name dump-after-pass)
+             (begin (println out) 'dumped)
+             (loop rest out)))])))
+
+;; ---- main -----------------------------------------------------------
+
+(define user-forms (strip-directives (read-forms-from-string (read-all))))
+(define full-program
+  `(program ,@(prelude-inject user-forms) ,@user-forms))
+(let ([result (run-chain full-program)])
+  (unless (eq? result 'dumped)
+    (display result)))
