@@ -41,6 +41,8 @@ Binding & functions:
 (let* ([x 1] [y (+ x 1)]) body ...)   ;; sequential
 (let loop ([i 0]) ... (loop (+ i 1))) ;; named let; tail calls run in O(1) stack
 (letrec ([odd? ...] [even? ...]) ...) ;; mutual recursion
+(define (f a b . rest) ...)           ;; variadic: rest binds a list
+(lambda args ...)                     ;; all-rest lambda
 (lambda (x y) body ...)               ;; or λ; closures are first-class
 (set! x e)                            ;; mutation (locals and globals)
 ```
@@ -181,5 +183,5 @@ The web REPL (`web/`) runs the same language in the browser.
 - A REPL define can't shadow a primitive name (files can).
 - `main` is reserved for the program entry point (defining it is a
   clear compile-time error).
-- No variadic user functions yet: `format` and `apply` take their
-  arguments as a list.
+- `apply` handles at most 5 arguments (the register-argument budget);
+  `format` is fully variadic.

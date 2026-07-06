@@ -86,6 +86,21 @@
             (cons 'prelude-and-conclusion prelude-and-conclusion-arm64)
             (cons 'render-asm render-arm64))))
 
+;; render an IR readably for diffing: hashes/sets become sorted,
+;; tagged lists (src/diff-ir.rkt normalizes the reference the same way)
+(define (serialize-ir v)
+  (cond [(hash? v)
+         (cons 'hash-repr
+               (map (lambda (k) (list (serialize-ir k) (serialize-ir (hash-ref v k))))
+                    (sort (hash-keys v)
+                          (lambda (a b) (string<? (value->string a) (value->string b))))))]
+        [(set? v)
+         (cons 'set-repr
+               (sort (map serialize-ir (set->list v))
+                     (lambda (a b) (string<? (value->string a) (value->string b)))))]
+        [(pair? v) (cons (serialize-ir (car v)) (serialize-ir (cdr v)))]
+        [else v]))
+
 (define (run-chain program)
   (let loop ([chain (append (frontend-chain) (backend-chain))] [ir program])
     (match chain
@@ -93,7 +108,7 @@
       [`((,name . ,pass) . ,rest)
        (let ([out (pass ir)])
          (if (eq? name dump-after-pass)
-             (begin (println out) 'dumped)
+             (begin (println (serialize-ir out)) 'dumped)
              (loop rest out)))])))
 
 ;; ---- main -----------------------------------------------------------

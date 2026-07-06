@@ -144,16 +144,18 @@ seed lives in the test corpus.
 
 ## 4. Remaining gaps to full self-hosting (ranked)
 
-1. **An s-expression reader in Puffin** (~150 lines over
-   `read-all`/`string-byte`; the web interpreter's reader.js is the
-   blueprint). Next seed step; nothing blocks it.
-2. **Variadic functions** — the honest language gap. Today
-   `format`/`apply` take list arguments. A real fix teaches the
-   calling convention a rest-argument protocol (limit-functions
-   already packs >6 args into a vector — rest-args are the same
-   mechanism pointed the other way). Worth doing as its own
-   project; not required for bootstrap (the compiler's variadic
-   uses are all list-adaptable).
+1. **An s-expression reader in Puffin** — CLOSED: see
+   `puffincc-src/01-reader.puf` (byte-oriented, handles the full
+   surface syntax including dotted pairs, the quote family, and
+   `#%rest`/`#:when` tokens), exercised by every program puffincc
+   compiles.
+2. **Variadic functions** — ~~the honest language gap~~ CLOSED:
+   dotted formals landed with an arity-register calling convention
+   (every closure call passes its logical argument count; variadic
+   prologues rebuild the rest list via the runtime's spill area,
+   uniformly across the >6-argument overflow protocol). `format` is
+   now fully variadic; `apply` covers 0–5 arguments. See puffin-13
+   in the corpus and the "Variadic functions" commit.
 3. **Output** — the compiler emits one big string today via
    `format`/`string-append`; `display` to stdout suffices for a
    bootstrap driver (`puffin compile.puf < prog.puf > prog.s`).
