@@ -63,7 +63,12 @@
                                (not (set-member? included n))))
               (set->list needed)))
     (if (null? new-names)
-        (filter (lambda (f) (set-member? included (defn-name f))) candidates)
+        ;; a (: name t) declaration travels with its included function
+        (filter (lambda (f)
+                  (match f
+                    [`(: ,n ,_) (set-member? included n)]
+                    [_ (set-member? included (defn-name f))]))
+                candidates)
         (grow (foldl (lambda (n acc) (set-union acc (mentions-of (hash-ref by-name n))))
                      needed new-names)
               (foldl (lambda (n acc) (set-add acc n)) included new-names)))))
@@ -135,11 +140,13 @@
 ;; (dump-after ...) directives still work; module forms are rejected,
 ;; stdin has no directory to resolve requires against).
 
-(define opt-target-flag #f)
+;; flag cells start #f and are set! to symbols/strings; (ann ... _)
+;; keeps them dynamically typed under the reference checker
+(define opt-target-flag (ann #f _))
 (define opt-level 1)
-(define opt-output #f)
+(define opt-output (ann #f _))
 (define opt-runtime "src/runtime/libpuffin.a")
-(define opt-input #f)
+(define opt-input (ann #f _))
 
 (define (parse-args args)
   (define (flag-arg name rest)

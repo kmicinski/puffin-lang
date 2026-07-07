@@ -59,6 +59,16 @@
     [`(define ,g ,_) (if (symbol? g) g #f)]
     [_ #f]))
 
+;; every top-level name a form binds: defines bind one; define-type
+;; binds its type name AND each constructor (docs/TYPES.md) -- all of
+;; them provide/mangle like ordinary top-level names
+(define (module-defn-names f)
+  (match f
+    [`(define-type ,head ,ctors ...)
+     (cons (match head [`(,n ,_ ...) n] [n n])
+           (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
+    [_ (let ([n (module-defn-name f)]) (if n (list n) '()))]))
+
 ;; (fixed n) | (variadic n) | val
 (define (module-defn-arity f)
   (define (formals-arity fo n)
@@ -74,7 +84,8 @@
 
 ;; names that change meaning if spliced in unqualified
 (define module-keyword-names
-  (list->set '(define lambda λ let let* letrec begin if cond case
+  (list->set '(define-type ann :
+               define lambda λ let let* letrec begin if cond case
                when unless match set! while quote quasiquote unquote
                unquote-splicing and or else _ ... require provide
                signature #%rest nil void read)))
@@ -273,15 +284,23 @@
 ;; ---- loading the DAG -----------------------------------------------------
 ;; visit returns (loaded postorder ids); a module is
 ;;   (hash 'path 'id 'body 'top-names 'provides 'reqs)
+;;
+;; loaded/ids are keyed by (string->symbol s): the immutable hash
+;; compares keys by identity (hamt.c's load-bearing simplification),
+;; so two equal path strings BUILT SEPARATELY would miss -- symbols
+;; intern by content, restoring the reference's equal?-keyed
+;; semantics (this is what makes diamond requires load once).
+
+(define (path-key p) (string->symbol p))
 
 (define (module-id path entry-dir ids)
   (define rel path) ;; paths are already joined from the entry dir
   (define id (str-cat (path-stem path) "_" (to-hex (fnv1a-32 rel))))
   (begin
-    (when (and (hash-has-key? ids id)
-               (not (string=? (hash-ref ids id) path)))
+    (when (and (hash-has-key? ids (path-key id))
+               (not (string=? (hash-ref ids (path-key id)) path)))
       (module-error (str-cat "module id collision between "
-                                   (hash-ref ids id) " and " path)))
+                                   (hash-ref ids (path-key id)) " and " path)))
     id))
 
 (define (load-modules entry-path)
@@ -293,7 +312,7 @@
          [(member path stack)
           (module-error (str-cat "require cycle: "
                                        (string-join (reverse (cons path stack)) " -> ")))]
-         [(hash-has-key? loaded path) state]
+         [(hash-has-key? loaded (path-key path)) state]
          [else
           (let* ([raw (read-module-file path from)]
                  [forms (match raw
@@ -306,8 +325,8 @@
                                 state reqs)]
                  [body (filter (lambda (f) (not (or (require-form? f) (provide-form? f)))) forms)]
                  [top-names (foldl (lambda (f acc)
-                                     (let ([n (module-defn-name f)])
-                                       (if n (set-add acc n) acc)))
+                                     (foldl (lambda (n a) (set-add a n))
+                                            acc (module-defn-names f)))
                                    (set) body)]
                  [provides (parse-provides forms body top-names path)])
             (match state2
@@ -317,9 +336,9 @@
                               (module-id path entry-dir ids2))]
                       [m (hash 'path path 'id id 'body body
                                'top-names top-names 'provides provides 'reqs reqs)])
-                 (list (hash-set loaded2 path m)
+                 (list (hash-set loaded2 (path-key path) m)
                        (cons m postorder2)
-                       (if id (hash-set ids2 id path) ids2)))]))])]))
+                       (if id (hash-set ids2 (path-key id) path) ids2)))]))])]))
   (match (visit entry-path '() #f (list (hash) '() (hash)))
     [`(,loaded ,postorder ,_) (list loaded (reverse postorder))]))
 
@@ -360,6 +379,11 @@
       [(cons 'list ps) (cons 'list (map rpat ps))]
       [(cons 'vector ps) (cons 'vector (map rpat ps))]
       [(list '? pred p0) (list '? (rsym pred) (rpat p0))]
+      ;; ADT constructor patterns: the head is a top-level name
+      ;; (renamed like any other), the rest are subpatterns
+      [(cons head ps)
+       #:when (and (symbol? head) (list? ps))
+       (cons (rsym head) (map rpat ps))]
       [_ (if (symbol? p) (rsym p) p)]))
   (define (rqq-pat q)
     (match q
@@ -426,7 +450,7 @@
              (lambda (r acc)
                (match acc
                  [`(,ren ,aliases)
-                  (let ([dep (hash-ref loaded (hash-ref r 'target))])
+                  (let ([dep (hash-ref loaded (path-key (hash-ref r 'target)))])
                     (begin
                       (when (hash-ref r 'sig)
                         (check-signature (hash-ref r 'sig) (hash-ref dep 'body)
