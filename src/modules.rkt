@@ -26,7 +26,20 @@
 
 (provide resolve-modules
          module-forms?
-         read-module-forms)
+         read-module-forms
+         ;; shared with the separate-compilation driver (separate.rkt):
+         ;; the DAG loader, the renamer, and the small pieces both
+         ;; resolution styles agree on
+         load-modules
+         (struct-out mod)
+         (struct-out req)
+         rename-forms
+         check-signature
+         keyword-names
+         defn-name
+         defn-arity
+         fnv1a-32
+         module-error)
 
 ;; ---------------------------------------------------------------------
 ;; reading

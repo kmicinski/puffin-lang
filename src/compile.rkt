@@ -709,6 +709,17 @@
            forms))
   (define name->idx
     (foldl (λ (x acc) (hash-set acc x (hash-count acc))) (hash) global-names))
+  ;; separate compilation: imported value defines resolve to slots in
+  ;; the exporting module's globals array -- the slot descriptor is
+  ;; (ext <label> <k>) rather than a plain index, and flows opaquely
+  ;; through every later pass until the renderer addresses the label.
+  ;; Empty (the default) under whole-program compilation.
+  (define ext-globals (module-ext-globals))
+  (define (global-slot x shadowed)
+    (cond [(set-member? shadowed x) #f]
+          [(hash-ref name->idx x #f) => values]
+          [(hash-ref ext-globals x #f) => values]
+          [else #f]))
   ;; rewrite global reads/writes; `shadowed` holds locally-bound names
   (define (walk e shadowed) (prov (walk-core e shadowed) e))
   (define (walk-core e shadowed)
@@ -721,9 +732,8 @@
       [`(quote ,_) e]
       [`(string-lit ,_) e]
       [(? symbol? x)
-       (if (and (hash-has-key? name->idx x) (not (set-member? shadowed x)))
-           `(global-ref ,(hash-ref name->idx x))
-           x)]
+       (cond [(global-slot x shadowed) => (λ (i) `(global-ref ,i))]
+             [else x])]
       [`(if ,e0 ,e1 ,e2) `(if ,(walk e0 shadowed) ,(walk e1 shadowed) ,(walk e2 shadowed))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(walk e-g shadowed) ,(walk e-b shadowed))]) ,(walk e-r shadowed))]
@@ -732,9 +742,9 @@
       [`(let ([,x ,e]) ,e-b)
        `(let ([,x ,(walk e shadowed)]) ,(walk e-b (set-add shadowed x)))]
       [`(set! ,x ,e)
-       (if (and (hash-has-key? name->idx x) (not (set-member? shadowed x)))
-           `(global-set! ,(hash-ref name->idx x) ,(walk e shadowed))
-           `(set! ,x ,(walk e shadowed)))]
+       (cond [(global-slot x shadowed)
+              => (λ (i) `(global-set! ,i ,(walk e shadowed)))]
+             [else `(set! ,x ,(walk e shadowed))])]
       [`(lambda (,xs ...) ,e-b)
        `(lambda ,xs ,(walk e-b (set-union shadowed (list->set xs))))]
       [`(,(? prim? op) ,es ...) `(,op ,@(map (λ (e) (walk e shadowed)) es))]
@@ -806,9 +816,17 @@
       [`(,e-f ,e-args ...) `(app ,(walk e-f assignment) ,@(map (lambda (e) (walk e assignment)) e-args))]))
   (match p
     [`(program ,n-globals (define (,names ,params ...) ,bodies) ...)
+     ;; separate compilation: imported functions (mangled labels the
+     ;; linker resolves against other modules' .o's) are revealed
+     ;; exactly like own top-level functions. Own definitions win on
+     ;; a name collision (they are folded in second). Empty under
+     ;; whole-program compilation.
+     (define ext-set
+       (for/fold ([acc (hash)]) ([(name label) (in-hash (module-ext-funs))])
+         (hash-set acc name `(fun-ref ,label))))
      (define name-set
        (foldl (lambda (name acc) (hash-set acc name `(fun-ref ,name)))
-              (hash)
+              ext-set
               names))
      `(program
        ,n-globals
