@@ -61,6 +61,34 @@
 ;; ---------------------------------------------------------------------
 
 (define (desugar p)
+  ;; ---- gradual types (docs/TYPES.md): ADT tables ---------------------
+  ;; define-type constructors are collected up front (all of a
+  ;; module's types are implicitly mutually recursive, like top-level
+  ;; defines), so match patterns can recognize constructor heads and
+  ;; the lowering below can emit their defines before the prim-shadow
+  ;; rename map is computed.
+  (define ctor-arity (make-hasheq))     ;; ctor -> field count
+  (define nullary-ctors (mutable-seteq))
+  (match p
+    [`(program ,forms ...)
+     (for ([f forms])
+       (match f
+         [`(define-type ,_ ,ctors ...)
+          (for ([c ctors])
+            (match c
+              [`(,cn ,fts ...)
+               (hash-set! ctor-arity cn (length fts))
+               (when (null? fts) (set-add! nullary-ctors cn))]))]
+         [_ (void)]))])
+  (define (ctor-name? x) (and (symbol? x) (hash-has-key? ctor-arity x)))
+
+  ;; annotation helpers: [x : t] formals and [x : t e] let bindings
+  (define (annotated-formal? f) (match f [`(,(? symbol?) : ,_) #t] [_ #f]))
+  (define (strip-formals fs)
+    (map (λ (f) (match f [`(,x : ,_) x] [x x])) fs))
+  (define (annotated-binding? b) (match b [`(,(? symbol?) : ,_ ,_) #t] [_ #f]))
+  (define (strip-binding b) (match b [`(,x : ,_ ,e) `(,x ,e)] [b b]))
+
   ;; `bound` maps every lexically bound name to the name to use for
   ;; it downstream. Binding a name that collides with a stdlib
   ;; primitive renames it (gensym), so that after this pass a
@@ -149,9 +177,34 @@
   ;; otherwise. fail-e is duplicated only at test sites--it is
   ;; always a tiny thunk call. `bound` already contains the pattern
   ;; variables' (possibly renamed) bindings.
+  ;; ADT constructor test + field extraction: an instance is a tagged
+  ;; vector #(Ctor field ...) (docs/TYPES.md §2); the tag check makes
+  ;; nullary constructors safe in patterns even before their define
+  ;; initializes
+  (define (compile-ctor-pattern c ps subject success fail-e bound)
+    (define n (length ps))
+    (define (fields ps i success)
+      (match ps
+        ['() success]
+        [`(,p . ,rest)
+         (define x (gensym 'adt))
+         `(let ([,x (vector-ref ,subject ,(add1 i))])
+            ,(compile-pattern p x (fields rest (add1 i) success) fail-e bound))]))
+    `(if (if (vector? ,subject)
+             (if (eq? (vector-length ,subject) ,(add1 n))
+                 (eq? (vector-ref ,subject 0) (quote ,c))
+                 #f)
+             #f)
+         ,(fields ps 0 success)
+         ,fail-e))
+
   (define (compile-pattern pat subject success fail-e bound)
     (match pat
       ['_ success]
+      ;; a bare nullary-constructor name matches that constructor,
+      ;; not a binder (None in [(Some x) ...] [None ...])
+      [(? (λ (s) (and (symbol? s) (set-member? nullary-ctors s))) c)
+       (compile-ctor-pattern c '() subject success fail-e bound)]
       [(? symbol? x) `(let ([,(hash-ref bound x x) ,subject]) ,success)]
       [(? fixnum? n) `(if (eq? ,subject ,n) ,success ,fail-e)]
       [(? boolean? b) `(if (eq? ,subject ,b) ,success ,fail-e)]
@@ -190,7 +243,13 @@
       [(list '? pred p)
        `(if (,(hash-ref bound pred pred) ,subject)
             ,(compile-pattern p subject success fail-e bound)
-            ,fail-e)]))
+            ,fail-e)]
+      ;; ADT constructor patterns: (Ctor p ...)
+      [`(,(? ctor-name? c) ,ps ...)
+       (unless (= (length ps) (hash-ref ctor-arity c))
+         (error 'desugar "constructor ~a expects ~a fields, got ~a in pattern ~a"
+                c (hash-ref ctor-arity c) (length ps) pat))
+       (compile-ctor-pattern c ps subject success fail-e bound)]))
 
   ;; quasiquote patterns: symbols/numbers match themselves as data;
   ;; (unquote p) escapes back to pattern matching; lists match
@@ -302,6 +361,8 @@
   (define (pattern-vars pat)
     (match pat
       ['_ (set)]
+      ;; a bare nullary constructor is a test, not a binder
+      [(? (λ (s) (and (symbol? s) (set-member? nullary-ctors s))) _) (set)]
       [(? symbol? x) (set x)]
       [(? fixnum?) (set)]
       [(? boolean?) (set)]
@@ -316,7 +377,8 @@
       [(list 'cons p0 p1) (set-union (pattern-vars p0) (pattern-vars p1))]
       [(list-rest 'list ps) (apply set-union (set) (map pattern-vars ps))]
       [(list-rest 'vector ps) (apply set-union (set) (map pattern-vars ps))]
-      [(list '? _ p) (pattern-vars p)]))
+      [(list '? _ p) (pattern-vars p)]
+      [`(,(? ctor-name?) ,ps ...) (apply set-union (set) (map pattern-vars ps))]))
 
   (define (compile-match e-subj clauses bound)
     (define subject (gensym 'mat-subject))
@@ -388,6 +450,26 @@
                  ,(per-clause rest))]))
        `(let ([,k ,(h e-k bound)]) ,(per-clause clauses))]
       [`(match ,e-subj ,clauses ...) (compile-match e-subj clauses bound)]
+      ;; gradual types: expression ascription erases; annotated
+      ;; lambdas/lets normalize to their plain forms (the typecheck
+      ;; pass has already consumed the annotations by now)
+      [`(ann ,e0 ,_) #:when (not (hash-has-key? bound 'ann))
+       (h e0 bound)]
+      [`(,(or 'lambda 'λ) (,formals ...) : ,_ ,body ...)
+       #:when (andmap (λ (f) (or (symbol? f) (annotated-formal? f))) formals)
+       (h `(lambda ,(strip-formals formals) ,@body) bound)]
+      [`(,(or 'lambda 'λ) (,formals ...) ,body ...)
+       #:when (ormap annotated-formal? formals)
+       (h `(lambda ,(strip-formals formals) ,@body) bound)]
+      [`(let ,(? symbol? loop) (,(? list? bindings) ...) ,body ...)
+       #:when (ormap annotated-binding? bindings)
+       (h `(let ,loop ,(map strip-binding bindings) ,@body) bound)]
+      [`(let (,(? list? bindings) ...) ,body ...)
+       #:when (ormap annotated-binding? bindings)
+       (h `(let ,(map strip-binding bindings) ,@body) bound)]
+      [`(let* (,(? list? bindings) ...) ,body ...)
+       #:when (ormap annotated-binding? bindings)
+       (h `(let* ,(map strip-binding bindings) ,@body) bound)]
       ;; binding
       [`(let ,(? symbol? loop) ([,xs ,es] ...) ,body ...)
        ;; named let: a self-referential closure via set! (assignment
@@ -488,11 +570,36 @@
       [`(,e-f ,e-args ...)
        `(,(h e-f bound) ,@(map (λ (e) (h e bound)) e-args))]))
 
+  ;; gradual types: lower type-level forms before the prim-shadow map
+  ;; is computed. A define-type becomes one define per constructor
+  ;; (nullary = the singleton instance, n-ary = a builder function);
+  ;; (: name t) declarations vanish; annotated defines lose their
+  ;; [x : t] formals and `: t` results.
+  (define (lower-type-form form)
+    (match form
+      [`(define-type ,_ ,ctors ...)
+       (for/list ([c ctors])
+         (match c
+           [`(,cn) `(define ,cn (vector (quote ,cn)))]
+           [`(,cn ,fts ...)
+            (define xs (for/list ([_ fts]) (gensym 'fld)))
+            `(define (,cn ,@xs) (vector (quote ,cn) ,@xs))]))]
+      [`(: ,(? symbol?) ,_) '()]
+      [`(define (,f ,formals ...) : ,_ ,body ...)
+       #:when (andmap (λ (x) (or (symbol? x) (annotated-formal? x))) formals)
+       (list `(define (,f ,@(strip-formals formals)) ,@body))]
+      [`(define (,f ,formals ...) ,body ...)
+       #:when (and (andmap (λ (x) (or (symbol? x) (annotated-formal? x))) formals)
+                   (ormap annotated-formal? formals))
+       (list `(define (,f ,@(strip-formals formals)) ,@body))]
+      [form (list form)]))
+
   ;; Top-level definitions shadow stdlib primitives; colliding names
   ;; are renamed here, once, for the whole program.
   (define-values (top-bound top-forms)
     (match p
       [`(program ,forms ...)
+       (define lowered (append-map lower-type-form forms))
        (define-values (b _)
          (bind* (hash)
                 (filter-map (λ (form)
@@ -501,8 +608,8 @@
                                 [`(define (,f . ,_) ,_ ...) f]
                                 [`(define ,(? symbol? x) ,_) x]
                                 [_ #f]))
-                            forms)))
-       (values b forms)]))
+                            lowered)))
+       (values b lowered)]))
   (define (per-form form)
     (match form
       [`(define (,f ,xs ...) ,body ...)

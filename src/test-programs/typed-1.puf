@@ -1,0 +1,46 @@
+;; gradual types tour (docs/TYPES.md): ADTs, constructor patterns,
+;; annotations anywhere, _ everywhere else
+(define-type (Option a)
+  (None)
+  (Some a))
+
+(define-type Expr
+  (Num Int)
+  (EAdd Expr Expr)
+  (EMul Expr Expr)
+  (ENeg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [(Num n) n]
+    [(EAdd a b) (+ (eval-expr a) (eval-expr b))]
+    [(EMul a b) (* (eval-expr a) (eval-expr b))]
+    [(ENeg a) (- (eval-expr a))]))
+
+(println (eval-expr (EAdd (Num 1) (EMul (Num 3) (ENeg (Num 4))))))  ;; -11
+
+(: safe-div (-> Int Int (Option Int)))
+(define (safe-div a b)
+  (if (eq? b 0) None (Some (quotient a b))))
+
+(define (or-else [o : (Option Int)] [d : Int]) : Int
+  (match o
+    [(Some x) x]
+    [None d]))
+
+(println (or-else (safe-div 10 2) -1))   ;; 5
+(println (or-else (safe-div 10 0) -1))   ;; -1
+
+;; annotated let bindings + annotated lambda formals, mixed with plain
+(let ([xs : (List Int) (list 1 2 3)])
+  (println (foldl (lambda ([x : Int] acc) (+ x acc)) 0 xs)))  ;; 6
+
+(println (ann (+ 20 22) Int))  ;; 42
+
+;; higher-order over ADTs, mostly inferred
+(define (omap f o)
+  (match o
+    [(Some x) (Some (f x))]
+    [None None]))
+(println (or-else (omap (lambda (x) (* x x)) (Some 6)) 0))  ;; 36
+(or-else (omap (lambda (x) (* x x)) None) 99)               ;; 99
