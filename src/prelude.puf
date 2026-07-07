@@ -120,9 +120,15 @@
 (define (symbol<? a b) (string<? (symbol->string a) (symbol->string b)))
 
 (define (string-join xs sep)
+  ;; linear + tail: interleave into a list, one string-concat --
+  ;; binary append here was O(n^2) bytes and O(n) stack (30GB-RSS bug)
   (cond [(null? xs) ""]
         [(null? (cdr xs)) (car xs)]
-        [else (string-append (car xs) (string-append sep (string-join (cdr xs) sep)))]))
+        [else
+         (let loop ([rest (cdr xs)] [acc (list (car xs))])
+           (if (null? rest)
+               (string-concat (reverse acc))
+               (loop (cdr rest) (cons (car rest) (cons sep acc)))))]))
 
 ;; variadic format: (format "~a + ~a~%" 1 2)
 ;; ~a and ~s both render display-style; ~% newline; ~~ tilde.

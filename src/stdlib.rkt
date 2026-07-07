@@ -279,6 +279,9 @@
    ;; ---- io: files, argv, subprocesses (lib/io.c) -------------------------
    ;; What a self-contained compiler driver needs: puffincc reads its
    ;; input modules, writes assembly, and shells out to the assembler.
+   (prim-spec 'string-concat 1 'pf_string_concat #t
+              (λ (xs) (apply string-append xs))
+              "Concatenate a list of strings in one allocation (linear; string-join's backbone).")
    (prim-spec 'read-file 1 'pf_read_file #t
               (λ (p) (file->string p))
               "The named file's bytes, as a string (exits with an error if unreadable).")
