@@ -935,8 +935,12 @@
 ;; ---------------------------------------------------------------------
 
 (define (lift-lambdas p)
-  (define emitted-defines (set))
-  (define (emit-define! defn) (set! emitted-defines (set-add emitted-defines defn)))
+  ;; emitted defines accumulate on a list in emission order (gensym'd
+  ;; names keep entries distinct). A set would work too, but its
+  ;; iteration order is unspecified -- puffincc's HAMT sets iterate
+  ;; differently, and diff-ir compares definitions positionally.
+  (define emitted-defines '())
+  (define (emit-define! defn) (set! emitted-defines (cons defn emitted-defines)))
   ;; calculate the free variables of an expression e...
   (define (free-vars e)
     (match e
@@ -1043,7 +1047,7 @@
        `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
   (match p
     [`(program ,n-globals ,definitions ...)
-     `(program ,n-globals ,@(map per-defn definitions) ,@(set->list emitted-defines))]))
+     `(program ,n-globals ,@(map per-defn definitions) ,@(reverse emitted-defines))]))
 
 ;; ---------------------------------------------------------------------
 ;; Pass: limit-functions
@@ -1148,6 +1152,20 @@
       ['() (k '())]
       [`(,hd . ,tl)
        (convert-expr hd (λ (a) (convert-args tl (λ (as) (k (cons a as))))))]))
+  ;; join points: naively an if's continuation is duplicated into
+  ;; BOTH branches, which is exponential under nested ifs. Probe the
+  ;; continuation with a fresh variable; when its output is more
+  ;; than a small bounded expression, bind the if's value once
+  ;; instead -- both branches reduce to an atom, the if sits in a
+  ;; let rhs (a legal ANF join shape; explicate-control gives the
+  ;; continuation a single join block). A trivial continuation (the
+  ;; identity of tail position, or a small wrapper) is still
+  ;; duplicated so tail calls in branches stay in tail position.
+  (define join-size-limit 24)
+  (define (exp-size v)
+    (if (pair? v) (+ (exp-size (car v)) (exp-size (cdr v))) 1))
+  (define (small-continuation? k)
+    (<= (exp-size (k (gensym 'probe))) join-size-limit))
   (define (convert-expr e k) (prov (convert-expr-core e k) e))
   (define (convert-expr-core e k)
     (match e
@@ -1176,12 +1194,24 @@
        (convert-args
         (list ea eb)
         (λ (as)
-          `(if (,op ,@as) ,(convert-expr e1 k) ,(convert-expr e2 k))))]
+          (if (small-continuation? k)
+              `(if (,op ,@as) ,(convert-expr e1 k) ,(convert-expr e2 k))
+              (let ([x (gensym 'join)])
+                `(let ([,x (if (,op ,@as)
+                               ,(convert-expr e1 (λ (a) a))
+                               ,(convert-expr e2 (λ (a) a)))])
+                   ,(k x))))))]
       [`(if ,e0 ,e1 ,e2)
        (convert-expr
         e0
         (λ (a-g)
-          `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))))]
+          (if (small-continuation? k)
+              `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))
+              (let ([x (gensym 'join)])
+                `(let ([,x (if ,a-g
+                               ,(convert-expr e1 (λ (a) a))
+                               ,(convert-expr e2 (λ (a) a)))])
+                   ,(k x))))))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
        `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
           ,(convert-expr e-r k))]
@@ -1276,6 +1306,18 @@
        (expr->blocks e+ current-block k)]
       [`(let ([_ ,rhs]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(effect ,rhs))]
+      ;; join points ((let ([x (if g e-t e-f)]) e+), from anf-convert
+      ;; when the if's continuation was non-trivial): both branches
+      ;; assign x and meet at a fresh label holding the (single)
+      ;; continuation of the if
+      [`(let ([,x (if ,g ,e-t ,e-f)]) ,e+)
+       (define l-join (gensym 'join))
+       (define rest-blocks (expr->blocks e+ l-join k))
+       (define if-blocks
+         (expr->blocks `(if ,g ,e-t ,e-f)
+                       current-block
+                       (λ (a) `(seq (assign ,x ,a) (goto ,l-join)))))
+       (merge rest-blocks if-blocks)]
       ;; proper tail calls: an app whose value is immediately
       ;; returned becomes a tail-app (the backends turn it into an
       ;; epilogue + indirect jump, so loops run in constant stack)

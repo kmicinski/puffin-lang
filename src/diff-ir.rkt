@@ -20,7 +20,15 @@
   (define seen (make-hash))
   (define counter 0)
   (define (norm-sym s)
-    (define str (symbol->string s))
+    (define str0 (symbol->string s))
+    ;; a gensym'd arithmetic name (+198) prints bare and would read
+    ;; back from puffincc's dump as a number, so its serialize-ir
+    ;; prefixes number-reading symbols with "%"; mirror that here
+    ;; (same predicate as the runtime's string->number: strtoll,
+    ;; i.e. an optional sign then digits)
+    (define str (if (regexp-match #rx"^[+-]?[0-9]+$" str0)
+                    (string-append "%" str0)
+                    str0))
     (define m (regexp-match #rx"^(.*?)[.]?[0-9]+$" str))
     (cond
       [(and m (> (string-length (second m)) 0))
@@ -31,10 +39,12 @@
       [else s]))
   (let walk ([v tree])
     (cond [(symbol? v) (norm-sym v)]
-          ;; puffincc's dump displays strings unquoted, so they read
-          ;; back as symbols; mirror that (multi-token strings will
-          ;; still mismatch -- acceptable for a debugging diff)
-          [(string? v) (string->symbol v)]
+          ;; puffincc's serialize-ir renders a string as
+          ;; (string-repr <byte> ...) -- println would display its
+          ;; contents unquoted (unreadable if it holds "," or ")");
+          ;; mirror that here
+          [(string? v)
+           (cons 'string-repr (bytes->list (string->bytes/utf-8 v)))]
           [(pair? v) (cons (walk (car v)) (walk (cdr v)))]
           [(hash? v)
            ;; align with puffincc's serialize-ir

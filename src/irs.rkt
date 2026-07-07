@@ -533,6 +533,13 @@
   (match e
     [(? atom?)                                                      #t]
     [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
+    ;; join points: an if in a let rhs, both branches reducing to
+    ;; the bound atom -- emitted by anf-convert when the if's
+    ;; continuation is non-trivial (binding it once instead of
+    ;; duplicating it into both branches, which is exponential
+    ;; under nested ifs)
+    [`(let ([,_ (if ,(? atom?) ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
+    [`(let ([,_ (if (,(? cmp?) ,(? atom?) ,(? atom?)) ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
     [`(let ([,_ ,(? anf-rhs?)]) ,(? anf-exp?))                      #t]
     [`(if ,(? atom?) ,(? anf-exp?) ,(? anf-exp?))                   #t]
     ;; fused compare-and-branch (>= -O1): the test is one comparison
