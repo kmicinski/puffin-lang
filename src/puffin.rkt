@@ -12,9 +12,13 @@
 ;;                                   compile every DAG module separately
 ;;                                   (cached) and link (docs/MODULES.md §3)
 ;;   puffin -t x86-64 ...            pick a target (default: host)
+;;   puffin -t bytecode prog.puf     compile to a .pbc unit and run it
+;;                                   on bin/puffin-vm (docs/BYTECODE.md);
+;;                                   with -c, produce prog.pbc
 ;;
 ;; bin/puffin wraps this in a shell script.
 
+(require racket/runtime-path)
 (require "system.rkt")
 (require "compile.rkt")
 (require "interpreters.rkt")
@@ -46,10 +50,18 @@
        (exit 1)]
       [_ (void)])))
 
+(define-runtime-path puffin-vm-path "../bin/puffin-vm")
+
 (define (run-file file)
-  (define exe (build-path (find-system-path 'temp-dir) (format "puffin-run-~a" (current-milliseconds))))
+  (define bc? (eq? (target) 'bytecode))
+  (define exe (build-path (find-system-path 'temp-dir)
+                          (format "puffin-run-~a~a" (current-milliseconds) (if bc? ".pbc" ""))))
   (compile-to file (path->string exe))
-  (define code (system/exit-code (format "~a" exe)))
+  ;; a bytecode unit runs on the VM (bin/puffin-vm; make -C src/vm)
+  (define code
+    (if bc?
+        (system/exit-code (format "~a ~a" puffin-vm-path exe))
+        (system/exit-code (format "~a" exe))))
   (delete-file exe)
   (exit code))
 
@@ -90,5 +102,8 @@
      (build-separate file (or (output-path)
                               (path->string (path-replace-extension file ""))))]
     [(compile-only)
-     (compile-to file (or (output-path) (path->string (path-replace-extension file ""))))]
+     (compile-to file (or (output-path)
+                          (path->string (path-replace-extension
+                                         file
+                                         (if (eq? (target) 'bytecode) ".pbc" "")))))]
     [else (run-file file)]))

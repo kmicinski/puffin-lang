@@ -200,13 +200,55 @@
           (check! tgt prog input (string-append program-out err-out) golden))))))
 
 ;; ---------------------------------------------------------------------
+;; bytecode mode: compile with -t bytecode (LEAN, like the native
+;; modes) and run the unit on bin/puffin-vm against the same goldens
+;; ---------------------------------------------------------------------
+
+(define (run-bytecode-tests progs)
+  (define vm (build-path here ".." "bin" "puffin-vm"))
+  (unless (file-exists? vm)
+    (error 'bytecode "bin/puffin-vm not built (make -C src/vm)"))
+  (define pbc (build-path (find-system-path 'temp-dir) (format "puffin-test-~a.pbc" (current-milliseconds))))
+  (for ([prog progs])
+    (define compiled?
+      (parameterize ([target 'bytecode]
+                     [retain-trace? #f]
+                     [write-stdout-mode #f]
+                     [verbose-mode #f]
+                     [executable-file (path->string pbc)])
+        (with-handlers ([exn:fail? (λ (e)
+                                     (check! 'bytecode/compile prog "-" (exn-message e) "compiles")
+                                     #f)])
+          (match (run/capture (λ () (run-assembler-linker (read-program-file (program-path prog)))))
+            [(cons `(err ,_) out)
+             (check! 'bytecode/compile prog "-" (string-append "compile error\n" out) "compiles")
+             #f]
+            [_ #t]))))
+    (when compiled?
+      (for ([input (input-names)])
+        (define golden (golden-for prog input))
+        (when golden
+          (define-values (sp out in err)
+            (subprocess #f #f #f vm pbc))
+          ;; a fast unit (or a crashing one) may close stdin before
+          ;; we write it -- same guard as the native modes
+          (with-handlers ([exn:fail? (lambda (_) (void))])
+            (fprintf in "~a\n" (string-join (map number->string (input-ints input)) " "))
+            (close-output-port in))
+          (define program-out (port->string out))
+          (define err-out (port->string err))
+          (subprocess-wait sp)
+          (close-input-port out) (close-input-port err)
+          (check! 'bytecode prog input (string-append program-out err-out) golden))))))
+
+;; ---------------------------------------------------------------------
 ;; entry
 ;; ---------------------------------------------------------------------
 
 (define chosen-progs
   (command-line
    #:once-each
-   [("-m" "--mode") m "Mode: interp | chain | x86-64 | arm64 | all | gen" (mode m)]
+   [("-m" "--mode") m "Mode: interp | chain | x86-64 | arm64 | bytecode | all | gen" (mode m)]
    [("-O" "--optimize") lvl "Optimization level (default 1)" (optimize-level (string->number lvl))]
    #:args progs
    (if (empty? progs) (program-names) progs)))
@@ -250,6 +292,7 @@
   ["chain"  (run-chain-tests chosen-progs)]
   ["x86-64" (run-native-tests chosen-progs 'x86-64)]
   ["arm64"  (run-native-tests chosen-progs 'arm64)]
+  ["bytecode" (run-bytecode-tests chosen-progs)]
   ["puffincc" (run-puffincc-tests chosen-progs 'arm64)]
   ["puffincc-x86" (run-puffincc-tests chosen-progs 'x86-64)]
   ["all"

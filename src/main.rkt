@@ -58,7 +58,14 @@
                                 (λ () #f)))
      (if b
          (b)
-         (error 'backend "the arm64 backend is not available; use --target x86-64"))]))
+         (error 'backend "the arm64 backend is not available; use --target x86-64"))]
+    ['bytecode
+     (define b (dynamic-require (build-path src-dir "backend-bytecode.rkt")
+                                'bytecode-backend-passes
+                                (λ () #f)))
+     (if b
+         (b)
+         (error 'backend "the bytecode backend is not available"))]))
 
 (define (all-passes) (append frontend-passes (backend-passes)))
 
@@ -260,7 +267,31 @@
 
 ;; Generate a binary (delete any stale executable first, then verify
 ;; its creation). Returns either the trace or `(err ,trace).
+;;
+;; Target 'bytecode short-circuits the toolchain half: the last pass
+;; (render-pbc) already produced the unit's bytes, which ARE the
+;; output artifact (a .pbc file the VM loads); there is nothing to
+;; assemble or link.
 (define (run-assembler-linker source-tree)
+  (if (eq? (target) 'bytecode)
+      (run-bytecode-renderer source-tree)
+      (run-native-assembler-linker source-tree)))
+
+(define (run-bytecode-renderer source-tree)
+  (define trace
+    (parameterize ([end-pass (if (equal? (end-pass) "render-asm") "render-pbc" (end-pass))])
+      (compile-verbose source-tree)))
+  (cond
+    [(and (equal? "render-pbc" (hash-ref (last trace) 'pass-name "unknown"))
+          (bytes? (hash-ref (last trace) 'output)))
+     (with-output-to-file (executable-file) #:exists 'replace
+       (λ () (write-bytes (hash-ref (last trace) 'output))))
+     trace]
+    [else
+     (displayln "Error! Bytecode rendering failed")
+     `(err ,trace)]))
+
+(define (run-native-assembler-linker source-tree)
   (displayln (format "Compiling for target ~a ..." (target)))
   ;; delete the ASM file so we can detect if it got generated
   (when (file-exists? (asm-file)) (delete-file (asm-file)))
