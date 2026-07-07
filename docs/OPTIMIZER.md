@@ -218,6 +218,16 @@ contraction):
    unreachable in the final state graph are dropped (subsumes and extends
    the parse-time prelude pruning).
 
+## 6.5b Final measurements (2026-07-07, post join-points/growth-budget/lean)
+
+14-benchmark geomean: **0.954× Racket (Chez) — faster overall**, 8/14
+outright wins. -O1 buys a 1.53× geomean over -O0; -O2's flow analysis
+adds ~1% geomean on these workloads (its clients mostly matter on
+higher-order code the suite underweights). Compile times are honest
+now: the hosted stage-1 build is 8.8s/463MB (--lean), puffincc
+self-compiles in ~527MB. Full interactive breakdown per level:
+bench/report.html ("The optimization explorer").
+
 ## 6.5 What the first measurements taught us (2026-07-06)
 
 With `-O1` (contraction + direct known calls + open-coded prims) the
