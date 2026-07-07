@@ -1,0 +1,365 @@
+;; puffincc -- contract.puf: -O1 cp0-style contraction + bounded
+;; inlining over the core IR (post-uniqueify, pre-collect-globals).
+;; The Puffin port of src/opt/contract.rkt; see docs/OPTIMIZER.md §4.
+;;
+;; The rewrite is demand-driven and metered: every node copied on
+;; behalf of an inlining attempt charges an effort counter; when a
+;; budget trips, the attempt residualizes. Total time is O(n · E).
+;;
+;; (contract-program p) -> (list p* changed?)
+
+(require "system.puf")
+
+;; ---- effect-free prims (safe to drop when their value is unused) ----
+;; Only genuine backend prims belong here: prelude functions are
+;; ordinary bindings a user may shadow with something impure.
+(define pure-prims
+  (list->set '(+ - * eq? < <= > >= quotient remainder modulo
+               bitwise-and bitwise-ior bitwise-xor arithmetic-shift
+               cons car cdr pair? null? fixnum? boolean? symbol? string?
+               procedure? vector? hash? set?
+               vector make-vector vector-ref vector-length
+               string-length string-append substring string-byte string<? string=?
+               symbol->string string->symbol number->string string->number
+               hash hash-set hash-ref hash-ref/default hash-has-key? hash-count hash-keys hash-remove
+               set-add set-member? set-count set-remove set->list
+               equal? value->string)))
+
+(define (contract-literal? e)
+  (match e
+    [#t #t] [#f #t]
+    [`(void) #t] [`(nil) #t]
+    [(list 'quote _) #t]
+    [`(string-lit ,_) #t]
+    [_ (fixnum? e)]))
+
+(define (pure-exp? e)
+  (match e
+    [(? symbol? _) #t]
+    [`(lambda ,_ ,_) #t]
+    [`(if ,a ,b ,c) (and (pure-exp? a) (pure-exp? b) (pure-exp? c))]
+    [`(let ([,_ ,r]) ,b) (and (pure-exp? r) (pure-exp? b))]
+    [`(begin ,es ...) (andmap pure-exp? es)]
+    [`(,op ,args ...)
+     #:when (symbol? op)
+     (and (set-member? pure-prims op) (andmap pure-exp? args))]
+    [_ (contract-literal? e)]))
+
+;; ---- census: one pass over the whole program -------------------------
+;; census = (list refs assigned binding bound), mutable containers:
+;;   refs      var -> reference count           (make-hash)
+;;   assigned  vars ever set!                   (make-set)
+;;   binding   var -> rhs of its unique binding (make-hash)
+;;   bound     every name BOUND in the censused program: inlining
+;;             freshens binders, so the rewrite can meet names the
+;;             census never saw; facts about those are vacuous and
+;;             clients must treat them conservatively.
+
+(define (make-contract-census p)
+  (define refs (make-hash))
+  (define assigned (make-set))
+  (define binding (make-hash))
+  (define bound (make-set))
+  (define (ref! x) (hash-set! refs x (+ 1 (hash-ref/default refs x 0))))
+  (define (walk e)
+    (match e
+      [(? symbol? x) (ref! x)]
+      [`(read) (void)] [`(void) (void)] [`(nil) (void)]
+      [(list 'quote _) (void)]
+      [`(string-lit ,_) (void)]
+      [`(set! ,x ,e0) (begin (set-add! assigned x) (walk e0))]
+      [`(let ([,x ,rhs]) ,body)
+       (begin (hash-set! binding x rhs)
+              (set-add! bound x)
+              (walk rhs) (walk body))]
+      [`(lambda ,xs ,body)
+       (begin (map (lambda (x) (set-add! bound x)) xs) (walk body))]
+      [`(if ,a ,b ,c) (begin (walk a) (walk b) (walk c))]
+      [`(while ,c ,b) (begin (walk c) (walk b))]
+      [`(begin ,es ...) (map walk es)]
+      [`(,rator ,rands ...) (begin (walk rator) (map walk rands))]
+      [_ (void)]))
+  (match p
+    [`(program ,forms ...)
+     (map (lambda (f)
+            (match f
+              [`(define (,name ,args ...) ,body)
+               (begin (hash-set! binding name `(lambda ,args ,body))
+                      (set-add! bound name)
+                      (map (lambda (x) (set-add! bound x)) args)
+                      (walk body))]
+              [`(define ,name ,rhs)
+               (begin (hash-set! binding name rhs)
+                      (set-add! bound name)
+                      (walk rhs))]
+              [e (walk e)]))
+          forms)])
+  (list refs assigned binding bound))
+
+(define (census-refs c) (first c))
+(define (census-assigned c) (second c))
+(define (census-binding c) (third c))
+(define (census-bound c) (fourth c))
+(define (fourth xs) (list-ref xs 3))
+
+(define (ref-count c x) (hash-ref/default (census-refs c) x 0))
+(define (assigned? c x) (set-member? (census-assigned c) x))
+(define (binding-of c x) (hash-ref/default (census-binding c) x #f))
+(define (known? c x) (set-member? (census-bound c) x))
+
+;; ---- size + fresh-renaming copy (charged against the effort) ---------
+
+(define (exp-size e)
+  (if (pair? e)
+      (foldl (lambda (s acc) (+ acc (exp-size s))) 1 e)
+      1))
+
+;; effort: a 1-slot vector of remaining fuel; every copied node costs 1
+(define (spend! effort n)
+  (define left (- (vector-ref effort 0) n))
+  (begin (vector-set! effort 0 left)
+         (> left 0)))
+
+;; copy e, freshening every bound variable; rn maps old->new
+(define (freshen e rn effort)
+  (and (spend! effort 1)
+       (match e
+         [(? symbol? x) (hash-ref/default rn x x)]
+         [`(read) e] [`(void) e] [`(nil) e]
+         [(list 'quote _) e]
+         [`(string-lit ,_) e]
+         [`(set! ,x ,e0)
+          (let ([e0* (freshen e0 rn effort)])
+            (and e0* `(set! ,(hash-ref/default rn x x) ,e0*)))]
+         [`(let ([,x ,rhs]) ,body)
+          ;; `_` is the throwaway binder (and the while wrapper's
+          ;; marker): never referenced, must stay literally `_`
+          (let* ([x* (if (eq? x '_) '_ (gensym x))]
+                 [rhs* (freshen rhs rn effort)]
+                 [body* (and rhs*
+                             (freshen body
+                                      (if (eq? x '_) rn (hash-set rn x x*))
+                                      effort))])
+            (and body* `(let ([,x* ,rhs*]) ,body*)))]
+         [`(lambda (,xs ...) ,body)
+          ;; the #%rest variadic marker is a keyword, not a binder
+          (let* ([xs* (map (lambda (x) (if (eq? x '#%rest) x (gensym x))) xs)]
+                 [rn* (foldl2 (lambda (x x* m) (hash-set m x x*)) rn xs xs*)]
+                 [body* (freshen body rn* effort)])
+            (and body* `(lambda ,xs* ,body*)))]
+         [`(if ,a ,b ,c)
+          (let* ([a* (freshen a rn effort)]
+                 [b* (and a* (freshen b rn effort))]
+                 [c* (and b* (freshen c rn effort))])
+            (and c* `(if ,a* ,b* ,c*)))]
+         [`(while ,a ,b)
+          (let* ([a* (freshen a rn effort)]
+                 [b* (and a* (freshen b rn effort))])
+            (and b* `(while ,a* ,b*)))]
+         [`(begin ,es ...)
+          (let loop ([es es] [acc '()])
+            (if (null? es)
+                `(begin ,@(reverse acc))
+                (let ([e* (freshen (car es) rn effort)])
+                  (and e* (loop (cdr es) (cons e* acc))))))]
+         [(? pair? es)
+          (let loop ([es es] [acc '()])
+            (if (null? es)
+                (reverse acc)
+                (let ([e* (freshen (car es) rn effort)])
+                  (and e* (loop (cdr es) (cons e* acc))))))]
+         [_ e])))
+
+;; ---- prim folding on literal operands ---------------------------------
+
+(define (fold-prim op args)
+  (match (cons op args)
+    [`(+ ,(? fixnum? a) ,(? fixnum? b)) (+ a b)]
+    [`(- ,(? fixnum? a) ,(? fixnum? b)) (- a b)]
+    [`(* ,(? fixnum? a) ,(? fixnum? b)) (* a b)]
+    [`(- ,(? fixnum? a)) (- 0 a)]
+    [`(< ,(? fixnum? a) ,(? fixnum? b)) (< a b)]
+    [`(<= ,(? fixnum? a) ,(? fixnum? b)) (<= a b)]
+    [`(> ,(? fixnum? a) ,(? fixnum? b)) (> a b)]
+    [`(>= ,(? fixnum? a) ,(? fixnum? b)) (>= a b)]
+    [`(eq? ,a ,b)
+     #:when (and (contract-literal? a) (contract-literal? b))
+     (equal? a b)]
+    [`(quotient ,(? fixnum? a) ,(? fixnum? b))
+     #:when (not (zero? b))
+     (quotient a b)]
+    [`(remainder ,(? fixnum? a) ,(? fixnum? b))
+     #:when (not (zero? b))
+     (remainder a b)]
+    [`(null? (nil)) #t]
+    [`(null? ,v)
+     #:when (and (contract-literal? v) (not (equal? v '(nil))))
+     #f]
+    [`(fixnum? ,(? fixnum? _)) #t]
+    [`(pair? ,v) #:when (contract-literal? v) #f]
+    [_ 'no-fold]))
+
+;; ---- the rewrite -------------------------------------------------------
+;; env maps var -> substitution (literal or variable); `inlining` is
+;; the set of function names currently being inlined (recursion guard).
+
+(define contract-size-limit 50)     ;; max nodes for an inlined body copy
+(define contract-effort-limit 400)  ;; fuel per inlining attempt
+(define contract-always-inline 16)
+
+(define (contract-program p)
+  (define c (make-contract-census p))
+  (define changed (vector #f))
+
+  (define (subst-ok? x)
+    (and (known? c x) (not (assigned? c x))))
+
+  ;; does this function's body mention its own name? (memoized)
+  (define recursive-cache (make-hash))
+  (define (self-recursive? fname fbody)
+    (if (hash-has-key? recursive-cache fname)
+        (hash-ref recursive-cache fname)
+        (let ([r (let walk ([e fbody])
+                   (cond [(symbol? e) (eq? e fname)]
+                         [(pair? e)
+                          (match e
+                            [(list 'quote _) #f]
+                            [`(string-lit ,_) #f]
+                            [_ (ormap walk e)])]
+                         [else #f]))])
+          (begin (hash-set! recursive-cache fname r) r))))
+
+  (define (wrap-lets xs args body)
+    (if (null? xs)
+        body
+        `(let ([,(car xs) ,(car args)])
+           ,(wrap-lets (cdr xs) (cdr args) body))))
+
+  ;; returns the rewritten inlined expression, or #f to residualize
+  (define (try-inline fname xs fbody args env inlining)
+    (define sz (exp-size fbody))
+    (define single-use? (eq? (ref-count c fname) 1))
+    ;; a self-recursive function re-inlines only when some argument
+    ;; is a literal (constant-guided unrolling)
+    (and (or (not (self-recursive? fname fbody))
+             (ormap contract-literal? args))
+         (or single-use? (<= sz contract-always-inline)
+             (<= sz contract-size-limit))
+         (let* ([effort (vector (if (or single-use? (<= sz contract-always-inline))
+                                    (* 4 contract-effort-limit)
+                                    contract-effort-limit))]
+                [copy (freshen `(lambda ,xs ,fbody) (hash) effort)])
+           (and copy
+                (match copy
+                  [`(lambda (,xs* ...) ,body*)
+                   (begin
+                     (vector-set! changed 0 #t)
+                     (opt (wrap-lets xs* args body*) env
+                          (set-add inlining fname)))])))))
+
+  (define (opt e env inlining)
+    (match e
+      [(? symbol? x)
+       ;; NB: the substitute may itself be the literal #f, so probe
+       ;; with has-key? rather than a #f default
+       (if (hash-has-key? env x)
+           (begin (vector-set! changed 0 #t) (hash-ref env x))
+           x)]
+      [`(read) e] [`(void) e] [`(nil) e]
+      [(list 'quote _) e]
+      [`(string-lit ,_) e]
+      [`(set! ,x ,e0) `(set! ,x ,(opt e0 env inlining))]
+      [`(let ([,x ,rhs]) ,body)
+       (let ([rhs* (opt rhs env inlining)])
+         (cond
+           ;; copy/constant propagation: literal or variable rhs, x unassigned
+           [(and (subst-ok? x)
+                 (or (contract-literal? rhs*)
+                     (and (symbol? rhs*) (known? c rhs*) (not (assigned? c rhs*)))))
+            (begin (vector-set! changed 0 #t)
+                   (opt body (hash-set env x rhs*) inlining))]
+           ;; dead binding with pure rhs (census facts only apply to
+           ;; names it saw)
+           [(and (known? c x) (zero? (ref-count c x)) (not (assigned? c x))
+                 (pure-exp? rhs*))
+            (begin (vector-set! changed 0 #t)
+                   (opt body env inlining))]
+           [else
+            (begin
+              ;; a surviving lambda binding inlines as its OPTIMIZED
+              ;; self: the census-time original may reference let-vars
+              ;; that copy-propagation has since erased
+              (when (match rhs* [`(lambda ,_ ,_) #t] [_ #f])
+                (hash-set! (census-binding c) x rhs*))
+              `(let ([,x ,rhs*]) ,(opt body env inlining)))]))]
+      [`(lambda ,xs ,body) `(lambda ,xs ,(opt body env inlining))]
+      [`(if ,a ,b ,c0)
+       (let ([a* (opt a env inlining)])
+         (if (contract-literal? a*)
+             (begin (vector-set! changed 0 #t)
+                    ;; Racket truthiness: only #f is false
+                    (if (equal? a* #f) (opt c0 env inlining) (opt b env inlining)))
+             `(if ,a* ,(opt b env inlining) ,(opt c0 env inlining))))]
+      [`(while ,a ,b)
+       (let ([a* (opt a env inlining)])
+         (if (equal? a* #f)
+             (begin (vector-set! changed 0 #t) `(void))
+             `(while ,a* ,(opt b env inlining))))]
+      [`(begin ,es ...)
+       (let* ([es* (map (lambda (s) (opt s env inlining)) es)]
+              [last* (last es*)]
+              [init (take es* (- (length es*) 1))]
+              [init* (filter (lambda (s) (not (pure-exp? s))) init)])
+         (begin
+           (when (< (length init*) (length init)) (vector-set! changed 0 #t))
+           (if (null? init*) last* `(begin ,@init* ,last*))))]
+      ;; direct beta: ((lambda (xs...) b) args...) -- fixed arity only
+      ;; (a variadic's rest formal binds an argument LIST, not an arg)
+      [`((lambda (,xs ...) ,body) ,args ...)
+       #:when (and (eq? (length xs) (length args))
+                   (not (member '#%rest xs)))
+       (begin
+         (vector-set! changed 0 #t)
+         (let ([args* (map (lambda (a) (opt a env inlining)) args)])
+           (opt (wrap-lets xs args* body) env inlining)))]
+      [`(,rator ,rands ...)
+       (let ([rator* (opt rator env inlining)]
+             [rands* (map (lambda (r) (opt r env inlining)) rands)])
+         (cond
+           ;; prim application: try folding
+           [(and (symbol? rator*) (set-member? pure-prims rator*)
+                 (not (binding-of c rator*)))
+            (let ([folded (fold-prim rator* rands*)])
+              (if (eq? folded 'no-fold)
+                  `(,rator* ,@rands*)
+                  (begin (vector-set! changed 0 #t) folded)))]
+           [else
+            ;; known-function inlining through a variable/top-level
+            ;; name (Racket's cond => arm: bind the attempt's result)
+            (let ([inlined
+                   (and (symbol? rator*)
+                        (known? c rator*)
+                        (not (assigned? c rator*))
+                        (not (set-member? inlining rator*))
+                        (match (binding-of c rator*)
+                          [`(lambda (,xs ...) ,fbody)
+                           #:when (and (eq? (length xs) (length rands*))
+                                       (not (member '#%rest xs)))
+                           (try-inline rator* xs fbody rands* env inlining)]
+                          [_ #f]))])
+              (if inlined inlined `(,rator* ,@rands*)))]))]
+      [_ e]))
+
+  (match p
+    [`(program ,forms ...)
+     (let ([out
+            `(program
+              ,@(map (lambda (f)
+                       (match f
+                         [`(define (,name ,args ...) ,body)
+                          `(define (,name ,@args) ,(opt body (hash) (set-add (set) name)))]
+                         [`(define ,name ,rhs)
+                          `(define ,name ,(opt rhs (hash) (set)))]
+                         [e (opt e (hash) (set))]))
+                     forms))])
+       (list out (vector-ref changed 0)))]))

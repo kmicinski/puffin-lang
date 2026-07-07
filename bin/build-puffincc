@@ -1,15 +1,20 @@
 #!/bin/sh
 # Build puffincc (the Puffin compiler written in Puffin), stage 1:
-# regenerate the manifest/prelude data, concatenate puffincc-src/ in
-# order, and compile it with the Racket-hosted Puffin compiler.
+# compile its module DAG (puffincc-src/main.puf) with the
+# Racket-hosted Puffin compiler. The generated modules (tables.puf,
+# prelude-data.puf) are committed; regenerate them with
+# `racket src/gen-puffincc-tables.rkt` after editing src/stdlib.rkt
+# or src/prelude.puf.
 #
 #   bin/build-puffincc [out]     default out: build/puffincc
+#
+# After stage 1, puffincc is self-hosting and self-contained:
+#   build/puffincc prog.puf -o prog                          # compile + link
+#   build/puffincc puffincc-src/main.puf -o build/puffincc2  # stage 2
 set -e
 cd "$(dirname "$0")/.."
 OUT="${1:-build/puffincc}"
 mkdir -p build
 racket src/gen-puffincc-tables.rkt
-cat puffincc-src/*.puf > build/puffincc.puf
-echo "concatenated $(wc -l < build/puffincc.puf | tr -d ' ') lines -> build/puffincc.puf"
-bin/puffin -c -o "$OUT" build/puffincc.puf
+bin/puffin -c -o "$OUT" puffincc-src/main.puf
 echo "stage-1 puffincc at $OUT"

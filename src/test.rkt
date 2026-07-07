@@ -38,7 +38,10 @@
 
 (define (program-names)
   (sort (for/list ([f (directory-list tests-dir)]
-                   #:when (regexp-match? #rx"\\.(scm|puf)$" (path->string f)))
+                   #:when (or (regexp-match? #rx"\\.(scm|puf)$" (path->string f))
+                              ;; a directory with a main.puf is a
+                              ;; multi-file module program
+                              (file-exists? (build-path tests-dir f "main.puf"))))
           (path->string (path-replace-extension f "")))
         string<?))
 
@@ -47,7 +50,10 @@
 
 (define (program-path name)
   (define scm (build-path tests-dir (string-append name ".scm")))
-  (if (file-exists? scm) scm (build-path tests-dir (string-append name ".puf"))))
+  (define dir-main (build-path tests-dir name "main.puf"))
+  (cond [(file-exists? scm) scm]
+        [(file-exists? dir-main) dir-main]
+        [else (build-path tests-dir (string-append name ".puf"))]))
 
 (define (input-ints input-name)
   (map string->number
@@ -181,8 +187,11 @@
         (when golden
           (define-values (sp out in err)
             (subprocess #f #f #f exe))
-          (fprintf in "~a\n" (string-join (map number->string (input-ints input)) " "))
-          (close-output-port in)
+          ;; a fast binary (or a crashing one) may close stdin before
+          ;; we write it -- same guard as run-puffincc-tests
+          (with-handlers ([exn:fail? (lambda (_) (void))])
+            (fprintf in "~a\n" (string-join (map number->string (input-ints input)) " "))
+            (close-output-port in))
           (define program-out (port->string out))
           (define err-out (port->string err))
           (subprocess-wait sp)
@@ -197,6 +206,7 @@
   (command-line
    #:once-each
    [("-m" "--mode") m "Mode: interp | chain | x86-64 | arm64 | all | gen" (mode m)]
+   [("-O" "--optimize") lvl "Optimization level (default 1)" (optimize-level (string->number lvl))]
    #:args progs
    (if (empty? progs) (program-names) progs)))
 
@@ -211,9 +221,8 @@
   (for ([prog progs])
     (define compiled?
       (match (run/capture
-              (λ () (system (format "~a ~a ~a ~a"
-                                    (build-path here 'up "bin" "puffincc-compile")
-                                    (program-path prog) exe tgt))))
+              (λ () (system (format "build/puffincc -t ~a ~a -o ~a --runtime src/runtime/libpuffin.a"
+                                    tgt (program-path prog) exe))))
         [(cons #t _) #t]
         [(cons _ out)
          (check! 'puffincc/compile prog "-" (string-append "compile failed

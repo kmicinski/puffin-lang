@@ -1,0 +1,15 @@
+;; cons cells as 2-element vectors; empty list is (void).
+;; This module shadows the cons PRIMITIVE with its own function --
+;; importers get this one for calls, module-locally and imported.
+(provide is_nil cons head tail)
+(define (is_nil x) (eq? x (void)))
+
+;; cons cell as 2-element vector: [0] = head, [1] = tail
+(define (cons h t)
+  (let ([c (make-vector 2)])
+    (let ([_ (vector-set! c 0 h)])
+      (let ([_ (vector-set! c 1 t)])
+        c))))
+
+(define (head c) (vector-ref c 0))
+(define (tail c) (vector-ref c 1))

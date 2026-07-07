@@ -289,6 +289,32 @@ defprim('read-all', 0, (a, ctx) => {
   ctx.inputPos = ctx.input.length;
   return new PStr(rest);
 });
+
+// ---- io: files, argv, subprocesses (browser: virtual file map) --------
+// The native runtime reads the real filesystem (lib/io.c); here the
+// optional ctx.files map plays the filesystem, so file-driven
+// programs (like puffincc) still run in the sandbox.
+defprim('read-file', 1, (a, ctx) => {
+  const p = wantString(a[0], 'read-file').s;
+  if (ctx.files && p in ctx.files) return new PStr(ctx.files[p]);
+  throw new PuffinError(`read-file: cannot open ${p} (no filesystem in the web interpreter)`);
+});
+defprim('write-file', 2, (a, ctx) => {
+  if (!ctx.files) throw new PuffinError('write-file: no filesystem in the web interpreter');
+  ctx.files[wantString(a[0], 'write-file').s] = wantString(a[1], 'write-file').s;
+  return VOID;
+});
+defprim('file-exists?', 1, (a, ctx) =>
+  Boolean(ctx.files && wantString(a[0], 'file-exists?').s in ctx.files));
+defprim('command-line-args', 0, (a, ctx) => {
+  let l = NIL;
+  const args = ctx.args || [];
+  for (let i = args.length - 1; i >= 0; i--) l = new Pair(new PStr(args[i]), l);
+  return l;
+});
+defprim('system', 1, () => {
+  throw new PuffinError('system: no subprocesses in the web interpreter');
+});
 defprim('substring', 3, (a) => {
   const s = wantString(a[0], 'substring').s;
   const i = Number(wantInt(a[1], 'substring')), j = Number(wantInt(a[2], 'substring'));

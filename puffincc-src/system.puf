@@ -1,18 +1,25 @@
-;; puffincc -- 02-system.puf: the shared vocabulary (mirrors
+;; puffincc -- system.puf: the shared vocabulary (mirrors
 ;; src/system.rkt + the predicate layer of src/irs.rkt).
 ;;
-;; puffincc is the Puffin compiler written in Puffin. One namespace,
-;; concatenated from puffincc-src/*.puf in order by
-;; bin/build-puffincc; this file defines what every pass leans on.
+;; puffincc is the Puffin compiler written in Puffin, a module DAG
+;; rooted at main.puf (built by: bin/puffin -c puffincc-src/main.puf);
+;; this module defines what every pass leans on.
 ;;
 ;; Conventions vs the Racket reference (docs/BOOTSTRAP.md):
 ;;  - no structs: tagged lists; no multiple values: return lists
 ;;  - no parameters: plain top-level defines (+ set! where needed)
-;;  - the target is a global, set by the driver
+;;  - the target and optimize level are globals, set by the driver
 
 ;; ---- target ---------------------------------------------------------
 
+(require "tables.puf")
+
 (define current-target 'arm64)   ;; driver may (set! current-target 'x86-64)
+
+;; optimization level, set by the driver: 0 = none, 1 = contraction +
+;; direct calls + open-coded prims, 2 = + flow analysis
+;; (docs/OPTIMIZER.md; the optimizer port tracks src/opt/)
+(define optimize-level 1)
 
 (define (argument-registers)
   (if (eq? current-target 'x86-64)
@@ -45,6 +52,10 @@
 ;; symbol ids are assigned from the sorted literal table (see the
 ;; backends); (tag-symbol id) mirrors system.rkt
 (define (tag-symbol id) (bitwise-ior (arithmetic-shift id 3) 3))
+
+;; heap header kind bytes (in sync with runtime/puffin.h)
+(define heap-kind-vector 1)
+(define heap-kind-pair 2)
 
 ;; ---- primitive vocabulary (prim-table comes from 00-tables.puf) ----
 
@@ -124,6 +135,11 @@
   (if (or (null? xs) (null? ys))
       acc
       (foldl2 f (f (car xs) (car ys) acc) (cdr xs) (cdr ys))))
+
+(define (foldr2 f base xs ys)
+  (if (or (null? xs) (null? ys))
+      base
+      (f (car xs) (car ys) (foldr2 f base (cdr xs) (cdr ys)))))
 
 ;; number range of block/program info: (program ,info ,defns ...)
 (define (program-info p) (car (cdr p)))

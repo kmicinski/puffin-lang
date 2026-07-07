@@ -1,4 +1,0 @@
-(list
- 'program
- (set 'g6980)
- '#hash((_main . (seq (assign g6980 (- 5)) (return g6980)))))

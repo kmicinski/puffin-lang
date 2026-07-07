@@ -1,0 +1,50 @@
+(provide run)
+(require "env.puf")
+(require "cells.puf")
+;; ---- the evaluator ---------------------------------------------------
+(define (evaluate e env)
+  (match e
+    [(? fixnum? n) n]
+    [#t #t]
+    [#f #f]
+    [`(quote ,d) d]
+    [(? symbol? x)
+     (let ([v (env-lookup env x)])
+       (if (cell? v) (cell-get v) v))]
+    [`(lambda (,xs ...) ,body) (list 'closure xs body env)]
+    [`(if ,g ,t ,f)
+     (if (evaluate g env) (evaluate t env) (evaluate f env))]
+    [`(let ([,xs ,es] ...) ,body)
+     (evaluate body (env-extend* env xs (map (lambda (e0) (evaluate e0 env)) es)))]
+    [`(letrec ([,f ,e0]) ,body)
+     (let* ([cell (make-cell)]
+            [env+ (hash-set env f cell)])
+       (begin (cell-set! cell (evaluate e0 env+))
+              (evaluate body env+)))]
+    [`(car ,e0) (car (evaluate e0 env))]
+    [`(cdr ,e0) (cdr (evaluate e0 env))]
+    [`(null? ,e0) (null? (evaluate e0 env))]
+    [`(,op ,e0 ,e1)
+     #:when (member op '(+ - * = < cons))
+     (delta op (evaluate e0 env) (evaluate e1 env))]
+    [`(,e-f ,e-args ...)
+     (apply-closure (evaluate e-f env)
+                    (map (lambda (e0) (evaluate e0 env)) e-args))]
+    [_ (error (list 'bad-expression e))]))
+
+(define (delta op a b)
+  (match op
+    ['+ (+ a b)]
+    ['- (- a b)]
+    ['* (* a b)]
+    ['= (eq? a b)]
+    ['< (< a b)]
+    ['cons (cons a b)]))
+
+(define (apply-closure f args)
+  (match f
+    [`(closure ,xs ,body ,env)
+     (evaluate body (env-extend* env xs args))]
+    [_ (error (list 'not-a-procedure f))]))
+
+(define (run e) (evaluate e (hash)))

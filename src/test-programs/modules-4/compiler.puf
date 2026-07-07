@@ -1,0 +1,9 @@
+;; compile arithmetic expressions to stack-machine code
+(provide compile-expr)
+(define (compile-expr e)
+  (match e
+    [(? fixnum? n) `((push ,n))]
+    [`(+ ,a ,b) (append (compile-expr a) (append (compile-expr b) '((add))))]
+    [`(- ,a ,b) (append (compile-expr a) (append (compile-expr b) '((sub))))]
+    [`(* ,a ,b) (append (compile-expr a) (append (compile-expr b) '((mul))))]
+    [`(neg ,a) (append (compile-expr a) '((neg)))]))

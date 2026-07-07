@@ -1,7 +1,0 @@
-(program
- (let ([a (read)])
-   (let ([b (read)])
-     (let ([c (eq? a b)])
-       (let ([d (<= a b)])
-	 (- (if c (+ b b) (- b a))
-	    (if d (+ a a) (- a b))))))))

@@ -1,9 +1,0 @@
-'(program
-  ()
-  (let ((read7567 (read)))
-    (let ((read7568 (read)))
-      (let ((read7569 (read)))
-        (let ((read7570 (read)))
-          (let ((|+7571| (+ read7569 read7570)))
-            (let ((|+7572| (+ read7568 |+7571|)))
-              (let ((|+7573| (+ read7567 |+7572|))) |+7573|))))))))

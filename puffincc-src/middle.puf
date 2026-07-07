@@ -17,6 +17,9 @@
 ;; - Turns begin into let chains, wraps while for the ANF passes
 ;; ---------------------------------------------------------------------
 
+(require "tables.puf")
+(require "system.puf")
+
 (define (shrink p)
   (define (h e)
     (match e
@@ -467,6 +470,12 @@
        `(let ([,v (make-closure ,(+ (length canonical-vars) 1))])
           (let ([_ (unsafe-vector-set! ,v 0 (fun-ref ,f-name))]) ;; function name
             ,(init-stack canonical-vars 1)))]
+      ;; direct call to a known top-level function (>= -O1): no
+      ;; closure record, no indirect jump. Top-level defines capture
+      ;; nothing, so the env argument is a dead 0.
+      [`(app (fun-ref ,f) ,e-args ...)
+       #:when (>= optimize-level 1)
+       `(app (fun-ref ,f) 0 ,@(map walk-expr e-args))]
       [`(app ,e-f ,e-args ...)
        (define clo (gensym 'clo))
        `(let ([,clo ,(walk-expr e-f)])
@@ -609,6 +618,15 @@
       [`(global-set! ,i ,e0)
        (convert-expr e0 (lambda (a)
                           `(let ([_ (global-set! ,i ,a)]) ,(k '(void)))))]
+      ;; fused compare-and-branch (>= -O1): when the test is one
+      ;; comparison, keep it in the if -- never materialize the
+      ;; boolean (explicate-control turns it into a cmp+branch tail)
+      [`(if (,op ,ea ,eb) ,e1 ,e2)
+       #:when (and (>= optimize-level 1) (cmp? op))
+       (convert-args
+        (list ea eb)
+        (lambda (as)
+          `(if (,op ,@as) ,(convert-expr e1 k) ,(convert-expr e2 k))))]
       [`(if ,e0 ,e1 ,e2)
        (convert-expr
         e0
@@ -626,6 +644,18 @@
                      (lambda (a0)
                        (convert-expr e1 (lambda (a1)
                                           `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(k '(void)))))))]
+      ;; direct calls (>= -O1): a (fun-ref f) rator stays in place --
+      ;; no materialization, the backends emit a direct call/jump
+      [`(app (fun-ref ,f) ,es ...)
+       #:when (>= optimize-level 1)
+       (convert-args es (lambda (as)
+                          (define x (gensym 'app))
+                          `(let ([,x (app (fun-ref ,f) ,@as)]) ,(k x))))]
+      [`(papp ,n (fun-ref ,f) ,es ...)
+       #:when (>= optimize-level 1)
+       (convert-args es (lambda (as)
+                          (define x (gensym 'app))
+                          `(let ([,x (papp ,n (fun-ref ,f) ,@as)]) ,(k x))))]
       [`(app ,es ...)
        (convert-args es (lambda (as)
                           (define x (gensym 'app))
@@ -705,6 +735,20 @@
        (hash current-block `(tail-app ,n ,a-f ,@a-args))]
       [`(let ([,x ,rhs]) ,e+)
        (extend (expr->blocks e+ current-block k) current-block `(assign ,x ,rhs))]
+      ;; fused compare-and-branch (>= -O1 anf output): the test is a
+      ;; comparison over atoms; emit it directly as the block tail
+      ;; with the TRUE branch first (the opposite order of the
+      ;; (eq? a #f) form below, which tests for falseness)
+      [`(if (,op ,aa ,ab) ,e-t ,e-f)
+       #:when (cmp? op)
+       (define l-t (gensym 'lab))
+       (define l-f (gensym 'lab))
+       (define true-blocks (expr->blocks e-t l-t k))
+       (define false-blocks (expr->blocks e-f l-f k))
+       (define all-blocks (merge true-blocks false-blocks))
+       (hash-set all-blocks
+                 current-block
+                 `(if (,op ,aa ,ab) (goto ,l-t) (goto ,l-f)))]
       [`(if ,a ,e-t ,e-f)
        (define l-t (gensym 'lab))
        (define l-f (gensym 'lab))
@@ -736,12 +780,158 @@
     (foldl (lambda (l acc) (hash-set acc l (untail-tail (hash-ref blocks l))))
            (hash)
            (hash-keys blocks)))
+  ;; -------------------------------------------------------------------
+  ;; Loop recovery (>= -O1; docs/OPTIMIZER.md §5.5): a self tail call
+  ;; runs the full call/return protocol every iteration. Instead,
+  ;; move the function's entry tail to a fresh loophead label and
+  ;; rewrite every plain self tail call into parallel parameter
+  ;; reassignment + (goto loophead). The reassignment is two-phase
+  ;; (args into fresh temps first, then temps into the formals)
+  ;; because the args may reference the formals being reassigned.
+  ;; -------------------------------------------------------------------
+  (define (recover-loops fname formals blocks)
+    (define (self-call? t)
+      (match t
+        [`(tail-app ,n (fun-ref ,g) ,args ...)
+         (and (equal? g fname) (eq? n (length args)))]
+        [`(seq ,_ ,rest) (self-call? rest)]
+        [_ #f]))
+    (cond
+      [(not (ormap (lambda (l) (self-call? (hash-ref blocks l))) (hash-keys blocks)))
+       blocks]
+      [else
+       (define loophead (gensym 'loophead))
+       (define (rewrite t)
+         (match t
+           [`(tail-app ,n (fun-ref ,g) ,args ...)
+            #:when (and (equal? g fname) (eq? n (length args)))
+            (define temps (map (lambda (_) (gensym 'looptmp)) args))
+            (foldr2 (lambda (ti ai acc) `(seq (assign ,ti ,ai) ,acc))
+                    (foldr2 (lambda (fi ti acc) `(seq (assign ,fi ,ti) ,acc))
+                            `(goto ,loophead)
+                            formals temps)
+                    temps args)]
+           [`(seq ,s ,rest) `(seq ,s ,(rewrite rest))]
+           [_ t]))
+       (define moved
+         (hash-set (hash-set blocks loophead (hash-ref blocks fname))
+                   fname `(goto ,loophead)))
+       (foldl (lambda (l acc) (hash-set acc l (rewrite (hash-ref moved l))))
+              (hash)
+              (hash-keys moved))]))
+  ;; -------------------------------------------------------------------
+  ;; Blocks cleanup (>= -O1): (a) jump threading -- a block that is
+  ;; exactly (goto M) is bypassed by retargeting its predecessors;
+  ;; (b) single-predecessor merging -- a terminal (goto M) where M
+  ;; has exactly one predecessor splices M's tail in place; (c) drop
+  ;; blocks unreachable from the entry.
+  ;; -------------------------------------------------------------------
+  (define (cleanup-blocks entry blocks)
+    ;; (a) jump threading (the entry keeps its name: chains stop
+    ;; there, and it is never removed)
+    (define (thread blocks)
+      (define (final-target l)
+        (let loop ([l l] [seen (set)])
+          (cond
+            [(set-member? seen l) l]
+            [(equal? l entry) l]
+            [else
+             (if (hash-has-key? blocks l)
+                 (match (hash-ref blocks l)
+                   [`(goto ,m) (if (equal? m l) l (loop m (set-add seen l)))]
+                   [_ l])
+                 l)])))
+      (define (retarget t)
+        (match t
+          [`(goto ,l) `(goto ,(final-target l))]
+          [`(if ,c (goto ,l0) (goto ,l1))
+           `(if ,c (goto ,(final-target l0)) (goto ,(final-target l1)))]
+          [`(seq ,s ,rest) `(seq ,s ,(retarget rest))]
+          [_ t]))
+      (foldl (lambda (l acc) (hash-set acc l (retarget (hash-ref blocks l))))
+             (hash)
+             (hash-keys blocks)))
+    ;; (b) single-predecessor merging, iterated to fixpoint (each
+    ;; splice deletes one block, so it is bounded by the block count)
+    (define (pred-counts blocks)
+      (define counts (make-hash))
+      (define (bump l) (hash-set! counts l (+ 1 (hash-ref/default counts l 0))))
+      (map (lambda (l)
+             (let walk ([t (hash-ref blocks l)])
+               (match t
+                 [`(goto ,m) (bump m)]
+                 [`(if ,_ (goto ,m0) (goto ,m1)) (begin (bump m0) (bump m1))]
+                 [`(seq ,_ ,rest) (walk rest)]
+                 [_ (void)])))
+           (hash-keys blocks))
+      counts)
+    (define (terminal-goto t)
+      (match t
+        [`(goto ,m) m]
+        [`(seq ,_ ,rest) (terminal-goto rest)]
+        [_ #f]))
+    (define (merge-single-preds blocks)
+      (define counts (pred-counts blocks))
+      (define candidate
+        (findf (lambda (pr) pr)
+               (map (lambda (l)
+                      (let ([m (terminal-goto (hash-ref blocks l))])
+                        (and m
+                             (not (equal? m entry))
+                             (not (equal? m l))
+                             (eq? (hash-ref/default counts m 0) 1)
+                             (hash-has-key? blocks m)
+                             (cons l m))))
+                    (sort (hash-keys blocks) symbol<?))))
+      (cond
+        [candidate
+         (let ([l (car candidate)] [m (cdr candidate)])
+           (define (splice t)
+             (match t
+               [`(goto ,g) (if (equal? g m) (hash-ref blocks m) `(goto ,g))]
+               [`(seq ,s ,rest) `(seq ,s ,(splice rest))]
+               [_ t]))
+           (merge-single-preds
+            (hash-remove (hash-set blocks l (splice (hash-ref blocks l))) m)))]
+        [else blocks]))
+    ;; (c) drop unreachable blocks
+    (define (drop-unreachable blocks)
+      (define seen (make-set))
+      (define (targets t)
+        (match t
+          [`(goto ,m) (list m)]
+          [`(if ,_ (goto ,m0) (goto ,m1)) (list m0 m1)]
+          [`(seq ,_ ,rest) (targets rest)]
+          [_ '()]))
+      (let dfs ([l entry])
+        (when (and (hash-has-key? blocks l) (not (set-member? seen l)))
+          (begin
+            (set-add! seen l)
+            (map dfs (targets (hash-ref blocks l))))))
+      (foldl (lambda (l acc)
+               (if (set-member? seen l)
+                   (hash-set acc l (hash-ref blocks l))
+                   acc))
+             (hash)
+             (hash-keys blocks)))
+    (drop-unreachable (merge-single-preds (thread blocks))))
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
        (define blocks (expr->blocks e-body fname (lambda (a) `(return ,a))))
-       `(define (,fname ,@formals)
-          ,(if (equal? fname entry-symbol) (untail blocks) blocks))]))
+       (define blocks-looped
+         (if (and (>= optimize-level 1)
+                  (not (equal? fname entry-symbol))
+                  (not (member '#%rest formals)))
+             (recover-loops fname formals blocks)
+             blocks))
+       (define blocks-untailed
+         (if (equal? fname entry-symbol) (untail blocks-looped) blocks-looped))
+       (define blocks-clean
+         (if (>= optimize-level 1)
+             (cleanup-blocks fname blocks-untailed)
+             blocks-untailed))
+       `(define (,fname ,@formals) ,blocks-clean)]))
   (match p
     [`(program ,info ,defns ...)
      `(program ,info ,@(map per-defn defns))]))

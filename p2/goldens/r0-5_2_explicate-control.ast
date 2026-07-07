@@ -1,1 +1,0 @@
-'(program () #hash((_main . (seq (assign |+7438| (+ 3 5)) (return |+7438|)))))

@@ -12,7 +12,9 @@
 (require racket/runtime-path)
 (require "system.rkt")
 (require "irs.rkt")
-(require "compile.rkt")
+(require "opt/optimize.rkt"
+         "modules.rkt"
+         "compile.rkt")
 (require "interpreters.rkt")
 (require "backend-x86.rkt")
 
@@ -31,6 +33,7 @@
    `(,desugar                "desugar"                ,puffin-program?               ,core-program?                 ,interpret-puffin)
    `(,shrink                 "shrink"                 ,core-program?                 ,shrunk-program?               ,interpret-puffin)
    `(,uniqueify              "uniqueify"              ,shrunk-program?               ,unique-source-tree?           ,interpret-puffin)
+   `(,optimize                "optimize"               ,unique-source-tree?           ,unique-source-tree?           ,interpret-puffin)
    `(,collect-globals        "collect-globals"        ,unique-source-tree?           ,globals-program?              ,interpret-puffin)
    `(,reveal-functions       "reveal-functions"       ,globals-program?              ,revealed-functions-program?   ,interpret-puffin)
    `(,assignment-convert     "assignment-convert"     ,revealed-functions-program?   ,assignment-converted-program? ,interpret-puffin)
@@ -359,10 +362,16 @@
               (foldl (λ (n acc) (set-add acc n)) included new-names)))))
 
 (define (read-program-file file-name)
+  (define raw (read-forms file-name))
   (define forms
-    (match (read-forms file-name)
-      [`((program ,inner ...)) inner]
-      [fs fs]))
+    (cond
+      ;; module system (docs/MODULES.md): any require/provide form
+      ;; makes this file the entry module of a require DAG, resolved
+      ;; to a flat form list before the pipeline sees it
+      [(module-forms? raw) (resolve-modules file-name)]
+      [else (match raw
+              [`((program ,inner ...)) inner]
+              [fs fs])]))
   `(program ,@(prelude-forms forms) ,@forms))
 
 ;;
@@ -381,6 +390,8 @@
                       (write-stdout-mode #f)]
      [("-t" "--target") tgt "Target architecture: x86-64 or arm64"
                         (target (string->symbol tgt))]
+     [("-O" "--optimize") lvl "Optimization level: 0, 1 (default), 2"
+                          (optimize-level (string->number lvl))]
      [("-o" "--output") out "Executable output path"
                         (executable-file out)]
      #:args leftover

@@ -12,6 +12,9 @@ import {
 } from './interp.js';
 import { VOID, PuffinHalt, PuffinError, render, Closure, splitFormals } from './values.js';
 import { preludeSource } from './prelude.js';
+import { resolveModules, moduleForms, ModuleError } from './modules.js';
+
+export { resolveModules, moduleForms, ModuleError };
 
 // The Puffin-written stdlib layer: injected into every program,
 // minus any name the program defines itself (mirrors main.rkt's
@@ -50,10 +53,21 @@ function makeCtx(input, onOutput) {
 // reference's display-return). Returns:
 //   { ok: true,  value: string | null }   value = rendered result (null if void)
 //   { ok: false, error: string }          read or runtime error
-export function run(source, { input, onOutput } = {}) {
+export function run(source, { input, onOutput, files, entry } = {}) {
   const out = onOutput || (() => {});
   try {
-    const userForms = unwrapProgram(readAll(source));
+    // module programs (docs/MODULES.md): a virtual file map + entry
+    // path resolves the require DAG to a flat form list; a lone
+    // source that uses require/provide resolves against itself
+    let userForms;
+    if (files) {
+      userForms = resolveModules(files, entry || 'main.puf');
+    } else {
+      const raw = readAll(source);
+      userForms = moduleForms(raw)
+        ? resolveModules({ 'main.puf': source }, 'main.puf')
+        : unwrapProgram(raw);
+    }
     const forms = [...preludeFormsFor(userForms), ...userForms];
     const ctx = makeCtx(input && input.length ? input : defaultInput(), out);
     const global = new Frame(null);

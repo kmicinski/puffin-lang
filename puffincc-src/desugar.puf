@@ -8,6 +8,9 @@
 ;; variable ((map car xs)-style) eta-expands to a lambda, while a
 ;; let-bound `car` stays a variable reference.
 
+(require "tables.puf")
+(require "system.puf")
+
 (define (desugar p)
   ;; the #:when clause marker: puffincc's reader reads it as a
   ;; symbol, but the host Racket reader would read a keyword, so it

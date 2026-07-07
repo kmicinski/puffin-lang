@@ -1,1 +1,0 @@
-((3) 0 () 0 () () (q program (let ((x (read))) (let ((y (+ x 3))) (let ((z (+ y (- 1)))) (if (if (if (< z x) #t (eq? z x)) (if (< 0 z) #t (not (eq? x y))) #f) (+ (- z) y) (+ (+ x y) (- z))))))))

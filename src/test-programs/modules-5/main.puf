@@ -1,0 +1,71 @@
+;; puffin-9: an eval/apply interpreter for an extended lambda calculus,
+;; written the way the Puffin compiler itself is written -- match with
+;; quasiquote patterns over s-expression ASTs, immutable hashes for
+;; environments, closures as tagged data. This is the warm-up for
+;; bootstrapping: `evaluate` below is a miniature of interpret-puffin.
+;;
+;; The object language ("LC+"):
+;;   e ::= n | #t | #f | x
+;;       | (lambda (x ...) e) | (e e ...)
+;;       | (if e e e) | (let ([x e] ...) e) | (letrec ([f e]) e)
+;;       | (prim e e)            prim in {+ - * = < cons}
+;;       | (car e) | (cdr e) | (null? e) | 'datum
+;;
+;; Values: numbers, booleans, pairs/nil, and closures
+;; (closure formals body env). letrec is implemented with a
+;; back-patched environment cell, mirroring how the reference
+;; interpreter ties recursive knots.
+
+(require "interp.puf")
+
+;; ---- programs in the object language ---------------------------------
+
+;; recursion via letrec: factorial
+(println (run '(letrec ([fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))])
+                 (fact 10))))                                        ;; 3628800
+
+;; higher-order functions: compose and twice
+(println (run '(let ([compose (lambda (f g) (lambda (x) (f (g x))))]
+                     [add3 (lambda (n) (+ n 3))]
+                     [dbl (lambda (n) (* n 2))])
+                 ((compose add3 dbl) 10))))                          ;; 23
+
+;; church numerals, converted back to integers
+(println (run '(let ([zero (lambda (f) (lambda (x) x))]
+                     [succ (lambda (n) (lambda (f) (lambda (x) (f ((n f) x)))))]
+                     [to-int (lambda (n) ((n (lambda (k) (+ k 1))) 0))])
+                 (let ([three (succ (succ (succ zero)))])
+                   (to-int (succ three))))))                         ;; 4
+
+;; recursion WITHOUT letrec: the Z combinator (strict Y)
+(println (run '(let ([Z (lambda (f)
+                          ((lambda (x) (f (lambda (v) ((x x) v))))
+                           (lambda (x) (f (lambda (v) ((x x) v))))))])
+                 (let ([fib (Z (lambda (fib)
+                                 (lambda (n)
+                                   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))))])
+                   (fib 15)))))                                      ;; 610
+
+;; lists in the object language: build 1..5 and sum it
+(println (run '(letrec ([build (lambda (i) (if (= i 6) '() (cons i (build (+ i 1)))))])
+                 (letrec ([sum (lambda (l) (if (null? l) 0 (+ (car l) (sum (cdr l)))))])
+                   (sum (build 1))))))                               ;; 15
+
+;; the interpreter interpreting an interpreter (two levels down):
+;; LC+ runs a tiny evaluator for arithmetic expression trees
+(println (run '(letrec ([ev (lambda (t)
+                              (if (null? (cdr t))
+                                  (car t)
+                                  (let ([op (car t)]
+                                        [a (ev (car (cdr t)))]
+                                        [b (ev (car (cdr (cdr t))))])
+                                    (if (= op 0) (+ a b) (* a b)))))])
+                 ;; tree: (* (+ 1 2) (+ 3 4)) encoded as nested lists
+                 ;; ops: 0 = add, 1 = mul; leaves: (n . '())
+                 (ev (cons 1 (cons (cons 0 (cons (cons 1 '()) (cons (cons 2 '()) '())))
+                                   (cons (cons 0 (cons (cons 3 '()) (cons (cons 4 '()) '())))
+                                        '())))))))                   ;; 21
+
+;; errors surface as Puffin errors: applying a number halts cleanly
+;; (uncomment to see:  (run '(5 5))  =>  error: (not-a-procedure 5)
+(run '(((lambda (x) (lambda (y) (- x y))) 20) 6))

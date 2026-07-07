@@ -76,6 +76,13 @@
 ;; Atoms minus variables (for predicates that need the distinction)
 (define (literal? a) (and (atom? a) (not (symbol? a))))
 
+;; An application's rator at the anf/blocks levels: an atom, or --
+;; direct calls to known top-level functions (>= -O1; see
+;; docs/OPTIMIZER.md §5) -- a bare (fun-ref f).
+(define (app-rator? a)
+  (or (atom? a)
+      (match a [`(fun-ref ,(? symbol?)) #t] [_ #f])))
+
 (define (imm? op)                (match op [`(imm ,n)            (fixnum? n)] [_ #f]))
 (define (byte-reg? op)           (match op [`(byte-reg ,r)       (symbol? r)] [_ #f]))
 (define (reg? op)                (match op [`(reg ,r)            (symbol? r)] [_ #f]))
@@ -84,8 +91,9 @@
 (define (global? op)             (match op [`(global ,i)         (integer? i)] [_ #f]))
 (define (label? l)               (symbol? l))
 
-;; Condition codes: e, ne, l, ae (ae backs the unsigned bounds checks)
-(define (cc? op)                 (member op '(e ne l ae)))
+;; Condition codes: e, ne, l, ae (ae backs the unsigned bounds
+;; checks); le/g/ge back the fused compare-and-branch tails
+(define (cc? op)                 (member op '(e ne l le g ge ae)))
 
 ;; ---------------------------------------------------------------------
 ;; 1) Puffin source programs
@@ -503,8 +511,8 @@
     [`(global-set! ,_ ,(? atom?))        #t]
     [`(unsafe-vector-ref ,(? atom?) ,(? fixnum?)) #t]
     [`(unsafe-vector-set! ,(? atom?) ,(? fixnum?) ,(? atom?)) #t]
-    [`(app ,(? atom?) ,args ...)         (andmap atom? args)]
-    [`(papp ,(? fixnum?) ,(? atom?) ,args ...) (andmap atom? args)]
+    [`(app ,(? app-rator?) ,args ...)    (andmap atom? args)]
+    [`(papp ,(? fixnum?) ,(? app-rator?) ,args ...) (andmap atom? args)]
     [`(,(? prim?) ,args ...)             (andmap atom? args)]
     [_                                   #f]))
 
@@ -514,6 +522,9 @@
     [`(let ([_ (while ,(? anf-exp?) ,(? anf-exp?))]) ,(? anf-exp?)) #t]
     [`(let ([,_ ,(? anf-rhs?)]) ,(? anf-exp?))                      #t]
     [`(if ,(? atom?) ,(? anf-exp?) ,(? anf-exp?))                   #t]
+    ;; fused compare-and-branch (>= -O1): the test is one comparison
+    ;; over atoms, never materialized as a boolean
+    [`(if (,(? cmp?) ,(? atom?) ,(? atom?)) ,(? anf-exp?) ,(? anf-exp?)) #t]
     [_                                                              #f]))
 
 (define (anf-program? p)
@@ -538,8 +549,8 @@
     [`(fun-ref ,(? symbol?))           #t]
     [`(global-ref ,_)                  #t]
     [`(unsafe-vector-ref ,(? atom?) ,(? fixnum?)) #t]
-    [`(app ,a-f ,args ...)             (andmap atom? (cons a-f args))]
-    [`(papp ,(? fixnum?) ,a-f ,args ...) (andmap atom? (cons a-f args))]
+    [`(app ,(? app-rator?) ,args ...)  (andmap atom? args)]
+    [`(papp ,(? fixnum?) ,(? app-rator?) ,args ...) (andmap atom? args)]
     [`(,(? prim?) ,args ...)           (andmap atom? args)]
     [_                                 #f]))
 
@@ -554,9 +565,12 @@
 (define (blocks-tail? s)
   (match s
     [`(return ,a)                                   (atom? a)]
-    [`(tail-app ,(? fixnum?) ,a-f ,args ...)        (andmap atom? (cons a-f args))]
+    [`(tail-app ,(? fixnum?) ,(? app-rator?) ,args ...) (andmap atom? args)]
     [`(seq ,(? blocks-stmt?) ,rest)                 (blocks-tail? rest)]
-    [`(if (,(? shrunk-cmp?) ,(? atom?) ,(? atom?))
+    ;; the test is either the classic (eq? a #f)/(< a b) over atoms
+    ;; or a fused comparison (>= -O1); the FIRST goto is the branch
+    ;; taken when the comparison holds
+    [`(if (,(? cmp?) ,(? atom?) ,(? atom?))
           (goto ,(? label?))
           (goto ,(? label?)))                       #t]
     [`(goto ,(? label?))                            #t]

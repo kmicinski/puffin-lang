@@ -1,0 +1,30 @@
+;; Sudoku (the class r4-7 program), split into modules:
+;; listlib.puf (vector cons cells), cells.puf, solver.puf.
+(require "listlib.puf")
+(require "cells.puf")
+(require "solver.puf")
+;; =========================
+(define (read_board)
+  (let ([board (void)])
+    (let ([i 0])
+      (begin
+        (while (< i 9)
+		(begin
+                 (let ([j 0])
+                   (while (< j 9)
+			   (begin
+			     (let ([v (read)])
+                              (if (eq? v 0)
+				   (set! board board)
+				   (set! board (cons (make_cell i j v) board))))
+			     (set! j (+ j 1)))))
+                 (set! i (+ i 1))))
+        board))))
+
+;; =========================
+;; Entry: read board, solve from (0,0), return solution
+;; Solution is a list of (row col val) cells
+;; =========================
+(let* ([board (read_board)]
+       [solution (solve_cell 0 0 board)])
+  (lookup solution 8 8))

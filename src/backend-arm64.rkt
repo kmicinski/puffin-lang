@@ -27,7 +27,7 @@
 ;;
 ;; Abstract instructions (operands: imm/reg/var/deref/global):
 ;;   (mov s d) (add s d) (sub s d) (mul s d) (neg d)
-;;   (asr k d) (lsl k d) (orr k d)
+;;   (asr k d) (lsl k d) (orr k d) (and k d)
 ;;   (cmp a b)              flags of a-b (note: sane order, not AT&T)
 ;;   (cset cc d)
 ;;   (jmp l) (jmp-if cc l) (retq)
@@ -99,6 +99,56 @@
   (define (copy-arguments as)
     (map (λ (a r) `(mov ,(h-atom a) (reg ,r)))
          as (take (argument-registers-list) (length as))))
+  ;; ---- open-coded prims (>= -O1; docs/OPTIMIZER.md §5) ---------------
+  ;; The arm64 mirror of backend-x86.rkt's open coding: hot
+  ;; pair/vector prims emit inline fast paths, and every check the
+  ;; runtime prim performs becomes a compare-and-branch to a shared
+  ;; per-function TRAP block that calls the original runtime prim --
+  ;; it re-checks and errors with the exact original message, and
+  ;; never returns (the jmp to the conclusion keeps it well-formed).
+  ;; Register discipline: arguments are staged in the argument
+  ;; registers (never allocated, never used by patch-instructions'
+  ;; x10/x11 staging), so the trap block needs no register shuffling
+  ;; and imposes no liveness demands on the allocator; the checks
+  ;; scratch only x9 (x10 for the pair?/vector? split below).
+  (define (open-code-prims?) (>= (optimize-level) 1))
+  (define extra-blocks (make-hash))  ;; label -> instrs, reset per defn
+  (define trap-labels  (make-hash))  ;; prim -> trap label, reset per defn
+  (define (reset-open-coding!)
+    (hash-clear! extra-blocks)
+    (hash-clear! trap-labels))
+  (define (trap-label! op nargs)
+    (hash-ref! trap-labels op
+               (λ ()
+                 (define l (gensym (format "trap_~a_" (stdlib-rt-sym op))))
+                 (hash-set! extra-blocks l
+                            `((callq ,(stdlib-rt-sym op) ,nargs)
+                              (jmp ,(conclusion-block-name))))
+                 l)))
+  ;; check that the value in `r` is a heap object (low bits 001) of
+  ;; header kind `k`; branches to the trap otherwise (x9 scratch)
+  (define (heap-kind-checks r k trap)
+    `((mov (reg ,r) (reg x9))
+      (and (imm 7) (reg x9))
+      (cmp (reg x9) (imm 1))
+      (jmp-if ne ,trap)
+      (ldr (deref (reg ,r) -1) (reg x9))  ;; the header word
+      (and (imm 255) (reg x9))            ;; its kind byte
+      (cmp (reg x9) (imm ,k))
+      (jmp-if ne ,trap)))
+  ;; check that `ri` holds a tagged fixnum index in bounds for the
+  ;; vector in `rv`: (header >> 5) is the TAGGED length ((len<<8)>>5
+  ;; = len<<3), so one unsigned compare of tagged index against it
+  ;; checks the bound and catches negatives at once
+  (define (index-checks ri rv trap)
+    `((mov (reg ,ri) (reg x9))
+      (and (imm 7) (reg x9))
+      (cmp (reg x9) (imm 0))
+      (jmp-if ne ,trap)
+      (ldr (deref (reg ,rv) -1) (reg x9))
+      (asr (imm 5) (reg x9))
+      (cmp (reg ,ri) (reg x9))
+      (jmp-if ae ,trap)))
   ;; `sink` stores x0 (the result register) into the target
   (define (rhs->instrs rhs sink) (prov-each (rhs->instrs-core rhs sink) rhs))
   (define (rhs->instrs-core rhs sink)
@@ -132,6 +182,19 @@
       [`(fun-ref ,f)
        `((lea-fun ,f (reg x0))
          ,@sink)]
+      ;; direct calls (>= -O1 anf output): a (fun-ref f) rator
+      ;; becomes a direct bl to f's label -- same argument and
+      ;; arity-register protocol as the indirect case
+      [`(app (fun-ref ,f) ,args ...)
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum (length args))) (reg x12))
+         (callq ,f ,(length args))
+         ,@sink)]
+      [`(papp ,n (fun-ref ,f) ,args ...)
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
+         (callq ,f ,(length args))
+         ,@sink)]
       [`(app ,a-f ,args ...)
        `(,@(copy-arguments args)
          (mov (imm ,(tag-fixnum (length args))) (reg x12))
@@ -150,6 +213,49 @@
        `((mov (imm ,(tag-fixnum (index-of string-table s))) (reg x0))
          (callq pf_string_const 1)
          ,@sink)]
+      ;; open-coded pair/vector prims (>= -O1): inline fast paths,
+      ;; checks branch to the shared trap block (see above)
+      [`(null? ,a) #:when (open-code-prims?)
+       ;; (null? x) is (eq? x '()): the eq? compare/cset/tag sequence
+       `((cmp ,(h-atom a) (imm ,nil-value))
+         (cset e (reg x0))
+         (lsl (imm 3) (reg x0))
+         (orr (imm ,false-value) (reg x0))
+         ,@sink)]
+      [`(,(and op (or 'car 'cdr)) ,a) #:when (open-code-prims?)
+       ;; pair layout: | header | car | cdr |, tagged ptr = addr + 1
+       `((mov ,(h-atom a) (reg x0))
+         ,@(heap-kind-checks 'x0 heap-kind/pair (trap-label! op 1))
+         (ldr (deref (reg x0) ,(match op ['car 7] ['cdr 15])) (reg x0))
+         ,@sink)]
+      [`(vector-length ,a) #:when (open-code-prims?)
+       `((mov ,(h-atom a) (reg x0))
+         ,@(heap-kind-checks 'x0 heap-kind/vector (trap-label! 'vector-length 1))
+         (ldr (deref (reg x0) -1) (reg x0))
+         (asr (imm 5) (reg x0))         ;; header>>5: the tagged length
+         ,@sink)]
+      [`(vector-ref ,a ,i) #:when (open-code-prims?)
+       ;; a tagged index IS a byte offset: element i is at [v+i*8+7];
+       ;; compute the address with an add, then load off it
+       (define trap (trap-label! 'vector-ref 2))
+       `((mov ,(h-atom a) (reg x0))
+         (mov ,(h-atom i) (reg x1))
+         ,@(heap-kind-checks 'x0 heap-kind/vector trap)
+         ,@(index-checks 'x1 'x0 trap)
+         (add (reg x1) (reg x0))
+         (ldr (deref (reg x0) 7) (reg x0))
+         ,@sink)]
+      [`(vector-set! ,a ,i ,v) #:when (open-code-prims?)
+       (define trap (trap-label! 'vector-set! 3))
+       `((mov ,(h-atom a) (reg x0))
+         (mov ,(h-atom i) (reg x1))
+         (mov ,(h-atom v) (reg x2))
+         ,@(heap-kind-checks 'x0 heap-kind/vector trap)
+         ,@(index-checks 'x1 'x0 trap)
+         (add (reg x1) (reg x0))
+         (str (reg x2) (deref (reg x0) 7))
+         (mov (imm ,void-value) (reg x0))
+         ,@sink)]
       [`(,(? stdlib-prim? op) ,args ...)
        `(,@(copy-arguments args)
          (callq ,(stdlib-rt-sym op) ,(length args))
@@ -167,12 +273,46 @@
       [`(return ,a)
        `((mov ,(h-atom a) (reg x0))
          (jmp ,(conclusion-block-name)))]
+      ;; direct tail call (>= -O1 anf output): no target register
+      ;; needed; prelude-and-conclusion expands tail-jmp-direct into
+      ;; epilogue + a direct b to f's label
+      [`(tail-app ,n (fun-ref ,f) ,args ...)
+       `(,@(copy-arguments args)
+         (mov (imm ,(tag-fixnum n)) (reg x12))
+         (tail-jmp-direct ,f ,(length args)))]
       [`(tail-app ,n ,a-f ,args ...)
        ;; x9 is scratch and survives the epilogue expansion
        `((mov ,(h-atom a-f) (reg x9))
          ,@(copy-arguments args)
          (mov (imm ,(tag-fixnum n)) (reg x12))
          (tail-jmp (reg x9) ,(length args)))]
+      ;; open-coded pair?/vector? (>= -O1): the header kind may only
+      ;; be loaded when the tag says heap, so the block splits: false
+      ;; exits branch to a fresh #f block and both paths rejoin the
+      ;; rest of the tail in a fresh continuation block
+      [`(seq ,(and stmt `(assign ,x (,(and op (or 'pair? 'vector?)) ,a))) ,rst)
+       #:when (open-code-prims?)
+       (define k (match op ['pair? heap-kind/pair] ['vector? heap-kind/vector]))
+       (define l-false (gensym (format "oc_~a_false_" (stdlib-rt-sym op))))
+       (define l-join  (gensym (format "oc_~a_join_" (stdlib-rt-sym op))))
+       (hash-set! extra-blocks l-false
+                  (prov-each `((mov (imm ,false-value) (reg x0))
+                               (mov (reg x0) (var ,x))
+                               (jmp ,l-join))
+                             stmt))
+       (hash-set! extra-blocks l-join (h rst))
+       `((mov ,(h-atom a) (reg x9))
+         (mov (reg x9) (reg x10))
+         (and (imm 7) (reg x10))
+         (cmp (reg x10) (imm 1))
+         (jmp-if ne ,l-false)
+         (ldr (deref (reg x9) -1) (reg x10))
+         (and (imm 255) (reg x10))
+         (cmp (reg x10) (imm ,k))
+         (jmp-if ne ,l-false)
+         (mov (imm ,true-value) (reg x0))
+         (mov (reg x0) (var ,x))
+         (jmp ,l-join))]
       [`(seq (assign ,x ,rhs) ,rst)
        (append (rhs->instrs rhs `((mov (reg x0) (var ,x)))) (h rst))]
       [`(seq (effect ,rhs) ,rst)
@@ -188,7 +328,7 @@
          (str (reg x10) (deref (reg x9) ,(* 8 (+ i 1))))
          ,@(h rst))]
       [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
-       (define cc (match cmp ['eq? 'e] ['< 'l]))
+       (define cc (match cmp ['eq? 'e] ['< 'l] ['<= 'le] ['> 'g] ['>= 'ge]))
        `((cmp ,(h-atom a0) ,(h-atom a1))
          (jmp-if ,cc ,l0)
          (jmp ,l1))]
@@ -196,10 +336,16 @@
        `((jmp ,l))]))
   (define (per-defn defn)
     (match-define `(define ,locals (,f ,args ...) ,blocks) defn)
-    (define blocks+ (hash-set
-                     (foldl (λ (block acc) (hash-set acc block (h (hash-ref blocks block)))) (hash) (hash-keys blocks))
-                     (conclusion-block-name)
-                     '((retq))))
+    (reset-open-coding!)
+    (define blocks-sel
+      (hash-set
+       (foldl (λ (block acc) (hash-set acc block (h (hash-ref blocks block)))) (hash) (hash-keys blocks))
+       (conclusion-block-name)
+       '((retq))))
+    ;; splice in the trap/split blocks minted for this function
+    (define blocks+
+      (for/fold ([acc blocks-sel]) ([(l is) (in-hash extra-blocks)])
+        (hash-set acc l is)))
     (define entry (hash-ref blocks+ f))
     (define mi (index-of args '#%rest))
     (define moves
@@ -248,7 +394,7 @@
     [`(,(or 'add 'sub 'mul 'orr) ,src ,dst)
      (list (vars-of src dst) (vars-of dst))]
     [`(neg ,dst)         (list (vars-of dst) (vars-of dst))]
-    [`(,(or 'asr 'lsl) ,_ ,dst) (list (vars-of dst) (vars-of dst))]
+    [`(,(or 'asr 'lsl 'and) ,_ ,dst) (list (vars-of dst) (vars-of dst))]
     [`(cmp ,a ,b)        (list (vars-of a b) '())]
     [`(cset ,_ ,dst)     (list '() (vars-of dst))]
     [`(indirect-callq ,a) (list (vars-of a) '())]
@@ -313,7 +459,7 @@
             ,@is-s
             (,op ,r-s (reg x10))
             (str (reg x10) ,dst))])]
-      [`(,(and op (or 'neg 'asr 'lsl)) ,args ... ,dst)
+      [`(,(and op (or 'neg 'asr 'lsl 'and)) ,args ... ,dst)
        (if (reg? dst)
            (list instr)
            `((ldr ,dst (reg x10))
@@ -462,6 +608,12 @@
                  (frame-pop)
                  (indirect-jmp ,op))
                 tj)]
+              [(and tj `(tail-jmp-direct ,f-target ,_))
+               (prov-each `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
+                 ,@restores
+                 (frame-pop)
+                 (jmp-direct ,f-target))
+                tj)]
               [_ (list i)]))
           instrs))
        (define my-conclusion (gensym 'conclusion))
@@ -524,7 +676,7 @@
       [`(imm ,i) (format "#~a" i)]
       [`(reg ,x) (symbol->string x)]))
 (define (render-cc-arm cc)
-  (match cc ['e "eq"] ['ne "ne"] ['l "lt"] ['ae "hs"]))
+  (match cc ['e "eq"] ['ne "ne"] ['l "lt"] ['le "le"] ['g "gt"] ['ge "ge"] ['ae "hs"]))
 ;; an fp-relative slot: ldur/stur handle +-255 directly; farther
 ;; slots compute the address in x16 (the linker-scratch register)
 (define (render-mem-access ldr? op mem)
@@ -538,6 +690,19 @@
          [else
           (format "mov x16, #~a\n    add x16, x16, ~a\n    ~a ~a, [x16]"
                   off base (if ldr? "ldr" "str") (reg-name op))])]))
+;; sp +- n: add/sub immediates encode 12 bits, optionally shifted
+;; left 12; frames larger than 4095 bytes emit the page part and the
+;; remainder separately (n is always a positive multiple of 16)
+(define (sp-adjust op n)
+  (define hi (arithmetic-shift n -12))
+  (define lo (bitwise-and n 4095))
+  (unless (< hi 4096)
+    (error 'render "frame too large for sp adjustment: ~a bytes" n))
+  (cond
+    [(zero? hi) (format "~a sp, sp, #~a" op n)]
+    [(zero? lo) (format "~a sp, sp, #~a, lsl #12" op hi)]
+    [else (format "~a sp, sp, #~a, lsl #12\n    ~a sp, sp, #~a" op hi op lo)]))
+
 (define (render-instr-arm instr)
   (define globals-sym (rt-sym 'puffin_globals))
   (match instr
@@ -552,6 +717,7 @@
       [`(asr (imm ,k) ,dst) (format "asr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(lsl (imm ,k) ,dst) (format "lsl ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(orr (imm ,k) ,dst) (format "orr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
+      [`(and (imm ,k) ,dst) (format "and ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(cmp ,a ,b) (format "cmp ~a, ~a" (reg-name a) (render-op-arm b))]
       [`(cset ,cc ,dst) (format "cset ~a, ~a" (reg-name dst) (render-cc-arm cc))]
       [`(jmp-if ,cc ,lab) (format "b.~a ~a" (render-cc-arm cc) lab)]
@@ -560,6 +726,8 @@
       [`(callq ,(? label? l) ,_) (format "bl ~a" (symbol->string (rt-sym l)))]
       [`(indirect-callq ,op) (format "blr ~a" (reg-name op))]
       [`(indirect-jmp ,op) (format "br ~a" (reg-name op))]
+      ;; direct tail jump to a function label (rt-sym, like callq)
+      [`(jmp-direct ,f) (format "b ~a" (rt-sym f))]
       ['(retq) "ret"]
       [`(lea-fun ,f ,dst)
        (format "adrp ~a, ~a@PAGE\n    add ~a, ~a, ~a@PAGEOFF"
@@ -578,8 +746,11 @@
                (rt-sym 'pf_arg_spill) (rt-sym 'pf_arg_spill) (reg-name src) (* 8 i))]
       ['(frame-push) "stp x29, x30, [sp, #-16]!\n    mov x29, sp"]
       ['(frame-pop) "ldp x29, x30, [sp], #16"]
-      [`(sp-sub ,n) (format "sub sp, sp, #~a" n)]
-      [`(sp-add ,n) (format "add sp, sp, #~a" n)]
+      ;; add/sub immediates encode 12 bits (optionally shifted 12);
+      ;; big frames (large spill counts) split into a shifted-page
+      ;; part and a remainder
+      [`(sp-sub ,n) (sp-adjust "sub" n)]
+      [`(sp-add ,n) (sp-adjust "add" n)]
       [`(stp ,a ,b) (if b
                         (format "stp ~a, ~a, [sp, #-16]!" a b)
                         (format "str ~a, [sp, #-16]!" a))]

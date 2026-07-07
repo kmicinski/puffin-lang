@@ -15,7 +15,7 @@ CFLAGS  := -Wall -Wextra -O2 -Ivendor/gc/include
 ARCHES  := arm64 x86_64
 
 CORE_SRCS := core.c
-LIB_SRCS  := lib/pairs.c lib/vectors.c lib/strings.c lib/table.c lib/hashes.c lib/sets.c lib/hamt.c lib/arith.c lib/predicates.c lib/stdlib_init.c
+LIB_SRCS  := lib/pairs.c lib/vectors.c lib/strings.c lib/table.c lib/hashes.c lib/sets.c lib/hamt.c lib/arith.c lib/predicates.c lib/io.c lib/stdlib_init.c
 SRCS      := $(CORE_SRCS) $(LIB_SRCS)
 
 BUILD := build

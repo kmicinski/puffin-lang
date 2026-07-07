@@ -54,6 +54,11 @@
 
 (define target (make-parameter (default-target)))
 
+;; optimization level: 0 = none, 1 = contraction/inlining + safe
+;; open-coded prims (cp0-class budgets), 2 = + AAM flow analysis and
+;; its clients (see docs/OPTIMIZER.md)
+(define optimize-level (make-parameter 1))
+
 (define (entry-symbol) 'main)
 (define (conclusion-block-name)   'conclusion)
 

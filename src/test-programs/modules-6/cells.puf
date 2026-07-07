@@ -1,0 +1,14 @@
+;; cell = (row col val) as nested cons
+(provide make_cell cell_row cell_col cell_val)
+(require "listlib.puf")
+(define (make_cell r c v)
+  (cons r (cons c (cons v (void)))))
+
+(define (cell_row cell)
+  (head cell))
+
+(define (cell_col cell)
+  (head (tail cell)))
+
+(define (cell_val cell)
+  (head (tail (tail cell))))

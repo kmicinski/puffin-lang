@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q reg rbp)) () (c program c (h - (equal) ((su . "g5402") . -8)) c (h - (equal) (conclusion) (main c (q movq (imm 5) (reg rax)) c (q negq (reg rax)) c (c movq c (q reg rax) c (c deref c (? . 0) q -8)) c (c movq c (c deref c (? . 0) q -8) q (reg rax)) q (jmp conclusion)))))

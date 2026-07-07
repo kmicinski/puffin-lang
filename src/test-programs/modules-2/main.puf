@@ -1,0 +1,4 @@
+(require "b.puf")
+(require "c.puf")
+(println 'init-main)
+(println (+ from-b from-c))

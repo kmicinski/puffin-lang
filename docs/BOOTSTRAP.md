@@ -184,25 +184,35 @@ Racket pass — the golden machinery already knows how to compare).
 
 ## 5. SELF-HOSTING: achieved
 
-`puffincc-src/` contains the full compiler in Puffin (~3,000 lines:
-reader, desugar, middle passes, regalloc, both backends, driver),
-kept in lockstep with the reference via generated tables
+`puffincc-src/` contains the full compiler in Puffin (~5,200 lines —
+a module DAG rooted at main.puf: reader, module resolution, desugar,
+the optimizer (contraction + CESK* flow analysis), middle passes,
+regalloc, both backends, CLI driver), kept in lockstep with the
+reference via generated table modules
 (src/gen-puffincc-tables.rkt) and per-pass cross-implementation
 diffing (src/diff-ir.rkt + the driver's (dump-after pass)
 directive). Results:
 
 - **Stage 1** (hosted build, `bin/build-puffincc`): the entire
-  corpus passes through puffincc — 189/189 golden checks on arm64
-  and 189/189 targeting x86-64.
-- **Stage 2**: puffincc compiles itself (24.6 s, 327k lines of
-  assembly out); the stage-2 binary passes the corpus 189/189.
+  corpus passes through puffincc on arm64 and targeting x86-64
+  (98 programs × 3 inputs per route, module programs included).
+- **Stage 2**: puffincc compiles itself — reading and resolving its
+  own module DAG from disk; the stage-2 binary passes the corpus.
 - **Stage 3 fixpoint**: stage-2-compiled puffincc produces
   **byte-identical** assembly to stage 2. Determinism comes free:
   the runtime's gensym counter starts fresh per process.
 
-The C runtime and the assemble/link step (clang) remain host-side
-by design; `bin/puffincc-compile prog out [target]` is the
-one-command path.
+The C runtime stays host-side by design, but puffincc now drives the
+assemble/link step itself: `build/puffincc prog.puf -o prog` reads
+the program (resolving its require/provide modules from disk),
+compiles, writes the assembly, and shells out to clang via the
+`system` primitive — no wrapper script. `-o out.s` stops at
+assembly; no `-o` prints it (the classic pipe mode, `puffincc <
+prog.puf > prog.s`, also survives for single-file programs).
+puffincc itself is a module DAG rooted at `puffincc-src/main.puf`
+(docs/MODULES.md), and carries the full optimizer port
+(`optimize.puf` = contraction/inlining + the -O1 pass hooks;
+`aam.puf` = the -O2 flow analysis; docs/OPTIMIZER.md).
 
 ## 6. How this was validated
 

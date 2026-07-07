@@ -1,0 +1,506 @@
+;; puffincc -- modules.puf: module resolution (docs/MODULES.md), the
+;; Puffin port of src/modules.rkt.
+;;
+;; (resolve-modules entry-path) reads the entry file and its require
+;; DAG from disk (read-file), mangles each non-entry module's
+;; top-level names, uniformly renames each module's forms (leaving
+;; data positions alone: quoted datums, quasiquote templates outside
+;; unquotes, match-pattern structure, case datums), and returns one
+;; flat list of top-level forms in depth-first postorder, entry last.
+;;
+;; (module-forms? forms) says whether a form list uses the module
+;; system at all; stdin-fed programs that do are rejected upstream
+;; (no base directory to resolve requires against).
+
+(require "reader.puf")
+
+;; string-append is a binary prim; message building wants n-ary
+(define (str-cat . parts)
+  (foldl (lambda (part acc) (string-append acc part)) "" parts))
+
+(define (require-form? f)
+  (match f [`(require . ,_) #t] [_ #f]))
+(define (provide-form? f)
+  (match f [`(provide . ,_) #t] [_ #f]))
+
+(define (module-forms? forms)
+  (ormap (lambda (f) (or (require-form? f) (provide-form? f))) forms))
+
+(define (module-error msg)
+  (error (str-cat "modules: " msg)))
+
+;; ---- small pieces ----------------------------------------------------
+
+;; deterministic 32-bit FNV-1a over a string (matches src/modules.rkt)
+(define (fnv1a-32 s)
+  (define n (string-length s))
+  (let loop ([i 0] [h 2166136261])
+    (if (>= i n)
+        h
+        (loop (+ i 1)
+              (bitwise-and (* (bitwise-xor h (string-byte s i)) 16777619)
+                           4294967295)))))
+
+(define (to-hex n)
+  (define digits "0123456789abcdef")
+  (if (zero? n)
+      "0"
+      (let loop ([n n] [acc ""])
+        (if (zero? n)
+            acc
+            (loop (quotient n 16)
+                  (str-cat (substring digits (remainder n 16) (+ (remainder n 16) 1))
+                                 acc))))))
+
+;; a define's name, or #f
+(define (module-defn-name f)
+  (match f
+    [`(define (,g . ,_) . ,_) g]
+    [`(define ,g ,_) (if (symbol? g) g #f)]
+    [_ #f]))
+
+;; (fixed n) | (variadic n) | val
+(define (module-defn-arity f)
+  (define (formals-arity fo n)
+    (cond [(null? fo) `(fixed ,n)]
+          [(symbol? fo) `(variadic ,n)]
+          [(pair? fo) (formals-arity (cdr fo) (+ n 1))]
+          [else 'val]))
+  (match f
+    [`(define (,_ . ,formals) . ,_) (formals-arity formals 0)]
+    [`(define ,_ (lambda ,formals . ,_))
+     (formals-arity formals 0)]
+    [_ 'val]))
+
+;; names that change meaning if spliced in unqualified
+(define module-keyword-names
+  (list->set '(define lambda λ let let* letrec begin if cond case
+               when unless match set! while quote quasiquote unquote
+               unquote-splicing and or else _ ... require provide
+               signature #%rest nil void read)))
+
+;; ---- paths (byte-oriented, / separated) --------------------------------
+
+(define (path-dirname p)
+  (define n (string-length p))
+  (let loop ([i (- n 1)])
+    (cond [(< i 0) ""]
+          [(eq? (string-byte p i) 47) (substring p 0 i)]
+          [else (loop (- i 1))])))
+
+(define (path-split p)
+  (define n (string-length p))
+  (let loop ([i 0] [start 0] [acc '()])
+    (cond [(>= i n) (reverse (if (> i start) (cons (substring p start i) acc) acc))]
+          [(eq? (string-byte p i) 47)
+           (loop (+ i 1) (+ i 1)
+                 (if (> i start) (cons (substring p start i) acc) acc))]
+          [else (loop (+ i 1) start acc)])))
+
+;; resolve rel against directory base, normalizing ./ and ../
+(define (path-join base rel)
+  (define parts (append (if (string=? base "") '() (path-split base))
+                        (path-split rel)))
+  (define out
+    (foldl (lambda (part acc)
+             (cond [(string=? part ".") acc]
+                   [(string=? part "..") (if (null? acc) acc (cdr acc))]
+                   [else (cons part acc)]))
+           '()
+           parts))
+  ;; keep absolute paths absolute
+  (define joined (string-join (reverse out) "/"))
+  (if (and (> (string-length base) 0) (eq? (string-byte base 0) 47))
+      (str-cat "/" joined)
+      joined))
+
+(define (path-stem p)
+  (define parts (path-split p))
+  (define name (if (null? parts) p (last parts)))
+  (define n (string-length name))
+  (define no-ext
+    (let loop ([i (- n 1)])
+      (cond [(< i 0) name]
+            [(eq? (string-byte name i) 46) (substring name 0 i)]
+            [else (loop (- i 1))])))
+  ;; sanitize to [a-zA-Z0-9_]
+  (let loop ([i 0] [acc ""])
+    (if (>= i (string-length no-ext))
+        acc
+        (let ([b (string-byte no-ext i)])
+          (loop (+ i 1)
+                (str-cat acc
+                               (if (or (digit-byte? b)
+                                       (and (< 64 b) (< b 91))
+                                       (and (< 96 b) (< b 123)))
+                                   (substring no-ext i (+ i 1))
+                                   "_")))))))
+
+;; ---- parsing module forms ----------------------------------------------
+
+;; require/provide option markers: both readers give symbols for
+;; these when READING PUFFIN SOURCE ONLY VIA PUFFINCC; the hosted
+;; Racket reader reads them as keywords -- so, as everywhere else in
+;; puffincc, they are named via string->symbol and matched
+;; positionally, never as literals inside quasiquote patterns.
+(define kw-as (string->symbol "#:as"))
+(define kw-only (string->symbol "#:only"))
+(define kw-rename (string->symbol "#:rename"))
+(define kw-sig (string->symbol "#:sig"))
+(define kw-match-when (string->symbol "#:when"))
+
+;; (require "path" [#:as M] [#:only (n ...)] [#:rename ((old new) ...)]
+;;          [#:sig "path.pufs"]) -> req hash
+(define (parse-require f base-dir path)
+  (define (bad) (module-error (str-cat "malformed require in " path)))
+  (match f
+    [`(require ,p . ,opts)
+     (begin
+       (unless (string? p) (bad))
+       (let loop ([opts opts] [alias #f] [only #f] [renames #f] [sig #f])
+         (match opts
+           ['()
+            (begin
+              (when (and alias (or only renames))
+                (module-error (str-cat "require " p ": #:as cannot be combined with #:only/#:rename")))
+              (hash 'target (path-join base-dir p)
+                    'alias alias 'only only 'renames renames
+                    'sig (if sig (path-join base-dir sig) #f)))]
+           [`(,kw ,v . ,rest)
+            (cond
+              [(eq? kw kw-as)
+               (if (symbol? v) (loop rest v only renames sig) (bad))]
+              [(eq? kw kw-only)
+               (if (andmap symbol? v) (loop rest alias v renames sig) (bad))]
+              [(eq? kw kw-rename)
+               (if (andmap (lambda (pr) (match pr [`(,o ,n) (and (symbol? o) (symbol? n))] [_ #f])) v)
+                   (loop rest alias only (map (lambda (pr) (cons (first pr) (second pr))) v) sig)
+                   (bad))]
+              [(eq? kw kw-sig)
+               (if (string? v) (loop rest alias only renames v) (bad))]
+              [else (bad)])]
+           [_ (bad)])))]
+    [_ (bad)]))
+
+(define (read-module-file path from)
+  (unless (file-exists? path)
+    (module-error (str-cat "required module not found: " path
+                                 (if (string? from) (str-cat " (from " from ")") ""))))
+  (read-forms-from-string (read-file path)))
+
+;; signature ascription: returns the narrowed export set
+(define (check-signature sig-path body top-names mod-path)
+  (define sig-forms (read-module-file sig-path mod-path))
+  (define entries
+    (match sig-forms
+      [`((signature ,name . ,entries))
+       (if (symbol? name) entries
+           (module-error (str-cat sig-path ": expected a single (signature NAME entries...) form")))]
+      [_ (module-error (str-cat sig-path ": expected a single (signature NAME entries...) form"))]))
+  (define by-name
+    (foldl (lambda (f acc)
+             (let ([n (module-defn-name f)])
+               (if n (hash-set acc n f) acc)))
+           (hash) body))
+  (foldl
+   (lambda (entry provides)
+     (match entry
+       [`(val ,n)
+        (begin
+          (unless (set-member? top-names n)
+            (module-error (str-cat mod-path ": signature requires val "
+                                         (symbol->string n) ", not defined")))
+          (set-add provides n))]
+       [`(fun ,n ,arity)
+        (begin
+          (unless (set-member? top-names n)
+            (module-error (str-cat mod-path ": signature requires fun "
+                                         (symbol->string n) ", not defined")))
+          (match (module-defn-arity (hash-ref by-name n))
+            [`(fixed ,k)
+             (unless (eq? k arity)
+               (module-error (str-cat mod-path ": signature fun " (symbol->string n)
+                                            " expects arity " (number->string arity)
+                                            ", definition has arity " (number->string k))))]
+            [`(variadic ,k)
+             (unless (>= arity k)
+               (module-error (str-cat mod-path ": signature fun " (symbol->string n)
+                                            " expects arity " (number->string arity)
+                                            ", variadic definition needs >= " (number->string k))))]
+            ['val
+             (module-error (str-cat mod-path ": signature fun " (symbol->string n)
+                                          " is not syntactically a function"))])
+          (set-add provides n))]
+       [_ (module-error (str-cat sig-path ": malformed signature entry"))]))
+   (set)
+   entries))
+
+(define (parse-provides forms body top-names path)
+  (define provide-forms (filter provide-form? forms))
+  (define sig-forms
+    (filter (lambda (f)
+              (match f
+                [`(provide ,kw ,_) (eq? kw kw-sig)]
+                [_ #f]))
+            provide-forms))
+  (cond
+    [(pair? sig-forms)
+     (begin
+       (unless (and (null? (cdr sig-forms)) (eq? (length provide-forms) 1))
+         (module-error (str-cat path ": (provide #:sig ...) must be the module's only provide form")))
+       (match (first sig-forms)
+         [`(provide ,_ ,sp)
+          (if (string? sp)
+              (check-signature (path-join (path-dirname path) sp) body top-names path)
+              (module-error (str-cat "malformed provide in " path)))]))]
+    [(null? provide-forms) top-names]
+    [else
+     (foldl (lambda (pf provides)
+              (match pf
+                [`(provide . ,ns)
+                 (foldl (lambda (n acc)
+                          (begin
+                            (unless (symbol? n)
+                              (module-error (str-cat "malformed provide in " path)))
+                            (unless (set-member? top-names n)
+                              (module-error (str-cat path " provides " (symbol->string n)
+                                                           ", which it does not define")))
+                            (set-add acc n)))
+                        provides ns)]))
+            (set)
+            provide-forms)]))
+
+;; ---- loading the DAG -----------------------------------------------------
+;; visit returns (loaded postorder ids); a module is
+;;   (hash 'path 'id 'body 'top-names 'provides 'reqs)
+
+(define (module-id path entry-dir ids)
+  (define rel path) ;; paths are already joined from the entry dir
+  (define id (str-cat (path-stem path) "_" (to-hex (fnv1a-32 rel))))
+  (begin
+    (when (and (hash-has-key? ids id)
+               (not (string=? (hash-ref ids id) path)))
+      (module-error (str-cat "module id collision between "
+                                   (hash-ref ids id) " and " path)))
+    id))
+
+(define (load-modules entry-path)
+  (define entry-dir (path-dirname entry-path))
+  (define (visit path stack from state)
+    (match state
+      [`(,loaded ,postorder ,ids)
+       (cond
+         [(member path stack)
+          (module-error (str-cat "require cycle: "
+                                       (string-join (reverse (cons path stack)) " -> ")))]
+         [(hash-has-key? loaded path) state]
+         [else
+          (let* ([raw (read-module-file path from)]
+                 [forms (match raw
+                          [`((program . ,inner)) inner]
+                          [_ raw])]
+                 [reqs (map (lambda (f) (parse-require f (path-dirname path) path))
+                            (filter require-form? forms))]
+                 [state2 (foldl (lambda (r st)
+                                  (visit (hash-ref r 'target) (cons path stack) path st))
+                                state reqs)]
+                 [body (filter (lambda (f) (not (or (require-form? f) (provide-form? f)))) forms)]
+                 [top-names (foldl (lambda (f acc)
+                                     (let ([n (module-defn-name f)])
+                                       (if n (set-add acc n) acc)))
+                                   (set) body)]
+                 [provides (parse-provides forms body top-names path)])
+            (match state2
+              [`(,loaded2 ,postorder2 ,ids2)
+               (let* ([id (if (string=? path entry-path)
+                              #f
+                              (module-id path entry-dir ids2))]
+                      [m (hash 'path path 'id id 'body body
+                               'top-names top-names 'provides provides 'reqs reqs)])
+                 (list (hash-set loaded2 path m)
+                       (cons m postorder2)
+                       (if id (hash-set ids2 id path) ids2)))]))])]))
+  (match (visit entry-path '() #f (list (hash) '() (hash)))
+    [`(,loaded ,postorder ,_) (list loaded (reverse postorder))]))
+
+(define (module-mangled m name)
+  (if (hash-ref m 'id)
+      (string->symbol (str-cat (symbol->string name) "_" (hash-ref m 'id)))
+      name))
+
+;; ---- the renamer -----------------------------------------------------------
+;; ren: hash name -> new name; qual: symbol -> resolved-or-#f
+
+(define (rename-module-forms forms ren qual)
+  (define (rsym s)
+    (cond [(hash-has-key? ren s) (hash-ref ren s)]
+          [(qual s) (qual s)]
+          [else s]))
+  ;; quasiquote templates: symbols are data; descend only into
+  ;; escapes (matched with (list 'unquote e) -- both readers treat a
+  ;; literal unquote head inside a quasiquote pattern as an escape)
+  (define (rqq q depth)
+    (match q
+      [(list 'unquote e)
+       (list 'unquote (if (eq? depth 1) (rexpr e) (rqq e (- depth 1))))]
+      [(list 'quasiquote e) (list 'quasiquote (rqq e (+ depth 1)))]
+      [(cons (list 'unquote-splicing e) rest)
+       (cons (list 'unquote-splicing (if (eq? depth 1) (rexpr e) (rqq e (- depth 1))))
+             (rqq rest depth))]
+      [(cons a rest) (cons (rqq a depth) (rqq rest depth))]
+      [_ q]))
+  ;; match patterns: variables rename uniformly; constructor heads,
+  ;; quoted datums, and quasiquote data do not
+  (define (rpat p)
+    (match p
+      ['_ p]
+      [(list 'quote _) p]
+      [(list 'quasiquote q) (list 'quasiquote (rqq-pat q))]
+      [(list 'cons p0 p1) (list 'cons (rpat p0) (rpat p1))]
+      [(cons 'list ps) (cons 'list (map rpat ps))]
+      [(cons 'vector ps) (cons 'vector (map rpat ps))]
+      [(list '? pred p0) (list '? (rsym pred) (rpat p0))]
+      [_ (if (symbol? p) (rsym p) p)]))
+  (define (rqq-pat q)
+    (match q
+      [(list 'unquote p) (list 'unquote (rpat p))]
+      [(cons a rest) (cons (rqq-pat a) (rqq-pat rest))]
+      [_ q]))
+  (define (rmatch-clause cl)
+    (match cl
+      [`(,p ,kw ,guard . ,body)
+       #:when (eq? kw kw-match-when)
+       (cons (rpat p) (cons kw-match-when (cons (rexpr guard) (map rexpr body))))]
+      [`(,p . ,body) (cons (rpat p) (map rexpr body))]
+      [_ cl]))
+  (define (rcase-clause cl)
+    (match cl
+      [`(else . ,body) (cons 'else (map rexpr body))]
+      [`(,ds . ,body) (cons ds (map rexpr body))]
+      [_ cl]))
+  (define (rexpr e)
+    (match e
+      [`(quote ,_) e]
+      [`(quasiquote ,q) (list 'quasiquote (rqq q 1))]
+      [`(match ,subj . ,clauses)
+       (cons 'match (cons (rexpr subj) (map rmatch-clause clauses)))]
+      [`(case ,k . ,clauses)
+       (cons 'case (cons (rexpr k) (map rcase-clause clauses)))]
+      [`(,a . ,d) (cons (rexpr a) (rexpr d))]
+      [_ (if (symbol? e) (rsym e) e)]))
+  (map rexpr forms))
+
+;; ---- resolve-modules --------------------------------------------------------
+
+(define (resolve-modules entry-path)
+  (match (load-modules entry-path)
+    [`(,loaded ,mods)
+     (let* ([all-mentions
+             (foldl (lambda (m acc)
+                      (let walk ([v (hash-ref m 'body)] [acc acc])
+                        (cond [(symbol? v) (set-add acc v)]
+                              [(pair? v) (walk (cdr v) (walk (car v) acc))]
+                              [else acc])))
+                    (set) mods)])
+       (append-map
+        (lambda (m)
+          (define m-path (hash-ref m 'path))
+          (define top-names (hash-ref m 'top-names))
+          ;; imports: (ren aliases), threaded functionally
+          (define (add-import ren local target from)
+            (begin
+              (when (set-member? module-keyword-names local)
+                (module-error (str-cat m-path ": cannot import " (symbol->string local)
+                                             " unqualified (reserved word); use #:as or #:rename")))
+              (when (set-member? top-names local)
+                (module-error (str-cat m-path ": import " (symbol->string local)
+                                             " from " from
+                                             " collides with a local top-level definition")))
+              (when (and (hash-has-key? ren local)
+                         (not (eq? (hash-ref ren local) target)))
+                (module-error (str-cat m-path ": name " (symbol->string local)
+                                             " imported from two different modules")))
+              (hash-set ren local target)))
+          (define ren+aliases
+            (foldl
+             (lambda (r acc)
+               (match acc
+                 [`(,ren ,aliases)
+                  (let ([dep (hash-ref loaded (hash-ref r 'target))])
+                    (begin
+                      (when (hash-ref r 'sig)
+                        (check-signature (hash-ref r 'sig) (hash-ref dep 'body)
+                                         (hash-ref dep 'top-names) (hash-ref dep 'path)))
+                      (if (hash-ref r 'alias)
+                          (list ren (hash-set aliases (hash-ref r 'alias) dep))
+                          (let* ([dep-provides (hash-ref dep 'provides)]
+                                 [names
+                                  (cond [(hash-ref r 'only)
+                                         (begin
+                                           (map (lambda (n)
+                                                  (unless (set-member? dep-provides n)
+                                                    (module-error
+                                                     (str-cat m-path ": #:only name "
+                                                                    (symbol->string n)
+                                                                    " is not provided by "
+                                                                    (hash-ref dep 'path)))))
+                                                (hash-ref r 'only))
+                                           (hash-ref r 'only))]
+                                        [else (set->list dep-provides)])]
+                                 [rename-pairs (or (hash-ref r 'renames) '())])
+                            (begin
+                              (map (lambda (pr)
+                                     (unless (member (car pr) names)
+                                       (module-error
+                                        (str-cat m-path ": #:rename of "
+                                                       (symbol->string (car pr))
+                                                       ", which is not imported from "
+                                                       (hash-ref dep 'path)))))
+                                   rename-pairs)
+                              (list (foldl (lambda (n ren)
+                                             (let ([pr (assoc n rename-pairs)])
+                                               (add-import ren (if pr (cdr pr) n)
+                                                           (module-mangled dep n)
+                                                           (hash-ref dep 'path))))
+                                           ren names)
+                                    aliases))))))]))
+             (list (hash) (hash))
+             (hash-ref m 'reqs)))
+          (define ren0 (first ren+aliases))
+          (define aliases (second ren+aliases))
+          ;; own top-level names (non-entry modules mangle)
+          (define ren
+            (if (hash-ref m 'id)
+                (foldl (lambda (n ren)
+                         (let ([mn (module-mangled m n)])
+                           (begin
+                             (when (set-member? all-mentions mn)
+                               (module-error (str-cat m-path ": source uses "
+                                                            (symbol->string mn)
+                                                            ", which collides with a mangled module name")))
+                             (hash-set ren n mn))))
+                       ren0 (set->list top-names))
+                ren0))
+          ;; qualified M.name (split at the first dot when M is an alias)
+          (define (qual s)
+            (define str (symbol->string s))
+            (define n (string-length str))
+            (define i
+              (let loop ([k 0])
+                (cond [(>= k n) #f]
+                      [(eq? (string-byte str k) 46) k]
+                      [else (loop (+ k 1))])))
+            (if (and i (> i 0) (< (+ i 1) n))
+                (let ([dep (hash-ref/default aliases (string->symbol (substring str 0 i)) #f)])
+                  (if dep
+                      (let ([nm (string->symbol (substring str (+ i 1) n))])
+                        (begin
+                          (unless (set-member? (hash-ref dep 'provides) nm)
+                            (module-error (str-cat m-path ": " (symbol->string nm)
+                                                         " is not provided by " (hash-ref dep 'path)
+                                                         " (via " str ")")))
+                          (module-mangled dep nm)))
+                      #f))
+                #f))
+          (rename-module-forms (hash-ref m 'body) ren qual))
+        mods))]))

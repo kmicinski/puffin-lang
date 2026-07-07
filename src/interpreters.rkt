@@ -350,7 +350,10 @@
        (define truth
          (match cmp
            ['eq? (eqv? v0 v1)]
-           ['<   (< v0 v1)]))
+           ['<   (< v0 v1)]
+           ['<=  (<= v0 v1)]
+           ['>   (> v0 v1)]
+           ['>=  (>= v0 v1)]))
        (go (hash-ref blocks (if truth l-t l-f)) env stack)]
       [`(goto ,l) (go (hash-ref blocks l) env stack)]))
   (display-return

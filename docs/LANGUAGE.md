@@ -24,6 +24,33 @@ it's read at call time). Top-level definitions shadow standard-library
 primitives, so old class programs that define their own `cons` run
 unchanged.
 
+## Modules
+
+A file is a module (docs/MODULES.md has the full story). `(provide
+name ...)` declares its exports — no provide form means everything
+top-level is exported. `(require "path.puf")` imports another file's
+provided names; paths resolve relative to the requiring file.
+
+```scheme
+(require "vec.puf")                     ;; unqualified: dot, norm2
+(require "matrix.puf" #:as M)           ;; qualified: M.transpose
+(require "util.puf" #:only (twice) #:rename ((twice do-twice)))
+(provide area)
+(define pi 314159)                      ;; private unless provided
+(define (area r) (* pi (* r r)))
+```
+
+Requires must form a DAG (cycles are compile-time errors); each
+module's top-level effects run once, in depth-first postorder.
+Signature files (`.pufs`) optionally constrain a module's exports:
+`(provide #:sig "ring.pufs")` checks names and arities and narrows
+the export set to exactly the signature. Import collisions — two
+modules providing the same name, or an import colliding with a local
+define or a reserved word — are compile-time errors; disambiguate
+with `#:as` or `#:rename`. Everything (the reference compiler, the
+web playground's file tabs, and puffincc) understands modules; a file
+with no require/provide compiles exactly as before.
+
 ## Values
 
 Fixnums (61-bit), booleans `#t`/`#f`, `(void)`, symbols `'foo`, the
@@ -167,9 +194,20 @@ bin/puffin prog.puf             # compile natively + run
 bin/puffin -i prog.puf          # interpret
 bin/puffin -c prog.puf -o prog  # compile only
 bin/puffin -t x86-64 prog.puf   # cross-target (runs under Rosetta)
+bin/puffin -O 0 prog.puf        # optimization level (default -O1)
 ```
 
-The web REPL (`web/`) runs the same language in the browser.
+Module programs work everywhere a single file does: point any of the
+above at the entry file and the require DAG is resolved from disk.
+The self-hosted compiler is a standalone driver with the same shape:
+
+```
+build/puffincc prog.puf -o prog   # compile + assemble + link, no scripts
+build/puffincc -O 2 -t x86-64 prog.puf -o prog.s
+```
+
+The web REPL (`web/`) runs the same language in the browser; the
+playground's "+ file" tab turns the editor into a module DAG.
 
 ## Sharp edges (current)
 

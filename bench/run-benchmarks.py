@@ -110,19 +110,43 @@ def main():
         results["benchmarks"].append(entry)
 
     # -- compile-time benchmarks --
+    # puffincc is a module DAG now (puffincc-src/main.puf); it reads
+    # its own sources from disk when self-compiling
     print("compile-time...", flush=True)
     fib = os.path.join(PROGS, "fib.puf")
-    pccpuf = os.path.join(ROOT, "build", "puffincc.puf")
+    pccmain = os.path.join(ROOT, "puffincc-src", "main.puf")
     ct = {}
-    ct["hosted, fib (16 passes + clang)"] = bench_route(
+    ct["hosted, fib (17 passes + clang)"] = bench_route(
         ["sh", "-c", f"cd {ROOT} && bin/puffin -c -o /tmp/bench-ct-fib {fib}"], n=3)["median"]
     ct["puffincc, fib (asm only)"] = bench_route(
-        ["sh", "-c", f"cd {ROOT} && build/puffincc < {fib} > /tmp/bench-ct-fib.s"], n=3)["median"]
-    ct["hosted, puffincc.puf (2972 lines)"] = bench_route(
-        ["sh", "-c", f"cd {ROOT}/src && racket main.rkt -f -t arm64 {pccpuf} >/dev/null 2>&1"], n=2)["median"]
+        ["sh", "-c", f"cd {ROOT} && build/puffincc {fib} -o /tmp/bench-ct-fib.s"], n=3)["median"]
+    ct["hosted, puffincc (module DAG)"] = bench_route(
+        ["sh", "-c", f"cd {ROOT} && racket src/main.rkt -f -t arm64 {pccmain} >/dev/null 2>&1"], n=2)["median"]
     ct["puffincc self-compile (stage 2)"] = bench_route(
-        ["sh", "-c", f"cd {ROOT} && build/puffincc < {pccpuf} > /tmp/bench-ct-pcc.s"], n=2)["median"]
+        ["sh", "-c", f"cd {ROOT} && build/puffincc {pccmain} -o /tmp/bench-ct-pcc.s"], n=2)["median"]
     results["compile_time"] = ct
+
+    # -- optimization levels: run time at -O0/1/2 + compile time --
+    print("optimization levels...", flush=True)
+    levels = {}
+    LV_BENCH = [n for n, _, _ in BENCHMARKS]
+    for name in LV_BENCH:
+        puf = os.path.join(PROGS, f"{name}.puf")
+        entry = {}
+        for lv in ["0", "1", "2"]:
+            out = os.path.join(BUILD, f"{name}-arm-O{lv}")
+            t0 = time.monotonic()
+            sh(f"cd {ROOT} && bin/puffin -c -O {lv} -t arm64 -o {out} {puf}")
+            ctime = time.monotonic() - t0
+            if not os.path.exists(out):
+                entry[lv] = None; continue
+            r = bench_route([out], n=3)
+            entry[lv] = {"median": r["median"], "compile": ctime, "output": r["output"]}
+        outs = {v["output"] for v in entry.values() if v}
+        if len(outs) > 1:
+            print(f"  !! {name}: outputs differ across levels: {outs}")
+        levels[name] = entry
+    results["levels"] = levels
 
     results["meta"]["n_runs"] = N
     results["meta"]["machine"] = sh("sysctl -n machdep.cpu.brand_string").stdout.strip()

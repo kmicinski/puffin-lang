@@ -1,1 +1,0 @@
-((3) 0 () 0 () () (c program c () c (c let c (c (c (su . "+5342") q (+ 5 3))) c (c let c (c (c (su . "read5343") q (read))) c (c let c (c (c (su . "+5344") c (c + c 2 c (su . "read5343")))) c (c let c (c (c (su . "g5345") c (c - c (su . "+5344")))) c (c let c (c (c (su . "+5346") c (c + c (su . "+5342") c (su . "g5345")))) c (su . "+5346"))))))))

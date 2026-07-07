@@ -1,5 +1,0 @@
-'(program
-  ()
-  (let ((x (read)))
-    (let ((y (let ((x7833 (read))) (+ x7833 (+ x7833 x7833)))))
-      (+ (- (+ x y)) x))))

@@ -276,6 +276,25 @@
    (prim-spec 'modulo   2 'pf_modulo #t modulo
               "Integer modulus; the result's sign follows the divisor (checked).")
 
+   ;; ---- io: files, argv, subprocesses (lib/io.c) -------------------------
+   ;; What a self-contained compiler driver needs: puffincc reads its
+   ;; input modules, writes assembly, and shells out to the assembler.
+   (prim-spec 'read-file 1 'pf_read_file #t
+              (λ (p) (file->string p))
+              "The named file's bytes, as a string (exits with an error if unreadable).")
+   (prim-spec 'write-file 2 'pf_write_file #t
+              (λ (p s) (call-with-output-file p #:exists 'replace (λ (o) (display s o))) (void))
+              "(Re)write the named file with the string's bytes.")
+   (prim-spec 'file-exists? 1 'pf_file_exists_huh #t
+              (λ (p) (file-exists? p))
+              "Whether the named file exists and is readable.")
+   (prim-spec 'command-line-args 0 'pf_command_line_args #t
+              (λ () (vector->list (current-command-line-arguments)))
+              "The program's command-line arguments (a list of strings, argv[0] excluded).")
+   (prim-spec 'system 1 'pf_system #t
+              (λ (cmd) (system/exit-code cmd))
+              "Run a shell command; its exit code.")
+
    ;; ---- compiler-internal ----------------------------------------------
    ;; make-closure allocates a closure record (kind 4): slot 0 holds
    ;; the code pointer, the rest capture the environment. Only

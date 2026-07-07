@@ -3,7 +3,7 @@
 ;; Puffin -- diff-ir.rkt: compare puffincc's IR (via its dump-after
 ;; directive) against the Racket reference's, modulo gensym spelling.
 ;;
-;;   racket src/diff-ir.rkt <pass-name> <prog.puf> [target]
+;;   racket src/diff-ir.rkt <pass-name> <prog.puf> [target] [olvl]
 ;;
 ;; Runs the reference chain up to <pass-name>, runs
 ;; `build/puffincc` with (dump-after <pass-name>), alpha-normalizes
@@ -31,6 +31,10 @@
       [else s]))
   (let walk ([v tree])
     (cond [(symbol? v) (norm-sym v)]
+          ;; puffincc's dump displays strings unquoted, so they read
+          ;; back as symbols; mirror that (multi-token strings will
+          ;; still mismatch -- acceptable for a debugging diff)
+          [(string? v) (string->symbol v)]
           [(pair? v) (cons (walk (car v)) (walk (cdr v)))]
           [(hash? v)
            ;; align with puffincc's serialize-ir
@@ -44,11 +48,12 @@
 
 (module+ main
   (match-define (vector pass-name prog rest ...) (current-command-line-arguments))
-  (define tgt (match rest [(vector t) (string->symbol t)] [_ 'arm64]))
+  (define tgt (match rest [(vector t _ ...) (string->symbol t)] [_ 'arm64]))
+  (define olvl (match rest [(vector _ o) (string->number o)] [_ 1]))
   ;; reference side
   (define program (read-program-file prog))
   (define ref
-    (parameterize ([target tgt])
+    (parameterize ([target tgt] [optimize-level olvl])
       (let loop ([chain (all-passes)] [ir program])
         (match chain
           ['() (error 'diff-ir "no such pass: ~a" pass-name)]
@@ -56,8 +61,8 @@
            (define out (pass ir))
            (if (equal? name pass-name) out (loop more out))]))))
   ;; puffincc side
-  (define cmd (format "{ echo '(target ~a)'; echo '(dump-after ~a)'; cat ~a; } | build/puffincc"
-                      tgt pass-name prog))
+  (define cmd (format "{ echo '(target ~a)'; echo '(dump-after ~a)'; cat ~a; } | build/puffincc -O ~a"
+                      tgt pass-name prog olvl))
   (define pcc-out (with-output-to-string (λ () (system cmd))))
   (define pcc (with-input-from-string pcc-out read))
   (define n-ref (normalize ref))

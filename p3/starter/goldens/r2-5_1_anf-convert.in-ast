@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q read)) () (c program c () c (c let c (c (c r c (? . 0))) c (c let c (c (c s c (? . 0))) q (let ((d (+ r (- s)))) (if (if (< 0 r) (if (if (< d 0) #t (eq? d 0)) #t (if (< 0 s) #t (eq? s 0))) #f) (if (not (eq? r s)) (+ (+ r s) (- d)) (+ (+ r s) (- d))) (if (< r s) (+ (+ r (- 1)) (+ s 1)) (+ 0 0))))))))

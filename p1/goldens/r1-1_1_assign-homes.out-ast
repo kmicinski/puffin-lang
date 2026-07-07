@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q reg rbp)) () (c program c (h - (equal) ((su . "x5890") . -24) (x . -16) ((su . "x5889") . -8)) c (h - (equal) (main c (c movq c (q imm 2) c (c deref c (? . 0) q -16)) c (c movq c (c deref c (? . 0) q -16) c (c deref c (? . 0) q -8)) c (c movq c (c deref c (? . 0) q -8) c (c deref c (? . 0) q -24)) c (c movq c (c deref c (? . 0) q -24) q (reg rax))))))

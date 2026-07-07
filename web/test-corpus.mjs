@@ -6,7 +6,7 @@
 //   node web/test-corpus.mjs            run all
 //   node web/test-corpus.mjs r4-7       restrict to named programs
 
-import { readFileSync, readdirSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run } from './src/puffin/index.js';
@@ -20,7 +20,9 @@ const goldensDir = join(srcDir, 'goldens');
 const only = process.argv.slice(2);
 
 const programs = readdirSync(testsDir)
-  .filter((f) => f.endsWith('.scm') || f.endsWith('.puf'))
+  .filter((f) => f.endsWith('.scm') || f.endsWith('.puf')
+    // a directory with a main.puf is a multi-file module program
+    || (statSync(join(testsDir, f)).isDirectory() && existsSync(join(testsDir, f, 'main.puf'))))
   .map((f) => f.replace(/\.(scm|puf)$/, ''))
   .filter((p) => only.length === 0 || only.includes(p))
   .sort();
@@ -41,18 +43,31 @@ let checks = 0;
 let failures = 0;
 
 for (const prog of programs) {
-  const source = readFileSync(
-    existsSync(join(testsDir, `${prog}.scm`))
-      ? join(testsDir, `${prog}.scm`)
-      : join(testsDir, `${prog}.puf`),
-    'utf8');
+  // module programs run from a virtual file map, mirroring the browser
+  let source = null, files = null;
+  const progDir = join(testsDir, prog);
+  if (existsSync(join(progDir, 'main.puf'))) {
+    files = {};
+    for (const f of readdirSync(progDir))
+      if (f.endsWith('.puf') || f.endsWith('.pufs'))
+        files[f] = readFileSync(join(progDir, f), 'utf8');
+  } else {
+    source = readFileSync(
+      existsSync(join(testsDir, `${prog}.scm`))
+        ? join(testsDir, `${prog}.scm`)
+        : join(testsDir, `${prog}.puf`),
+      'utf8');
+  }
   for (const input of inputs) {
     const goldenPath = join(goldensDir, `${prog}_${input}.golden`);
     if (!existsSync(goldenPath)) continue;
     const golden = readFileSync(goldenPath, 'utf8');
     checks++;
     let out = '';
-    const res = run(source, { input: inputInts(input), onOutput: (s) => { out += s; } });
+    const res = run(source, {
+      input: inputInts(input), onOutput: (s) => { out += s; },
+      files, entry: files ? 'main.puf' : null,
+    });
     if (!res.ok) out += `ERROR: ${res.error}`;
     if (out.trim() !== golden.trim()) {
       failures++;

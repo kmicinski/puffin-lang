@@ -1,5 +1,28 @@
 # Puffin modules: SML structure discipline, Racket surface, separate compilation
 
+> **Status (2026-07-07):** §1 and §2 are IMPLEMENTED, three times over:
+> `src/modules.rkt` (the reference front pass, hooked into
+> `read-program-file` so every route — interp, chain, both backends,
+> the trace server — sees modules), `web/src/puffin/modules.js` (the
+> web interpreter, over a virtual file map), and
+> `puffincc-src/modules.puf` (puffincc itself, which both COMPILES
+> module programs and IS one: puffincc-src/ is a module DAG rooted at
+> main.puf). Resolution is whole-program (load the require DAG,
+> mangle each non-entry module's top-level names, flatten in
+> depth-first postorder); §3's separate compilation (.pufi/.o cache)
+> is still future work. Corpus: `src/test-programs/modules-1..6` runs
+> on every route; the compile-time failure modes live in
+> `src/test-modules.rkt`.
+>
+> Implementation notes that postdate the design: renaming is UNIFORM
+> through a module (binders and references alike), which preserves
+> binding structure without scope analysis — the renamer only knows
+> where symbols are *data* (quoted datums, quasiquote templates
+> outside unquotes, match-pattern structure, case datums). Importing
+> a reserved word (`match`, `else`, …) unqualified is an error; use
+> `#:as`/`#:rename`. `set!` to an imported name is currently allowed
+> and mutates the exporting module's cell.
+
 Design goals, in order: (1) modularity you can trust (explicit exports,
 no accidental capture between files); (2) genuine **separate
 compilation** (a module compiles to a `.o` + a small interface file;

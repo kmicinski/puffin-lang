@@ -1,8 +1,0 @@
-(program
-  (let ([x (read)])
-    (let ([y (+ x 10)])
-      (let ([z (- y)])
-        (let ([u (+ z x)])
-          (let ([v (+ u y)])
-            (let ([w (- v)])
-              (+ (+ w u) (+ y z)))))))))

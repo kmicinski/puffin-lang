@@ -1,7 +1,0 @@
-(program
-  (let ([x (read)])
-    (let ([y (+ x 3)])
-      (let ([z (- y 1)])                    
-        (if (and (<= z x) (or (> z 0) (not (eq? x y))))
-            (+ (- z) y)                     
-            (- (+ x y) z))))))              

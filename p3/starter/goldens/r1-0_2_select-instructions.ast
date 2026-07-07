@@ -1,4 +1,0 @@
-(list
- 'program
- (set 'a)
- '#hash((_main . ((movq (imm 1) (var a)) (movq (var a) (reg rax))))))

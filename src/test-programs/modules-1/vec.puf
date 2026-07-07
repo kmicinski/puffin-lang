@@ -1,0 +1,6 @@
+;; unqualified import target; `secret` stays private
+(provide dot norm2)
+(define (dot a b)
+  (if (null? a) 0 (+ (* (car a) (car b)) (dot (cdr a) (cdr b)))))
+(define (norm2 a) (dot a a))
+(define secret 42)

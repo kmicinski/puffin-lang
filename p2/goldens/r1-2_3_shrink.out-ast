@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q read)) () (c program c (c let c (c (c x c (? . 0))) c (c let c (c (c y c (c let c (c (c x c (? . 0))) q (+ x (+ x x))))) q (+ (- (+ x y)) x)))))

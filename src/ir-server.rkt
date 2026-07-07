@@ -21,6 +21,7 @@
 (require racket/runtime-path)
 (require "system.rkt")
 (require "irs.rkt")
+(require "modules.rkt")
 (require "compile.rkt")
 (require "interpreters.rkt")
 (require "main.rkt")
@@ -35,19 +36,49 @@
     ['arm64 (dynamic-require (build-path here "backend-arm64.rkt") 'render-lines-arm64)]))
 
 ;; Compile source text through the full chain for `tgt`, returning
-;; the pipeline jsexpr (or an error jsexpr).
-(define (trace-source source-text tgt)
+;; the pipeline jsexpr (or an error jsexpr). `files` is an optional
+;; virtual file map (hash of path-string -> source-string) for module
+;; programs: it is materialized in a temp directory and resolved
+;; through the module front pass, entry main.puf.
+(define (trace-source source-text tgt olvl [files #f])
   (with-handlers ([exn:fail? (λ (e) (hash 'error (exn-message e)))])
-    (define forms
-      (with-input-from-string source-text
+    (define (read-forms-from-string s)
+      (with-input-from-string s
         (λ () (let loop ([acc '()])
                 (define f (read))
                 (if (eof-object? f) (reverse acc) (loop (cons f acc)))))))
-    (define program
-      (match forms
-        [`((program ,inner ...)) `(program ,@(prelude-forms inner) ,@inner)]
-        [_ `(program ,@(prelude-forms forms) ,@forms)]))
+    (define forms
+      (cond
+        [files
+         (define dir (build-path (find-system-path 'temp-dir)
+                                 (format "puffin-trace-~a" (current-milliseconds))))
+         (make-directory* dir)
+         (for ([(name src) (in-hash files)])
+           ;; virtual paths are flat names; refuse anything that escapes
+           (define name-str (if (symbol? name) (symbol->string name) name))
+           (when (regexp-match? #rx"\\.\\.|/" name-str)
+             (error 'trace "bad file name: ~a" name-str))
+           (with-output-to-file (build-path dir name-str) #:exists 'replace
+             (λ () (display src))))
+         (begin0 (resolve-modules (build-path dir "main.puf"))
+                 (delete-directory/files dir))]
+        [else
+         (define raw (read-forms-from-string source-text))
+         (if (module-forms? raw)
+             ;; a lone source using require/provide resolves against itself
+             (let ([dir (build-path (find-system-path 'temp-dir)
+                                    (format "puffin-trace-~a" (current-milliseconds)))])
+               (make-directory* dir)
+               (with-output-to-file (build-path dir "main.puf") #:exists 'replace
+                 (λ () (display source-text)))
+               (begin0 (resolve-modules (build-path dir "main.puf"))
+                       (delete-directory/files dir)))
+             (match raw
+               [`((program ,inner ...)) inner]
+               [_ raw]))]))
+    (define program `(program ,@(prelude-forms forms) ,@forms))
     (parameterize ([target tgt]
+                   [optimize-level olvl]
                    [write-stdout-mode #f]
                    [verbose-mode #f])
       (define trace
@@ -89,7 +120,14 @@
                    ["x86-64" 'x86-64]
                    ["arm64" 'arm64]
                    [_ (default-target)]))
-     (json-response (trace-source (hash-ref body 'source "") tgt))]
+     (define olvl (match (hash-ref body 'optimize 1)
+                    [(and (? exact-integer? n) (? (λ (n) (<= 0 n 2)))) n]
+                    [_ 1]))
+     (define files
+       (match (hash-ref body 'files 'missing)
+         [(? hash? h) h]
+         [_ #f]))
+     (json-response (trace-source (hash-ref body 'source "") tgt olvl files))]
     [(list #"GET" (list "passes"))
      (json-response (hash 'passes (parameterize ([target (default-target)])
                                     (map second (all-passes)))))]
@@ -103,7 +141,7 @@
   (match args
     [(list "--dump" prog out rest ...)
      (define tgt (match rest [(list "-t" t) (string->symbol t)] [_ (default-target)]))
-     (define jsexpr (trace-source (file->string prog) tgt))
+     (define jsexpr (trace-source (file->string prog) tgt 1))
      (with-output-to-file out (λ () (write-json jsexpr)) #:exists 'replace)
      (displayln (format "wrote ~a (~a passes)" out
                         (if (hash-has-key? jsexpr 'passes)

@@ -1,9 +1,0 @@
-(list
- 'program
- (set '|+7438|)
- '#hash((_main
-         .
-         ((movq (imm 3) (reg rax))
-          (addq (imm 5) (reg rax))
-          (movq (reg rax) (var |+7438|))
-          (movq (var |+7438|) (reg rax))))))

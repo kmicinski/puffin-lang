@@ -1,6 +1,0 @@
-(program
-  (let ([n (read)])
-    (let ([m (+ n 1)])
-      (let ([p (- m)])
-        (let ([q (+ p p)])
-          (+ q (+ m n)))))))

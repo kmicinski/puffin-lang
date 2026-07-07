@@ -1,1 +1,0 @@
-((3) 0 () 0 () () (u . ".globl _main\n.extern _read_int64\n.extern _print_int64\n_main:\n    pushq %rbp\n    movq %rsp, %rbp\n    addq $0, %rsp\n    movq $42, %rax\n    movq %rax, %rdi\n    call _print_int64\n    movq $0, %rax\n    movq %rbp, %rsp\n    popq %rbp\n    ret\n"))

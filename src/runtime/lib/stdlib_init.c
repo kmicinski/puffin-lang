@@ -11,6 +11,7 @@ void pf_lib_strings_init(void);
 void pf_lib_hashes_init(void);
 void pf_lib_sets_init(void);
 void pf_lib_hamt_init(void);
+void pf_lib_io_init(void);
 
 void pf_stdlib_init(void) {
   pf_lib_pairs_init();
@@ -19,4 +20,5 @@ void pf_stdlib_init(void) {
   pf_lib_hashes_init();
   pf_lib_sets_init();
   pf_lib_hamt_init();
+  pf_lib_io_init();
 }

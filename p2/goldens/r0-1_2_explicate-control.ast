@@ -1,1 +1,0 @@
-'(program () #hash((_main . (seq (assign g6982 (- 5)) (return g6982)))))

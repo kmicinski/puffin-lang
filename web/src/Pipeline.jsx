@@ -20,6 +20,7 @@ export default function Pipeline(props) {
   const [notice, setNotice] = createSignal('');
   const [traceLabel, setTraceLabel] = createSignal('');
   const [target, setTarget] = createSignal('arm64');
+  const [optLevel, setOptLevel] = createSignal(1);
   const [tracing, setTracing] = createSignal(false);
   const [crumbs, setCrumbs] = createSignal([]);
 
@@ -211,13 +212,18 @@ export default function Pipeline(props) {
       const res = await fetch(TRACE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: props.getSource(), target: target() }),
+        body: JSON.stringify({
+          source: props.getSource(),
+          files: (props.getFiles && props.getFiles()) || undefined,
+          target: target(),
+          optimize: optLevel(),
+        }),
       });
       const json = await res.json();
       if (json.error) {
         setNotice(`trace error: ${json.error}`);
       } else {
-        loadTrace(json, `editor trace · ${json.target ?? target()}`);
+        loadTrace(json, `editor trace · ${json.target ?? target()} · -O${optLevel()}`);
         setNotice('');
       }
     } catch {
@@ -250,6 +256,12 @@ export default function Pipeline(props) {
         <select class="examples" value={target()} onChange={(e) => setTarget(e.target.value)} title="Target architecture">
           <option value="arm64">arm64</option>
           <option value="x86-64">x86-64</option>
+        </select>
+        <select class="examples" value={optLevel()} onChange={(e) => setOptLevel(Number(e.target.value))}
+                title="Optimization level (docs/OPTIMIZER.md): O0 none, O1 contraction+inlining+open-coded prims, O2 +AAM flow analysis">
+          <option value={0}>-O0</option>
+          <option value={1}>-O1</option>
+          <option value={2}>-O2</option>
         </select>
         <span class="trace-label">{traceLabel()}</span>
         <Show when={notice()}>

@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q read)) () (c program c (c define c (q main) c (c (c f c (? . 0)) c (? . 0))) q (define (f x) (lambda (y) (+ y x)))))

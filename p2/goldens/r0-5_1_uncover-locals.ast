@@ -1,4 +1,0 @@
-(list
- 'program
- (set '|+7436|)
- '#hash((_main . (seq (assign |+7436| (+ 3 5)) (return |+7436|)))))

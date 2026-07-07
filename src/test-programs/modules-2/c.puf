@@ -1,0 +1,4 @@
+(provide from-c)
+(require "d.puf")
+(println 'init-c)
+(define from-c (+ base 2))

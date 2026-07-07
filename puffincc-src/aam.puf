@@ -1,0 +1,635 @@
+;; puffincc -- aam.puf: -O2 AAM-style abstract interpretation over
+;; the post-uniqueify core IR, plus its optimization clients. The
+;; Puffin port of src/opt/aam.rkt; see docs/OPTIMIZER.md §3/§6.
+;;
+;; Eval/apply CESK*: states are fixnums (E ℓ)=2ℓ / (A ℓ)=2ℓ+1 over
+;; one widened store in three regions (R: label→valset, K:
+;; label→kontset, σ: name→valset) with per-address dependency sets
+;; driving incremental re-enqueue. Transfers are STAGED per label
+;; before iteration. Abstract values: 'top | (const k) | (clo ℓ) |
+;; type tags. Escaped closures get ⊤ formals and (topk) bodies.
+;;
+;; Dialect notes vs the reference:
+;;  - labels are assigned by traversal order only (no node-identity
+;;    hash); the client walk mirrors the same traversal and
+;;    cross-checks against the nodes vector -- but Puffin has no
+;;    exception handling, so a desync is a FATAL error here rather
+;;    than a silent fallback (it means the two walks diverged: a bug).
+;;  - the ceiling still degrades gracefully: analyze returns #f and
+;;    aam-clients is the identity.
+
+(require "system.puf")
+
+(define aam-widen-limit 8)
+(define aam-state-ceiling 200000)
+
+;; ---- literals and the abstract-value vocabulary ----------------------
+
+(define (literal-node? e)
+  (match e
+    [#t #t] [#f #t]
+    [`(void) #t] [`(nil) #t]
+    [(list 'quote s) (symbol? s)]
+    [_ (fixnum? e)]))
+
+(define (const-type k)
+  (cond [(fixnum? k) 'fixnum]
+        [(boolean? k) 'bool]
+        [(equal? k '(void)) 'void]
+        [(equal? k '(nil)) 'nil]
+        [else 'symbol]))          ;; (quote s)
+
+(define (prim-op? op bound)
+  (and (symbol? op)
+       (not (set-member? bound op))
+       (or (prim? op) (if (member op '(and or not <= > >=)) #t #f))))
+
+(define (prim-result op)
+  (cond
+    [(member op '(+ - * quotient remainder modulo bitwise-and bitwise-ior
+                  bitwise-xor arithmetic-shift string-length string-byte
+                  vector-length hash-count set-count read))
+     (set 'fixnum)]
+    [(member op '(eq? < <= > >= not equal? pair? null? fixnum? boolean?
+                  symbol? string? vector? hash? set? void? procedure?
+                  hash-has-key? set-member? string=? string<?))
+     (set 'bool)]
+    [(member op '(cons)) (set 'pair)]
+    [(member op '(make-vector)) (set 'vector)]
+    [(member op '(string-append substring symbol->string number->string
+                  value->string read-all read-file))
+     (set 'string)]
+    [(member op '(string->symbol gensym)) (set 'symbol)]
+    [(member op '(hash hash-set hash-remove make-hash)) (set 'hash)]
+    [(member op '(set set-add set-remove make-set)) (set 'set)]
+    [(member op '(println display newline vector-set! hash-set!
+                  hash-remove! set-add! set-remove! write-file))
+     (set 'void)]
+    [(member op '(string->number)) (set 'fixnum 'bool)]
+    [(member op '(hash-keys set->list command-line-args)) (set 'pair 'nil)]
+    [(member op '(file-exists?)) (set 'bool)]
+    [(member op '(system)) (set 'fixnum)]
+    [(member op '(error)) (set)]
+    [else (set 'top)]))
+
+;; ---- syntactic pre-passes ---------------------------------------------
+
+;; every name the program binds: define names, let binders, formals
+(define (program-binders p)
+  (define names (make-set))
+  (define (walk e)
+    (match e
+      [`(string-lit ,_) (void)]
+      [`(read) (void)]
+      [(list 'quote _) (void)]
+      [`(while ,g ,b) (begin (walk g) (walk b))]
+      [`(let ([,x ,rhs]) ,body)
+       (begin (unless (eq? x '_) (set-add! names x))
+              (walk rhs) (walk body))]
+      [`(if ,a ,b ,c) (begin (walk a) (walk b) (walk c))]
+      [`(set! ,_ ,e0) (walk e0)]
+      [`(lambda (,xs ...) ,body)
+       (begin (map (lambda (x) (unless (eq? x '#%rest) (set-add! names x))) xs)
+              (walk body))]
+      [`(begin ,es ...) (map walk es)]
+      [(? pair? es) (map walk es)]
+      [_ (void)]))
+  (match p
+    [`(program ,forms ...)
+     (map (lambda (f)
+            (match f
+              [`(define (,g ,_ ...) ,body) (begin (set-add! names g) (walk body))]
+              [`(define ,x ,rhs) (begin (set-add! names x) (walk rhs))]
+              [e (walk e)]))
+          forms)])
+  names)
+
+;; every name that is ever a set! target
+(define (assigned-vars p)
+  (define names (make-set))
+  (define (walk e)
+    (match e
+      [`(set! ,x ,e0) (begin (set-add! names x) (walk e0))]
+      [(list 'quote _) (void)]
+      [`(string-lit ,_) (void)]
+      [_ (when (pair? e) (map walk e))]))
+  (match p [`(program ,forms ...) (map walk forms)])
+  names)
+
+;; conservative "mentions": every symbol occurring in a form's code
+(define (aam-mentions-of form)
+  (define acc (make-set))
+  (define (walk v)
+    (cond [(symbol? v) (set-add! acc v)]
+          [(pair? v) (begin (walk (car v)) (walk (cdr v)))]
+          [else (void)]))
+  (match form
+    [`(define (,_ ,_ ...) ,body) (walk body)]
+    [`(define ,_ ,rhs) (walk rhs)]
+    [e (walk e)])
+  acc)
+
+;; ---- the machine -------------------------------------------------------
+;; facts (returned by analyze): a hash with keys
+;;   'nodes 'rvals 'varvals 'read-vars 'clo-name 'escaped 'n-labels 'n-states
+;; or #f when the state ceiling tripped.
+
+(define (analyze p)
+  (define forms (match p [`(program ,fs ...) fs]))
+  (define bound (program-binders p))
+
+  ;; ---- labels ----
+  (define label-count (vector 0))
+  (define nodes-rev (vector '()))
+  (define (next-label! e)
+    (define l (vector-ref label-count 0))
+    (vector-set! label-count 0 (+ l 1))
+    (vector-set! nodes-rev 0 (cons e (vector-ref nodes-rev 0)))
+    l)
+
+  ;; ---- the widened store and dependency sets ----
+  (define rvals (make-hash))    ;; label -> value set (R)
+  (define kvals (make-hash))    ;; label -> kont set (K)
+  (define vvals (make-hash))    ;; name  -> value set (σ)
+  (define rdeps (make-hash))    ;; addr -> mutable set of dependent states
+  (define kdeps (make-hash))
+  (define vdeps (make-hash))
+
+  ;; ---- worklist over fixnum states ----
+  (define worklist (vector '()))
+  (define queued (make-hash))
+  (define seen (make-hash))
+  (define current-state (vector -1))
+  (define (ev-state l) (* 2 l))
+  (define (ret-state l) (+ 1 (* 2 l)))
+  (define (enqueue! s)
+    (unless (hash-ref/default queued s #f)
+      (hash-set! queued s #t)
+      (hash-set! seen s #t)
+      (vector-set! worklist 0 (cons s (vector-ref worklist 0)))))
+  (define (enqueue-if-new! s)
+    (unless (hash-ref/default seen s #f) (enqueue! s)))
+
+  ;; ---- reads (register the running state as a dependent) ----
+  (define (depend! deps key)
+    (when (>= (vector-ref current-state 0) 0)
+      (begin
+        (unless (hash-has-key? deps key) (hash-set! deps key (make-set)))
+        (set-add! (hash-ref deps key) (vector-ref current-state 0)))))
+  (define (wake! deps key)
+    (when (hash-has-key? deps key)
+      (map enqueue! (set->list (hash-ref deps key)))))
+  (define (read-r l) (begin (depend! rdeps l) (hash-ref/default rvals l (set))))
+  (define (read-k l) (begin (depend! kdeps l) (hash-ref/default kvals l (set))))
+  (define (read-v x) (begin (depend! vdeps x) (hash-ref/default vvals x (set))))
+
+  ;; ---- per-label staged tables ----
+  (define transfers (make-hash))  ;; label -> thunk for (E ℓ)
+  (define comps (make-hash))      ;; label -> vector of component labels
+  (define prim-res (make-hash))   ;; label -> result set of a prim node
+  (define clo-info (make-hash))   ;; label -> (cons formals body-label)
+  (define clo-name (make-hash))   ;; label -> top-level binding name
+  (define read-vars (make-set))
+  (define escaped (make-set))
+
+  ;; ---- widening / joins (tied with set! -- mutual recursion with
+  ;; escape!/push-kont! crosses define boundaries) ----
+  (define (escape! l)
+    (unless (set-member? escaped l)
+      (begin
+        (set-add! escaped l)
+        (let ([fi (hash-ref clo-info l)])
+          (begin
+            (map (lambda (x)
+                   (unless (eq? x '#%rest) (join-v! x (set 'top))))
+                 (car fi))
+            (push-kont! (cdr fi) '(topk)))))))
+  (define (escape-clos! S)
+    (map (lambda (v) (match v [`(clo ,l) (escape! l)] [_ (void)]))
+         (set->list S)))
+
+  (define (widen S)
+    (if (set-member? S 'top)
+        (begin (escape-clos! S) (set 'top))
+        (let ([by-type
+               (foldl (lambda (v acc)
+                        (match v
+                          [`(const ,k)
+                           (let ([t (const-type k)])
+                             (hash-set acc t (+ 1 (hash-ref/default acc t 0))))]
+                          [_ acc]))
+                      (hash) (set->list S))])
+          (let ([S1 (foldl (lambda (v acc)
+                             (match v
+                               [`(const ,k)
+                                (let ([t (const-type k)])
+                                  (if (or (> (hash-ref/default by-type t 0) 1)
+                                          (set-member? S t))
+                                      (set-add acc t)
+                                      (set-add acc v)))]
+                               [_ (set-add acc v)]))
+                           (set) (set->list S))])
+            (if (> (set-count S1) aam-widen-limit)
+                (begin (escape-clos! S1) (set 'top))
+                S1)))))
+
+  (define (join-r! l S)
+    (unless (zero? (set-count S))
+      (let* ([old (hash-ref/default rvals l (set))]
+             [new (if (set-member? old 'top)
+                      (begin (escape-clos! S) old)
+                      (widen (set-union old S)))])
+        (unless (equal? old new)
+          (begin
+            (hash-set! rvals l new)
+            (wake! rdeps l)
+            (enqueue! (ret-state l)))))))
+
+  (define (join-v! x S)
+    (unless (or (eq? x '_) (zero? (set-count S)))
+      (let* ([old (hash-ref/default vvals x (set))]
+             [new (if (set-member? old 'top)
+                      (begin (escape-clos! S) old)
+                      (widen (set-union old S)))])
+        (unless (equal? old new)
+          (begin
+            (hash-set! vvals x new)
+            (wake! vdeps x))))))
+
+  (define (join-k! l k)
+    (let ([old (hash-ref/default kvals l (set))])
+      (unless (set-member? old k)
+        (begin
+          (hash-set! kvals l (set-add old k))
+          (wake! kdeps l)
+          (enqueue! (ret-state l))))))
+
+  (define (push-kont! l k)
+    (begin (join-k! l k)
+           (enqueue-if-new! (ev-state l))))
+
+  ;; ---- truthiness on value sets (only (const #f) is false) ----
+  (define (may-true? S)
+    (ormap (lambda (v) (not (equal? v '(const #f)))) (set->list S)))
+  (define (may-false? S)
+    (ormap (lambda (v)
+             (match v ['top #t] ['bool #t] [`(const ,k) (equal? k #f)] [_ #f]))
+           (set->list S)))
+
+  ;; ---- staging: label a node and compile its (E ℓ) transfer ----
+  ;; Traversal order (shared verbatim with the client rewrite walk):
+  ;; self first, then children left-to-right in source order.
+  (define (stage! e)
+    (define l (next-label! e))
+    (define (T! th) (hash-set! transfers l th))
+    (begin
+      (match e
+        [(? literal-node? k)
+         (T! (lambda () (join-r! l (set `(const ,k)))))]
+        [`(string-lit ,_)
+         (T! (lambda () (join-r! l (set 'string))))]
+        [`(read)
+         (T! (lambda () (join-r! l (set 'fixnum))))]
+        [(? symbol? x)
+         (T! (lambda () (begin (set-add! read-vars x) (join-r! l (read-v x)))))]
+        [`(while ,g ,b)
+         (let* ([lg (stage! g)]
+                [lb (stage! b)])
+           (begin
+             (hash-set! comps l (vector lg lb))
+             (T! (lambda () (push-kont! lg `(wgk ,l))))))]
+        [`(let ([,x ,rhs]) ,body)
+         (let* ([lr (stage! rhs)]
+                [lb (stage! body)])
+           (T! (lambda () (push-kont! lr `(letk ,l ,x ,lb)))))]
+        [`(if ,a ,b ,c)
+         (let* ([la (stage! a)]
+                [lb (stage! b)]
+                [lc (stage! c)])
+           (T! (lambda () (push-kont! la `(ifk ,l ,lb ,lc)))))]
+        [`(set! ,x ,rhs)
+         (let ([lr (stage! rhs)])
+           (T! (lambda () (push-kont! lr `(setk ,l ,x)))))]
+        [`(lambda (,xs ...) ,body)
+         (let ([lb (stage! body)])
+           (begin
+             (hash-set! clo-info l (cons xs lb))
+             (T! (lambda () (join-r! l (set `(clo ,l)))))))]
+        [`(begin ,e0 ,es ...)
+         (let ([ls (list->vector (map stage! (cons e0 es)))])
+           (begin
+             (hash-set! comps l ls)
+             (T! (lambda () (push-kont! (vector-ref ls 0) `(begk ,l 0))))))]
+        [`(,op ,es ...)
+         #:when (prim-op? op bound)
+         (let ([ls (list->vector (map stage! es))]
+               [res (prim-result op)])
+           (begin
+             (hash-set! comps l ls)
+             (hash-set! prim-res l res)
+             (if (zero? (vector-length ls))
+                 (T! (lambda () (join-r! l res)))
+                 (T! (lambda () (push-kont! (vector-ref ls 0) `(prmk ,l 0)))))))]
+        [`(,f ,es ...)
+         (let ([ls (list->vector (map stage! (cons f es)))])
+           (begin
+             (hash-set! comps l ls)
+             (T! (lambda () (push-kont! (vector-ref ls 0) `(appk ,l 0))))))])
+      l))
+
+  ;; ---- kont application: the (A ℓ) half ----
+  (define (do-call l cs)
+    (define fvals (read-r (vector-ref cs 0)))
+    (define argRs
+      (let loop ([i 1] [acc '()])
+        (if (< i (vector-length cs))
+            (loop (+ i 1) (cons (read-r (vector-ref cs i)) acc))
+            (reverse acc))))
+    (define nargs (length argRs))
+    (map
+     (lambda (fv)
+       (match fv
+         ['top
+          (begin (map escape-clos! argRs)
+                 (join-r! l (set 'top)))]
+         [`(clo ,lc)
+          (let* ([fi (hash-ref clo-info lc)]
+                 [formals (car fi)]
+                 [lb (cdr fi)]
+                 [mi (index-of formals '#%rest)])
+            (cond
+              [mi ;; variadic: fixed formals bind, the rest escape into a list
+               (let ([fixed (take formals mi)])
+                 (when (>= nargs (length fixed))
+                   (begin
+                     (foldl2 (lambda (x R acc) (begin (join-v! x R) acc))
+                             (void) fixed argRs)
+                     (map escape-clos! (drop argRs (length fixed)))
+                     (join-v! (list-ref formals (+ mi 1)) (set 'pair 'nil))
+                     (push-kont! lb `(retk ,l)))))]
+              [(eq? (length formals) nargs)
+               (begin
+                 (foldl2 (lambda (x R acc) (begin (join-v! x R) acc))
+                         (void) formals argRs)
+                 (push-kont! lb `(retk ,l)))]
+              [else (void)]))]   ;; arity mismatch: no value flows
+         [_ (void)]))            ;; applying a non-closure: runtime error
+     (set->list fvals)))
+
+  (define (apply-kont k S)
+    (match k
+      [`(retk ,lp) (join-r! lp S)]
+      [`(letk ,l ,x ,lb) (begin (join-v! x S) (push-kont! lb `(retk ,l)))]
+      [`(setk ,l ,x) (begin (join-v! x S) (join-r! l (set '(const (void)))))]
+      [`(begk ,l ,i)
+       (let ([cs (hash-ref comps l)])
+         (if (eq? i (- (vector-length cs) 1))
+             (join-r! l S)
+             (push-kont! (vector-ref cs (+ i 1)) `(begk ,l ,(+ i 1)))))]
+      [`(ifk ,l ,lt ,lf)
+       (begin
+         (when (may-true? S) (push-kont! lt `(retk ,l)))
+         (when (may-false? S) (push-kont! lf `(retk ,l))))]
+      [`(wgk ,l)
+       (let ([cs (hash-ref comps l)])
+         (begin
+           (when (may-true? S) (push-kont! (vector-ref cs 1) `(wbk ,l)))
+           (when (may-false? S) (join-r! l (set '(const (void)))))))]
+      [`(wbk ,l) (void)] ;; guard re-reads are dep-driven; body value dies
+      [`(prmk ,l ,i)
+       (let ([cs (hash-ref comps l)])
+         (if (eq? i (- (vector-length cs) 1))
+             (begin
+               ;; args may be retained by the prim (cons/hash-set/...)
+               (let loop ([j 0])
+                 (when (< j (vector-length cs))
+                   (begin (escape-clos! (read-r (vector-ref cs j)))
+                          (loop (+ j 1)))))
+               (join-r! l (hash-ref prim-res l)))
+             (push-kont! (vector-ref cs (+ i 1)) `(prmk ,l ,(+ i 1)))))]
+      [`(appk ,l ,i)
+       (let ([cs (hash-ref comps l)])
+         (if (eq? i (- (vector-length cs) 1))
+             (do-call l cs)
+             (push-kont! (vector-ref cs (+ i 1)) `(appk ,l ,(+ i 1)))))]
+      [`(defk ,x) (join-v! x S)]
+      [`(topk) (escape-clos! S)] ;; an escaped call's result escapes too
+      [`(donek) (void)]))
+
+  (define (do-ret l)
+    (define Ks (read-k l))
+    (define S (read-r l))
+    (unless (zero? (set-count S))
+      (map (lambda (k) (apply-kont k S)) (set->list Ks))))
+
+  ;; ---- stage the top level ----
+  ;; A value define's cell starts at 0; a reference can concretely
+  ;; see 0 only from a function body or a form textually before the
+  ;; define. Seed (const 0) exactly in those cases.
+  (define fn-mentions
+    (foldl (lambda (f acc)
+             (match f
+               [`(define (,_ ,_ ...) ,_)
+                (foldl (lambda (m a) (set-add a m)) acc
+                       (set->list (aam-mentions-of f)))]
+               [_ acc]))
+           (set) forms))
+  (define roots (vector '()))
+  (define (root! th)
+    (vector-set! roots 0 (cons th (vector-ref roots 0))))
+  (foldl
+   (lambda (form before)
+     (begin
+       (match form
+         [`(define (,f ,xs ...) ,body)
+          (let* ([lf (next-label! form)]
+                 [lb (stage! body)])
+            (begin
+              (hash-set! clo-info lf (cons xs lb))
+              (hash-set! clo-name lf f)
+              (root! (lambda () (join-v! f (set `(clo ,lf)))))))]
+         [`(define ,x ,rhs)
+          (let ([lr (stage! rhs)])
+            (begin
+              (when (match rhs [`(lambda ,_ ,_) #t] [_ #f])
+                (hash-set! clo-name lr x))
+              (let ([seed0? (or (set-member? fn-mentions x)
+                                (set-member? before x))])
+                (root! (lambda ()
+                         (begin
+                           (when seed0? (join-v! x (set '(const 0))))
+                           (push-kont! lr `(defk ,x))))))))]
+         [e
+          (let ([le (stage! e)])
+            (root! (lambda () (push-kont! le '(donek)))))])
+       (foldl (lambda (m a) (set-add a m)) before
+              (set->list (aam-mentions-of form)))))
+   (set) forms)
+
+  (define nodes (list->vector (reverse (vector-ref nodes-rev 0))))
+
+  ;; ---- the fixpoint ----
+  (vector-set! current-state 0 -1)
+  (map (lambda (th) (th)) (reverse (vector-ref roots 0)))
+  (define n-states
+    (let loop ([n 0])
+      (cond
+        [(null? (vector-ref worklist 0)) n]
+        [(> n aam-state-ceiling) #f]
+        [else
+         (let ([s (car (vector-ref worklist 0))])
+           (begin
+             (vector-set! worklist 0 (cdr (vector-ref worklist 0)))
+             (hash-set! queued s #f)
+             (vector-set! current-state 0 s)
+             (if (zero? (remainder s 2))
+                 ((hash-ref transfers (quotient s 2)))
+                 (do-ret (quotient s 2)))
+             (loop (+ n 1))))])))
+  (vector-set! current-state 0 -1)
+  (and n-states
+       (hash 'nodes nodes
+             'rvals rvals
+             'varvals vvals
+             'read-vars read-vars
+             'clo-name clo-name
+             'escaped escaped
+             'n-labels (vector-ref label-count 0)
+             'n-states n-states)))
+
+;; ---- clients: flow constant folding, super-beta rator revelation, ----
+;; ---- dead top-level defines -------------------------------------------
+
+(define (aam-clients p)
+  (define facts (analyze p))
+  (if (not facts)
+      p   ;; ceiling tripped: degrade to the identity
+      (aam-rewrite p facts)))
+
+(define (aam-rewrite p facts)
+  (define forms (match p [`(program ,fs ...) fs]))
+  (define bound (program-binders p))
+  (define assigned (assigned-vars p))
+  (define nodes (hash-ref facts 'nodes))
+  (define rvals (hash-ref facts 'rvals))
+  (define clo-name (hash-ref facts 'clo-name))
+  (define read-vars (hash-ref facts 'read-vars))
+
+  (define (flow l) (hash-ref/default rvals l (set)))
+  (define (singleton-const S)
+    (and (eq? (set-count S) 1)
+         (match (car (set->list S)) [`(const ,k) k] [_ #f])))
+  (define (singleton-clo S)
+    (and (eq? (set-count S) 1)
+         (match (car (set->list S)) [`(clo ,l) l] [_ #f])))
+
+  ;; the rewrite walk mirrors analyze's traversal exactly; the
+  ;; nodes-vector cross-check makes any drift a loud, fatal error
+  (define ctr (vector 0))
+  (define (next!)
+    (let ([l (vector-ref ctr 0)])
+      (begin (vector-set! ctr 0 (+ l 1)) l)))
+  (define (rw e)
+    (define l (next!))
+    (begin
+      (unless (if (pair? e)
+                  (eq? e (vector-ref nodes l))
+                  (equal? e (vector-ref nodes l)))
+        (error 'aam-clients-label-desync))
+      (match e
+        [`(string-lit ,_) e]
+        [`(read) e]
+        [(? literal-node? _) e]
+        [(? symbol? x)
+         ;; flow constant folding: a reference whose flow set is
+         ;; exactly {(const k)} IS k (never for set! vars)
+         (let ([k (and (not (set-member? assigned x))
+                       (singleton-const (flow l)))])
+           (if k k x))]
+        [`(while ,g ,b) `(while ,(rw g) ,(rw b))]
+        [`(let ([,x ,rhs]) ,body) `(let ([,x ,(rw rhs)]) ,(rw body))]
+        [`(if ,a ,b ,c) `(if ,(rw a) ,(rw b) ,(rw c))]
+        [`(set! ,x ,rhs) `(set! ,x ,(rw rhs))]
+        [`(lambda (,xs ...) ,body) `(lambda ,xs ,(rw body))]
+        [`(begin ,e0 ,es ...) `(begin ,@(map rw (cons e0 es)))]
+        [`(,op ,es ...)
+         #:when (prim-op? op bound)
+         `(,op ,@(map rw es))]
+        [`(,f ,es ...)
+         ;; super-beta: a rator variable that flows to exactly one
+         ;; closure bound by a top-level define is rewritten to that
+         ;; define's name (top-level defines instantiate one closure
+         ;; per run, so the values are identical); -O1's inliner
+         ;; takes it from there
+         (let* ([lf (vector-ref ctr 0)] ;; the label rw will give the rator
+                [f* (rw f)]
+                [f** (if (and (symbol? f) (symbol? f*))
+                         (let* ([lc (singleton-clo (flow lf))]
+                                [nm (and lc (hash-ref/default clo-name lc #f))])
+                           (if (and nm
+                                    (not (set-member? assigned nm))
+                                    (not (set-member? assigned f))
+                                    (not (eq? nm f*)))
+                               nm
+                               f*))
+                         f*)])
+           `(,f** ,@(map rw es)))])))
+
+  (define forms1
+    (map (lambda (form)
+           (match form
+             [`(define (,f ,xs ...) ,body)
+              (begin (next!) ;; the define form's own (closure) label
+                     `(define (,f ,@xs) ,(rw body)))]
+             [`(define ,x ,rhs)
+              `(define ,x ,(rw rhs))]
+             [e (rw e)]))
+         forms))
+
+  ;; dead top-level defines: never read in any reachable abstract
+  ;; state AND unreferenced from live forms, as a shrinking fixpoint
+  ;; (mutually recursive dead cliques go together); only
+  ;; allocation-free rhs kinds are dropped
+  (define (dead-defn-name f)
+    (match f
+      [`(define (,g ,_ ...) ,_) g]
+      [`(define ,g ,_) (if (symbol? g) g #f)]
+      [_ #f]))
+  (define (droppable-kind? f)
+    (match f
+      [`(define (,_ ,_ ...) ,_) #t]
+      [`(define ,_ ,rhs)
+       (or (literal-node? rhs) (symbol? rhs)
+           (match rhs
+             [`(lambda ,_ ,_) #t]
+             [`(string-lit ,_) #t]
+             [_ #f]))]
+      [_ #f]))
+  (define candidates
+    (foldl (lambda (f acc)
+             (let ([n (dead-defn-name f)])
+               (if (and n (droppable-kind? f)
+                        (not (set-member? read-vars n)))
+                   (set-add acc n)
+                   acc)))
+           (set) forms1))
+  (define dead
+    (let loop ([dead candidates])
+      (let ([refs
+             (foldl (lambda (f acc)
+                      (let ([n (dead-defn-name f)])
+                        (if (and n (set-member? dead n))
+                            acc
+                            (foldl (lambda (m a) (set-add a m)) acc
+                                   (set->list (aam-mentions-of f))))))
+                    (set) forms1)])
+        (let ([dead* (foldl (lambda (n acc)
+                              (if (set-member? refs n) acc (set-add acc n)))
+                            (set) (set->list dead))])
+          (if (equal? dead* dead) dead (loop dead*))))))
+  (define forms2
+    (filter (lambda (f)
+              (let ([n (dead-defn-name f)])
+                (not (and n (set-member? dead n)))))
+            forms1))
+  `(program ,@forms2))

@@ -1,0 +1,23 @@
+;; puffincc -- optimize.puf: the `optimize` pass, dispatching on
+;; optimize-level (the Puffin port of src/opt/optimize.rkt):
+;;   0 = identity
+;;   1 = contraction + bounded inlining, iterated to a small round limit
+;;   2 = flow-analysis clients first (aam.puf), then -O1
+;; IR-preserving: unique core source tree in and out.
+
+(require "system.puf")
+(require "contract.puf")
+(require "aam.puf")
+
+(define optimize-round-limit 4)
+
+(define (optimize p)
+  (if (zero? optimize-level)
+      p
+      (let ([p2 (if (>= optimize-level 2) (aam-clients p) p)])
+        (let loop ([p p2] [round 0])
+          (if (>= round optimize-round-limit)
+              p
+              (match (contract-program p)
+                [`(,p* ,changed)
+                 (if changed (loop p* (+ round 1)) p*)]))))))

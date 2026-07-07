@@ -75,59 +75,67 @@
     (define order (block-order blocks f))
 
     ;; ---- block-level liveness fixpoint -------------------------------
-    (define (instr-uses i)  (first (uses+defs i)))
-    (define (instr-defs i)  (second (uses+defs i)))
-    (define live-in (make-hash))   ;; label -> set of vars
+    ;; One mutable set walked backward per block: O(uses+defs) per
+    ;; instruction instead of persistent-set unions (which made this
+    ;; and the interval pass quadratic in live-set size -- visible on
+    ;; the -O1-inlined puffincc build).
+    (define uses+defs-of (make-hasheq))  ;; instr -> (list uses defs), cached
+    (define (instr-uses+defs i)
+      (or (hash-ref uses+defs-of i #f)
+          (let ([ud (uses+defs i)]) (hash-set! uses+defs-of i ud) ud)))
+    (define live-in (make-hash))   ;; label -> set of vars (immutable snapshot)
     (define (block-live-in l live-out)
       ;; walk the block backward from live-out
-      (foldr (λ (i acc) (set-union (list->set (instr-uses i))
-                                   (set-subtract acc (list->set (instr-defs i)))))
-             live-out
-             (hash-ref blocks l)))
+      (define live (set-copy live-out))
+      (for ([i (in-list (reverse (hash-ref blocks l)))])
+        (match-define (list us ds) (instr-uses+defs i))
+        (for ([d (in-list ds)]) (set-remove! live d))
+        (for ([u (in-list us)]) (set-add! live u)))
+      live)
     (define (live-out-of l)
-      (foldl (λ (s acc) (set-union acc (hash-ref live-in s (set))))
-             (set)
-             (block-successors (hash-ref blocks l))))
+      (define out (mutable-set))
+      (for ([s (block-successors (hash-ref blocks l))])
+        (set-union! out (hash-ref live-in s (mutable-set))))
+      out)
     (let fixpoint ()
       (define changed #f)
       (for ([l order])
         (define new-in (block-live-in l (live-out-of l)))
-        (unless (equal? new-in (hash-ref live-in l (set)))
+        (unless (equal? new-in (hash-ref live-in l (mutable-set)))
           (hash-set! live-in l new-in)
           (set! changed #t)))
       (when changed (fixpoint)))
 
-    ;; ---- per-instruction live sets and intervals ----------------------
-    ;; global linear numbering over `order`; extend each var's
-    ;; interval to cover every occurrence and every point of liveness
-    (define intervals (make-hash)) ;; var -> (cons start end)
+    ;; ---- intervals -----------------------------------------------------
+    ;; global linear numbering over `order`. A hull only needs its
+    ;; endpoints anchored: touching every occurrence, plus each
+    ;; block's live-in vars at its first point and live-out vars at
+    ;; its last, covers every point of liveness (a var live at point
+    ;; k has a def-or-live-in anchor at or before k and a
+    ;; use-or-live-out anchor at or after k, and hulls are convex).
+    (define intervals (make-hash)) ;; var -> (vector start end)
     (define (touch! v i)
-      (define cur (hash-ref intervals v (cons i i)))
-      (hash-set! intervals v (cons (min (car cur) i) (max (cdr cur) i))))
+      (define cur (hash-ref intervals v #f))
+      (if cur
+          (begin (when (< i (vector-ref cur 0)) (vector-set! cur 0 i))
+                 (when (> i (vector-ref cur 1)) (vector-set! cur 1 i)))
+          (hash-set! intervals v (vector i i))))
     (define n 0)
     (for ([l order])
       (define instrs (hash-ref blocks l))
-      (define outs (live-out-of l))
-      ;; live-after set for each instruction: fold backward building
-      ;; (before_0 before_1 ... before_{n-1} outs); instruction k's
-      ;; live-after is before_{k+1}, i.e. the cdr, already in order
-      (define live-afters
-        (cdr (foldr (λ (i acc)
-                      (define after (car acc))
-                      (define before (set-union (list->set (instr-uses i))
-                                                (set-subtract after (list->set (instr-defs i)))))
-                      (cons before acc))
-                    (list outs)
-                    instrs)))
-      (for ([i instrs] [after live-afters])
-        (for ([v (instr-uses i)]) (touch! v n))
-        (for ([v (instr-defs i)]) (touch! v n))
-        (for ([v after]) (touch! v n))
+      (define start n)
+      (define end (+ n (max 0 (sub1 (length instrs)))))
+      (for ([v (in-set (hash-ref live-in l (mutable-set)))]) (touch! v start))
+      (for ([v (in-set (live-out-of l))]) (touch! v end))
+      (for ([i instrs])
+        (match-define (list us ds) (instr-uses+defs i))
+        (for ([v (in-list us)]) (touch! v n))
+        (for ([v (in-list ds)]) (touch! v n))
         (set! n (add1 n))))
 
     ;; ---- linear scan ---------------------------------------------------
     (define regs (allocatable-registers-list))
-    (define sorted (sort (hash->list intervals) < #:key cadr)) ;; by start
+    (define sorted (sort (hash->list intervals) < #:key (λ (iv) (vector-ref (cdr iv) 0)))) ;; by start
     (define var->loc (make-hash))
     (define active '())   ;; list of (end var reg), kept sorted by end
     (define free-regs regs)
@@ -142,7 +150,7 @@
       (set! spill-count (add1 spill-count))
       `(spill ,spill-count))
     (for ([iv sorted])
-      (match-define (cons v (cons start end)) iv)
+      (match-define (cons v (vector start end)) iv)
       (expire! start)
       (cond
         [(pair? free-regs)

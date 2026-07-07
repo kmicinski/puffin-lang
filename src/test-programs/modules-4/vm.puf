@@ -1,0 +1,12 @@
+;; the stack machine
+(provide run-vm)
+(define (run-vm instrs stack)
+  (match instrs
+    ['() (car stack)]
+    [(cons i rest)
+     (match (list i stack)
+       [`((push ,n) ,st) (run-vm rest (cons n st))]
+       [`((add) (,b ,a . ,st)) (run-vm rest (cons (+ a b) st))]
+       [`((sub) (,b ,a . ,st)) (run-vm rest (cons (- a b) st))]
+       [`((mul) (,b ,a . ,st)) (run-vm rest (cons (* a b) st))]
+       [`((neg) (,a . ,st)) (run-vm rest (cons (- a) st))])]))

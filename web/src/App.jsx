@@ -121,7 +121,14 @@ export default function App() {
     appendLine('— run —', 'sys');
     setRunning(true);
     startTimer();
-    runWorker.postMessage({ type: 'run', source: editor.getValue(), input: parseStdin(stdinText()) });
+    saveActive();
+    runWorker.postMessage({
+      type: 'run',
+      source: editor.getValue(),
+      input: parseStdin(stdinText()),
+      files: files(),
+      entry: files() ? 'main.puf' : null,
+    });
   }
 
   function doStop() {
@@ -192,6 +199,74 @@ export default function App() {
     }
   }
 
+  // ---------- files (module programs) ----------
+  // null = single-file mode; otherwise { "path.puf": source, ... }
+  // with the entry fixed at main.puf (docs/MODULES.md: a file is a
+  // module; require paths resolve within this virtual file map)
+  const [files, setFiles] = createSignal(null);
+  const [activeFile, setActiveFile] = createSignal('main.puf');
+  const [renaming, setRenaming] = createSignal(null); // path being renamed
+
+  function saveActive() {
+    if (files() && editor) {
+      setFiles({ ...files(), [activeFile()]: editor.getValue() });
+    }
+  }
+
+  function switchFile(path) {
+    if (path === activeFile()) return;
+    saveActive();
+    setActiveFile(path);
+    editor.setValue(files()[path] ?? '');
+    editor.setScrollTop(0);
+  }
+
+  function addFile() {
+    saveActive();
+    let fs = files();
+    if (!fs) { // convert single-file mode: current editor text becomes main.puf
+      fs = { 'main.puf': editor.getValue() };
+      setActiveFile('main.puf');
+    }
+    let n = 1;
+    while (`lib${n}.puf` in fs) n++;
+    const name = `lib${n}.puf`;
+    setFiles({ ...fs, [name]: `(provide )\n\n;; (require "${name}") from main.puf to use it\n` });
+    setActiveFile(name);
+    editor.setValue(files()[name]);
+  }
+
+  function removeFile(path) {
+    if (path === 'main.puf') return;
+    const fs = { ...files() };
+    delete fs[path];
+    const remaining = Object.keys(fs);
+    if (remaining.length === 1) { // back to single-file mode
+      setFiles(null);
+      editor.setValue(fs['main.puf']);
+      setActiveFile('main.puf');
+      return;
+    }
+    setFiles(fs);
+    if (activeFile() === path) {
+      setActiveFile('main.puf');
+      editor.setValue(fs['main.puf']);
+    }
+  }
+
+  function renameFile(oldPath, newPath) {
+    setRenaming(null);
+    newPath = newPath.trim();
+    if (oldPath === 'main.puf' || newPath === '' || newPath === oldPath) return;
+    if (!/\.(puf|pufs)$/.test(newPath)) newPath += '.puf';
+    const fs = { ...files() };
+    if (newPath in fs) return;
+    fs[newPath] = fs[oldPath];
+    delete fs[oldPath];
+    setFiles(fs);
+    if (activeFile() === oldPath) setActiveFile(newPath);
+  }
+
   // ---------- editor ----------
   let editorEl;
   let editor;
@@ -214,7 +289,17 @@ export default function App() {
 
   function loadExample(ev) {
     const ex = EXAMPLES.find((x) => x.id === ev.target.value);
-    if (ex && editor) { editor.setValue(ex.code); editor.setScrollTop(0); }
+    if (!ex || !editor) return;
+    if (ex.files) {
+      setFiles({ ...ex.files });
+      setActiveFile(ex.entry || 'main.puf');
+      editor.setValue(ex.files[ex.entry || 'main.puf']);
+    } else {
+      setFiles(null);
+      setActiveFile('main.puf');
+      editor.setValue(ex.code);
+    }
+    editor.setScrollTop(0);
   }
 
   return (
@@ -251,6 +336,38 @@ export default function App() {
       {/* Playground stays mounted (hidden) so the editor, workers and console survive mode switches */}
       <main class="main" style={{ display: mode() === 'play' ? 'flex' : 'none' }}>
         <section class="editor-pane">
+          <div class="file-tabs">
+            <Show when={files()}>
+              <For each={Object.keys(files()).sort((a, b) => (a === 'main.puf' ? -1 : b === 'main.puf' ? 1 : a.localeCompare(b)))}>
+                {(path) => (
+                  <div
+                    classList={{ 'file-tab': true, active: activeFile() === path }}
+                    onClick={() => switchFile(path)}
+                    onDblClick={() => path !== 'main.puf' && setRenaming(path)}
+                    title={path === 'main.puf' ? 'entry module' : 'double-click to rename'}
+                  >
+                    <Show when={renaming() === path} fallback={<span>{path}</span>}>
+                      <input
+                        class="rename"
+                        value={path}
+                        ref={(el) => queueMicrotask(() => { el.focus(); el.select(); })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') renameFile(path, e.target.value);
+                          else if (e.key === 'Escape') setRenaming(null);
+                        }}
+                        onBlur={(e) => renameFile(path, e.target.value)}
+                      />
+                    </Show>
+                    <Show when={path !== 'main.puf' && renaming() !== path}>
+                      <button class="close" title="remove file"
+                        onClick={(e) => { e.stopPropagation(); removeFile(path); }}>×</button>
+                    </Show>
+                  </div>
+                )}
+              </For>
+            </Show>
+            <button class="file-tab add" onClick={addFile} title="Add a module file (require it from main.puf)">+ file</button>
+          </div>
           <div class="monaco-host" ref={editorEl} />
         </section>
 
@@ -300,7 +417,11 @@ export default function App() {
       <Show when={pipelineOpened()}>
         <div class="pipeline-host" style={{ display: mode() === 'pipeline' ? 'flex' : 'none' }}>
           <Suspense fallback={<div class="pipeline-loading">loading pipeline visualizer…</div>}>
-            <Pipeline getSource={() => (editor ? editor.getValue() : '')} active={() => mode() === 'pipeline'} />
+            <Pipeline
+              getSource={() => (editor ? editor.getValue() : '')}
+              getFiles={() => { saveActive(); return files(); }}
+              active={() => mode() === 'pipeline'}
+            />
           </Suspense>
         </div>
       </Show>

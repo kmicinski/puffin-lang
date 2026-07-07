@@ -1,7 +1,0 @@
-'(program
-  #hash((read6958 . -8))
-  #hash((_main
-         .
-         ((callq _read_int64 0)
-          (movq (reg rax) (deref (reg rbp) -8))
-          (movq (deref (reg rbp) -8) (reg rax))))))

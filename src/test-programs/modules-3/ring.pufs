@@ -1,0 +1,5 @@
+(signature RING
+  (val zero)
+  (fun add 2)
+  (fun mul 2)
+  (fun sum 1))

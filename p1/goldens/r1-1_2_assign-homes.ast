@@ -1,8 +1,0 @@
-'(program
-  #hash((x7651 . -24) (x7652 . -16) (x . -8))
-  #hash((_main
-         .
-         ((movq (imm 2) (deref (reg rbp) -8))
-          (movq (deref (reg rbp) -8) (deref (reg rbp) -24))
-          (movq (deref (reg rbp) -24) (deref (reg rbp) -16))
-          (movq (deref (reg rbp) -16) (reg rax))))))

@@ -1,1 +1,0 @@
-((3) 0 () 1 ((q fun-ref fib)) () (c program c (c define c (q main) c (c let c (q (x (read))) c (c if c (q < x 8) c (c app c (? . 0) q x) c (c app c (? . 0) q 8)))) c (c define c (q fib x) c (c if c (q eq? x 0) c 1 c (c if c (q eq? x 1) c 1 c (c + c (c app c (? . 0) q (+ x (- 1))) c (c app c (? . 0) q (+ x (- 2)))))))))

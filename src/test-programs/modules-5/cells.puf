@@ -1,0 +1,10 @@
+(provide make-cell cell? cell-set! cell-get)
+;; ---- recursive cells for letrec ------------------------------------
+;; a cell is a 1-slot vector; deref happens at variable lookup time
+(define (make-cell) (vector 'undefined))
+(define (cell? v) (and (vector? v) (eq? (vector-length v) 1)))
+(define (cell-set! c v) (vector-set! c 0 v))
+(define (cell-get c)
+  (let ([v (vector-ref c 0)])
+    (if (eq? v 'undefined) (error 'letrec-used-before-defined) v)))
+

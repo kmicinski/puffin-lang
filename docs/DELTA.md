@@ -448,8 +448,52 @@ frame-layout bug — `#<unknown:195>` garbage was the symptom);
 `main` originally tail-jumped past its own conclusion; prim shadowing
 was originally re-decided per pass instead of settled in desugar.
 
-## 12. Where to take it next (agreed direction + loose ends)
+## 12. Modules, the optimizer, and the self-contained puffincc (2026-07)
 
+Three coordinated moves, each documented in its own file:
+
+- **The module system** (docs/MODULES.md) — `(require "path.puf")` /
+  `(provide ...)` with `#:as`/`#:only`/`#:rename` and optional `.pufs`
+  signature ascription, implemented as a front pass in all THREE
+  implementations: `src/modules.rkt` (one hook in `read-program-file`
+  covers every route), `web/src/puffin/modules.js` (virtual file map;
+  the playground grew file tabs), and `puffincc-src/modules.puf`.
+  Corpus: `modules-1..6` (the stack-VM, LC-interpreter, and sudoku
+  programs split into modules, byte-identical to their single-file
+  originals); failure modes in `src/test-modules.rkt`.
+
+- **The optimizer** (docs/OPTIMIZER.md) — `-O0/1/2` in both compilers.
+  The whole analysis + optimization stack (cp0-style contraction,
+  the staged CESK* flow analysis and its clients, direct known
+  calls, fused compare-and-branch, loop recovery, blocks cleanup,
+  open-coded pair/vector prims) is ported to Puffin in
+  `puffincc-src/{contract,aam,optimize}.puf` + hooks in
+  `middle.puf`/`backends.puf`. `src/diff-ir.rkt <pass> <prog> [tgt]
+  [olvl]` is the cross-implementation oracle.
+
+- **puffincc as a real compiler driver** — puffincc-src/ became a
+  module DAG rooted at `main.puf` (no more concatenation; the
+  generated `tables.puf`/`prelude-data.puf` are ordinary modules).
+  New io primitives (`read-file`, `write-file`, `file-exists?`,
+  `command-line-args`, `system`; `src/runtime/lib/io.c`) make it
+  self-contained: `build/puffincc prog.puf -o prog` resolves the
+  program's modules from disk, compiles, and drives clang itself.
+  `bin/puffincc-compile` is gone; `bin/build-puffincc` is just the
+  stage-1 hosted build. Pipe mode (`puffincc < prog.puf > prog.s`)
+  survives for single-file programs.
+
+Performance work this exposed: the shared register allocator's
+liveness/interval construction was quadratic in live-set size
+(rewritten with mutable backward walks + hull endpoint anchoring, in
+both `src/regalloc.rkt` and `backends.puf`), and arm64 frames larger
+than 4095 bytes crashed the assembler (sp adjustments now split into
+a shifted-page part + remainder, both implementations).
+
+## 13. Where to take it next (agreed direction + loose ends)
+
+- **Separate compilation** (docs/MODULES.md §3) — the `.pufi`/`.o`
+  cache and link-time DAG assembly; the interface format is designed,
+  the whole-program resolver is the semantic reference.
 - **Gradual types** — the planned next step. The natural seam: a
   `typecheck` pass between desugar and shrink, annotations via
   `(: name type)` forms, tag checks elided where types are known.

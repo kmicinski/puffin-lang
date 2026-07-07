@@ -55,6 +55,7 @@
      [("-i" "--interp") "Interpret instead of compiling" (interp-mode #t)]
      [("-o" "--output") out "Executable output path" (output-path out)]
      [("-t" "--target") tgt "Target architecture: x86-64 or arm64" (target (string->symbol tgt))]
+     [("-O" "--optimize") lvl "Optimization level: 0, 1 (default), 2" (optimize-level (string->number lvl))]
      #:args leftover
      (match leftover
        ['() #f]

@@ -9,3 +9,8 @@ web/node_modules/
 web/dist/
 intermediate-outputs/
 .DS_Store
+build/
+compiled/
+/.s
+\#*\#
+.\#*

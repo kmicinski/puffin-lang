@@ -1,0 +1,3 @@
+(provide base)
+(println 'init-d)
+(define base 10)

@@ -1,0 +1,6 @@
+(provide #:sig "ring.pufs")
+(define zero 0)
+(define (add a b) (+ a b))
+(define (mul a b) (* a b))
+(define (sum . xs) (foldl (lambda (x acc) (+ x acc)) 0 (car xs)))
+(define (helper-not-exported x) x)

@@ -29,7 +29,10 @@ onmessage = (e) => {
   const t0 = performance.now();
   let res;
   try {
-    res = run(msg.source, { input: msg.input, onOutput: out });
+    res = run(msg.source, {
+      input: msg.input, onOutput: out,
+      files: msg.files || null, entry: msg.entry || null,
+    });
   } catch (err) {
     res = { ok: false, error: `internal error: ${err && err.message}` };
   }
