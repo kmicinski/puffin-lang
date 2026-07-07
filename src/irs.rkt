@@ -91,6 +91,16 @@
 (define (global? op)             (match op [`(global ,i)         (integer? i)] [_ #f]))
 (define (label? l)               (symbol? l))
 
+;; A global slot descriptor: an index into this unit's globals array,
+;; or -- under separate compilation only -- (ext <label> <k>), slot k
+;; of the exporting module's array. Opaque to every pass in between
+;; collect-globals and the renderer.
+(define (global-slot? i)
+  (match i
+    [(? exact-nonnegative-integer?) #t]
+    [`(ext ,(? symbol?) ,(? exact-nonnegative-integer?)) #t]
+    [_ #f]))
+
 ;; Condition codes: e, ne, l, ae (ae backs the unsigned bounds
 ;; checks); le/g/ge back the fused compare-and-branch tails
 (define (cc? op)                 (member op '(e ne l le g ge ae)))
@@ -340,8 +350,8 @@
     ['(read) #t]
     [`(string-lit ,(? string?)) #t]
     [(? symbol?) #t]
-    [`(global-ref ,(? exact-nonnegative-integer?)) #t]
-    [`(global-set! ,(? exact-nonnegative-integer?) ,(? globals-exp?)) #t]
+    [`(global-ref ,(? global-slot?)) #t]
+    [`(global-set! ,(? global-slot?) ,(? globals-exp?)) #t]
     [`(,(? shrunk-cmp?) ,(? globals-exp?) ,(? globals-exp?)) #t]
     [`(if ,(? globals-exp?) ,(? globals-exp?) ,(? globals-exp?)) #t]
     [`(let ([_ (while ,(? globals-exp?) ,(? globals-exp?))]) ,(? globals-exp?)) #t]
@@ -379,7 +389,7 @@
     ['(read) #t]
     [`(string-lit ,_) #t]
     [(? symbol? x) (not (set-member? fs x))]
-    [`(fun-ref ,f) (set-member? fs f)]
+    [`(fun-ref ,f) (or (set-member? fs f) (set-member? (module-ext-funs) f))]
     [`(global-ref ,_) #t]
     [`(global-set! ,_ ,(? (λ (e) (revealed-exp? e fs)))) #t]
     [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
@@ -557,7 +567,7 @@
 (define (blocks-stmt? s)
   (match s
     [`(assign ,(? symbol?) ,(? blocks-rhs?))                         #t]
-    [`(global-set! ,(? exact-nonnegative-integer?) ,(? atom?))       #t]
+    [`(global-set! ,(? global-slot?) ,(? atom?))       #t]
     [`(unsafe-vector-set! ,(? atom?) ,(? fixnum?) ,(? atom?))        #t]
     [`(effect ,(? blocks-rhs?))                                      #t]
     [_                                                               #f]))
