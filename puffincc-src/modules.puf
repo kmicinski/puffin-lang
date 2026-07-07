@@ -292,13 +292,6 @@
 ;; visit returns (loaded postorder ids); a module is
 ;;   (hash 'path 'id 'body 'top-names 'provides 'reqs)
 ;;
-;; loaded/ids are keyed by (string->symbol s): the immutable hash
-;; compares keys by identity (hamt.c's load-bearing simplification),
-;; so two equal path strings BUILT SEPARATELY would miss -- symbols
-;; intern by content, restoring the reference's equal?-keyed
-;; semantics (this is what makes diamond requires load once).
-
-(define (path-key p) (string->symbol p))
 
 (define (module-id path entry-dir ids)
   (define rel path) ;; paths are already joined from the entry dir
