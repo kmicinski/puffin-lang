@@ -229,7 +229,12 @@
 (define (argument-registers-list)
   (match (target)
     ['x86-64 '(rdi rsi rdx rcx r8 r9)]
-    ['arm64  '(x0 x1 x2 x3 x4 x5)]))  ;; ARM has x0-x7; we use six to keep arity limiting identical
+    ['arm64  '(x0 x1 x2 x3 x4 x5)]  ;; ARM has x0-x7; we use six to keep arity limiting identical
+    ;; the bytecode VM has no register file, but the six-argument
+    ;; call protocol (limit-functions, papp packing, pf_collect_rest)
+    ;; is kept identical to native (docs/WASM-VM.md §2.2); these are
+    ;; placeholder names -- only the *count* matters to the middle-end
+    ['bytecode '(a0 a1 a2 a3 a4 a5)]))
 
 ;; Registers the allocator may hand out. We restrict ourselves to
 ;; callee-saved registers: values in them survive calls, so live
