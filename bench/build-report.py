@@ -165,8 +165,11 @@ pccdir = os.path.join(os.path.dirname(BENCH), "puffincc-src")
 if os.path.isdir(pccdir):
     parts = []
     for f in sorted(os.listdir(pccdir)):
-        if f.endswith(".puf"):
-            parts.append(f";; {'='*22} {f} {'='*22}\n" + open(os.path.join(pccdir, f)).read())
+        if f.endswith(".puf") and not f.startswith("."):
+            try:
+                parts.append(f";; {'='*22} {f} {'='*22}\n" + open(os.path.join(pccdir, f)).read())
+            except OSError:
+                pass  # editor lock files etc.
     prog_sources["puffincc"] = {"desc": "the self-hosted compiler (puffincc-src/ module DAG)",
                                 "puffin": "\n".join(parts), "racket": None}
 sources_json = json.dumps(prog_sources)
