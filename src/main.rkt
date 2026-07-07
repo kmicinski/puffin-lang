@@ -324,7 +324,8 @@
     (match f
       [`(define (,g ,_ ...) ,_ ...) g]
       [`(define (,g . ,_) ,_ ...) g]
-      [`(define ,(? symbol? x) ,_) x]))
+      [`(define ,(? symbol? x) ,_) x]
+      [_ #f]))   ;; (: name t) declarations and other non-defines
   (define user-names
     (list->set
      (filter-map (λ (f) (match f
@@ -356,7 +357,12 @@
       (filter (λ (n) (and (hash-has-key? by-name n) (not (set-member? included n))))
               (set->list needed)))
     (if (null? new-names)
-        (filter (λ (f) (set-member? included (defn-name f))) candidates)
+        ;; a (: name t) declaration travels with its included function
+        (filter (λ (f)
+                  (match f
+                    [`(: ,n ,_) (set-member? included n)]
+                    [_ (set-member? included (defn-name f))]))
+                candidates)
         (grow (foldl (λ (n acc) (set-union acc (mentions (hash-ref by-name n))))
                      needed new-names)
               (foldl (λ (n acc) (set-add acc n)) included new-names)))))
