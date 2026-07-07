@@ -24,8 +24,12 @@
   (parameterize ([write-stdout-mode #f]
                  [verbose-mode #f]
                  [executable-file out]
-                 [asm-file (path->string (build-path (find-system-path 'temp-dir) "puffin-cli.s"))]
-                 [object-file (path->string (build-path (find-system-path 'temp-dir) "puffin-cli.o"))])
+                 ;; unique per process: concurrent compiles (test harness,
+                 ;; background builds) must never share intermediates
+                 [asm-file (path->string (build-path (find-system-path 'temp-dir)
+                                                     (format "puffin-cli-~a.s" (current-milliseconds))))]
+                 [object-file (path->string (build-path (find-system-path 'temp-dir)
+                                                        (format "puffin-cli-~a.o" (current-milliseconds))))])
     (match (run/capture (λ () (run-assembler-linker (read-program-file file))))
       [(cons `(err ,_) out-str)
        (displayln out-str (current-error-port))

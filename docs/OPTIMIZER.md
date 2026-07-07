@@ -108,6 +108,12 @@ One demand-driven recursive rewrite in the cp0 mold, over the core IR:
      residualize if the size limit or effort limit trips. Recursive
      functions inline at most once per call site per round (no loop
      unrolling at `-O1`).
+   - a per-round **code-growth budget** caps multi-use inlining at a
+     third of the program's size (single-use inlines are net-zero and
+     exempt). Without it, a large program with many small hot
+     functions — puffincc itself — bloats 4-5× in assembly and swamps
+     the assembler; with it, big-program compile times stay in cp0
+     territory.
 4. Iterate 1–3 until no change or a round limit (the fuel makes each round
    linear; the round limit is a small constant).
 
@@ -259,6 +265,18 @@ facts out, modulo set ordering).
 - Differential fuzzing: chain mode already interprets every IR after every
   pass; the optimizer's output interpreting identically to its input *on
   every corpus program* is the cheapest strong oracle we have.
+
+**Big programs and -O1 assembly size (known limitation, 2026-07-07).**
+On a program the size of puffincc itself (~5,200 lines, s-expression
+walkers everywhere), §5's open-coded pair/vector primitives multiply
+the assembly by ~4-5× (~90MB), and the system assembler grinds on the
+result — inlining is NOT the culprit (the growth budget above binds it;
+measurements confirmed the size persists with inlining capped). Until
+open-coding is made size-aware (e.g. shared per-function check stubs,
+or a per-function open-coding budget), `bin/build-puffincc` builds
+stage 1 at `-O0`; normal-sized programs (the whole benchmark suite)
+are unaffected, and the report's per-level compile times keep this
+honest.
 
 **The puffincc port (2026-07-07).** The whole optimizer now exists in
 Puffin too: `puffincc-src/contract.puf` (§4, including the effort
