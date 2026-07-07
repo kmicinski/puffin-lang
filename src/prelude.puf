@@ -8,56 +8,71 @@
 ;; Everything below is deliberately tail-recursive where it matters:
 ;; Puffin has proper tail calls.
 
+(: length (-> (List a) Int))
 (define (length xs)
   (let loop ([xs xs] [n 0])
     (if (null? xs) n (loop (cdr xs) (+ n 1)))))
 
+(: append (-> (List a) (List a) (List a)))
 (define (append xs ys)
   (if (null? xs) ys (cons (car xs) (append (cdr xs) ys))))
 
+(: reverse (-> (List a) (List a)))
 (define (reverse xs)
   (let loop ([xs xs] [acc '()])
     (if (null? xs) acc (loop (cdr xs) (cons (car xs) acc)))))
 
+(: map (-> (-> a b) (List a) (List b)))
 (define (map f xs)
   (if (null? xs) '() (cons (f (car xs)) (map f (cdr xs)))))
 
+(: filter (-> (-> a Bool) (List a) (List a)))
 (define (filter p xs)
   (cond [(null? xs) '()]
         [(p (car xs)) (cons (car xs) (filter p (cdr xs)))]
         [else (filter p (cdr xs))]))
 
+(: foldl (-> (-> a b b) b (List a) b))
 (define (foldl f acc xs)
   (if (null? xs) acc (foldl f (f (car xs) acc) (cdr xs))))
 
+(: foldr (-> (-> a b b) b (List a) b))
 (define (foldr f acc xs)
   (if (null? xs) acc (f (car xs) (foldr f acc (cdr xs)))))
 
+(: list-ref (-> (List a) Int a))
 (define (list-ref xs i)
   (if (eq? i 0) (car xs) (list-ref (cdr xs) (- i 1))))
 
+(: member (-> a (List a) _))
 (define (member v xs)
   (cond [(null? xs) #f]
         [(equal? v (car xs)) xs]
         [else (member v (cdr xs))]))
 
+(: assoc (-> a (List (Pairof a b)) _))
 (define (assoc k ps)
   (cond [(null? ps) #f]
         [(equal? k (car (car ps))) (car ps)]
         [else (assoc k (cdr ps))]))
 
+(: range (-> Int Int (List Int)))
 (define (range a b)
   (if (< a b) (cons a (range (+ a 1) b)) '()))
 
+(: andmap (-> (-> a Bool) (List a) Bool))
 (define (andmap p xs)
   (if (null? xs) #t (if (p (car xs)) (andmap p (cdr xs)) #f)))
 
+(: ormap (-> (-> a Bool) (List a) Bool))
 (define (ormap p xs)
   (if (null? xs) #f (let ([v (p (car xs))]) (if v v (ormap p (cdr xs))))))
 
+(: last (-> (List a) a))
 (define (last xs)
   (if (null? (cdr xs)) (car xs) (last (cdr xs))))
 
+(: list->vector (-> (List a) (Vec a)))
 (define (list->vector xs)
   (let ([v (make-vector (length xs))])
     (let loop ([xs xs] [i 0])
@@ -65,17 +80,24 @@
           v
           (begin (vector-set! v i (car xs)) (loop (cdr xs) (+ i 1)))))))
 
+(: vector->list (-> (Vec a) (List a)))
 (define (vector->list v)
   (let loop ([i (- (vector-length v) 1)] [acc '()])
     (if (< i 0) acc (loop (- i 1) (cons (vector-ref v i) acc)))))
 
+(: max (-> Int Int Int))
 (define (max a b) (if (< a b) b a))
+(: min (-> Int Int Int))
 (define (min a b) (if (< a b) a b))
+(: abs (-> Int Int))
 (define (abs n) (if (< n 0) (- n) n))
 (define (add1 n) (+ n 1))
 (define (sub1 n) (- n 1))
+(: zero? (-> Int Bool))
 (define (zero? n) (eq? n 0))
+(: even? (-> Int Bool))
 (define (even? n) (eq? (remainder n 2) 0))
+(: odd? (-> Int Bool))
 (define (odd? n) (not (eq? (remainder n 2) 0)))
 (define (list? v)
   (cond [(null? v) #t]
@@ -100,6 +122,7 @@
     [_ (error 'apply-supports-at-most-five-arguments)]))
 
 ;; stable merge sort
+(: sort (-> (List a) (-> a a Bool) (List a)))
 (define (sort xs less?)
   (define (merge a b)
     (cond [(null? a) b]
@@ -119,6 +142,7 @@
 
 (define (symbol<? a b) (string<? (symbol->string a) (symbol->string b)))
 
+(: string-join (-> (List Str) Str Str))
 (define (string-join xs sep)
   ;; linear + tail: interleave into a list, one string-concat --
   ;; binary append here was O(n^2) bytes and O(n) stack (30GB-RSS bug)
@@ -149,12 +173,19 @@
         acc)))
 
 ;; list utilities the compiler leans on
+(: first (-> (List a) a))
 (define (first xs) (car xs))
+(: second (-> (List a) a))
 (define (second xs) (car (cdr xs)))
+(: third (-> (List a) a))
 (define (third xs) (car (cdr (cdr xs))))
+(: rest (-> (List a) (List a)))
 (define (rest xs) (cdr xs))
+(: take (-> (List a) Int (List a)))
 (define (take xs n) (if (eq? n 0) '() (cons (car xs) (take (cdr xs) (- n 1)))))
+(: drop (-> (List a) Int (List a)))
 (define (drop xs n) (if (eq? n 0) xs (drop (cdr xs) (- n 1))))
+(: index-of (-> (List a) a Int))
 (define (index-of xs v)
   (let loop ([xs xs] [i 0])
     (cond [(null? xs) #f]
@@ -163,10 +194,12 @@
 (define (append-map f xs) (foldr (lambda (x acc) (append (f x) acc)) '() xs))
 (define (filter-map f xs)
   (foldr (lambda (x acc) (let ([v (f x)]) (if v (cons v acc) acc))) '() xs))
+(: remove (-> a (List a) (List a)))
 (define (remove v xs)
   (cond [(null? xs) '()]
         [(equal? v (car xs)) (cdr xs)]
         [else (cons (car xs) (remove v (cdr xs)))]))
+(: findf (-> (-> a Bool) (List a) _))
 (define (findf p xs)
   (cond [(null? xs) #f]
         [(p (car xs)) (car xs)]

@@ -23,6 +23,7 @@ export class ModuleError extends PuffinError {
 }
 
 const KEYWORD_NAMES = new Set([
+  'define-type', 'ann', ':',
   'define', 'lambda', 'λ', 'let', 'let*', 'letrec', 'begin', 'if', 'cond',
   'case', 'when', 'unless', 'match', 'set!', 'while', 'quote', 'quasiquote',
   'unquote', 'unquote-splicing', 'and', 'or', 'else', '_', '...',
@@ -76,6 +77,22 @@ function defnName(f) {
   if (isSym(head)) return head;                     // (define x e)
   if (isList(head) && isSym(head[0])) return head[0]; // (define (f ...) ...), maybe dotted
   return null;
+}
+
+// every top-level name a form binds: defines bind one; define-type
+// binds its type name AND each constructor (docs/TYPES.md) — all of
+// them provide/mangle like ordinary top-level names
+function defnNames(f) {
+  if (isList(f) && f[0] === S('define-type') && f.length >= 2) {
+    const names = [];
+    const head = f[1];
+    if (isSym(head)) names.push(head);
+    else if (isList(head) && isSym(head[0])) names.push(head[0]);
+    for (const c of f.slice(2)) if (isList(c) && isSym(c[0])) names.push(c[0]);
+    return names;
+  }
+  const n = defnName(f);
+  return n === null ? [] : [n];
 }
 
 // (fixed n) | (variadic n) | 'val'
@@ -231,10 +248,7 @@ function loadModules(files, entryPath) {
     for (const r of reqs) visit(r.target, [...stack, path]);
     const body = forms.filter((f) => !isRequireForm(f) && !isProvideForm(f));
     const topNames = new Set();
-    for (const f of body) {
-      const n = defnName(f);
-      if (n) topNames.add(n);
-    }
+    for (const f of body) for (const n of defnNames(f)) topNames.add(n);
     const provides = parseProvides(files, forms, body, topNames, path);
     const m = {
       path,
@@ -300,6 +314,10 @@ function renameForms(forms, ren, qual) {
     if (p[0] === S('list') || p[0] === S('vector'))
       return [p[0], ...p.slice(1).map(pat)];
     if (p[0] === S('?') && p.length === 3) return [p[0], sym(p[1]), pat(p[2])];
+    // ADT constructor patterns: the head is a top-level name
+    // (renamed like any other), the rest are subpatterns
+    if (isSym(p[0]) && p.tail === undefined)
+      return [sym(p[0]), ...p.slice(1).map(pat)];
     return p;
   };
   const qqPat = (q) => {

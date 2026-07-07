@@ -22,6 +22,10 @@
 
 (define dump-after-pass #f)
 
+;; first param weakened to _: the checker leaves quasiquote-pattern
+;; binders out of the type env, so the `rest` binder below would
+;; resolve to the prelude's `rest : (-> (List a) (List a))`
+(: strip-directives (-> _ (List _)))
 (define (strip-directives forms)
   (match forms
     [`((target ,t) . ,rest)
@@ -38,12 +42,14 @@
     [`(define ,g ,_) g]
     [_ #f]))
 
+(: mentions-of (-> _ (Set Sym)))
 (define (mentions-of form)
   (let walk ([v form] [acc (set)])
     (cond [(symbol? v) (set-add acc v)]
           [(pair? v) (walk (cdr v) (walk (car v) acc))]
           [else acc])))
 
+(: prelude-inject (-> (List _) (List _)))
 (define (prelude-inject user-forms)
   (define user-names
     (foldl (lambda (f acc)
@@ -63,7 +69,12 @@
                                (not (set-member? included n))))
               (set->list needed)))
     (if (null? new-names)
-        (filter (lambda (f) (set-member? included (defn-name f))) candidates)
+        ;; a (: name t) declaration travels with its included function
+        (filter (lambda (f)
+                  (match f
+                    [`(: ,n ,_) (set-member? included n)]
+                    [_ (set-member? included (defn-name f))]))
+                candidates)
         (grow (foldl (lambda (n acc) (set-union acc (mentions-of (hash-ref by-name n))))
                      needed new-names)
               (foldl (lambda (n acc) (set-add acc n)) included new-names)))))
@@ -149,12 +160,15 @@
 ;; (dump-after ...) directives still work; module forms are rejected,
 ;; stdin has no directory to resolve requires against).
 
-(define opt-target-flag #f)
+;; flag cells start #f and are set! to symbols/strings; (ann ... _)
+;; keeps them dynamically typed under the reference checker
+(define opt-target-flag (ann #f _))
 (define opt-level 1)
-(define opt-output #f)
+(define opt-output (ann #f _))
 (define opt-runtime "src/runtime/libpuffin.a")
-(define opt-input #f)
+(define opt-input (ann #f _))
 
+(: parse-args (-> (List Str) Void))
 (define (parse-args args)
   (define (flag-arg name rest)
     (if (pair? rest)
@@ -183,6 +197,7 @@
 (parse-args (command-line-args))
 (set! optimize-level opt-level)
 
+(: compile-forms (-> (List _) _))
 (define (compile-forms raw-forms)
   ;; class-style files wrap everything in one (program ...) form
   (define user-forms
@@ -191,11 +206,13 @@
       [_ raw-forms]))
   (run-chain `(program ,@(prelude-inject user-forms) ,@user-forms)))
 
+(: ends-with? (-> Str Str Bool))
 (define (ends-with? s suffix)
   (define n (string-length s))
   (define m (string-length suffix))
   (and (>= n m) (string=? (substring s (- n m) n) suffix)))
 
+(: assemble-and-link (-> Str Str Void))
 (define (assemble-and-link asm out)
   (define triple (if (eq? current-target 'x86-64) "x86_64-apple-darwin" "arm64-apple-darwin"))
   (define asm-path (str-cat out ".s"))

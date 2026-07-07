@@ -81,6 +81,16 @@
     [`(define ,(? symbol? x) ,_) x]
     [_ #f]))
 
+;; every top-level name a form binds: defines bind one; define-type
+;; binds its type name AND each constructor (docs/TYPES.md) -- all of
+;; them provide/mangle like ordinary top-level names
+(define (defn-names f)
+  (match f
+    [`(define-type ,head ,ctors ...)
+     (cons (match head [`(,n ,_ ...) n] [n n])
+           (filter-map (λ (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
+    [_ (let ([n (defn-name f)]) (if n (list n) '()))]))
+
 ;; a define's arity for signature checking:
 ;;   (fixed n)     exactly n arguments
 ;;   (variadic n)  n or more
@@ -104,7 +114,8 @@
 ;; unqualified is an error (use #:as or #:rename); stdlib primitives
 ;; are checked separately so the message can say so.
 (define keyword-names
-  (seteq 'define 'lambda 'λ 'let 'let* 'letrec 'begin 'if 'cond 'case
+  (seteq 'define-type 'ann ':
+         'define 'lambda 'λ 'let 'let* 'letrec 'begin 'if 'cond 'case
          'when 'unless 'match 'set! 'while 'quote 'quasiquote 'unquote
          'unquote-splicing 'and 'or 'else '_ '... 'require 'provide
          'signature '#%rest 'nil 'void 'read))
@@ -261,8 +272,8 @@
        (for ([r reqs]) (visit (req-path r) (cons abs stack)))
        (define body (filter (λ (f) (not (or (require-form? f) (provide-form? f)))) forms))
        (define top-names
-         (for/fold ([acc (seteq)]) ([f body] #:when (defn-name f))
-           (set-add acc (defn-name f))))
+         (for/fold ([acc (seteq)]) ([f body])
+           (for/fold ([a acc]) ([n (defn-names f)]) (set-add a n))))
        (define provides (parse-provides forms (path-only abs) top-names abs))
        (define m (mod abs
                       (if (equal? abs entry-abs) #f (module-id abs))
@@ -306,6 +317,9 @@
       [(list-rest 'list ps) (cons 'list (map pat ps))]
       [(list-rest 'vector ps) (cons 'vector (map pat ps))]
       [(list '? pred p0) (list '? (sym pred) (pat p0))]
+      ;; ADT constructor patterns: the head is a top-level name
+      ;; (renamed like any other), the rest are subpatterns
+      [(cons (? symbol? head) (? list? ps)) (cons (sym head) (map pat ps))]
       [_ p]))
   (define (qq-pat q)
     (match q

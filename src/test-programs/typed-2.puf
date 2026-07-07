@@ -1,0 +1,134 @@
+;; typed-2: the flagship typed interpreter (the web playground's
+;; puffin-9, single-file). An eval/apply interpreter for an extended
+;; lambda calculus whose AST is a closed ADT (docs/TYPES.md):
+;; `parse` is the one place that inspects raw s-expressions, closures
+;; are a Clo constructor, letrec cells are a Binding ADT, and
+;; run-time VALUES stay gradual (_).
+
+;; ---- environments: immutable hashes, symbol-keyed ------------------
+(define-type Binding
+  (Val _)
+  (Rec (Vec _)))
+
+(define (rec-cell) (Rec (vector 'undefined)))
+(define (rec-fill! b v)
+  (match b [(Rec c) (vector-set! c 0 v)]))
+
+(define (env-lookup env x)
+  (match (hash-ref/default env x 'unbound)
+    [(Val v) v]
+    [(Rec c)
+     (let ([v (vector-ref c 0)])
+       (if (eq? v 'undefined) (error 'letrec-used-before-defined) v))]
+    ['unbound (error (list 'unbound-variable x))]))
+
+(define (env-extend* env xs vs)
+  (cond [(and (null? xs) (null? vs)) env]
+        [(or (null? xs) (null? vs)) (error 'arity-mismatch)]
+        [else (env-extend* (hash-set env (car xs) (Val (car vs))) (cdr xs) (cdr vs))]))
+
+;; ---- the AST: a closed algebraic datatype ---------------------------
+(define-type Expr
+  (Lit _)                          ;; numbers, booleans, quoted data
+  (Var Sym)
+  (Lam (List Sym) Expr)
+  (App Expr (List Expr))
+  (Prim Sym (List Expr))
+  (If Expr Expr Expr)
+  (Let (List Sym) (List Expr) Expr)
+  (Letrec Sym Expr Expr))
+
+(define-type Value
+  (Clo (List Sym) Expr (Hash Sym _)))
+
+;; ---- the front end: raw s-expressions -> Expr -----------------------
+(: parse (-> _ Expr))
+(define (parse s)
+  (match s
+    [(? fixnum? n) (Lit n)]
+    [#t (Lit #t)]
+    [#f (Lit #f)]
+    [`(quote ,d) (Lit d)]
+    [(? symbol? x) (Var x)]
+    [`(lambda (,xs ...) ,body) (Lam xs (parse body))]
+    [`(if ,g ,t ,f) (If (parse g) (parse t) (parse f))]
+    [`(let ([,xs ,es] ...) ,body) (Let xs (map parse es) (parse body))]
+    [`(letrec ([,f ,e0]) ,body) (Letrec f (parse e0) (parse body))]
+    [`(,op ,es ...)
+     #:when (member op '(+ - * = < cons car cdr null?))
+     (Prim op (map parse es))]
+    [`(,e-f ,e-args ...) (App (parse e-f) (map parse e-args))]
+    [_ (error (list 'bad-expression s))]))
+
+;; ---- the evaluator ---------------------------------------------------
+(define (evaluate [e : Expr] env)
+  (match e
+    [(Lit v) v]
+    [(Var x) (env-lookup env x)]
+    [(Lam xs body) (Clo xs body env)]
+    [(If g t f) (if (evaluate g env) (evaluate t env) (evaluate f env))]
+    [(Let xs es body)
+     (evaluate body (env-extend* env xs (map (lambda (e0) (evaluate e0 env)) es)))]
+    [(Letrec f e0 body)
+     (let* ([cell (rec-cell)]
+            [env+ (hash-set env f cell)])
+       (begin (rec-fill! cell (evaluate e0 env+))
+              (evaluate body env+)))]
+    [(Prim op es) (delta op (map (lambda (e0) (evaluate e0 env)) es))]
+    [(App e-f e-args)
+     (apply-closure (evaluate e-f env)
+                    (map (lambda (e0) (evaluate e0 env)) e-args))]))
+
+(define (delta [op : Sym] args)
+  (match (cons op args)
+    [`(+ ,a ,b) (+ a b)]
+    [`(- ,a ,b) (- a b)]
+    [`(* ,a ,b) (* a b)]
+    [`(= ,a ,b) (eq? a b)]
+    [`(< ,a ,b) (< a b)]
+    [`(cons ,a ,b) (cons a b)]
+    [`(car ,p) (car p)]
+    [`(cdr ,p) (cdr p)]
+    [`(null? ,v) (null? v)]))
+
+(define (apply-closure f args)
+  (match f
+    [(Clo xs body env) (evaluate body (env-extend* env xs args))]
+    [_ (error (list 'not-a-procedure f))]))
+
+(define (run s) (evaluate (parse s) (hash)))
+
+;; ---- programs in the object language ---------------------------------
+
+;; recursion via letrec: factorial
+(println (run '(letrec ([fact (lambda (n) (if (= n 0) 1 (* n (fact (- n 1)))))])
+                 (fact 10))))                                        ;; 3628800
+
+;; higher-order functions: compose and twice
+(println (run '(let ([compose (lambda (f g) (lambda (x) (f (g x))))]
+                     [add3 (lambda (n) (+ n 3))]
+                     [dbl (lambda (n) (* n 2))])
+                 ((compose add3 dbl) 10))))                          ;; 23
+
+;; church numerals, converted back to integers
+(println (run '(let ([zero (lambda (f) (lambda (x) x))]
+                     [succ (lambda (n) (lambda (f) (lambda (x) (f ((n f) x)))))]
+                     [to-int (lambda (n) ((n (lambda (k) (+ k 1))) 0))])
+                 (let ([three (succ (succ (succ zero)))])
+                   (to-int (succ three))))))                         ;; 4
+
+;; recursion WITHOUT letrec: the Z combinator (strict Y)
+(println (run '(let ([Z (lambda (f)
+                          ((lambda (x) (f (lambda (v) ((x x) v))))
+                           (lambda (x) (f (lambda (v) ((x x) v))))))])
+                 (let ([fib (Z (lambda (fib)
+                                 (lambda (n)
+                                   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))))])
+                   (fib 15)))))                                      ;; 610
+
+;; lists in the object language: build 1..5 and sum it
+(println (run '(letrec ([build (lambda (i) (if (= i 6) '() (cons i (build (+ i 1)))))])
+                 (letrec ([sum (lambda (l) (if (null? l) 0 (+ (car l) (sum (cdr l)))))])
+                   (sum (build 1))))))                               ;; 15
+
+(run '(((lambda (x) (lambda (y) (- x y))) 20) 6))

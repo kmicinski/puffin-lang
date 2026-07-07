@@ -21,20 +21,27 @@
 (require "tables.puf")
 (require "system.puf")
 
+(: bk-for-each (-> (-> a _) (List a) Void))
 (define (bk-for-each f xs)
   (if (null? xs)
       (void)
       (begin (f (car xs)) (bk-for-each f (cdr xs)))))
 
 ;; concatenate a list of strings (string-append is binary)
+(: bk-cat (-> (List Str) Str))
 (define (bk-cat xs)
   (foldr string-append "" xs))
 
+(: bk-imm? (-> _ Bool))
 (define (bk-imm? op)    (match op [`(imm ,n) (fixnum? n)] [_ #f]))
+(: bk-reg? (-> _ Bool))
 (define (bk-reg? op)    (match op [`(reg ,r) (symbol? r)] [_ #f]))
+(: bk-deref? (-> _ Bool))
 (define (bk-deref? op)  (match op [`(deref (reg ,r) ,i) #t] [_ #f]))
+(: bk-global? (-> _ Bool))
 (define (bk-global? op) (match op [`(global ,i) #t] [_ #f]))
 
+(: bk-index-of-table (-> (List _) _ Int))
 (define (bk-index-of-table lst v)
   (let ([i (index-of lst v)])
     (if i i (error (format "literal not in table: ~a" v)))))
@@ -118,6 +125,7 @@
 ;; movn/movk): no literal pools, whose fixups go out of range once
 ;; .text exceeds +-1MB (puffincc itself does). Mirrors the reference
 ;; renderer byte for byte.
+(: render-mov-imm64 (-> _ Int Str))
 (define (render-mov-imm64 dst i)
   (define mask16 65535)
   (define (hw k) (bitwise-and (arithmetic-shift i (* -16 k)) mask16))
@@ -855,6 +863,7 @@
 ;; arm64 sp +- n: add/sub immediates encode 12 bits, optionally
 ;; shifted left 12; frames larger than 4095 bytes emit the page part
 ;; and the remainder separately (n is a positive multiple of 16)
+(: bk-sp-adjust (-> Str Int Str))
 (define (bk-sp-adjust op n)
   (define hi (arithmetic-shift n -12))
   (define lo (bitwise-and n 4095))
@@ -865,6 +874,7 @@
     [else (format "~a sp, sp, #~a, lsl #12\n    ~a sp, sp, #~a" op hi op lo)]))
 
 ;; C-escape a string for .asciz, byte by byte (Puffin has no chars)
+(: bk-escape-c (-> Str Str))
 (define (bk-escape-c s)
   (define n (string-length s))
   (let loop ([i 0] [acc ""])

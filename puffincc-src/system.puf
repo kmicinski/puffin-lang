@@ -21,18 +21,22 @@
 ;; (docs/OPTIMIZER.md; the optimizer port tracks src/opt/)
 (define optimize-level 1)
 
+(: argument-registers (-> (List Sym)))
 (define (argument-registers)
   (if (eq? current-target 'x86-64)
       '(rdi rsi rdx rcx r8 r9)
       '(x0 x1 x2 x3 x4 x5)))
 
+(: allocatable-registers (-> (List Sym)))
 (define (allocatable-registers)
   (if (eq? current-target 'x86-64)
       '(rbx r12 r13 r14 r15)
       '(x19 x20 x21 x22 x23 x24 x25 x26)))
 
+(: frame-pointer (-> Sym))
 (define (frame-pointer) (if (eq? current-target 'x86-64) 'rbp 'x29))
 
+(: callee-save-area-bytes (-> Int Int))
 (define (callee-save-area-bytes n)
   (if (eq? current-target 'x86-64)
       (* 8 n)
@@ -43,6 +47,7 @@
 
 ;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
 
+(: tag-fixnum (-> Int Int))
 (define (tag-fixnum n) (arithmetic-shift n 3))
 (define false-value 2)
 (define true-value 10)
@@ -51,6 +56,7 @@
 
 ;; symbol ids are assigned from the sorted literal table (see the
 ;; backends); (tag-symbol id) mirrors system.rkt
+(: tag-symbol (-> Int Int))
 (define (tag-symbol id) (bitwise-ior (arithmetic-shift id 3) 3))
 
 ;; heap header kind bytes (in sync with runtime/puffin.h)
@@ -62,20 +68,25 @@
 (define intrinsic-unary '(-))
 (define intrinsic-binary '(+ * eq? <))
 
+(: cmp? (-> _ Bool))
 (define (cmp? op) (if (member op '(eq? < <= > >=)) #t #f))
+(: shrunk-cmp? (-> _ Bool))
 (define (shrunk-cmp? op) (if (member op '(eq? <)) #t #f))
 
+(: prim? (-> _ Bool))
 (define (prim? op)
   (and (symbol? op)
        (or (stdlib-prim? op)
            (if (member op intrinsic-unary) #t #f)
            (if (member op intrinsic-binary) #t #f))))
 
+(: prim-arity (-> Sym Int))
 (define (prim-arity op)
   (cond [(member op intrinsic-unary) 1]
         [(member op intrinsic-binary) 2]
         [else (stdlib-arity op)]))
 
+(: surface-prim? (-> _ Bool))
 (define (surface-prim? op)
   (and (symbol? op)
        (or (surface-stdlib-prim? op)
@@ -86,16 +97,20 @@
 
 ;; ---- atoms across the IRs ------------------------------------------
 
+(: fixnum-atom? (-> _ Bool))
 (define (fixnum-atom? a) (fixnum? a))
+(: ir-atom? (-> _ Bool))
 (define (ir-atom? a)
   (or (fixnum? a) (symbol? a) (boolean? a)
       (equal? a '(void)) (equal? a '(nil))
       (match a [`(quote ,s) (symbol? s)] [_ #f])))
 
+(: ir-literal? (-> _ Bool))
 (define (ir-literal? a) (and (ir-atom? a) (not (symbol? a))))
 
 ;; ---- assembler-symbol sanitization (mirrors rt-sym) -----------------
 
+(: rt-sym (-> Sym Sym))
 (define (rt-sym s)
   (define str (symbol->string s))
   (define n (string-length str))
@@ -127,15 +142,18 @@
 
 ;; ---- misc helpers used across passes --------------------------------
 
+(: hash-keys-sorted (-> (Hash Sym v) (List Sym)))
 (define (hash-keys-sorted h)
   (sort (hash-keys h) symbol<?))
 
 ;; fold over two lists in lockstep
+(: foldl2 (-> (-> a b c c) c (List a) (List b) c))
 (define (foldl2 f acc xs ys)
   (if (or (null? xs) (null? ys))
       acc
       (foldl2 f (f (car xs) (car ys) acc) (cdr xs) (cdr ys))))
 
+(: foldr2 (-> (-> a b c c) c (List a) (List b) c))
 (define (foldr2 f base xs ys)
   (if (or (null? xs) (null? ys))
       base

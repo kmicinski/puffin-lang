@@ -8,9 +8,10 @@
 import { readAll, ReadError } from './reader.js';
 import {
   Frame, evalExpr, evalProgram, unwrapProgram, isFunDefine, isValDefine,
+  isDefineType, isTypeDecl, registerDefineType, installDefineType, defineClosure,
   surfacePrimNames,
 } from './interp.js';
-import { VOID, PuffinHalt, PuffinError, render, Closure, splitFormals } from './values.js';
+import { VOID, PuffinHalt, PuffinError, render } from './values.js';
 import { preludeSource } from './prelude.js';
 import { resolveModules, moduleForms, ModuleError } from './modules.js';
 
@@ -45,6 +46,7 @@ function makeCtx(input, onOutput) {
     input: input.map((n) => BigInt(n)),
     inputPos: 0,
     out: onOutput,
+    ctors: new Map(), // ADT constructor name -> field count (define-type)
   };
 }
 
@@ -98,12 +100,7 @@ export class Session {
     this.ctx = makeCtx(input && input.length ? input : defaultInput(), onOutput || (() => {}));
     // preload the Puffin-written stdlib layer (silently)
     for (const f of preludeFormsFor([])) {
-      if (isFunDefine(f)) {
-        this.global.define(
-          f[1][0],
-          (() => { const { fixed, rest } = splitFormals(f[1], 1);
-                   return new Closure(fixed, f.slice(2), this.global, Symbol.keyFor(f[1][0]), rest); })());
-      }
+      if (isFunDefine(f)) this.global.define(f[1][0], defineClosure(f, this.global));
     }
   }
 
@@ -114,13 +111,15 @@ export class Session {
     const results = [];
     try {
       const forms = unwrapProgram(readAll(text));
+      // constructors register up front (like evalProgram's ctor table)
+      for (const f of forms) if (isDefineType(f)) registerDefineType(f, this.ctx);
       for (const f of forms) {
-        if (isFunDefine(f)) {
-          const name = f[1][0];
-          this.global.define(
-            name,
-            (() => { const { fixed, rest } = splitFormals(f[1], 1);
-                     return new Closure(fixed, f.slice(2), this.global, Symbol.keyFor(name), rest); })());
+        if (isDefineType(f)) {
+          installDefineType(f, this.global);
+        } else if (isTypeDecl(f)) {
+          // (: name t) declarations vanish
+        } else if (isFunDefine(f)) {
+          this.global.define(f[1][0], defineClosure(f, this.global));
         } else if (isValDefine(f)) {
           this.global.define(f[1], evalExpr(f[2], this.global, this.ctx));
         } else {

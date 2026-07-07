@@ -134,6 +134,9 @@
     [(list-rest 'list (? (λ (ps) (andmap match-pattern? ps)))) #t]
     [(list-rest 'vector (? (λ (ps) (andmap match-pattern? ps)))) #t]
     [(list '? (? symbol?) (? match-pattern?)) #t]
+    ;; ADT constructor pattern: (Ctor p ...) -- desugar checks the
+    ;; head against the program's define-types
+    [(list-rest (? symbol?) (? (λ (ps) (andmap match-pattern? ps)))) #t]
     [_ #f]))
 
 (define (quasi-pattern? q)
@@ -167,12 +170,16 @@
     [`(unless ,(? puffin-exp?) ,(? puffin-exp?) ...) #t]
     [`(case ,(? puffin-exp?) [,_ ,(? puffin-exp?) ...] ...) #t]
     [`(match ,(? puffin-exp?) ,clauses ...) (andmap match-clause? clauses)]
-    ;; binding
-    [`(let ([,(? symbol?) ,(? puffin-exp?)] ...) ,(? puffin-exp?) ...) #t]
-    [`(let ,(? symbol? loop) ([,(? symbol?) ,(? puffin-exp?)] ...) ,(? puffin-exp?) ...) #t]
-    [`(let* ([,(? symbol?) ,(? puffin-exp?)] ...) ,(? puffin-exp?) ...) #t]
-    [`(lambda (,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
-    [`(λ (,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
+    ;; expression ascription (erased by desugar)
+    [`(ann ,(? puffin-exp?) ,(? type-syntax?)) #t]
+    ;; binding (bindings may carry [x : t e] annotations)
+    [`(let (,(? let-binding?) ...) ,(? puffin-exp?) ...) #t]
+    [`(let ,(? symbol? loop) (,(? let-binding?) ...) ,(? puffin-exp?) ...) #t]
+    [`(let* (,(? let-binding?) ...) ,(? puffin-exp?) ...) #t]
+    [`(lambda (,(? formal?) ...) : ,(? type-syntax?) ,(? puffin-exp?) ...) #t]
+    [`(λ (,(? formal?) ...) : ,(? type-syntax?) ,(? puffin-exp?) ...) #t]
+    [`(lambda (,(? formal?) ...) ,(? puffin-exp?) ...) #t]
+    [`(λ (,(? formal?) ...) ,(? puffin-exp?) ...) #t]
     ;; variadic lambdas: dotted or all-rest formals
     [`(lambda ,(? symbol?) ,(? puffin-exp?) ...) #t]
     [`(λ ,(? symbol?) ,(? puffin-exp?) ...) #t]
@@ -194,9 +201,41 @@
     [`[,(? match-pattern?) ,(? puffin-exp?) ...] #t]
     [_ #f]))
 
+;; ---- gradual types: surface syntax (docs/TYPES.md) --------------------
+;; Types are checked properly by the typecheck pass; the predicate only
+;; recognizes the shape: a symbol (_ Int Bool a Expr ...) or a compound
+;; with a symbol head ((List t), (-> t t), (Option a), ...).
+(define (type-syntax? t)
+  (match t
+    [(? symbol?) #t]
+    [`(,(? symbol?) ,(? type-syntax?) ...) #t]
+    [_ #f]))
+
+;; a formal is x or [x : t]
+(define (formal? f)
+  (match f
+    [(? symbol?) #t]
+    [`(,(? symbol?) : ,(? type-syntax?)) #t]
+    [_ #f]))
+
+;; a let binding is [x e] or [x : t e]
+(define (let-binding? b)
+  (match b
+    [`(,(? symbol?) ,(? puffin-exp?)) #t]
+    [`(,(? symbol?) : ,(? type-syntax?) ,(? puffin-exp?)) #t]
+    [_ #f]))
+
 (define (puffin-defn? defn)
   (match defn
-    [`(define (,(? symbol?) ,(? symbol?) ...) ,(? puffin-exp?) ...) #t]
+    ;; algebraic datatypes: (define-type Name (Ctor t ...) ...) or
+    ;; (define-type (Name a ...) (Ctor t ...) ...)
+    [`(define-type ,(? symbol?) (,(? symbol?) ,(? type-syntax?) ...) ...) #t]
+    [`(define-type (,(? symbol?) ,(? symbol?) ...) (,(? symbol?) ,(? type-syntax?) ...) ...) #t]
+    ;; a top-level type declaration
+    [`(: ,(? symbol?) ,(? type-syntax?)) #t]
+    ;; defines, with optional [x : t] formals and a `: t` result
+    [`(define (,(? symbol?) ,(? formal?) ...) : ,(? type-syntax?) ,(? puffin-exp?) ...) #t]
+    [`(define (,(? symbol?) ,(? formal?) ...) ,(? puffin-exp?) ...) #t]
     ;; variadic: dotted formals
     [`(define (,(? symbol?) . ,_) ,(? puffin-exp?) ...) #t]
     [`(define ,(? symbol?) ,(? puffin-exp?)) #t]
