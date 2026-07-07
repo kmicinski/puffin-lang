@@ -9,10 +9,21 @@
 > module programs and IS one: puffincc-src/ is a module DAG rooted at
 > main.puf). Resolution is whole-program (load the require DAG,
 > mangle each non-entry module's top-level names, flatten in
-> depth-first postorder); §3's separate compilation (.pufi/.o cache)
-> is still future work. Corpus: `src/test-programs/modules-1..6` runs
-> on every route; the compile-time failure modes live in
+> depth-first postorder). Corpus: `src/test-programs/modules-1..6`
+> runs on every route; the compile-time failure modes live in
 > `src/test-modules.rkt`.
+>
+> **§3 separate compilation is IMPLEMENTED** (same day, arm64 only)
+> in `src/separate.rkt` + sep-mode hooks in the pipeline/backend:
+> `bin/puffin -c --module foo.puf` builds `build-cache/<pathhash>/
+> foo.{o,pufi}` (stale/missing deps rebuild recursively);
+> `bin/puffin -c --separate main.puf -o prog` compiles every DAG
+> module separately (cached) and links. The default no-flag route is
+> untouched (verified byte-identical). Tests:
+> `racket src/test-separate.rkt` (modules-1..6 goldens through
+> --separate, incremental-rebuild behavior, double-diamond
+> init-once). Implementation notes that postdate this design are in
+> §3.1 below.
 >
 > Implementation notes that postdate the design: renaming is UNIFORM
 > through a module (binders and references alike), which preserves
@@ -125,6 +136,59 @@ The prelude (`src/prelude.puf`) becomes what it always morally was:
 a module implicitly required by every module (still pruned to what
 each module mentions, so `.o` sizes stay small).
 
+### 3.1 As-built notes (2026-07-07)
+
+Where the implementation refines (or deliberately deviates from) the
+sketch above:
+
+- **Symbol/string literals go through per-module slot tables.** The
+  whole-program backend bakes symbol ids as immediates (pf_init
+  interns the program's table in id order). Ids cannot agree across
+  independently compiled `.o`s, so in separate mode each unit's init
+  preamble interns its own symbol names (`pf_intern_symbol`) and
+  materializes its string literals (`pf_string_from_bytes`) into
+  assembler-local `Lpfm_syms`/`Lpfm_strs` arrays in `__DATA` (GC
+  static roots); a literal is then one load. Cross-module `eq?` on
+  symbols holds because the runtime interns by name. The entry unit
+  also defines the runtime's whole-program table symbols
+  (`puffin_symbol_names` etc.) as empty — they are declared weak but
+  Mach-O wants definitions.
+- **Mangling hashes the ABSOLUTE path** (`name_<stem>_<fnv1a32 of
+  abs path>`), not the entry-relative path whole-program resolution
+  uses: a module's `.o`/`.pufi` must not depend on who required it.
+  Same for the cache key `build-cache/<fnv1a32 of abs path>/`.
+- **`.pufi` extensions**: a `(flags ...)` row (target / -O level /
+  safe-mode; mismatches rebuild), `requires` entries carry the dep's
+  *interface digest* — a sha1 over (module-id, provides, globals
+  label+count, init) only, so editing a dep's bodies rebuilds just
+  the dep — `val` provides carry their globals-array slot, and `fun`
+  arities are `(fixed n)`/`(variadic n)`. Require-site `#:sig`
+  ascription re-checks against the `.pufi` (the whole point: no dep
+  bodies are read).
+- **Per-module state**: globals array `pfm_globals_<mid>` (.globl,
+  collect-globals numbering within the module — imported value
+  defines compile to `(ext <label> <slot>)` descriptors that flow
+  opaquely to the renderer), init `pfm_init_<mid>` with a run-once
+  guard flag, so linking a module into any init order is safe; the
+  entry's `main` calls every init in require-DAG postorder right
+  after `pf_init`.
+- **The prelude is one shared unpruned module** (deliberate v1
+  relaxation of "pruned per module"): mangled labels like any
+  module, implicitly required by all. Its exports are threaded to
+  each unit as name→label pairs *at reveal-functions time* rather
+  than pre-renamed, because desugar introduces references (e.g.
+  `unquote-splicing` → `append`) after resolution runs. A module
+  defining its own `map` still shadows the prelude's, exactly as in
+  whole-program mode.
+- **Entry unit caching**: `<stem>.entry.{o,rec}`; the record adds
+  the init-call list (a new transitive dep changes it without
+  touching the entry's source).
+- **Separate mode compiles at ≤ -O1**: the -O2 AAM layer assumes a
+  closed program (its dead-define client would drop a provided but
+  locally-unused function). Cross-module inlining stays out, per §4.
+- **arm64 only** for now; the x86-64 backend has not grown the
+  sep-mode literal machinery (`--separate -t x86-64` errors).
+
 ## 4. What stays out (v1)
 
 - No functors, no nested modules, no first-class modules. The
@@ -148,16 +212,19 @@ untouched (module resolution happens before desugar):
    mangled names, reject collisions/cycles. Output: an ordinary
    single-module program whose free references to other modules are
    already-mangled externs, plus link metadata.
-2. `src/main.rkt` — `--module` compile mode (emit `.o`+`.pufi`),
-   link mode gathers the DAG; extern symbols flow to the backends as
-   the existing `fun-ref`/global machinery (externs are just labels
-   the assembler resolves at link time).
-3. Backends: nothing new except honoring extern labels for
-   cross-module calls (direct `callq pf_m…_f` at ≥ -O1) and the
-   per-module init function (a `define` like any other).
-4. Tests: `src/test-programs/modules/` — a multi-file corpus entry
-   (the golden runner learns one new shape: a directory with a
-   `main.puf`), covering qualified/unqualified/renamed imports, sig
-   ascription success + the three failure modes (missing name, arity
-   mismatch, narrowing), DAG init order, stale-cache rebuilds, and a
-   diamond dependency.
+2. `src/separate.rkt` — the build orchestrator: DAG load (reusing
+   `load-modules`), per-module resolution against dep `.pufi`s,
+   staleness, object compilation, linking. `src/puffin.rkt` grew the
+   `--module`/`--separate` flags. Extern symbols flow to the
+   backends as the existing `fun-ref`/global machinery (externs are
+   just labels the assembler resolves at link time).
+3. Backends: honoring extern labels for cross-module calls (direct
+   `callq f_m… ` at ≥ -O1), the per-module init function (the
+   synthesized entry, under a parameterized name), and the sep-mode
+   literal tables of §3.1.
+4. Tests: `src/test-programs/modules-1..6` — multi-file corpus
+   entries (the golden runner learned one new shape: a directory
+   with a `main.puf`) covering qualified/unqualified/renamed
+   imports, sig ascription, and DAG init order on every route; sig
+   failure modes in `src/test-modules.rkt`; stale-cache rebuilds and
+   the double-diamond init-once in `src/test-separate.rkt`.

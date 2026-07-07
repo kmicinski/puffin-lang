@@ -389,7 +389,10 @@
     ['(read) #t]
     [`(string-lit ,_) #t]
     [(? symbol? x) (not (set-member? fs x))]
-    [`(fun-ref ,f) (or (set-member? fs f) (set-member? (module-ext-funs) f))]
+    [`(fun-ref ,f) (or (set-member? fs f)
+                       ;; separate compilation: an imported label
+                       (for/or ([(_ label) (in-hash (module-ext-funs))])
+                         (eq? label f)))]
     [`(global-ref ,_) #t]
     [`(global-set! ,_ ,(? (λ (e) (revealed-exp? e fs)))) #t]
     [`(let ([_ (while ,e-g ,e-b)]) ,e-r)

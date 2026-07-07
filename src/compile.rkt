@@ -822,8 +822,8 @@
      ;; a name collision (they are folded in second). Empty under
      ;; whole-program compilation.
      (define ext-set
-       (for/fold ([acc (hash)]) ([f (in-set (module-ext-funs))])
-         (hash-set acc f `(fun-ref ,f))))
+       (for/fold ([acc (hash)]) ([(name label) (in-hash (module-ext-funs))])
+         (hash-set acc name `(fun-ref ,label))))
      (define name-set
        (foldl (lambda (name acc) (hash-set acc name `(fun-ref ,name)))
               ext-set

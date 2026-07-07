@@ -80,9 +80,14 @@
 ;;                (entry kind only)
 (define module-sep-mode (make-parameter #f))
 
-;; imported functions (already-mangled labels defined in other .o's):
-;; reveal-functions treats them exactly like own top-level functions
-(define module-ext-funs (make-parameter (seteq)))
+;; imported functions: hash of source-visible name -> mangled label
+;; (defined in another module's .o). reveal-functions marks
+;; references (fun-ref <label>), exactly like own top-level
+;; functions. For dep imports the resolver has already renamed the
+;; reference to the label (name = label); prelude imports keep their
+;; source spelling (desugar introduces e.g. `append` after renaming),
+;; so name and label differ.
+(define module-ext-funs (make-parameter (hash)))
 
 ;; imported value defines: mangled name -> (ext <globals-label> <slot>),
 ;; consumed by collect-globals (reads/writes become external

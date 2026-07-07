@@ -901,7 +901,23 @@
      (format "Lpfm_strs: .space ~a\n" (max 8 (* 8 (length strings))))
      (if (eq? kind 'module) "Lpfm_initflag: .space 8\n" "")
      (format ".globl ~a\n" gsym)
-     (format "~a: .space ~a\n" gsym (max 8 (* 8 n-globals)))))
+     (format "~a: .space ~a\n" gsym (max 8 (* 8 n-globals)))
+     ;; the runtime's whole-program literal tables are declared
+     ;; weak, but Mach-O still wants definitions at link time: the
+     ;; entry unit supplies the empty ones (every literal goes
+     ;; through the per-module init preambles instead)
+     (if (eq? kind 'entry)
+         (apply string-append
+                (append
+                 (for/list ([s '(puffin_symbol_names puffin_symbol_count
+                                 puffin_string_consts puffin_string_const_count)])
+                   (format ".globl ~a\n" (rt-sym s)))
+                 (list
+                  (format "~a:\n" (rt-sym 'puffin_symbol_names))
+                  (format "~a: .quad 0\n" (rt-sym 'puffin_symbol_count))
+                  (format "~a:\n" (rt-sym 'puffin_string_consts))
+                  (format "~a: .quad 0\n" (rt-sym 'puffin_string_const_count)))))
+         "")))
   (define (data-segment info)
     (define symbols (hash-ref info 'symbols '()))
     (define strings (hash-ref info 'strings '()))
