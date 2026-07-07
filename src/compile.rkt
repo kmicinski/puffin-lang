@@ -917,8 +917,12 @@
 ;; ---------------------------------------------------------------------
 
 (define (lift-lambdas p)
-  (define emitted-defines (set))
-  (define (emit-define! defn) (set! emitted-defines (set-add emitted-defines defn)))
+  ;; emitted defines accumulate on a list in emission order (gensym'd
+  ;; names keep entries distinct). A set would work too, but its
+  ;; iteration order is unspecified -- puffincc's HAMT sets iterate
+  ;; differently, and diff-ir compares definitions positionally.
+  (define emitted-defines '())
+  (define (emit-define! defn) (set! emitted-defines (cons defn emitted-defines)))
   ;; calculate the free variables of an expression e...
   (define (free-vars e)
     (match e
@@ -1025,7 +1029,7 @@
        `(define (,fname ,@maybe-env ,@formals) ,(walk-expr e-body))]))
   (match p
     [`(program ,n-globals ,definitions ...)
-     `(program ,n-globals ,@(map per-defn definitions) ,@(set->list emitted-defines))]))
+     `(program ,n-globals ,@(map per-defn definitions) ,@(reverse emitted-defines))]))
 
 ;; ---------------------------------------------------------------------
 ;; Pass: limit-functions

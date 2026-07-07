@@ -98,9 +98,23 @@
             (cons 'render-asm render-arm64))))
 
 ;; render an IR readably for diffing: hashes/sets become sorted,
-;; tagged lists (src/diff-ir.rkt normalizes the reference the same way)
+;; tagged lists (src/diff-ir.rkt normalizes the reference the same
+;; way). Strings become (string-repr <byte> ...) -- println displays
+;; string contents unquoted, so a string holding "," or ")" would
+;; otherwise make the dump unreadable.
 (define (serialize-ir v)
-  (cond [(hash? v)
+  (cond [(string? v)
+         (cons 'string-repr
+               (let loop ([i 0])
+                 (if (< i (string-length v))
+                     (cons (string-byte v i) (loop (+ i 1)))
+                     '())))]
+        ;; a gensym'd arithmetic name (+198) prints bare and would
+        ;; read back as a number; prefix it (diff-ir mirrors this on
+        ;; the reference side before alpha-renaming)
+        [(and (symbol? v) (string->number (symbol->string v)))
+         (string->symbol (str-cat "%" (symbol->string v)))]
+        [(hash? v)
          (cons 'hash-repr
                (map (lambda (k) (list (serialize-ir k) (serialize-ir (hash-ref v k))))
                     (sort (hash-keys v)
