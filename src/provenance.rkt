@@ -27,6 +27,8 @@
 
 (provide prov prov-each prov-of prov-candidates prov-chain)
 
+(require "system.rkt")
+
 ;; out-node -> (listof in-node), most specific (earliest-recorded)
 ;; first. Weak keys: dead IRs drop their entries. A node can carry a
 ;; few candidate origins: CPS-shaped passes (anf-convert) construct a
@@ -46,7 +48,7 @@
 ;; skipping them lets the next-outer walker frame supply the
 ;; compound origin instead.
 (define (prov out in)
-  (when (and (taggable? out) (taggable? in) (not (eq? out in)))
+  (when (and (retain-trace?) (taggable? out) (taggable? in) (not (eq? out in)))
     (define cur (hash-ref prov-table out '()))
     (when (and (< (length cur) max-candidates)
                (not (memq in cur)))

@@ -16,5 +16,9 @@ cd "$(dirname "$0")/.."
 OUT="${1:-build/puffincc}"
 mkdir -p build
 racket src/gen-puffincc-tables.rkt
-bin/puffin -c -o "$OUT" puffincc-src/main.puf
+# stage 1 builds at -O0: at -O1 the open-coded primitives on a
+# program this size produce ~90MB of assembly and the system
+# assembler grinds (docs/OPTIMIZER.md "big programs" note); puffincc's
+# OUTPUT optimization level is independent of how it was built
+bin/puffin -c -O 0 -o "$OUT" puffincc-src/main.puf
 echo "stage-1 puffincc at $OUT"

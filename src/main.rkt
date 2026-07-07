@@ -80,23 +80,33 @@
   ;; Run the pass
   (define output (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
                    (pass input)))
-  ;; Build an object of metadata
-  (define h (hash 'input input
-                  'orig-input input
-                  'pass-name pass-name
-                  'satisfies-input-predicate (input-pred input)
-                  'satisfies-output-predicate (output-pred output)
-                  'pretty-output (if (string? output) output (pretty-format output))
-                  'output output))
-  ;; Run the interpreter--the identity interpreter (discards input) is
-  ;; used as a default parameter if none is provided
-  (match
-      ;; see system.rkt
-      (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
-        (run/capture (λ () (interp (hash-ref h 'output) input-stream))))
-    [`(error ,e) (hash-set h 'interp (format "!!! Evaluation error !!!: ~a" e))]
-    [(cons v stdout)
-     (hash-set (hash-set h 'interp v) 'stdout stdout)]))
+  ;; Compile-only fast path (retain-trace? #f): no pretty-printing,
+  ;; no predicates, no per-pass interpretation, no input retention --
+  ;; those made the working set ~17 full IRs plus a pretty-printed
+  ;; string of each (tens of GB on puffincc-sized programs).
+  (cond
+    [(not (retain-trace?))
+     (if (and (pair? output) (eq? (car output) 'error))
+         (hash 'pass-name pass-name 'output output 'error (cadr output))
+         (hash 'pass-name pass-name 'output output))]
+    [else
+     ;; Build an object of metadata
+     (define h (hash 'input input
+                     'orig-input input
+                     'pass-name pass-name
+                     'satisfies-input-predicate (input-pred input)
+                     'satisfies-output-predicate (output-pred output)
+                     'pretty-output (if (string? output) output (pretty-format output))
+                     'output output))
+     ;; Run the interpreter--the identity interpreter (discards input) is
+     ;; used as a default parameter if none is provided
+     (match
+         ;; see system.rkt
+         (with-handlers ([exn:fail? (λ (e) `(error ,(exn-message e)))])
+           (run/capture (λ () (interp (hash-ref h 'output) input-stream))))
+       [`(error ,e) (hash-set h 'interp (format "!!! Evaluation error !!!: ~a" e))]
+       [(cons v stdout)
+        (hash-set (hash-set h 'interp v) 'stdout stdout)])]))
 
 ;; Write a pass output to stdout
 (define (pass-output->stdout h)
@@ -184,7 +194,8 @@
                [out-pred   (car out-preds)]
                [interp     (car interps)]
                [h          (run-pass-expect pass pass-name input
-                                            in-pred out-pred interp input-stream)])
+                                            in-pred out-pred interp input-stream)]
+               [trace      (if (retain-trace?) trace '())])
           (if (hash-has-key? h 'error)
               (reverse (cons h trace))
               (loop (cdr passes) (cdr names) (cdr in-preds) (cdr out-preds)
@@ -392,8 +403,11 @@
                             (start-pass pass)]
      [("-e" "--end-pass") pass "End at pass <pass>"
                           (end-pass pass)]
-     [("-f" "--fast") "Skip interpretation / dumping, just compile"
-                      (write-stdout-mode #f)]
+     [("-f" "--fast") "Skip interpretation / dumping, just compile (implies --lean)"
+                      (write-stdout-mode #f)
+                      (retain-trace? #f)]
+     [("--lean") "Keep no pass history: one IR in memory at a time (the low-memory mode; compile-only CLIs default to it)"
+                 (retain-trace? #f)]
      [("-t" "--target") tgt "Target architecture: x86-64 or arm64"
                         (target (string->symbol tgt))]
      [("-O" "--optimize") lvl "Optimization level: 0, 1 (default), 2"

@@ -210,6 +210,20 @@
 (define (contract-program p)
   (define c (make-contract-census p))
   (define changed (vector #f))
+  ;; overall code-growth budget (per round): multi-use inlining may
+  ;; add at most a quarter of the program's CODE size -- quoted
+  ;; datums count 1, or the embedded prelude data would make the
+  ;; budget vacuous (mirrors the reference; single-use inlines are
+  ;; net-zero and exempt)
+  (define (code-size e)
+    (match e
+      [(list 'quote _) 1]
+      [`(string-lit ,_) 1]
+      [_ (if (pair? e)
+             (foldl (lambda (s acc) (+ acc (code-size s))) 1 e)
+             1)]))
+  (define grow-budget (max 2000 (quotient (code-size p) 4)))
+  (define grown (vector 0))
 
   (define (subst-ok? x)
     (and (known? c x) (not (assigned? c x))))
@@ -245,6 +259,7 @@
              (ormap contract-literal? args))
          (or single-use? (<= sz contract-always-inline)
              (<= sz contract-size-limit))
+         (or single-use? (<= (+ (vector-ref grown 0) sz) grow-budget))
          (let* ([effort (vector (if (or single-use? (<= sz contract-always-inline))
                                     (* 4 contract-effort-limit)
                                     contract-effort-limit))]
@@ -254,6 +269,8 @@
                   [`(lambda (,xs* ...) ,body*)
                    (begin
                      (vector-set! changed 0 #t)
+                     (unless single-use?
+                       (vector-set! grown 0 (+ (vector-ref grown 0) sz)))
                      (opt (wrap-lets xs* args body*) env
                           (set-add inlining fname)))])))))
 

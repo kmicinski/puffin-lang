@@ -200,6 +200,22 @@
 (define (contract-program p)
   (define c (make-census p))
   (define changed (box #f))
+  ;; overall code-growth budget (per round): multi-use inlining may
+  ;; add at most a quarter of the program's CODE size -- quoted
+  ;; datums count 1 (puffincc embeds its whole prelude as one quoted
+  ;; literal; measuring data would make the budget vacuous). Without
+  ;; this, a large program with many small hot functions (puffincc
+  ;; itself: ~4-5x assembly bloat) trades unbounded code growth for
+  ;; negligible wins and swamps the assembler. Single-use inlines are
+  ;; exempt -- the original body dies, so they are net-zero.
+  (define (code-size e)
+    (match e
+      [`(quote ,_) 1]
+      [`(string-lit ,_) 1]
+      [`(,es ...) (add1 (for/sum ([s es]) (code-size s)))]
+      [_ 1]))
+  (define grow-budget (max 2000 (quotient (code-size p) 4)))
+  (define grown (box 0))
 
   (define (subst-ok? x)
     ;; a variable reference can be replaced by its binding's
@@ -318,6 +334,7 @@
              (ormap literal? args))
          (or single-use? (<= sz always-inline-size)
              (<= sz size-limit))
+         (or single-use? (<= (+ (unbox grown) sz) grow-budget))
          (let* ([effort (box (if (or single-use? (<= sz always-inline-size))
                                  (* 4 effort-limit)
                                  effort-limit))]
@@ -326,6 +343,8 @@
                 (match copy
                   [`(lambda (,xs* ...) ,body*)
                    (set-box! changed #t)
+                   (unless single-use?
+                     (set-box! grown (+ (unbox grown) sz)))
                    (opt (wrap-lets xs* args body*) env
                         (set-add inlining fname))])))))
 

@@ -324,6 +324,15 @@ defprim('substring', 3, (a) => {
   if (i < 0 || j < i || j > s.length) throw new PuffinError('substring: index out of range');
   return new PStr(s.slice(i, j));
 });
+defprim('string-concat', 1, (a) => {
+  let parts = [], p = a[0];
+  while (p !== NIL) {
+    if (!(p instanceof Pair)) throw new PuffinError('string-concat: expected a list');
+    parts.push(wantString(p.car, 'string-concat').s);
+    p = p.cdr;
+  }
+  return new PStr(parts.join(''));
+});
 defprim('string<?', 2, (a) =>
   wantString(a[0], 'string<?').s < wantString(a[1], 'string<?').s);
 defprim('string-byte', 2, (a) => {

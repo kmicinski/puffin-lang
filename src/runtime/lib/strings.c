@@ -46,6 +46,32 @@ pf pf_string_equal_huh(pf a, pf b) {
   return equal_string(a, b);
 }
 
+
+// (string-concat xs): concatenate a LIST of strings in one
+// allocation -- the linear-time backbone of string-join. Without it,
+// joining N lines by binary append copies the accumulated suffix per
+// line: O(N*S) bytes of churn (a stage-2 puffincc self-compile
+// allocated terabytes and ballooned past 30GB RSS).
+pf pf_string_concat(pf xs) {
+  int64_t total = 0;
+  for (pf p = xs; p != PF_NIL; ) {
+    pf_expect_kind(p, PF_KIND_PAIR);
+    pf s = pf_heap_ptr(p)[1];
+    pf_expect_kind(s, PF_KIND_STRING);
+    total += pf_len_of(s);
+    p = pf_heap_ptr(p)[2];
+  }
+  pf out = pf_alloc_atomic(PF_KIND_STRING, total, total + 1);
+  char *w = (char *)(pf_heap_ptr(out) + 1);
+  for (pf p = xs; p != PF_NIL; p = pf_heap_ptr(p)[2]) {
+    pf s = pf_heap_ptr(p)[1];
+    memcpy(w, pf_heap_ptr(s) + 1, pf_len_of(s));
+    w += pf_len_of(s);
+  }
+  *w = '\0';
+  return out;
+}
+
 pf pf_string_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_STRING)); }
 
 pf pf_symbol_to_string(pf v) {

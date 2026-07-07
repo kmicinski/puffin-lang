@@ -171,25 +171,83 @@ if os.path.isdir(pccdir):
                                 "puffin": "\n".join(parts), "racket": None}
 sources_json = json.dumps(prog_sources)
 
-# optimization-levels rows (three-series grouped bars, arm64)
+# ---- the optimization explorer -----------------------------------------
+# Interactive section: levels data (run/compile per -O0/1/2, arm64) is
+# embedded as JSON and rendered client-side (grouped bars + slope view,
+# metric toggles, Racket baseline overlay). Levels are an ORDERED scale,
+# so they wear a sequential single-hue ramp (validated:
+#   light #6ea9e6/#3d82d2/#1a5cae — all checks pass;
+#   dark  #5892e6/#3b7ad4/#2a5fb8 — no fails; CVD/contrast WARNs are
+#   relieved by fixed in-group position, 2px gaps, the legend, direct
+#   labels, and the table view below the chart).
 levels_section = ""
 if "levels" in R:
-    lv_rows, lv_ct_rows = [], []
-    for name, e in R["levels"].items():
-        if not all(e.get(l) for l in ("0", "1", "2")): continue
-        lv_rows.append((name, [
-            ("puffin-arm64", e["0"]["median"], None, None, f"{name} -O0: {fmt_s(e['0']['median'])} (compile {fmt_s(e['0']['compile'])})"),
-            ("puffin-x86",   e["1"]["median"], None, None, f"{name} -O1: {fmt_s(e['1']['median'])} (compile {fmt_s(e['1']['compile'])})"),
-            ("racket",       e["2"]["median"], None, None, f"{name} -O2: {fmt_s(e['2']['median'])} (compile {fmt_s(e['2']['compile'])})")]))
-    if lv_rows:
-        lv_legend = ('<div class="legend">'
-                     '<span style="--sw: var(--c-puffin-arm64)">-O0</span>'
-                     '<span style="--sw: var(--c-puffin-x86)">-O1</span>'
-                     '<span style="--sw: var(--c-racket)">-O2</span></div>')
-        levels_section = lv_legend + bar_chart(
-            "Run time by optimization level (arm64)",
-            "seconds, lower is better; hover for compile times",
-            lv_rows)
+    lv = {name: e for name, e in R["levels"].items()
+          if all(e.get(l) for l in ("0", "1", "2"))}
+    rk = {b["name"]: b["routes"]["racket"]["median"] for b in R["benchmarks"]}
+    if lv:
+        names = [b["name"] for b in R["benchmarks"] if b["name"] in lv]
+        payload = {
+            "names": names,
+            "run": {n: [lv[n][l]["median"] for l in ("0", "1", "2")] for n in names},
+            "compile": {n: [lv[n][l]["compile"] for l in ("0", "1", "2")] for n in names},
+            "racket": {n: rk.get(n) for n in names},
+        }
+        def gm(xs):
+            return math.exp(sum(math.log(x) for x in xs) / len(xs))
+        sp01 = gm([lv[n]["0"]["median"] / lv[n]["1"]["median"] for n in names])
+        sp12 = gm([lv[n]["1"]["median"] / lv[n]["2"]["median"] for n in names])
+        ct01 = gm([lv[n]["1"]["compile"] / lv[n]["0"]["compile"] for n in names])
+        beat = sum(1 for n in names if rk.get(n) and lv[n]["1"]["median"] < rk[n])
+        # static table: the no-JS / accessibility home of every value
+        lv_head = ("<tr><th>benchmark</th>"
+                   "<th>-O0 run</th><th>-O1 run</th><th>-O2 run</th>"
+                   "<th>-O1 speedup</th><th>Racket</th>"
+                   "<th>-O0 compile</th><th>-O1 compile</th><th>-O2 compile</th></tr>")
+        lv_rows_html = "".join(
+            f"<tr><th><span class='src-link' data-prog='{n}'>{n}</span></th>"
+            + "".join(f"<td>{fmt_s(lv[n][l]['median'])}</td>" for l in ("0", "1", "2"))
+            + f"<td class='{ 'win' if lv[n]['0']['median']/lv[n]['1']['median'] > 1 else 'lose'}'>"
+              f"{lv[n]['0']['median']/lv[n]['1']['median']:.2f}×</td>"
+            + (f"<td>{fmt_s(rk[n])}</td>" if rk.get(n) else "<td>—</td>")
+            + "".join(f"<td class='rss'>{fmt_s(lv[n][l]['compile'])}</td>" for l in ("0", "1", "2"))
+            + "</tr>"
+            for n in names)
+        levels_section = f"""
+<div class="tiles">
+  <div class="tile"><div class="n">{sp01:.2f}×</div><div class="l">geomean run-time speedup, -O0 → -O1</div></div>
+  <div class="tile"><div class="n">{sp12:.2f}×</div><div class="l">further speedup, -O1 → -O2 (flow analysis)</div></div>
+  <div class="tile"><div class="n">{beat} / {len(names)}</div><div class="l">benchmarks faster than Racket at -O1</div></div>
+  <div class="tile"><div class="n">{ct01:.1f}×</div><div class="l">geomean compile-time cost of -O1 over -O0</div></div>
+</div>
+<div class="explorer-controls" role="group" aria-label="optimization explorer controls">
+  <span class="ctl-group" data-ctl="metric">
+    <button class="pill active" data-v="run">Run time</button>
+    <button class="pill" data-v="compile">Compile time</button>
+    <button class="pill" data-v="speedup">Speedup ×</button>
+  </span>
+  <span class="ctl-group" data-ctl="view">
+    <button class="pill active" data-v="bars">Bars</button>
+    <button class="pill" data-v="slopes">Slopes</button>
+  </span>
+  <label class="ctl-check"><input type="checkbox" id="lv-baseline" checked> Racket baseline</label>
+</div>
+<div class="legend" id="lv-legend">
+  <span style="--sw: var(--lv0)">-O0</span>
+  <span style="--sw: var(--lv1)">-O1</span>
+  <span style="--sw: var(--lv2)">-O2</span>
+  <span style="--sw: var(--c-racket)" id="lv-legend-rk">Racket (baseline)</span>
+</div>
+<div id="lv-chart" aria-label="optimization level explorer chart"></div>
+<p class="note" id="lv-note"></p>
+<details class="lv-table"><summary>All measured values (table)</summary>
+<table><thead>{lv_head}</thead><tbody>{lv_rows_html}</tbody></table>
+</details>
+<script type="application/json" id="levels-data">{json.dumps(payload)}</script>
+__EXPLORER_SCRIPT__"""
+else:
+    levels_section = ('<p class="note">Per-level measurements not in this results.json yet — '
+                      'rerun <code>python3 bench/run-benchmarks.py</code>.</p>')
 
 meta = R["meta"]
 page = f"""<!-- Puffin vs Racket benchmark report (generated by bench/build-report.py) -->
@@ -269,6 +327,31 @@ dialog#srcview::backdrop {{ background: rgba(20,20,18,0.35); backdrop-filter: bl
 #srcview .kw {{ color: var(--c-puffin-arm64); }}
 .badge {{ display: inline-block; background: var(--card); border: 1px solid var(--border);
          border-radius: 999px; padding: 2px 11px; font-size: 12.5px; color: var(--text-secondary); margin: 2px 6px 2px 0; }}
+
+/* ---- optimization explorer ---- */
+.viz-root {{ --lv0: #6ea9e6; --lv1: #3d82d2; --lv2: #1a5cae; }}
+@media (prefers-color-scheme: dark) {{ .viz-root {{ --lv0: #5892e6; --lv1: #3b7ad4; --lv2: #2a5fb8; }} }}
+.explorer-controls {{ display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 14px 0 4px; }}
+.ctl-group {{ display: inline-flex; background: var(--card); border: 1px solid var(--border);
+              border-radius: 999px; padding: 2px; }}
+.pill {{ font: 12.5px -apple-system, "Segoe UI", sans-serif; border: 0; background: none;
+        color: var(--text-secondary); padding: 4px 13px; border-radius: 999px; cursor: pointer; }}
+.pill.active {{ background: var(--c-puffin-arm64); color: #fff; }}
+.pill:not(.active):hover {{ color: var(--text-primary); }}
+.ctl-check {{ font-size: 12.5px; color: var(--text-secondary); display: inline-flex;
+              align-items: center; gap: 6px; user-select: none; }}
+.ctl-check.off {{ opacity: 0.4; }}
+#lv-chart svg {{ width: 100%; height: auto; display: block; }}
+#lv-chart .lv-baseline-tick {{ stroke: var(--c-racket); stroke-width: 2; }}
+#lv-chart .slope {{ stroke: var(--baseline); stroke-width: 2; fill: none; cursor: pointer; }}
+#lv-chart .slope.hot {{ stroke: var(--c-puffin-arm64); stroke-width: 3; }}
+#lv-chart .slope.geo {{ stroke: var(--c-puffin-arm64); stroke-width: 3; }}
+#lv-chart .slope-hit {{ stroke: transparent; stroke-width: 14; fill: none; cursor: pointer; }}
+#lv-chart .slope-dot {{ fill: var(--c-puffin-arm64); stroke: var(--surface-1); stroke-width: 2; }}
+#lv-chart .slope-rk {{ stroke: var(--c-racket); stroke-width: 2; stroke-dasharray: 4 3; }}
+.lv-table {{ margin-top: 10px; }}
+.lv-table summary {{ font-size: 13px; color: var(--text-secondary); cursor: pointer; }}
+.lv-table td, .lv-table th {{ font-variant-numeric: tabular-nums; }}
 </style>
 <div class="viz-root">
 <h1>Puffin vs Racket</h1>
@@ -320,11 +403,14 @@ C data structures shine on mutable hashes, vectors, and byte-string building.</p
 lists row flips the other way: Boehm's conservative heap retains more of the 3M-cons workload
 than Racket's precise collector.</p>
 
-<h2>Optimization levels</h2>
+<h2>The optimization explorer</h2>
 <p class="lede">The optimizer (docs/OPTIMIZER.md): <code>-O0</code> none, <code>-O1</code>
 cp0-class contraction + bounded inlining + direct known calls + open-coded data prims
-(cost-bounded the way Chez's cp0 is), <code>-O2</code> adds an AAM-style 0-CFA
-(eval/apply CESK*, widened store) and its clients. Same golden outputs at every level.</p>
++ loop recovery (cost-bounded the way Chez's cp0 is), <code>-O2</code> adds an
+AAM-style 0-CFA (eval/apply CESK*, widened store) and its clients: super-beta
+inlining, flow constant folding, dead-definition pruning. Same golden outputs at
+every level — explore what each level buys per workload, what it costs to compile,
+and where each one lands against Racket.</p>
 {levels_section}
 
 <h2>Compile time</h2>
@@ -436,6 +522,192 @@ document.addEventListener('click', e => {
 });
 document.getElementById('sv-close').onclick = () => dlg.close();
 </script>"""
+EXPLORER = r"""<script>
+(() => {
+  const el = document.getElementById('levels-data');
+  if (!el) return;
+  const D = JSON.parse(el.textContent);
+  const chart = document.getElementById('lv-chart');
+  const note = document.getElementById('lv-note');
+  const state = { metric: 'run', view: 'bars', baseline: true, pinned: null };
+  const LV = ['-O0', '-O1', '-O2'];
+  const LVC = ['var(--lv0)', 'var(--lv1)', 'var(--lv2)'];
+
+  const fmtS = (v) => v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
+  const fmtV = (v) => state.metric === 'speedup' ? `${v.toFixed(2)}×` : fmtS(v);
+  const vals = (n) => state.metric === 'speedup'
+    ? D.run[n].map((v) => D.run[n][0] / v)
+    : D[state.metric][n];
+  const geomean = (i) => {
+    const xs = D.names.map((n) => vals(n)[i]);
+    return Math.exp(xs.reduce((a, x) => a + Math.log(x), 0) / xs.length);
+  };
+  const tipFor = (n, i) => {
+    const r = D.run[n], c = D.compile[n];
+    const parts = [`${n} ${LV[i]}: run ${fmtS(r[i])} (×${(r[0] / r[i]).toFixed(2)} vs -O0), compile ${fmtS(c[i])}`];
+    if (D.racket[n]) parts.push(`Racket: ${fmtS(D.racket[n])}`);
+    return parts.join(' · ');
+  };
+
+  // nice linear ticks: snap max/5 to 1/2/2.5/5 * 10^k
+  function linTicks(vmax) {
+    const raw = vmax / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = ([1, 2, 2.5, 5, 10].find((s) => s * mag >= raw)) * mag;
+    const top = step * Math.ceil(vmax / step);
+    const ts = []; for (let t = 0; t <= top + 1e-9; t += step) ts.push(t);
+    return { top, ts };
+  }
+
+  function renderBars() {
+    const LEFT = 210, RIGHT = 90, BAR = 12, GAP = 2, GGAP = 14, TOP = 8, W = 860;
+    const names = D.names;
+    const groupH = 3 * (BAR + GAP) + GGAP;
+    const H = TOP + names.length * groupH + 30;
+    const plotW = W - LEFT - RIGHT;
+    let vmax = Math.max(...names.map((n) => Math.max(...vals(n))));
+    if (state.metric === 'run' && state.baseline)
+      vmax = Math.max(vmax, ...names.map((n) => D.racket[n] || 0));
+    const { top, ts } = linTicks(vmax);
+    const X = (v) => LEFT + plotW * v / top;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="per-benchmark times by optimization level">`;
+    for (const t of ts) {
+      const label = state.metric === 'speedup' ? `${t}×` : fmtS(t);
+      s += `<line x1="${X(t)}" y1="${TOP}" x2="${X(t)}" y2="${H - 26}" class="grid"/>`
+         + `<text x="${X(t)}" y="${H - 12}" class="tick" text-anchor="middle">${t === 0 ? 0 : label}</text>`;
+    }
+    if (state.metric === 'speedup')
+      s += `<line x1="${X(1)}" y1="${TOP - 2}" x2="${X(1)}" y2="${H - 26}" class="baseline"/>`;
+    let y = TOP;
+    for (const n of names) {
+      const gy = y, vv = vals(n);
+      const tick = state.metric === 'run' && state.baseline && D.racket[n] ? X(D.racket[n]) : -1;
+      for (let i = 0; i < 3; i++) {
+        const bx = X(vv[i]);
+        s += `<rect x="${LEFT}" y="${y}" width="${Math.max(bx - LEFT, 1).toFixed(1)}" height="${BAR}" rx="4" `
+           + `fill="${LVC[i]}" class="mark" tabindex="0" data-tip="${tipFor(n, i).replace(/"/g, '&quot;')}"/>`;
+        if (i === 1) {
+          // keep the direct label clear of the baseline tick
+          const lx = (tick >= 0 && tick > bx - 8 && tick < bx + 52) ? tick + 8 : bx + 6;
+          s += `<text x="${lx}" y="${y + BAR - 2}" class="vlabel">${fmtV(vv[i])}</text>`;
+        }
+        y += BAR + GAP;
+      }
+      if (state.metric === 'run' && state.baseline && D.racket[n]) {
+        const rx = X(D.racket[n]);
+        s += `<line x1="${rx}" y1="${gy - 1}" x2="${rx}" y2="${gy + 3 * (BAR + GAP) - GAP + 1}" `
+           + `class="lv-baseline-tick" data-tip="Racket ${n}: ${fmtS(D.racket[n])}"/>`;
+      }
+      s += `<text x="${LEFT - 8}" y="${gy + (3 * (BAR + GAP)) / 2 + 3}" class="glabel src-link" data-prog="${n}" text-anchor="end">${n}</text>`;
+      y += GGAP;
+    }
+    s += '</svg>';
+    chart.innerHTML = s;
+    note.textContent = state.metric === 'speedup'
+      ? 'Bars show each level’s speedup over -O0 (right of the dashed 1× line = faster). Labels mark -O1; hover or focus any bar for full details.'
+      : 'Three bars per benchmark: -O0, -O1, -O2 top to bottom. Labels mark -O1; hover or focus any bar for full details.'
+        + (state.metric === 'run' && state.baseline ? ' Amber ticks mark Racket on the same workload.' : '');
+  }
+
+  function renderSlopes() {
+    const LEFT = 70, RIGHT = 130, TOP = 16, W = 860, H = 380;
+    const plotW = W - LEFT - RIGHT, plotH = H - TOP - 46;
+    const XS = [0, 1, 2].map((i) => LEFT + plotW * i / 2);
+    const log = state.metric !== 'speedup';
+    let lo = Infinity, hi = -Infinity;
+    for (const n of D.names) for (const v of vals(n)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    if (state.metric === 'run' && state.baseline)
+      for (const n of D.names) if (D.racket[n]) { lo = Math.min(lo, D.racket[n]); hi = Math.max(hi, D.racket[n]); }
+    const Y = log
+      ? (v) => TOP + plotH * (1 - (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)))
+      : (v) => TOP + plotH * (1 - v / hi);
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="times across optimization levels">`;
+    const yticks = (log
+      ? [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 60].filter((t) => t >= lo * 0.8 && t <= hi * 1.2)
+      : linTicks(hi).ts.filter((t) => t > 0))
+      .filter((t) => Y(t) >= TOP - 1 && Y(t) <= TOP + plotH + 1); // never below the axis row
+    for (const t of yticks)
+      s += `<line x1="${LEFT}" y1="${Y(t)}" x2="${W - RIGHT}" y2="${Y(t)}" class="grid"/>`
+         + `<text x="${LEFT - 6}" y="${Y(t) + 3}" class="tick" text-anchor="end">${state.metric === 'speedup' ? t + '×' : fmtS(t)}</text>`;
+    for (let i = 0; i < 3; i++)
+      s += `<text x="${XS[i]}" y="${H - 26}" class="tick" text-anchor="middle">${LV[i]}</text>`;
+    const hot = state.pinned;
+    const line = (n) => [0, 1, 2].map((i) => `${XS[i]},${Y(vals(n)[i])}`).join(' ');
+    for (const n of D.names) if (n !== hot)
+      s += `<polyline class="slope" points="${line(n)}"/>`
+         + `<polyline class="slope-hit" points="${line(n)}" tabindex="0" data-n="${n}" data-tip="${[0,1,2].map((i)=>`${LV[i]} ${fmtV(vals(n)[i])}`).join(' · ')} — ${n}"/>`;
+    // right-edge labels (geomean, pinned, racket): collect, then nudge
+    // apart so converging lines never stack their labels
+    const g = [0, 1, 2].map(geomean);
+    s += `<polyline class="slope geo" points="${[0,1,2].map((i)=>`${XS[i]},${Y(g[i])}`).join(' ')}"/>`;
+    const edge = [{ y: Y(g[2]), text: 'geomean', cls: 'glabel', attrs: '' }];
+    if (hot) {
+      const vv = vals(hot);
+      s += `<polyline class="slope hot" points="${line(hot)}"/>`;
+      for (let i = 0; i < 3; i++)
+        s += `<circle class="slope-dot" cx="${XS[i]}" cy="${Y(vv[i])}" r="4.5" data-tip="${tipFor(hot, i).replace(/"/g, '&quot;')}"/>`;
+      edge.push({ y: Y(vv[2]), text: hot, cls: 'glabel src-link', attrs: ` data-prog="${hot}"` });
+      if (state.metric === 'run' && state.baseline && D.racket[hot]) {
+        const ry = Y(D.racket[hot]);
+        s += `<line x1="${LEFT}" y1="${ry}" x2="${W - RIGHT}" y2="${ry}" class="slope-rk"/>`;
+        edge.push({ y: ry, text: `Racket · ${fmtS(D.racket[hot])}`, cls: 'tick', attrs: '' });
+      }
+    }
+    edge.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < edge.length; i++)
+      if (edge[i].y - edge[i - 1].y < 14) edge[i].y = edge[i - 1].y + 14;
+    for (const l of edge)
+      s += `<text x="${W - RIGHT + 8}" y="${l.y + 4}" class="${l.cls}"${l.attrs}>${l.text}</text>`;
+    s += '</svg>';
+    chart.innerHTML = s;
+    note.textContent = 'One line per benchmark' + (log ? ' (log scale)' : '') +
+      '; the bold line is the geometric mean. Hover, focus, or click a line to pin a benchmark' +
+      (state.metric === 'run' && state.baseline ? ' and see its Racket baseline.' : '.');
+    chart.querySelectorAll('.slope-hit').forEach((p) => {
+      p.addEventListener('mouseenter', () => { state.pinned = p.dataset.n; render(); });
+      p.addEventListener('focus', () => { state.pinned = p.dataset.n; render(); });
+      p.addEventListener('click', () => { state.pinned = p.dataset.n; render(); });
+    });
+  }
+
+  function render() {
+    (state.view === 'bars' ? renderBars : renderSlopes)();
+    const chk = document.querySelector('.ctl-check');
+    const applies = state.metric === 'run';
+    chk.classList.toggle('off', !applies);
+    chk.querySelector('input').disabled = !applies;
+    document.getElementById('lv-legend-rk').style.display =
+      applies && state.baseline ? '' : 'none';
+  }
+
+  document.querySelectorAll('.ctl-group').forEach((g) => {
+    g.addEventListener('click', (e) => {
+      const b = e.target.closest('.pill');
+      if (!b) return;
+      g.querySelectorAll('.pill').forEach((p) => p.classList.toggle('active', p === b));
+      state[g.dataset.ctl] = b.dataset.v;
+      if (g.dataset.ctl === 'view') state.pinned = null;
+      render();
+    });
+  });
+  document.getElementById('lv-baseline').addEventListener('change', (e) => {
+    state.baseline = e.target.checked; render();
+  });
+  // keyboard focus shows the same tooltip the pointer gets
+  const tip = document.getElementById('tip');
+  document.addEventListener('focusin', (e) => {
+    const m = e.target.closest && e.target.closest('[data-tip]');
+    if (!m) return;
+    tip.textContent = m.dataset.tip;
+    tip.style.display = 'block';
+    const r = m.getBoundingClientRect();
+    tip.style.left = Math.min(r.left, window.innerWidth - 340) + 'px';
+    tip.style.top = (r.bottom + 8) + 'px';
+  });
+  document.addEventListener('focusout', () => { tip.style.display = 'none'; });
+  render();
+})();
+</script>"""
 page = page.replace("__VIEWER_SCRIPT__", VIEWER)
+page = page.replace("__EXPLORER_SCRIPT__", EXPLORER)
 open(os.path.join(BENCH, "report.html"), "w").write(page)
 print(f"wrote bench/report.html  geomean={geomean:.3f} wins={wins}")

@@ -88,13 +88,21 @@
 
 (define (select-instructions-arm64 p)
   (define-values (symbol-table string-table) (scan-literals-arm p))
+  ;; separate compilation (docs/MODULES.md §3): symbol ids are interned
+  ;; at module-init time (they must agree across .o's), so a symbol
+  ;; literal is a load from the module's Lpfm_syms slot table rather
+  ;; than a compile-time immediate; string literals likewise load
+  ;; their init-materialized heap object from Lpfm_strs.
+  (define sep? (and (module-sep-mode) #t))
   (define (h-atom a)
     (match a
       ['(void)        `(imm ,void-value)]
       ['(nil)         `(imm ,nil-value)]
       [(? fixnum? n)  `(imm ,(tag-fixnum n))]
       [(? boolean? b) `(imm ,(if b true-value false-value))]
-      [`(quote ,s)    `(imm ,(tag-symbol (index-of symbol-table s)))]
+      [`(quote ,s)    (if sep?
+                          `(symref ,(index-of symbol-table s))
+                          `(imm ,(tag-symbol (index-of symbol-table s))))]
       [(? symbol? x)  `(var ,x)]))
   (define (copy-arguments as)
     (map (λ (a r) `(mov ,(h-atom a) (reg ,r)))
@@ -210,9 +218,12 @@
        `((ldr-global ,i (reg x0))
          ,@sink)]
       [`(string-lit ,s)
-       `((mov (imm ,(tag-fixnum (index-of string-table s))) (reg x0))
-         (callq pf_string_const 1)
-         ,@sink)]
+       (if sep?
+           `((ldr-slot Lpfm_strs ,(index-of string-table s) (reg x0))
+             ,@sink)
+           `((mov (imm ,(tag-fixnum (index-of string-table s))) (reg x0))
+             (callq pf_string_const 1)
+             ,@sink))]
       ;; open-coded pair/vector prims (>= -O1): inline fast paths,
       ;; checks branch to the shared trap block (see above)
       [`(null? ,a) #:when (open-code-prims?)
@@ -388,6 +399,8 @@
     [`(str ,src ,dst)    (list (vars-of src dst) '())]
     [`(ldr-global ,_ ,dst) (list '() (vars-of dst))]
     [`(str-global ,src ,_) (list (vars-of src) '())]
+    [`(ldr-slot ,_ ,_ ,dst) (list '() (vars-of dst))]
+    [`(str-slot ,src ,_ ,_) (list (vars-of src) '())]
     [`(ldr-argspill ,_ ,dst) (list '() (vars-of dst))]
     [`(str-argspill ,src ,_) (list (vars-of src) '())]
     [`(lea-fun ,_ ,dst)  (list '() (vars-of dst))]
@@ -429,7 +442,10 @@
                      (values `((mov ,op (reg ,scratch))) `(reg ,scratch))
                      (values `((ldr-imm ,op (reg ,scratch))) `(reg ,scratch)))]
       [`(deref ,_ ,_) (values `((ldr ,op (reg ,scratch))) `(reg ,scratch))]
-      [`(global ,i) (values `((ldr-global ,i (reg ,scratch))) `(reg ,scratch))]))
+      [`(global ,i) (values `((ldr-global ,i (reg ,scratch))) `(reg ,scratch))]
+      ;; separate compilation: a symbol literal is slot i of the
+      ;; module's init-interned symbol table (see select-instructions)
+      [`(symref ,i) (values `((ldr-slot Lpfm_syms ,i (reg ,scratch))) `(reg ,scratch))]))
   (define (patch-instr instr) (prov-each (patch-instr-core instr) instr))
   (define (patch-instr-core instr)
     (match instr
@@ -440,6 +456,7 @@
          [((? mov-imm-ok?) `(reg ,_)) (list instr)]
          [(`(imm ,_) `(reg ,_)) `((ldr-imm ,src ,dst))]
          [((? mem?) `(reg ,_)) `((ldr ,src ,dst))]
+         [(`(symref ,i) `(reg ,_)) `((ldr-slot Lpfm_syms ,i ,dst))]
          [(_ (? mem?))
           (define-values (is r) (into-reg src 'x11))
           `(,@is (str ,r ,dst))]
@@ -541,6 +558,45 @@
 ;; prelude-and-conclusion
 ;; ---------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------
+;; separate-compilation init preamble (docs/MODULES.md §3): a module's
+;; init function (or main, in the entry unit) interns the unit's
+;; symbol literals and materializes its string literals into local
+;; slot tables before any user code runs. Straight-line, pre-patched
+;; instructions (this runs after patch-instructions): only x0/x1/x16
+;; and the callee's caller-saved registers are touched, at a point
+;; where nothing is live.
+;; ---------------------------------------------------------------------
+
+(define (literal-init-instrs prog-info)
+  (define symbols (hash-ref prog-info 'symbols '()))
+  (define strings (hash-ref prog-info 'strings '()))
+  (append
+   (append*
+    (for/list ([s symbols] [i (in-naturals)])
+      `((lea-label ,(string->symbol (format "Lpfsym~a" i)) (reg x0))
+        (callq pf_intern_symbol 1)
+        (lsl (imm 3) (reg x0))
+        (orr (imm 3) (reg x0))
+        (str-slot (reg x0) Lpfm_syms ,i))))
+   (append*
+    (for/list ([s strings] [i (in-naturals)])
+      `((lea-label ,(string->symbol (format "Lpfstr~a" i)) (reg x0))
+        (ldr-imm (imm ,(bytes-length (string->bytes/utf-8 s))) (reg x1))
+        (callq pf_string_from_bytes 2)
+        (str-slot (reg x0) Lpfm_strs ,i))))))
+
+;; run-once guard: if the unit's init flag is already set, return
+;; (void) through the ordinary conclusion; otherwise set it and fall
+;; through into the init body
+(define (init-guard-instrs conclusion-label)
+  `((ldr-slot Lpfm_initflag 0 (reg x9))
+    (mov (imm ,void-value) (reg x0))
+    (cmp (reg x9) (imm 0))
+    (jmp-if ne ,conclusion-label)
+    (mov (imm 1) (reg x10))
+    (str-slot (reg x10) Lpfm_initflag 0)))
+
 (define (prelude-and-conclusion-arm64 p)
   (define (rename-conclusion blocks name)
     (define (h instr)
@@ -558,7 +614,9 @@
       ['() '()]
       [`(,a) `((,a))]
       [`(,a ,b . ,rest) (cons (list a b) (save-pairs rest))]))
-  (define (per-defn defn)
+  (define sep (module-sep-mode))
+  (define sep-kind (and sep (hash-ref sep 'kind)))
+  (define (per-defn defn prog-info)
     (match defn
       [`(define ,info (,f ,args ...) ,blocks)
        (define callee-saved (hash-ref info 'callee-saved '()))
@@ -579,12 +637,30 @@
                          [`(,a ,b) `((ldp ,a ,b))]
                          [`(,a)    `((ldp ,a #f))]))
                      (reverse pairs)))
+       (define entry? (equal? f (entry-symbol)))
+       (define my-conclusion (gensym 'conclusion))
+       ;; what runs between the prologue and the user code:
+       ;;   whole-program main      pf_init
+       ;;   separate entry main     pf_init, own literals, then every
+       ;;                           module init in require-DAG postorder
+       ;;   separate module init    run-once guard, own literals
+       (define entry-extras
+         (cond
+           [(not entry?) '()]
+           [(not sep) `((callq pf_init 0))]
+           [(eq? sep-kind 'entry)
+            `((callq pf_init 0)
+              ,@(literal-init-instrs prog-info)
+              ,@(map (λ (l) `(callq ,l 0)) (hash-ref sep 'init-calls '())))]
+           [else ;; 'module
+            `(,@(init-guard-instrs my-conclusion)
+              ,@(literal-init-instrs prog-info))]))
        (define start-block (hash-ref blocks f))
        (define new-start-block
          `((frame-push)               ;; stp x29, x30, [sp, #-16]!; mov x29, sp
            ,@saves
            ,@(if (zero? frame-bytes) '() `((sp-sub ,frame-bytes)))
-           ,@(if (equal? f (entry-symbol)) `((callq pf_init 0)) '())
+           ,@entry-extras
            ,@start-block))
        (define restore
          `(,@(if (zero? frame-bytes) '() `((sp-add ,frame-bytes)))
@@ -592,7 +668,7 @@
            (frame-pop)                ;; ldp x29, x30, [sp], #16
            (retq)))
        (define conclusion-block
-         (if (equal? f (entry-symbol))
+         (if (and entry? (not (eq? sep-kind 'module)))
              `(;; result already in x0: print it, then return 0
                (callq pf_print_result 0)
                (mov (imm 0) (reg x0))
@@ -616,7 +692,6 @@
                 tj)]
               [_ (list i)]))
           instrs))
-       (define my-conclusion (gensym 'conclusion))
        (define blocks+
          (rename-conclusion
           (hash-set (hash-remove (hash-set blocks f new-start-block)
@@ -631,7 +706,7 @@
        `(define ,info (,f ,@args) ,blocks++)]))
   (match p
     [`(program ,info ,defns ...)
-     `(program ,info ,@(map per-defn defns))]))
+     `(program ,info ,@(map (λ (d) (per-defn d info)) defns))]))
 
 ;; ---------------------------------------------------------------------
 ;; render
@@ -704,8 +779,27 @@
     [else (format "~a sp, sp, #~a, lsl #12\n    ~a sp, sp, #~a" op hi op lo)]))
 
 (define (render-instr-arm instr)
-  (define globals-sym (rt-sym 'puffin_globals))
+  (define globals-sym (rt-sym (module-globals-label)))
   (match instr
+      ;; separate compilation: a slot in another module's globals
+      ;; array -- the label is external (.globl on the defining side)
+      [`(ldr-global (ext ,lbl ,k) ,dst)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    ldr ~a, [x16, #~a]"
+               (rt-sym lbl) (rt-sym lbl) (reg-name dst) (* 8 k))]
+      [`(str-global ,src (ext ,lbl ,k))
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
+               (rt-sym lbl) (rt-sym lbl) (reg-name src) (* 8 k))]
+      ;; separate compilation: assembler-local data (slot tables, the
+      ;; init flag, cstring addresses) -- labels are used verbatim
+      [`(lea-label ,l ,dst)
+       (format "adrp ~a, ~a@PAGE\n    add ~a, ~a, ~a@PAGEOFF"
+               (reg-name dst) l (reg-name dst) (reg-name dst) l)]
+      [`(ldr-slot ,l ,i ,dst)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    ldr ~a, [x16, #~a]"
+               l l (reg-name dst) (* 8 i))]
+      [`(str-slot ,src ,l ,i)
+       (format "adrp x16, ~a@PAGE\n    add x16, x16, ~a@PAGEOFF\n    str ~a, [x16, #~a]"
+               l l (reg-name src) (* 8 i))]
       [`(mov ,src ,dst) (format "mov ~a, ~a" (reg-name dst) (render-op-arm src))]
       [`(ldr-imm (imm ,i) ,dst) (render-mov-imm64 (reg-name dst) i)]
       [`(ldr ,mem ,dst) (render-mem-access #t dst mem)]
@@ -782,6 +876,48 @@
                     [#\\ "\\\\"] [#\" "\\\""] [#\newline "\\n"] [#\tab "\\t"]
                     [_ (string ch)]))
                 (string->list s))))
+  ;; separate compilation: no whole-program literal tables (pf_init
+  ;; would intern them with ids that can't agree across .o's).
+  ;; Instead: the same cstrings, two local slot tables the unit's
+  ;; init preamble fills (interned symbol words / materialized heap
+  ;; strings -- the GC scans __DATA, so they are roots), the
+  ;; run-once flag, and the unit's own exported globals array.
+  (define (data-segment-sep info kind)
+    (define symbols (hash-ref info 'symbols '()))
+    (define strings (hash-ref info 'strings '()))
+    (define n-globals (hash-ref info 'globals 0))
+    (define gsym (rt-sym (module-globals-label)))
+    (string-append
+     ".section __TEXT,__cstring,cstring_literals\n"
+     (apply string-append
+            (for/list ([s symbols] [i (in-naturals)])
+              (format "Lpfsym~a: .asciz \"~a\"\n" i (escape-c (symbol->string s)))))
+     (apply string-append
+            (for/list ([s strings] [i (in-naturals)])
+              (format "Lpfstr~a: .asciz \"~a\"\n" i (escape-c s))))
+     ".section __DATA,__data\n"
+     ".p2align 3\n"
+     (format "Lpfm_syms: .space ~a\n" (max 8 (* 8 (length symbols))))
+     (format "Lpfm_strs: .space ~a\n" (max 8 (* 8 (length strings))))
+     (if (eq? kind 'module) "Lpfm_initflag: .space 8\n" "")
+     (format ".globl ~a\n" gsym)
+     (format "~a: .space ~a\n" gsym (max 8 (* 8 n-globals)))
+     ;; the runtime's whole-program literal tables are declared
+     ;; weak, but Mach-O still wants definitions at link time: the
+     ;; entry unit supplies the empty ones (every literal goes
+     ;; through the per-module init preambles instead)
+     (if (eq? kind 'entry)
+         (apply string-append
+                (append
+                 (for/list ([s '(puffin_symbol_names puffin_symbol_count
+                                 puffin_string_consts puffin_string_const_count)])
+                   (format ".globl ~a\n" (rt-sym s)))
+                 (list
+                  (format "~a:\n" (rt-sym 'puffin_symbol_names))
+                  (format "~a: .quad 0\n" (rt-sym 'puffin_symbol_count))
+                  (format "~a:\n" (rt-sym 'puffin_string_consts))
+                  (format "~a: .quad 0\n" (rt-sym 'puffin_string_const_count)))))
+         "")))
   (define (data-segment info)
     (define symbols (hash-ref info 'symbols '()))
     (define strings (hash-ref info 'strings '()))
@@ -810,14 +946,23 @@
             (for/list ([_ strings] [i (in-naturals)]) (format "    .quad Lpfstr~a\n" i)))
      (format "~a: .quad ~a\n" (rt-sym 'puffin_string_const_count) (length strings))
      (format "~a: .space ~a\n" (rt-sym 'puffin_globals) (max 8 (* 8 n-globals)))))
+  (define sep (module-sep-mode))
   (match p
     [`(program ,info ,defns ...)
      (string-append
       (format ".globl ~a\n" (rt-sym (entry-symbol)))
+      (if sep
+          (apply string-append
+                 (for/list ([l (hash-ref sep 'exports '())]
+                            #:unless (equal? l (entry-symbol)))
+                   (format ".globl ~a\n" (rt-sym l))))
+          "")
       ".text\n.p2align 2\n"
       (apply string-append
              (map (λ (ln) (string-append (car ln) "\n")) (render-lines-arm64 p)))
-      (data-segment info))]))
+      (if sep
+          (data-segment-sep info (hash-ref sep 'kind))
+          (data-segment info)))]))
 
 ;; the pass table main.rkt splices in for --target arm64
 (define (arm64-backend-passes)

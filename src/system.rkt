@@ -54,13 +54,54 @@
 
 (define target (make-parameter (default-target)))
 
+;; compile-only fast path: when #f, run-chain keeps no history, no
+;; pretty-printed IRs, no per-pass predicates/interps, and provenance
+;; tagging is disabled -- the working set is one pass's input+output.
+;; Debugging surfaces (chain tests, the trace server) leave it #t.
+(define retain-trace? (make-parameter #t))
+
 ;; optimization level: 0 = none, 1 = contraction/inlining + safe
 ;; open-coded prims (cp0-class budgets), 2 = + AAM flow analysis and
 ;; its clients (see docs/OPTIMIZER.md)
 (define optimize-level (make-parameter 1))
 
-(define (entry-symbol) 'main)
+;; The synthesized entry function's name. Whole-program compilation
+;; always uses 'main; separate compilation (docs/MODULES.md §3)
+;; parameterizes it to the module's init symbol so collect-globals'
+;; synthesized function IS the module init.
+(define entry-symbol-name (make-parameter 'main))
+(define (entry-symbol) (entry-symbol-name))
 (define (conclusion-block-name)   'conclusion)
+
+;; ---------------------------------------------------------------------
+;; Separate compilation (docs/MODULES.md §3). All default to inert
+;; values: whole-program compilation is bit-for-bit unaffected.
+;; ---------------------------------------------------------------------
+
+;; #f, or a hash describing the module being compiled:
+;;   'kind        'module (a required module: init guard, no pf_init,
+;;                no result printing) or 'entry (the program's main)
+;;   'exports     labels to mark .globl (provided funs + the init)
+;;   'init-calls  init labels main calls in require-DAG postorder
+;;                (entry kind only)
+(define module-sep-mode (make-parameter #f))
+
+;; imported functions: hash of source-visible name -> mangled label
+;; (defined in another module's .o). reveal-functions marks
+;; references (fun-ref <label>), exactly like own top-level
+;; functions. For dep imports the resolver has already renamed the
+;; reference to the label (name = label); prelude imports keep their
+;; source spelling (desugar introduces e.g. `append` after renaming),
+;; so name and label differ.
+(define module-ext-funs (make-parameter (hash)))
+
+;; imported value defines: mangled name -> (ext <globals-label> <slot>),
+;; consumed by collect-globals (reads/writes become external
+;; global-ref/global-set! against the exporting module's array)
+(define module-ext-globals (make-parameter (hash)))
+
+;; the label of THIS compilation unit's globals array
+(define module-globals-label (make-parameter 'puffin_globals))
 
 ;; ---------------------------------------------------------------------
 ;; Tagged value representation (shared contract between the compiler,

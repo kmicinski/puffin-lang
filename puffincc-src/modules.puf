@@ -29,6 +29,13 @@
 (define (module-error msg)
   (error (str-cat "modules: " msg)))
 
+;; loaded/ids are keyed by (string->symbol s): the immutable hash
+;; compares string keys by IDENTITY (hamt.c's load-bearing
+;; simplification), so equal-but-distinct path strings would miss --
+;; diamond requires then splice a module twice. Symbols intern by
+;; content, restoring equal?-keyed semantics.
+(define (path-key p) (string->symbol p))
+
 ;; ---- small pieces ----------------------------------------------------
 
 ;; deterministic 32-bit FNV-1a over a string (matches src/modules.rkt)
