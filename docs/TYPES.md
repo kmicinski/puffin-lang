@@ -1,5 +1,19 @@
 # Puffin gradual types: ADTs first, `_` everywhere else
 
+> **Status:** §1–§4 are LIVE in the reference implementation on this
+> branch: `src/types.rkt` (the bidirectional checker, invoked at the
+> top of desugar so every route checks), ADT dynamic semantics
+> end-to-end on both backends, annotations parsing + erasing
+> everywhere. `typed-1` is a golden corpus program; the rejection
+> matrix lives in `src/test-types.rkt`; the whole untyped corpus
+> passes unchanged (297/297 — the gradual guarantee). One refinement
+> beyond the design: in applications, a formal's CONCRETE structure
+> is a contract (violations error) but a constraint that exists only
+> because greedy instantiation bound a type variable from a sibling
+> argument is an inference hint — conflicts there demote the variable
+> to `_`. Still ahead: prim types folding into the manifest, web +
+> puffincc dynamic-semantics parity, casts/blame, exhaustiveness.
+
 Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
 and annotations only ever tighten; (2) **algebraic datatypes as the

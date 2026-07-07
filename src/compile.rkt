@@ -46,6 +46,7 @@
 (require "system.rkt")  ;; System-specific details
 (require "stdlib.rkt")  ;; The standard library manifest
 (require "provenance.rkt") ;; IR provenance tags (see docs/DELTA.md)
+(require "types.rkt")   ;; the gradual typechecker (docs/TYPES.md)
 
 (provide (all-defined-out)) ;; export everything for testing
 
@@ -61,6 +62,11 @@
 ;; ---------------------------------------------------------------------
 
 (define (desugar p)
+  ;; gradual typecheck first (docs/TYPES.md): desugar is the funnel
+  ;; every route passes through, so checking here covers the
+  ;; interpreter, the chain, both backends, and the trace server.
+  ;; Types then erase below; unannotated code cannot fail.
+  (typecheck-program p)
   ;; ---- gradual types (docs/TYPES.md): ADT tables ---------------------
   ;; define-type constructors are collected up front (all of a
   ;; module's types are implicitly mutually recursive, like top-level
