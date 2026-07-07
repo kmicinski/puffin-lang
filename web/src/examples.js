@@ -12,6 +12,11 @@ export const EXAMPLES = [
     code: ";; Welcome to Puffin! 🐧\n;; A tiny Racket-like teaching language.\n;; Press Run (or Cmd/Ctrl+Enter) to evaluate; try the REPL on the right.\n\n;; Pattern matching over s-expression data:\n(define (eval-expr e)\n  (match e\n    [`(add ,a ,b) (+ (eval-expr a) (eval-expr b))]\n    [`(mul ,a ,b) (* (eval-expr a) (eval-expr b))]\n    [(? fixnum? n) n]))\n(println (eval-expr '(add (mul 3 4) (add 1 2))))   ;; 15\n\n;; Hashes are immutable by default (persistent HAMTs natively);\n;; hash-set returns a NEW hash. make-hash/hash-set! exist when\n;; you really want mutation.\n(define ages (hash 'gwen 7 'finn 11))\n(define ages+ (hash-set ages 'puffin 1))\n(println (hash-ref ages+ 'finn))                   ;; 11\n(println (hash-has-key? ages 'puffin))             ;; #f (ages untouched)\n(println (equal? ages (hash-remove ages+ 'puffin))) ;; #t (value semantics)\n\n;; Named let, lists, guards:\n(define (evens-below n)\n  (let loop ([i 0] [acc '()])\n    (cond [(< i n) (loop (+ i 1)\n                         (if (eq? (remainder i 2) 0) (cons i acc) acc))]\n          [else acc])))\n(println (evens-below 10))                         ;; (8 6 4 2 0)\n\n(match (list 'puffin 3)\n  [(list name k) #:when (< k 10) (list 'small name k)]\n  [_ 'big])\n",
   },
   {
+    id: "typed-tour",
+    label: "Gradual types: ADTs + annotations",
+    code: ";; Gradual types (docs/TYPES.md): ADTs, constructor patterns,\n;; annotations anywhere, _ everywhere else. Types erase at runtime,\n;; so unannotated code runs unchanged.\n(define-type (Option a)\n  (None)\n  (Some a))\n\n(define-type Expr\n  (Num Int)\n  (EAdd Expr Expr)\n  (EMul Expr Expr)\n  (ENeg Expr))\n\n(define (eval-expr [e : Expr]) : Int\n  (match e\n    [(Num n) n]\n    [(EAdd a b) (+ (eval-expr a) (eval-expr b))]\n    [(EMul a b) (* (eval-expr a) (eval-expr b))]\n    [(ENeg a) (- (eval-expr a))]))\n\n(println (eval-expr (EAdd (Num 1) (EMul (Num 3) (ENeg (Num 4))))))  ;; -11\n\n(: safe-div (-> Int Int (Option Int)))\n(define (safe-div a b)\n  (if (eq? b 0) None (Some (quotient a b))))\n\n(define (or-else [o : (Option Int)] [d : Int]) : Int\n  (match o\n    [(Some x) x]\n    [None d]))\n\n(println (or-else (safe-div 10 2) -1))   ;; 5\n(println (or-else (safe-div 10 0) -1))   ;; -1\n\n;; annotated let bindings + annotated lambda formals, mixed with plain\n(let ([xs : (List Int) (list 1 2 3)])\n  (println (foldl (lambda ([x : Int] acc) (+ x acc)) 0 xs)))  ;; 6\n\n(println (ann (+ 20 22) Int))  ;; 42\n\n;; higher-order over ADTs, mostly inferred\n(define (omap f o)\n  (match o\n    [(Some x) (Some (f x))]\n    [None None]))\n(println (or-else (omap (lambda (x) (* x x)) (Some 6)) 0))  ;; 36\n(or-else (omap (lambda (x) (* x x)) None) 99)               ;; 99\n",
+  },
+  {
     id: "modules-tour",
     label: "Modules: provide/require, #:as, signatures",
     entry: "main.puf",
@@ -25,7 +30,7 @@ export const EXAMPLES = [
   {
     id: "puffin-0",
     label: "Factorial",
-    code: "(define (fact n) (if (eq? n 0) 1 (* n (fact (- n 1)))))\n(println (fact 10))\n(fact 5)\n",
+    code: "(define (fact [n : Int]) : Int\n  (if (eq? n 0) 1 (* n (fact (- n 1)))))\n(println (fact 10))\n(fact 5)\n",
   },
   {
     id: "puffin-1",
@@ -35,7 +40,7 @@ export const EXAMPLES = [
   {
     id: "puffin-2",
     label: "Named let over a list",
-    code: "(let loop ([i 0] [keep '()])\n  (if (< i 10)\n      (loop (+ i 1) (if (eq? (remainder i 3) 0) (cons i keep) keep))\n      (println keep)))\n",
+    code: "(let loop ([i : Int 0] [keep : (List Int) '()])\n  (if (< i 10)\n      (loop (+ i 1) (if (eq? (remainder i 3) 0) (cons i keep) keep))\n      (println keep)))\n",
   },
   {
     id: "puffin-3",
@@ -50,7 +55,7 @@ export const EXAMPLES = [
   {
     id: "puffin-5",
     label: "Higher-order functions + equal?",
-    code: ";; higher-order + eta-expanded prims + equal?\n(define (map f xs) (if (null? xs) '() (cons (f (car xs)) (map f (cdr xs)))))\n(define (filter p xs)\n  (cond [(null? xs) '()]\n        [(p (car xs)) (cons (car xs) (filter p (cdr xs)))]\n        [else (filter p (cdr xs))]))\n(define (foldl f acc xs) (if (null? xs) acc (foldl f (f (car xs) acc) (cdr xs))))\n(println (map car (list (cons 1 2) (cons 3 4))))\n(println (filter pair? (list 1 (cons 1 2) 'x (cons 3 4))))\n(println (foldl + 0 (list 1 2 3 4 5)))\n(println (equal? (list 1 (vector 2 3)) (list 1 (vector 2 3))))\n(println (equal? \"abc\" (string-append \"ab\" \"c\")))\n(println (eq? 'foo 'foo))\n",
+    code: ";; higher-order + eta-expanded prims + equal?\n;; (: name t) declares the type of the define that follows --\n;; gradual style: annotate the boundaries, infer the rest\n(: map (-> (-> a b) (List a) (List b)))\n(define (map f xs) (if (null? xs) '() (cons (f (car xs)) (map f (cdr xs)))))\n(: filter (-> (-> a Bool) (List a) (List a)))\n(define (filter p xs)\n  (cond [(null? xs) '()]\n        [(p (car xs)) (cons (car xs) (filter p (cdr xs)))]\n        [else (filter p (cdr xs))]))\n(: foldl (-> (-> a b b) b (List a) b))\n(define (foldl f acc xs) (if (null? xs) acc (foldl f (f (car xs) acc) (cdr xs))))\n(println (map car (list (cons 1 2) (cons 3 4))))\n(println (filter pair? (list 1 (cons 1 2) 'x (cons 3 4))))\n(println (foldl + 0 (list 1 2 3 4 5)))\n(println (equal? (list 1 (vector 2 3)) (list 1 (vector 2 3))))\n(println (equal? \"abc\" (string-append \"ab\" \"c\")))\n(println (eq? 'foo 'foo))\n",
   },
   {
     id: "r4-7",

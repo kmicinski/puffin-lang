@@ -66,6 +66,9 @@ const S_CONS = S('cons');
 const S_PRED = S('?');
 const S_WILD = S('_');
 const S_KW_WHEN = S('#:when');
+const S_COLON = S(':');
+const S_ANN = S('ann');
+const S_DEFINE_TYPE = S('define-type');
 
 // ---------------------------------------------------------------------
 // Environments: chained frames of symbol -> box ({v})
@@ -379,6 +382,83 @@ export function surfacePrimNames() {
 }
 
 // ---------------------------------------------------------------------
+// gradual types (docs/TYPES.md): dynamic semantics only — checking is
+// hosted-only. Types erase: [x : t] formals and [x : t e] let bindings
+// strip, (lambda (...) : t ...) results strip, (ann e t) evaluates e,
+// (: name t) declarations vanish. define-type installs constructors:
+// an instance is EXACTLY a Puffin vector whose slot 0 is the
+// constructor symbol (a JS Array, like (vector 'Ctor field ...)), so
+// printing/equal?/vector? behave identically to the reference.
+// ---------------------------------------------------------------------
+
+// [x : t] annotated formal (also the shape of an annotated let name)
+function isAnnFormal(f) {
+  return Array.isArray(f) && f.length === 3 && f[1] === S_COLON
+    && typeof f[0] === 'symbol' && f.tail === undefined;
+}
+
+// strip [x : t] formals; plain names and dotted tails pass through
+function stripAnnFormals(raw) {
+  if (!Array.isArray(raw) || !raw.some(isAnnFormal)) return raw;
+  const out = raw.map((f) => (isAnnFormal(f) ? f[0] : f));
+  if (raw.tail !== undefined) out.tail = raw.tail;
+  return out;
+}
+
+// a let binding is [x e] or [x : t e]; returns [name, rhs-expr]
+function bindingParts(b) {
+  if (Array.isArray(b) && b.length === 4 && b[1] === S_COLON && typeof b[0] === 'symbol')
+    return [b[0], b[3]];
+  return [b[0], b[1]];
+}
+
+export function isDefineType(f) {
+  return isTaggedList(f, S_DEFINE_TYPE) && f.length >= 2;
+}
+
+// (: name t) top-level declaration — a no-op at runtime
+export function isTypeDecl(f) {
+  return isTaggedList(f, S_COLON) && f.length === 3 && typeof f[1] === 'symbol';
+}
+
+// record a define-type's constructors (name -> field count) in the
+// per-program/per-session registry, so match can recognize them
+export function registerDefineType(f, ctx) {
+  if (ctx.ctors === undefined) ctx.ctors = new Map();
+  for (let i = 2; i < f.length; i++) {
+    const c = f[i];
+    if (!Array.isArray(c) || c.length < 1 || typeof c[0] !== 'symbol' || c.tail !== undefined)
+      throw new PuffinError(`define-type: malformed constructor in ${renderDatum(f)}`);
+    ctx.ctors.set(c[0], c.length - 1);
+  }
+}
+
+// n-ary constructor builder: (Ctor a b) -> the tagged vector
+function ctorBuilder(cn, arity) {
+  return new Native(Symbol.keyFor(cn), arity, (a) => [cn, ...a]);
+}
+
+// install a define-type's constructor values into a frame
+// (nullary = one singleton instance, n-ary = a builder function)
+export function installDefineType(f, frame) {
+  for (let i = 2; i < f.length; i++) {
+    const c = f[i];
+    if (c.length === 1) frame.define(c[0], [c[0]]);
+    else frame.define(c[0], ctorBuilder(c[0], c.length - 1));
+  }
+}
+
+// closure for a (define (f formals...) [: t] body...) form, with
+// annotations erased (desugar's lower-type-form)
+export function defineClosure(f, env) {
+  const head = f[1];
+  const bodyStart =
+    head.tail === undefined && f.length >= 4 && f[2] === S_COLON ? 4 : 2;
+  const { fixed, rest } = splitFormals(stripAnnFormals(head), 1);
+  return new Closure(fixed, f.slice(bodyStart), env, Symbol.keyFor(head[0]), rest);
+}
+
+// ---------------------------------------------------------------------
 // quoted datum -> value (desugar's quote->expr semantics)
 // ---------------------------------------------------------------------
 
@@ -521,7 +601,7 @@ export function evalExpr(expr0, env0, ctx) {
           if (typeof expr[1] === 'symbol') {
             // named let: a self-referential closure
             const loopName = expr[1];
-            const bindings = expr[2];
+            const bindings = expr[2].map(bindingParts); // [x : t e] strips
             const params = bindings.map((b) => b[0]);
             const args = bindings.map((b) => evalExpr(b[1], env, ctx));
             const defFrame = new Frame(env);
@@ -534,7 +614,7 @@ export function evalExpr(expr0, env0, ctx) {
             continue;
           }
           // parallel let: rhs left-to-right, then bind
-          const bindings = expr[1];
+          const bindings = expr[1].map(bindingParts); // [x : t e] strips
           const vals = bindings.map((b) => evalExpr(b[1], env, ctx));
           const frame = new Frame(env);
           for (let i = 0; i < bindings.length; i++) frame.vars.set(bindings[i][0], { v: vals[i] });
@@ -546,7 +626,8 @@ export function evalExpr(expr0, env0, ctx) {
         case S_LETSTAR: {
           const bindings = expr[1];
           let frame = env;
-          for (const b of bindings) {
+          for (const b0 of bindings) {
+            const b = bindingParts(b0); // [x : t e] strips
             const v = evalExpr(b[1], frame, ctx);
             frame = new Frame(frame);
             frame.vars.set(b[0], { v });
@@ -557,8 +638,14 @@ export function evalExpr(expr0, env0, ctx) {
         }
 
         case S_LAMBDA: case S_LAMBDA2: {
-          const { fixed, rest } = splitFormals(expr[1]);
-          return new Closure(fixed, expr.slice(2), env, undefined, rest);
+          // gradual types: a `: t` result annotation and [x : t]
+          // formals erase (desugar's annotated-lambda cases)
+          const formals = expr[1];
+          const bodyStart =
+            Array.isArray(formals) && formals.tail === undefined
+              && expr.length >= 4 && expr[2] === S_COLON ? 4 : 2;
+          const { fixed, rest } = splitFormals(stripAnnFormals(formals));
+          return new Closure(fixed, expr.slice(bodyStart), env, undefined, rest);
         }
 
         case S_QUASIQUOTE:
@@ -588,11 +675,7 @@ export function evalExpr(expr0, env0, ctx) {
             for (let i = 1; i < expr.length; i++) {
               const f = expr[i];
               if (isFunDefine(f)) {
-                {
-                  const { fixed, rest } = splitFormals(f[1], 1);
-                  frame.vars.get(f[1][0]).v =
-                    new Closure(fixed, f.slice(2), frame, Symbol.keyFor(f[1][0]), rest);
-                }
+                frame.vars.get(f[1][0]).v = defineClosure(f, frame);
                 last = VOID;
               } else if (isValDefine(f)) {
                 frame.vars.get(f[1]).v = evalExpr(f[2], frame, ctx);
@@ -644,6 +727,16 @@ export function evalExpr(expr0, env0, ctx) {
         case S_NOT: {
           if (expr.length !== 2) throw new PuffinError('not: expects 1 argument');
           return evalExpr(expr[1], env, ctx) === false;
+        }
+
+        case S_ANN: {
+          // gradual types: expression ascription erases (shadowable,
+          // like desugar's #:when (not (hash-has-key? bound 'ann)))
+          if (expr.length === 3 && env.lookup(S_ANN) === undefined) {
+            expr = expr[1];
+            continue;
+          }
+          break; // shadowed or malformed: ordinary application
         }
 
         case S_ADD: case S_SUB: case S_MUL:
@@ -789,7 +882,15 @@ export function applyProcedure(f, args, ctx) {
 
 function tryMatch(pat, v, binds, env, ctx) {
   if (pat === S_WILD) return true;
-  if (typeof pat === 'symbol') { binds.set(pat, v); return true; }
+  if (typeof pat === 'symbol') {
+    // a bare nullary-constructor name is a tag test, not a binder
+    // (None in [(Some x) ...] [None ...]); the tag check makes it
+    // safe even before its define-type initializes
+    if (ctx.ctors !== undefined && ctx.ctors.get(pat) === 0)
+      return Array.isArray(v) && v.length === 1 && v[0] === pat;
+    binds.set(pat, v);
+    return true;
+  }
   if (typeof pat === 'bigint' || typeof pat === 'boolean') return eqv(v, pat);
   if (pat instanceof PStr) return v instanceof PStr && v.s === pat.s;
   if (Array.isArray(pat)) {
@@ -833,6 +934,20 @@ function tryMatch(pat, v, binds, env, ctx) {
       }
       if (!truthy(applyProcedure(pred, [v], ctx))) return false;
       return tryMatch(pat[2], v, binds, env, ctx);
+    }
+    // ADT constructor patterns: (Ctor p ...) — vector-kind + slot-0
+    // tag test, then field subpatterns (compile-ctor-pattern)
+    if (typeof head === 'symbol' && ctx.ctors !== undefined
+        && ctx.ctors.has(head) && pat.tail === undefined) {
+      const arity = ctx.ctors.get(head);
+      if (pat.length - 1 !== arity)
+        throw new PuffinError(
+          `constructor ${Symbol.keyFor(head)} expects ${arity} fields, got ${pat.length - 1} in pattern ${renderDatum(pat)}`);
+      if (!Array.isArray(v) || v.length !== arity + 1 || v[0] !== head) return false;
+      for (let i = 1; i < pat.length; i++) {
+        if (!tryMatch(pat[i], v[i], binds, env, ctx)) return false;
+      }
+      return true;
     }
   }
   throw new PuffinError(`unsupported match pattern: ${renderDatum(pat)}`);
@@ -897,26 +1012,30 @@ function matchQuasi(q, v, binds, env, ctx) {
 
 // pattern variables of a (quasi) pattern -- needed so zero-element
 // ellipsis segments still bind their variables to '()
-function quasiPatternVars(q, acc) {
+function quasiPatternVars(q, acc, ctx) {
   if (Array.isArray(q)) {
     if (q.length === 2 && q[0] === S_UNQUOTE && q.tail === undefined) {
-      patternVarsOf(q[1], acc);
+      patternVarsOf(q[1], acc, ctx);
     } else {
-      for (const x of q) quasiPatternVars(x, acc);
-      if (q.tail !== undefined) quasiPatternVars(q.tail, acc);
+      for (const x of q) quasiPatternVars(x, acc, ctx);
+      if (q.tail !== undefined) quasiPatternVars(q.tail, acc, ctx);
     }
   }
   return acc;
 }
-function patternVarsOf(pat, acc) {
+function patternVarsOf(pat, acc, ctx) {
   if (pat === S_WILD) return acc;
-  if (typeof pat === 'symbol') { acc.add(pat); return acc; }
+  if (typeof pat === 'symbol') {
+    // a bare nullary constructor is a test, not a binder
+    if (!(ctx.ctors !== undefined && ctx.ctors.get(pat) === 0)) acc.add(pat);
+    return acc;
+  }
   if (!Array.isArray(pat)) return acc;
   const head = pat[0];
   if (head === S_QUOTE) return acc;
-  if (head === S_QUASIQUOTE) return quasiPatternVars(pat[1], acc);
-  if (head === S_PRED) return patternVarsOf(pat[2], acc);
-  for (let i = 1; i < pat.length; i++) patternVarsOf(pat[i], acc);
+  if (head === S_QUASIQUOTE) return quasiPatternVars(pat[1], acc, ctx);
+  if (head === S_PRED) return patternVarsOf(pat[2], acc, ctx);
+  for (let i = 1; i < pat.length; i++) patternVarsOf(pat[i], acc, ctx);
   return acc;
 }
 
@@ -940,7 +1059,7 @@ function matchQuasiList(q, i, v, binds, env, ctx) {
     if (cur !== NIL) return false;
     if (elems.length < k) return false;
     const take = elems.length - k;
-    const vars = [...quasiPatternVars(mid, new Set())];
+    const vars = [...quasiPatternVars(mid, new Set(), ctx)];
     const acc = new Map(vars.map((x) => [x, []]));
     for (let j = 0; j < take; j++) {
       const tmp = new Map();
@@ -998,26 +1117,46 @@ export function unwrapProgram(forms) {
 // before anything runs; value cells start at 0), then forms run in
 // source order. Returns the last top-level *expression*'s value.
 export function evalProgram(forms, global, ctx) {
+  // ADT constructors are known program-wide before anything runs
+  // (mirrors desugar's up-front ctor table: a module's types are
+  // implicitly mutually recursive, so match patterns may mention a
+  // constructor before its define-type appears)
+  for (const f of forms) if (isDefineType(f)) registerDefineType(f, ctx);
   for (const f of forms) {
     if (isFunDefine(f)) {
       if (!global.vars.has(f[1][0])) global.define(f[1][0], VOID);
     } else if (isValDefine(f)) {
       if (!global.vars.has(f[1])) global.define(f[1], 0n);
+    } else if (isDefineType(f)) {
+      // lowered ctor defines: n-ary like fun defines, nullary like
+      // val defines (cells start at 0, initialized at source position)
+      for (let i = 2; i < f.length; i++) {
+        const cn = f[i][0];
+        if (!global.vars.has(cn)) global.define(cn, f[i].length === 1 ? 0n : VOID);
+      }
     }
   }
   for (const f of forms) {
     if (isFunDefine(f)) {
-      const name = f[1][0];
-      {
-        const { fixed, rest } = splitFormals(f[1], 1);
-        global.define(name, new Closure(fixed, f.slice(2), global, Symbol.keyFor(name), rest));
+      global.define(f[1][0], defineClosure(f, global));
+    } else if (isDefineType(f)) {
+      // n-ary constructor builders install with the closures
+      for (let i = 2; i < f.length; i++) {
+        if (f[i].length > 1) global.define(f[i][0], ctorBuilder(f[i][0], f[i].length - 1));
       }
     }
   }
   let last = VOID;
   for (const f of forms) {
     if (isFunDefine(f)) continue; // closure already installed; `last` unchanged
-    if (isValDefine(f)) {
+    if (isTypeDecl(f)) continue;  // (: name t) vanishes
+    if (isDefineType(f)) {
+      // nullary constructors initialize their one singleton instance
+      // here, like the lowered (define None (vector 'None))
+      for (let i = 2; i < f.length; i++) {
+        if (f[i].length === 1) { global.define(f[i][0], [f[i][0]]); last = VOID; }
+      }
+    } else if (isValDefine(f)) {
       global.define(f[1], evalExpr(f[2], global, ctx));
       last = VOID;
     } else {
