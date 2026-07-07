@@ -164,15 +164,15 @@
 ;; ---------------------------------------------------------------------
 
 (define (run-native-tests progs tgt)
-  (define exe (build-path (find-system-path 'temp-dir) (format "puffin-test-~a" tgt)))
+  (define exe (build-path (find-system-path 'temp-dir) (format "puffin-test-~a-~a" tgt (current-milliseconds))))
   (for ([prog progs])
     (define compiled?
       (parameterize ([target tgt]
                      [write-stdout-mode #f]
                      [verbose-mode #f]
                      [executable-file (path->string exe)]
-                     [asm-file (path->string (build-path (find-system-path 'temp-dir) "puffin-test.s"))]
-                     [object-file (path->string (build-path (find-system-path 'temp-dir) "puffin-test.o"))])
+                     [asm-file (path->string (build-path (find-system-path 'temp-dir) (format "puffin-test-~a.s" (current-milliseconds))))]
+                     [object-file (path->string (build-path (find-system-path 'temp-dir) (format "puffin-test-~a.o" (current-milliseconds))))])
         (with-handlers ([exn:fail? (λ (e)
                                      (check! (format "~a/compile" tgt) prog "-" (exn-message e) "compiles")
                                      #f)])
@@ -217,7 +217,7 @@
 ;; ---------------------------------------------------------------------
 
 (define (run-puffincc-tests progs tgt)
-  (define exe (build-path (find-system-path 'temp-dir) "puffincc-test"))
+  (define exe (build-path (find-system-path 'temp-dir) (format "puffincc-test-~a" (current-milliseconds))))
   (for ([prog progs])
     (define compiled?
       (match (run/capture

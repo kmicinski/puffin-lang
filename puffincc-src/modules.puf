@@ -29,6 +29,13 @@
 (define (module-error msg)
   (error (str-cat "modules: " msg)))
 
+;; loaded/ids are keyed by (string->symbol s): the immutable hash
+;; compares string keys by IDENTITY (hamt.c's load-bearing
+;; simplification), so equal-but-distinct path strings would miss --
+;; diamond requires then splice a module twice. Symbols intern by
+;; content, restoring equal?-keyed semantics.
+(define (path-key p) (string->symbol p))
+
 ;; ---- small pieces ----------------------------------------------------
 
 ;; deterministic 32-bit FNV-1a over a string (matches src/modules.rkt)
@@ -278,10 +285,10 @@
   (define rel path) ;; paths are already joined from the entry dir
   (define id (str-cat (path-stem path) "_" (to-hex (fnv1a-32 rel))))
   (begin
-    (when (and (hash-has-key? ids id)
-               (not (string=? (hash-ref ids id) path)))
+    (when (and (hash-has-key? ids (path-key id))
+               (not (string=? (hash-ref ids (path-key id)) path)))
       (module-error (str-cat "module id collision between "
-                                   (hash-ref ids id) " and " path)))
+                                   (hash-ref ids (path-key id)) " and " path)))
     id))
 
 (define (load-modules entry-path)
@@ -293,7 +300,7 @@
          [(member path stack)
           (module-error (str-cat "require cycle: "
                                        (string-join (reverse (cons path stack)) " -> ")))]
-         [(hash-has-key? loaded path) state]
+         [(hash-has-key? loaded (path-key path)) state]
          [else
           (let* ([raw (read-module-file path from)]
                  [forms (match raw
@@ -317,9 +324,9 @@
                               (module-id path entry-dir ids2))]
                       [m (hash 'path path 'id id 'body body
                                'top-names top-names 'provides provides 'reqs reqs)])
-                 (list (hash-set loaded2 path m)
+                 (list (hash-set loaded2 (path-key path) m)
                        (cons m postorder2)
-                       (if id (hash-set ids2 id path) ids2)))]))])]))
+                       (if id (hash-set ids2 (path-key id) path) ids2)))]))])]))
   (match (visit entry-path '() #f (list (hash) '() (hash)))
     [`(,loaded ,postorder ,_) (list loaded (reverse postorder))]))
 
@@ -426,7 +433,7 @@
              (lambda (r acc)
                (match acc
                  [`(,ren ,aliases)
-                  (let ([dep (hash-ref loaded (hash-ref r 'target))])
+                  (let ([dep (hash-ref loaded (path-key (hash-ref r 'target)))])
                     (begin
                       (when (hash-ref r 'sig)
                         (check-signature (hash-ref r 'sig) (hash-ref dep 'body)
