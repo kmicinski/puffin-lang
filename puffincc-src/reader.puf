@@ -17,8 +17,11 @@
 (define B-dot 46) (define B-minus 45)
 (define B-space 32) (define B-tab 9) (define B-nl 10) (define B-cr 13)
 
+(: ws-byte? (-> Int Bool))
 (define (ws-byte? b) (or (eq? b B-space) (eq? b B-tab) (eq? b B-nl) (eq? b B-cr)))
+(: digit-byte? (-> Int Bool))
 (define (digit-byte? b) (and (< 47 b) (< b 58)))
+(: delim-byte? (-> Int Bool))
 (define (delim-byte? b)
   (or (< b 0)  ;; EOF delimits
       (ws-byte? b) (eq? b B-lparen) (eq? b B-rparen)
@@ -27,12 +30,16 @@
 ;; The reader threads (pos . value) pairs; src and its length are
 ;; globals set by read-forms-from-string (one reader at a time --
 ;; the compiler reads exactly one program).
+(: reader-src Str)
 (define reader-src "")
+(: reader-len Int)
 (define reader-len 0)
 
+(: rd-peek (-> Int Int))
 (define (rd-peek i) (if (< i reader-len) (string-byte reader-src i) -1))
 
 ;; skip whitespace and ;-comments
+(: rd-skip (-> Int Int))
 (define (rd-skip i)
   (let loop ([i i])
     (cond [(>= i reader-len) i]
@@ -45,12 +52,14 @@
           [else i])))
 
 ;; a symbol-or-number token starting at i: scan to a delimiter
+(: rd-token-end (-> Int Int))
 (define (rd-token-end i)
   (let loop ([j i])
     (if (or (>= j reader-len) (delim-byte? (rd-peek j)))
         j
         (loop (+ j 1)))))
 
+(: rd-atom (-> Int (Pairof Int _)))
 (define (rd-atom i)
   (define j (rd-token-end i))
   (define text (substring reader-src i j))
@@ -60,6 +69,7 @@
               ;; a lone minus (or leading-minus non-number) is a symbol
               [else (string->symbol text)])))
 
+(: rd-string (-> Int (Pairof Int Str)))
 (define (rd-string i)   ;; i points AT the opening quote
   (let loop ([j (+ i 1)] [acc ""])
     (define b (rd-peek j))
@@ -78,6 +88,7 @@
       [else (loop (+ j 1) (string-append acc (substring reader-src j (+ j 1))))])))
 
 ;; a list whose opener was consumed; closer is the matching bracket
+(: rd-list (-> Int Int (Pairof Int _)))
 (define (rd-list i closer)
   (let loop ([i (rd-skip i)] [acc '()])
     (define b (rd-peek i))
@@ -96,6 +107,7 @@
        (loop (rd-skip (car f)) (cons (cdr f) acc))])))
 
 ;; one form at i (i already past whitespace) -> (next-pos . form)
+(: rd-form (-> Int (Pairof Int _)))
 (define (rd-form i)
   (define b (rd-peek i))
   (cond
@@ -126,6 +138,7 @@
        [else (rd-atom i)])]
     [else (rd-atom i)]))
 
+(: read-forms-from-string (-> Str (List _)))
 (define (read-forms-from-string s)
   (set! reader-src s)
   (set! reader-len (string-length s))

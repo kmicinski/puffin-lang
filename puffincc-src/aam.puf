@@ -20,11 +20,14 @@
 
 (require "system.puf")
 
+(: aam-widen-limit Int)
 (define aam-widen-limit 8)
+(: aam-state-ceiling Int)
 (define aam-state-ceiling 200000)
 
 ;; ---- literals and the abstract-value vocabulary ----------------------
 
+(: literal-node? (-> _ Bool))
 (define (literal-node? e)
   (match e
     [#t #t] [#f #t]
@@ -32,6 +35,7 @@
     [(list 'quote s) (symbol? s)]
     [_ (fixnum? e)]))
 
+(: const-type (-> _ Sym))
 (define (const-type k)
   (cond [(fixnum? k) 'fixnum]
         [(boolean? k) 'bool]
@@ -39,11 +43,13 @@
         [(equal? k '(nil)) 'nil]
         [else 'symbol]))          ;; (quote s)
 
+(: prim-op? (-> _ (Set Sym) Bool))
 (define (prim-op? op bound)
   (and (symbol? op)
        (not (set-member? bound op))
        (or (prim? op) (if (member op '(and or not <= > >=)) #t #f))))
 
+(: prim-result (-> Sym (Set Sym)))
 (define (prim-result op)
   (cond
     [(member op '(+ - * quotient remainder modulo bitwise-and bitwise-ior
@@ -75,6 +81,7 @@
 ;; ---- syntactic pre-passes ---------------------------------------------
 
 ;; every name the program binds: define names, let binders, formals
+(: program-binders (-> _ (Set Sym)))
 (define (program-binders p)
   (define names (make-set))
   (define (walk e)
@@ -105,6 +112,7 @@
   names)
 
 ;; every name that is ever a set! target
+(: assigned-vars (-> _ (Set Sym)))
 (define (assigned-vars p)
   (define names (make-set))
   (define (walk e)
@@ -117,6 +125,7 @@
   names)
 
 ;; conservative "mentions": every symbol occurring in a form's code
+(: aam-mentions-of (-> _ (Set Sym)))
 (define (aam-mentions-of form)
   (define acc (make-set))
   (define (walk v)

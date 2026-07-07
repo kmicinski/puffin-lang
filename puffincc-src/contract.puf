@@ -13,6 +13,7 @@
 ;; ---- effect-free prims (safe to drop when their value is unused) ----
 ;; Only genuine backend prims belong here: prelude functions are
 ;; ordinary bindings a user may shadow with something impure.
+(: pure-prims (Set Sym))
 (define pure-prims
   (list->set '(+ - * eq? < <= > >= quotient remainder modulo
                bitwise-and bitwise-ior bitwise-xor arithmetic-shift
@@ -25,6 +26,7 @@
                set-add set-member? set-count set-remove set->list
                equal? value->string)))
 
+(: contract-literal? (-> _ Bool))
 (define (contract-literal? e)
   (match e
     [#t #t] [#f #t]
@@ -33,6 +35,7 @@
     [`(string-lit ,_) #t]
     [_ (fixnum? e)]))
 
+(: pure-exp? (-> _ Bool))
 (define (pure-exp? e)
   (match e
     [(? symbol? _) #t]
@@ -55,6 +58,7 @@
 ;;             census never saw; facts about those are vacuous and
 ;;             clients must treat them conservatively.
 
+(: make-contract-census (-> _ (List _)))
 (define (make-contract-census p)
   (define refs (make-hash))
   (define assigned (make-set))
@@ -100,28 +104,35 @@
 (define (census-assigned c) (second c))
 (define (census-binding c) (third c))
 (define (census-bound c) (fourth c))
+(: fourth (-> (List a) a))
 (define (fourth xs) (list-ref xs 3))
 
+(: ref-count (-> (List _) Sym Int))
 (define (ref-count c x) (hash-ref/default (census-refs c) x 0))
+(: assigned? (-> (List _) Sym Bool))
 (define (assigned? c x) (set-member? (census-assigned c) x))
+(: binding-of (-> (List _) Sym _))
 (define (binding-of c x) (hash-ref/default (census-binding c) x #f))
+(: known? (-> (List _) Sym Bool))
 (define (known? c x) (set-member? (census-bound c) x))
 
 ;; ---- size + fresh-renaming copy (charged against the effort) ---------
 
+(: exp-size (-> _ Int))
 (define (exp-size e)
   (if (pair? e)
       (foldl (lambda (s acc) (+ acc (exp-size s))) 1 e)
       1))
 
 ;; effort: a 1-slot vector of remaining fuel; every copied node costs 1
+(: spend! (-> (Vec Int) Int Bool))
 (define (spend! effort n)
   (define left (- (vector-ref effort 0) n))
   (begin (vector-set! effort 0 left)
          (> left 0)))
 
 ;; copy e, freshening every bound variable; rn maps old->new
-(define (freshen e rn effort)
+(define (freshen e [rn : (Hash Sym Sym)] [effort : (Vec Int)])
   (and (spend! effort 1)
        (match e
          [(? symbol? x) (hash-ref/default rn x x)]
@@ -172,6 +183,7 @@
 
 ;; ---- prim folding on literal operands ---------------------------------
 
+(: fold-prim (-> Sym (List _) _))
 (define (fold-prim op args)
   (match (cons op args)
     [`(+ ,(? fixnum? a) ,(? fixnum? b)) (+ a b)]
@@ -203,8 +215,11 @@
 ;; env maps var -> substitution (literal or variable); `inlining` is
 ;; the set of function names currently being inlined (recursion guard).
 
+(: contract-size-limit Int)
 (define contract-size-limit 50)     ;; max nodes for an inlined body copy
+(: contract-effort-limit Int)
 (define contract-effort-limit 400)  ;; fuel per inlining attempt
+(: contract-always-inline Int)
 (define contract-always-inline 16)
 
 (define (contract-program p)

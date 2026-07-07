@@ -18,14 +18,18 @@
 (define (str-cat . parts)
   (foldl (lambda (part acc) (string-append acc part)) "" parts))
 
+(: require-form? (-> _ Bool))
 (define (require-form? f)
   (match f [`(require . ,_) #t] [_ #f]))
+(: provide-form? (-> _ Bool))
 (define (provide-form? f)
   (match f [`(provide . ,_) #t] [_ #f]))
 
+(: module-forms? (-> (List _) Bool))
 (define (module-forms? forms)
   (ormap (lambda (f) (or (require-form? f) (provide-form? f))) forms))
 
+(: module-error (-> Str _))
 (define (module-error msg)
   (error (str-cat "modules: " msg)))
 
@@ -34,11 +38,13 @@
 ;; simplification), so equal-but-distinct path strings would miss --
 ;; diamond requires then splice a module twice. Symbols intern by
 ;; content, restoring equal?-keyed semantics.
+(: path-key (-> Str Sym))
 (define (path-key p) (string->symbol p))
 
 ;; ---- small pieces ----------------------------------------------------
 
 ;; deterministic 32-bit FNV-1a over a string (matches src/modules.rkt)
+(: fnv1a-32 (-> Str Int))
 (define (fnv1a-32 s)
   (define n (string-length s))
   (let loop ([i 0] [h 2166136261])
@@ -48,6 +54,7 @@
               (bitwise-and (* (bitwise-xor h (string-byte s i)) 16777619)
                            4294967295)))))
 
+(: to-hex (-> Int Str))
 (define (to-hex n)
   (define digits "0123456789abcdef")
   (if (zero? n)
@@ -69,6 +76,7 @@
 ;; every top-level name a form binds: defines bind one; define-type
 ;; binds its type name AND each constructor (docs/TYPES.md) -- all of
 ;; them provide/mangle like ordinary top-level names
+(: module-defn-names (-> _ (List Sym)))
 (define (module-defn-names f)
   (match f
     [`(define-type ,head ,ctors ...)
@@ -99,6 +107,7 @@
 
 ;; ---- paths (byte-oriented, / separated) --------------------------------
 
+(: path-dirname (-> Str Str))
 (define (path-dirname p)
   (define n (string-length p))
   (let loop ([i (- n 1)])
@@ -106,6 +115,7 @@
           [(eq? (string-byte p i) 47) (substring p 0 i)]
           [else (loop (- i 1))])))
 
+(: path-split (-> Str (List Str)))
 (define (path-split p)
   (define n (string-length p))
   (let loop ([i 0] [start 0] [acc '()])
@@ -116,6 +126,7 @@
           [else (loop (+ i 1) start acc)])))
 
 ;; resolve rel against directory base, normalizing ./ and ../
+(: path-join (-> Str Str Str))
 (define (path-join base rel)
   (define parts (append (if (string=? base "") '() (path-split base))
                         (path-split rel)))
@@ -132,6 +143,7 @@
       (str-cat "/" joined)
       joined))
 
+(: path-stem (-> Str Str))
 (define (path-stem p)
   (define parts (path-split p))
   (define name (if (null? parts) p (last parts)))
@@ -169,7 +181,7 @@
 
 ;; (require "path" [#:as M] [#:only (n ...)] [#:rename ((old new) ...)]
 ;;          [#:sig "path.pufs"]) -> req hash
-(define (parse-require f base-dir path)
+(define (parse-require f [base-dir : Str] [path : Str])
   (define (bad) (module-error (str-cat "malformed require in " path)))
   (match f
     [`(require ,p . ,opts)
@@ -200,14 +212,14 @@
            [_ (bad)])))]
     [_ (bad)]))
 
-(define (read-module-file path from)
+(define (read-module-file [path : Str] from)
   (unless (file-exists? path)
     (module-error (str-cat "required module not found: " path
                                  (if (string? from) (str-cat " (from " from ")") ""))))
   (read-forms-from-string (read-file path)))
 
 ;; signature ascription: returns the narrowed export set
-(define (check-signature sig-path body top-names mod-path)
+(define (check-signature [sig-path : Str] body top-names [mod-path : Str])
   (define sig-forms (read-module-file sig-path mod-path))
   (define entries
     (match sig-forms
@@ -253,7 +265,7 @@
    (set)
    entries))
 
-(define (parse-provides forms body top-names path)
+(define (parse-provides forms body top-names [path : Str])
   (define provide-forms (filter provide-form? forms))
   (define sig-forms
     (filter (lambda (f)
@@ -293,6 +305,7 @@
 ;;   (hash 'path 'id 'body 'top-names 'provides 'reqs)
 ;;
 
+(: module-id (-> Str Str _ Str))
 (define (module-id path entry-dir ids)
   (define rel path) ;; paths are already joined from the entry dir
   (define id (str-cat (path-stem path) "_" (to-hex (fnv1a-32 rel))))
@@ -303,7 +316,7 @@
                                    (hash-ref ids (path-key id)) " and " path)))
     id))
 
-(define (load-modules entry-path)
+(define (load-modules [entry-path : Str])
   (define entry-dir (path-dirname entry-path))
   (define (visit path stack from state)
     (match state
@@ -342,6 +355,7 @@
   (match (visit entry-path '() #f (list (hash) '() (hash)))
     [`(,loaded ,postorder ,_) (list loaded (reverse postorder))]))
 
+(: module-mangled (-> _ Sym Sym))
 (define (module-mangled m name)
   (if (hash-ref m 'id)
       (string->symbol (str-cat (symbol->string name) "_" (hash-ref m 'id)))
@@ -416,7 +430,7 @@
 
 ;; ---- resolve-modules --------------------------------------------------------
 
-(define (resolve-modules entry-path)
+(define (resolve-modules [entry-path : Str])
   (match (load-modules entry-path)
     [`(,loaded ,mods)
      (let* ([all-mentions
