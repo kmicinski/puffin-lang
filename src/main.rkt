@@ -397,8 +397,11 @@
                             (start-pass pass)]
      [("-e" "--end-pass") pass "End at pass <pass>"
                           (end-pass pass)]
-     [("-f" "--fast") "Skip interpretation / dumping, just compile"
-                      (write-stdout-mode #f)]
+     [("-f" "--fast") "Skip interpretation / dumping, just compile (implies --lean)"
+                      (write-stdout-mode #f)
+                      (retain-trace? #f)]
+     [("--lean") "Keep no pass history: one IR in memory at a time (the low-memory mode; compile-only CLIs default to it)"
+                 (retain-trace? #f)]
      [("-t" "--target") tgt "Target architecture: x86-64 or arm64"
                         (target (string->symbol tgt))]
      [("-O" "--optimize") lvl "Optimization level: 0, 1 (default), 2"
