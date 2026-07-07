@@ -30,6 +30,7 @@
 
 (define (compile-to file out)
   (parameterize ([write-stdout-mode #f]
+                 [retain-trace? #f]
                  [verbose-mode #f]
                  [executable-file out]
                  ;; unique per process: concurrent compiles (test harness,

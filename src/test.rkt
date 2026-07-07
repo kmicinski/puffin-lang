@@ -168,6 +168,7 @@
   (for ([prog progs])
     (define compiled?
       (parameterize ([target tgt]
+                     [retain-trace? #f]
                      [write-stdout-mode #f]
                      [verbose-mode #f]
                      [executable-file (path->string exe)]

@@ -54,6 +54,12 @@
 
 (define target (make-parameter (default-target)))
 
+;; compile-only fast path: when #f, run-chain keeps no history, no
+;; pretty-printed IRs, no per-pass predicates/interps, and provenance
+;; tagging is disabled -- the working set is one pass's input+output.
+;; Debugging surfaces (chain tests, the trace server) leave it #t.
+(define retain-trace? (make-parameter #t))
+
 ;; optimization level: 0 = none, 1 = contraction/inlining + safe
 ;; open-coded prims (cp0-class budgets), 2 = + AAM flow analysis and
 ;; its clients (see docs/OPTIMIZER.md)
