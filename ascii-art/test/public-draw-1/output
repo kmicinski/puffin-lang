@@ -1,6 +1,0 @@
-The input is:
-><>
-The decompiled diagram is:
-'((0 0 #\>) (0 1 #\<) (0 2 #\>))
-Rendering this diagram produces the following:
-><>
