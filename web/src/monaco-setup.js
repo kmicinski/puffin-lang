@@ -8,7 +8,7 @@ import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 // restores standard Alt/Ctrl+Arrow word navigation as a bonus.
 import 'monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperations.js';
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import { surfacePrimNames } from './puffin/index.js';
+import { surfacePrimNames } from './engine/index.js';
 
 self.MonacoEnvironment = {
   getWorker() { return new editorWorker(); },

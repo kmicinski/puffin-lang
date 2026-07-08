@@ -2,7 +2,7 @@
 // persist across evals until the main thread sends 'reset' (or
 // respawns the worker).
 
-import { Session } from './puffin/index.js';
+import { Session } from './engine/index.js';
 
 let session = null;
 let input = [];

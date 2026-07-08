@@ -5,7 +5,7 @@
 // doesn't flood the message channel but output still streams while
 // the (synchronous) interpreter is running.
 
-import { run } from './puffin/index.js';
+import { run } from './engine/index.js';
 
 let buffer = '';
 let lastFlush = 0;
