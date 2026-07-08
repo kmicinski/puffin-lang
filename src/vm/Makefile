@@ -54,19 +54,19 @@ WASM_BIN    := ../../bin/puffin-vm.wasm
 # `make wasm WASM_EXEC_MODEL=reactor`.
 WASM_EXEC_MODEL ?= command
 
-# The runtime + VM sources compiled for wasm. Note: NO Boehm archive;
-# wasm/wasm-gc.c provides the allocation ABI, and wasm/include is put
-# FIRST on the include path so core.c's `#include <gc.h>` resolves to
-# the shim, not the vendored Boehm header.
-WASM_SRCS := \
-	puffin-vm.c \
-	wasm/wasm-gc.c \
-	wasm/wasm-host.c \
+# The C runtime, from source (no archive). Shared by the wasm build and
+# the native gctest build below; both link wasm/wasm-gc.c for the
+# allocator and put wasm/include FIRST on the include path so core.c's
+# `#include <gc.h>` resolves to the shim, not the vendored Boehm header.
+RUNTIME_SRCS := \
 	../runtime/core.c \
 	../runtime/lib/pairs.c ../runtime/lib/vectors.c ../runtime/lib/strings.c \
 	../runtime/lib/table.c ../runtime/lib/hashes.c ../runtime/lib/sets.c \
 	../runtime/lib/hamt.c ../runtime/lib/arith.c ../runtime/lib/predicates.c \
 	../runtime/lib/io.c ../runtime/lib/stdlib_init.c
+
+# The wasm build: VM + allocator + error boundary + the runtime.
+WASM_SRCS := puffin-vm.c wasm/wasm-gc.c wasm/wasm-host.c $(RUNTIME_SRCS)
 
 WASM_CFLAGS := -Wall -Wextra -O2 \
 	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
@@ -106,7 +106,29 @@ $(WASM_CC)-check:
 	  exit 1; \
 	}
 
-clean:
-	rm -f $(BIN) $(WASM_BIN)
+# ---------------------------------------------------------------
+# GC-seam test (native). docs/WASM-VM.md §3.2/§3.3.
+# ---------------------------------------------------------------
+# Builds the VM natively but through the SAME seam the wasm build
+# uses: the runtime is compiled from source against wasm/include/gc.h
+# and linked against wasm/wasm-gc.c (the wasm allocator) INSTEAD of
+# Boehm -- no libpuffin.a, no vendored GC. This exercises the wasm GC
+# seam end-to-end on the host, so wasm-gc.c can be verified against the
+# full corpus (and, once it lands, the §3.3 mark-sweep collector under
+# PUFFIN_VM_GC_STRESS) WITHOUT the wasi-sdk. wasm/wasm-host.c is
+# excluded: its --wrap=exit / host_abort import is wasm-only; native
+# exit() is libc's. Run the differential oracle with:
+#   tools/gctest-corpus.sh   (diffs puffin-vm-gctest vs puffin-vm)
+GCTEST_BIN  := ../../bin/puffin-vm-gctest
+GCTEST_SRCS := puffin-vm.c wasm/wasm-gc.c $(RUNTIME_SRCS)
+GCTEST_CFLAGS := -Wall -Wextra -O2 -I wasm/include -I ../runtime
 
-.PHONY: all clean wasm $(WASM_CC)-check
+gctest: $(GCTEST_BIN)
+$(GCTEST_BIN): $(GCTEST_SRCS) vm-prims.inc ../runtime/puffin.h wasm/wasm-gc.c wasm/include/gc.h
+	$(CC) $(GCTEST_CFLAGS) $(GCTEST_SRCS) -o $(GCTEST_BIN)
+	@echo "built $(GCTEST_BIN) (native VM through the wasm GC seam)"
+
+clean:
+	rm -f $(BIN) $(WASM_BIN) $(GCTEST_BIN)
+
+.PHONY: all clean wasm gctest $(WASM_CC)-check
