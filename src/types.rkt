@@ -314,6 +314,26 @@
           (subst res tenv)]
          [_ (type-error "~a: applying a non-function of type ~a" where ft)]))
 
+     ;; collect the binders a quasiquote pattern introduces. Every
+     ;; quasiquote datum is dynamic, so each binder is typed _ -- the
+     ;; point is only that they ENTER the env. Without this, a pattern
+     ;; var like x in `(add ,x ,y) is invisible and a later reference
+     ;; falls through `lookup` to a same-named TOP-LEVEL binding (the
+     ;; bug this fixes). `depth` tracks nested quasiquote/unquote; an
+     ;; unquote at depth 1 is a binding position whose sub is an
+     ;; ordinary match pattern (reuse pattern-bindings for its names).
+     (define (qq-pattern-binds tmpl depth)
+       (match tmpl
+         [`(,(or 'unquote 'unquote-splicing) ,sub)
+          (if (= depth 1)
+              (map (λ (b) (cons (car b) '_)) (pattern-bindings sub '_))
+              (qq-pattern-binds sub (sub1 depth)))]
+         [`(quasiquote ,inner) (qq-pattern-binds inner (add1 depth))]
+         [(? pair?)
+          (append (if (eq? (car tmpl) '...) '() (qq-pattern-binds (car tmpl) depth))
+                  (qq-pattern-binds (cdr tmpl) depth))]
+         [_ '()]))
+
      ;; pattern: returns bindings ((x . t) ...) and checks ctor shapes
      (define (pattern-bindings pat scrut-t)
        (match pat
@@ -328,7 +348,7 @@
                   '())]
             [else (list (cons s (if (eq? scrut-t '_) '_ scrut-t)))])]
          [`(quote ,_) '()]
-         [`(quasiquote ,_) '()]   ;; s-expression data: dynamic
+         [`(quasiquote ,tmpl) (qq-pattern-binds tmpl 1)]   ;; data is dynamic; bind vars to _
          [(? fixnum?) '()] [(? boolean?) '()] [(? string?) '()]
          [`(cons ,p0 ,p1)
           (define-values (a d)
@@ -439,6 +459,16 @@
          [`(while ,g ,body ...)
           (synth g env) (synth-body body env) 'Void]
          [`(set! ,x ,e0)
+          ;; SOUNDNESS INVARIANT (do not "fix" by adding narrowing):
+          ;; the checker deliberately does NO occurrence typing, so a
+          ;; variable's type is its declared/inferred type everywhere,
+          ;; and this consistency check is all mutation needs. If flow
+          ;; narrowing is ever added, it MUST refuse to refine any
+          ;; variable that is set! anywhere (the Typed-Racket rule) --
+          ;; otherwise a mutation could invalidate a narrowed fact. No
+          ;; effect system is required for that; the assigned-var set
+          ;; is a one-pass syntactic property. (Puffin has no unions to
+          ;; narrow by design; `_` is the dynamic-dispatch mechanism.)
           (define xt (lookup env x))
           (define et (synth e0 env))
           (unless (consistent? et xt)

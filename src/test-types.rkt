@@ -66,4 +66,16 @@
            (if (null? xs) 0 (+ (car xs) (sum (cdr xs)))))
          (sum (list 1 2 3))")
 
+;; quasiquote pattern binders enter the env (typed _) rather than
+;; falling through to a same-named top-level binding. Both programs
+;; below were REJECTED before the fix: the pattern var picked up the
+;; concrete top-level type. `,x` (plain unquote) and `,ps ...`
+;; (ellipsis) exercise both binding positions.
+(admits "(: x Str) (define x \"top\")
+         (define (ev e) (match e [`(add ,x ,y) (+ x y)] [_ 0]))
+         (ev `(add 1 2))")
+(admits "(: ps Str) (define ps \"top\")
+         (define (f e) (match e [`(,a ,ps ...) (car ps)] [_ 0]))
+         (f `(1 2 3))")
+
 (displayln "type tests: all passed")
