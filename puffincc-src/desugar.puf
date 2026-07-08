@@ -10,8 +10,14 @@
 
 (require "tables.puf")
 (require "system.puf")
+(require "types.puf")
 
 (define (desugar p)
+  ;; gradual typecheck first (docs/TYPES.md): desugar is the funnel
+  ;; every route passes through, so checking here covers the
+  ;; interpreter, the chain, and both backends. Types then erase
+  ;; below; unannotated code cannot fail.
+  (typecheck-program p)
   ;; the #:when clause marker: puffincc's reader reads it as a
   ;; symbol, but the host Racket reader would read a keyword, so it
   ;; is built from its string here rather than written literally
