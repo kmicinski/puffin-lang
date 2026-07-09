@@ -15,3 +15,8 @@ compiled/
 \#*\#
 .\#*
 .claude/
+
+# generated browser VM artifacts (tools/gen-web-vm.sh)
+web/public/*.wasm
+web/public/*.pbc
+bin/puffin-vm.wasm
