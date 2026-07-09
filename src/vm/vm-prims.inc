@@ -74,6 +74,7 @@ extern pf pf_command_line_args(void);
 extern pf pf_system(pf);
 extern pf pf_make_closure(pf);
 extern pf pf_string_const(pf);
+extern pf pf_bytes_to_string(pf);
 
 static const vm_prim vm_prims[] = {
   {"read", 0, (vm_prim_fn)pf_read_int},
@@ -148,6 +149,7 @@ static const vm_prim vm_prims[] = {
   {"system", 1, (vm_prim_fn)pf_system},
   {"make-closure", 1, (vm_prim_fn)pf_make_closure},
   {"string-const", 1, (vm_prim_fn)pf_string_const},
+  {"bytes->string", 1, (vm_prim_fn)pf_bytes_to_string},
 };
 
-enum { VM_PRIM_COUNT = 72 };
+enum { VM_PRIM_COUNT = 73 };

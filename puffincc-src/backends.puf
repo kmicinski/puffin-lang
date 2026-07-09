@@ -1660,3 +1660,507 @@
        ".text\n.p2align 2\n"
        (bk-cat (map per-defn defns))
        (bk-data-segment info)))]))
+
+;; =====================================================================
+;; The bytecode backend (mirrors src/backend-bytecode.rkt; format in
+;; docs/BYTECODE.md, frozen v1). Everything after uncover-locals for
+;; target 'bytecode:
+;;
+;;   select-instructions-bc   blocks IR -> bytecode instrs over
+;;                            (var x)/(stage k) slot operands
+;;   allocate-slots-bc        number locals (formals first, rest
+;;                            sorted) + staging area; resolve operands
+;;                            to slot indices (replaces regalloc)
+;;   linearize-bc             order blocks, lower two-way branches,
+;;                            drop fall-through jumps (replaces patch)
+;;   render-pbc               binary encoding of the unit into a
+;;                            *byte string* (Puffin strings are byte
+;;                            strings; write-file writes bytes)
+;;
+;; No open-coding at v1: every prim is a PRIM call through the
+;; manifest-ordered table. Deterministic output: same program, same
+;; bytes (the bootstrap fixpoint discipline extends to .pbc).
+;; =====================================================================
+
+;; prim ids: a prim's INDEX in the manifest. prim-table (tables.puf)
+;; is generated from src/stdlib.rkt in manifest order -- the same
+;; order the reference backend and the VM's generated table use -- so
+;; ids agree by construction.
+(define bc-prim-names (map car prim-table))
+(: bc-prim-id (-> Sym Int))
+(define (bc-prim-id op) (bk-index-of-table bc-prim-names op))
+
+;; drop the last element of a list (the prelude has no drop-right)
+(define (bc-drop-last xs)
+  (if (or (null? xs) (null? (cdr xs)))
+      '()
+      (cons (car xs) (bc-drop-last (cdr xs)))))
+
+;; map f over xs with a 0-based index: (f x i)
+(define (bc-map-index f xs)
+  (let loop ([xs xs] [i 0])
+    (if (null? xs)
+        '()
+        (cons (f (car xs) i) (loop (cdr xs) (+ i 1))))))
+
+;; concatenate a list of byte-lists (each append copies only its
+;; first argument, so this is linear in the total byte count)
+(define (bc-append-all chunks) (foldr append '() chunks))
+
+;; variadic concatenation of byte-lists: the prelude's `append` is
+;; BINARY, so (bc-app a b c ...) would silently drop everything past
+;; the second argument (calls are not arity-checked). bc-app takes
+;; any number of lists and appends them all.
+(define (bc-app . parts) (foldr append '() parts))
+
+;; ---------------------------------------------------------------------
+;; select-instructions-bc
+;;
+;; Slot operands: (var x) for a named local, (stage k) for slot k of
+;; the per-function staging area (call arguments + literal
+;; materialization). Literals never appear as instruction operands:
+;; they are staged with IMM/SYM first, so every operand is a slot.
+;; ---------------------------------------------------------------------
+
+(define (select-instructions-bc p)
+  (define tables (bk-scan-literals p))
+  (define symbol-table (first tables))
+  (define string-table (second tables))
+  ;; an atom as a "loadable": (var x) | (lit tagged-word) | (symlit i)
+  (define (h-atom a)
+    (match a
+      [`(void)        `(lit ,void-value)]
+      [`(nil)         `(lit ,nil-value)]
+      [(? fixnum? n)  `(lit ,(tag-fixnum n))]
+      [(? boolean? b) `(lit ,(if b true-value false-value))]
+      [`(quote ,s)    `(symlit ,(bk-index-of-table symbol-table s))]
+      [(? symbol? x)  `(var ,x)]))
+  ;; load an atom into destination slot d
+  (define (load-into d a)
+    (match (h-atom a)
+      [`(var ,x)    `((mov ,d (var ,x)))]
+      [`(lit ,w)    `((imm ,d ,w))]
+      [`(symlit ,i) `((sym ,d ,i))]))
+  ;; an atom as a *source* operand: returns (list instrs slot),
+  ;; staging literals in staging slot k
+  (define (src-operand a k)
+    (match (h-atom a)
+      [`(var ,x) (list '() `(var ,x))]
+      [_         (list (load-into `(stage ,k) a) `(stage ,k))]))
+  ;; stage call arguments into (stage 0..n-1)
+  (define (stage-args args)
+    (let loop ([as args] [i 0])
+      (if (null? as)
+          '()
+          (bc-app (load-into `(stage ,i) (car as)) (loop (cdr as) (+ i 1))))))
+  ;; calls, shared by assign/effect/tail positions. dst = #f => tail.
+  (define (emit-call dst rator args arity)
+    (define n (length args))
+    (match rator
+      [`(fun-ref ,f)
+       (bc-app (stage-args args)
+               (list (if dst
+                         `(call ,dst ,f (stage 0) ,n ,arity)
+                         `(tcall ,f (stage 0) ,n ,arity))))]
+      [a
+       ;; the callee value is read before the VM copies the staged
+       ;; arguments, so staging slot n is a safe home for it
+       (define is+fs (src-operand a n))
+       (bc-app (stage-args args)
+               (first is+fs)
+               (list (if dst
+                         `(calli ,dst ,(second is+fs) (stage 0) ,n ,arity)
+                         `(tcalli ,(second is+fs) (stage 0) ,n ,arity))))]))
+  ;; a non-tail rhs computed into destination slot d
+  (define (rhs->instrs rhs d)
+    (match rhs
+      [`(+ ,a0 ,a1)
+       (define p0 (src-operand a0 0))
+       (define p1 (src-operand a1 1))
+       (bc-app (first p0) (first p1) (list `(add ,d ,(second p0) ,(second p1))))]
+      [`(- ,a)
+       (define p0 (src-operand a 0))
+       (bc-app (first p0) (list `(neg ,d ,(second p0))))]
+      [`(* ,a0 ,a1)
+       (define p0 (src-operand a0 0))
+       (define p1 (src-operand a1 1))
+       (bc-app (first p0) (first p1) (list `(mul ,d ,(second p0) ,(second p1))))]
+      [`(,(? shrunk-cmp? cmp) ,a0 ,a1)
+       (define p0 (src-operand a0 0))
+       (define p1 (src-operand a1 1))
+       (define opc (if (eq? cmp 'eq?) 'eq 'lt))
+       (bc-app (first p0) (first p1) (list `(,opc ,d ,(second p0) ,(second p1))))]
+      [`(unsafe-vector-ref ,a ,i)
+       (define p0 (src-operand a 0))
+       (bc-app (first p0) (list `(uget ,d ,(second p0) ,i)))]
+      [`(fun-ref ,f)
+       (list `(funref ,d ,f))]
+      [`(string-lit ,s)
+       (list `(str ,d ,(bk-index-of-table string-table s)))]
+      [`(global-ref ,i)
+       (list `(gget ,d ,i))]
+      [`(app (fun-ref ,f) ,args ...)     (emit-call d `(fun-ref ,f) args (length args))]
+      [`(papp ,n (fun-ref ,f) ,args ...) (emit-call d `(fun-ref ,f) args n)]
+      [`(app ,a-f ,args ...)             (emit-call d a-f args (length args))]
+      [`(papp ,n ,a-f ,args ...)         (emit-call d a-f args n)]
+      [`(,(? stdlib-prim? op) ,args ...)
+       (bc-app (stage-args args)
+               (list `(prim ,d ,(bc-prim-id op) (stage 0) ,(length args))))]
+      ;; a bare atom
+      [a (load-into d a)]))
+  (define (h seq)
+    (match seq
+      [`(return ,a)
+       (define p0 (src-operand a 0))
+       (bc-app (first p0) (list `(ret ,(second p0))))]
+      [`(tail-app ,n (fun-ref ,f) ,args ...)
+       (emit-call #f `(fun-ref ,f) args n)]
+      [`(tail-app ,n ,a-f ,args ...)
+       (emit-call #f a-f args n)]
+      [`(seq (assign ,x ,rhs) ,rst)
+       (bc-app (rhs->instrs rhs `(var ,x)) (h rst))]
+      [`(seq (effect ,rhs) ,rst)
+       ;; result discarded: staging slot 0 is a fine home (dead after)
+       (bc-app (rhs->instrs rhs `(stage 0)) (h rst))]
+      [`(seq (global-set! ,i ,a) ,rst)
+       (define p0 (src-operand a 0))
+       (bc-app (first p0) (list `(gset ,i ,(second p0))) (h rst))]
+      [`(seq (unsafe-vector-set! ,a0 ,i ,a-v) ,rst)
+       (define p0 (src-operand a0 0))
+       (define p1 (src-operand a-v 1))
+       (bc-app (first p0) (first p1) (list `(uset ,(second p0) ,i ,(second p1))) (h rst))]
+      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
+       ;; the first goto is taken when the comparison holds
+       (define cc (cond [(eq? cmp 'eq?) 'eq]
+                        [(eq? cmp '<) 'lt]
+                        [(eq? cmp '<=) 'le]
+                        [(eq? cmp '>) 'gt]
+                        [else 'ge]))
+       (define p0 (src-operand a0 0))
+       (define p1 (src-operand a1 1))
+       (bc-app (first p0) (first p1) (list `(br ,cc ,(second p0) ,(second p1) ,l0 ,l1)))]
+      [`(goto ,l)
+       (list `(jmp ,l))]))
+  (define (per-defn defn)
+    (match defn
+      [`(define ,locals (,f ,args ...) ,blocks)
+       (define blocks-sel
+         (foldl (lambda (l acc) (hash-set acc l (h (hash-ref blocks l))))
+                (hash) (hash-keys blocks)))
+       ;; variadic prologue: COLLECT builds the #%rest list, must be
+       ;; the entry block's first instruction (the physical argument
+       ;; values still sit in slots 0..5).
+       (define mi (index-of args '#%rest))
+       (define args+
+         (if mi (bc-app (take args mi) (list (list-ref args (add1 mi)))) args))
+       (define blocks+
+         (if mi
+             (hash-set blocks-sel f
+                       (cons `(collect (var ,(list-ref args (add1 mi))) ,mi)
+                             (hash-ref blocks-sel f)))
+             blocks-sel))
+       (define info (hash 'locals locals 'variadic (if mi #t #f) 'kfixed (if mi mi 0)))
+       `(define ,info (,f ,@args+) ,blocks+)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,(hash-set (hash-set info 'symbols symbol-table) 'strings string-table)
+               ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; allocate-slots-bc: formals first (they receive the arguments),
+;; remaining locals sorted, then the staging area. The frame is at
+;; least 6 slots so any call site may deliver up to six physical
+;; arguments (variadics receive them without owning that many named
+;; formals).
+;; ---------------------------------------------------------------------
+
+;; instruction slot-operand positions (0-based, past the opcode)
+(define bc-slot-positions
+  (hash 'mov '(0 1) 'imm '(0) 'sym '(0) 'str '(0) 'funref '(0)
+        'gget '(0) 'gset '(1)
+        'neg '(0 1) 'add '(0 1 2) 'mul '(0 1 2) 'lt '(0 1 2) 'eq '(0 1 2)
+        'jmp '() 'br '(1 2)
+        'call '(0 2) 'calli '(0 1 2) 'tcall '(1) 'tcalli '(0 1)
+        'prim '(0 2) 'collect '(0)
+        'uget '(0 1) 'uset '(0 2)
+        'ret '(0)))
+
+(define (allocate-slots-bc p)
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,formals ...) ,blocks)
+       (define locals (hash-ref info 'locals))
+       ;; every (var x) mentioned anywhere gets a slot, not just the
+       ;; uncovered locals: a read-only-but-never-assigned variable
+       ;; (a match-clause predicate on a path never executed) is read
+       ;; without ever being assigned; slots are zero-seeded (fixnum 0).
+       (define mentioned (make-set))
+       (bk-for-each
+        (lambda (l)
+          (bk-for-each
+           (lambda (i)
+             (bk-for-each
+              (lambda (o) (match o [`(var ,x) (set-add! mentioned x)] [_ (void)]))
+              (cdr i)))
+           (hash-ref blocks l)))
+        (hash-keys blocks))
+       (define all-vars (set-union locals (list->set (set->list mentioned))))
+       (define others
+         (sort (filter (lambda (x) (and (not (member x formals)) (not (eq? x '#%rest))))
+                       (set->list all-vars))
+               symbol<?))
+       (define ordered (bc-app formals others))
+       (define slot-of
+         (let loop ([xs ordered] [i 0] [acc (hash)])
+           (if (null? xs) acc (loop (cdr xs) (+ i 1) (hash-set acc (car xs) i)))))
+       (define nbase (length ordered))
+       (define max-stage -1)
+       (define (resolve op)
+         (match op
+           [`(var ,x) (hash-ref slot-of x)]
+           [`(stage ,k) (begin (when (> k max-stage) (set! max-stage k)) (+ nbase k))]))
+       (define (resolve-instr i)
+         (match i
+           [`(,op ,ops ...)
+            (define positions (hash-ref bc-slot-positions op))
+            (list (cons op
+                        (bc-map-index
+                         (lambda (o k) (if (member k positions) (resolve o) o))
+                         ops)))]))
+       (define blocks+
+         (foldl (lambda (l acc) (hash-set acc l (append-map resolve-instr (hash-ref blocks l))))
+                (hash) (hash-keys blocks)))
+       ;; every frame holds >= 6 slots: an indirect call may deliver
+       ;; up to six physical argument values before the callee looks
+       (define nlocals (max 6 (+ nbase (add1 max-stage))))
+       `(define ,(hash-set (hash-set info 'nlocals nlocals) 'nformals (length formals))
+          (,f ,@formals) ,blocks+)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; linearize-bc: block ordering + branch lowering. Output per defn is
+;; one flat list of (label l) markers and instructions; the two-way
+;; (br cc a b l0 l1) becomes (br cc a b l0) -- taken when cc holds --
+;; followed by (jmp l1), and jumps to the immediately following label
+;; are dropped.
+;; ---------------------------------------------------------------------
+
+(define (linearize-bc p)
+  (define (per-defn defn)
+    (match defn
+      [`(define ,info (,f ,formals ...) ,blocks)
+       ;; entry first, then DFS favoring fall-through (an unconditional
+       ;; jump's target, or a branch's *else* target, comes next)
+       (define visited (make-set))
+       (define order '())
+       (define (chain l)
+         (when (and (hash-has-key? blocks l) (not (set-member? visited l)))
+           (set-add! visited l)
+           (set! order (cons l order))
+           (match (last (hash-ref blocks l))
+             [`(jmp ,m) (chain m)]
+             [`(br ,_ ,_ ,_ ,l0 ,l1) (begin (chain l1) (chain l0))]
+             [_ (void)])))
+       (chain f)
+       ;; unreachable blocks (possible at -O0) go last, sorted
+       (bk-for-each chain (sort (hash-keys blocks) symbol<?))
+       (define labels (reverse order))
+       (define nlabels (length labels))
+       (define items
+         (bc-append-all
+          (bc-map-index
+           (lambda (l k)
+             (define next (if (< (+ k 1) nlabels) (list-ref labels (+ k 1)) #f))
+             (define is (hash-ref blocks l))
+             (define lowered
+               (append
+                (bc-drop-last is)
+                (match (last is)
+                  [`(jmp ,m) (if (equal? m next) '() (list `(jmp ,m)))]
+                  [`(br ,cc ,a ,b ,l0 ,l1)
+                   (if (equal? l1 next)
+                       (list `(br ,cc ,a ,b ,l0))
+                       (list `(br ,cc ,a ,b ,l0) `(jmp ,l1)))]
+                  [i (list i)])))
+             (cons `(label ,l) lowered))
+           labels)))
+       `(define ,info (,f ,@formals) ,items)]))
+  (match p
+    [`(program ,info ,defns ...)
+     `(program ,info ,@(map per-defn defns))]))
+
+;; ---------------------------------------------------------------------
+;; render-pbc: encode the unit (docs/BYTECODE.md). Little-endian
+;; throughout, into a Puffin byte string. Deterministic.
+;; ---------------------------------------------------------------------
+
+(define bc-version 1)
+
+;; opcode numbers -- keep in sync with docs/BYTECODE.md and
+;; src/vm/puffin-vm.c (any change bumps bc-version)
+(define bc-opcodes
+  (hash 'mov 1 'imm 2 'imm8 3 'sym 4 'str 5 'funref 6
+        'neg 7 'add 8 'mul 9 'lt 10 'eq 11
+        'jmp 12 'br-eq 13 'br-lt 14 'br-le 15 'br-gt 16 'br-ge 17
+        'call 18 'calli 19 'tcall 20 'tcalli 21
+        'prim 22 'collect 23
+        'uget 24 'uset 25
+        'gget 26 'gset 27
+        'ret 28))
+
+(define (bc-imm8? w) (and (>= w -128) (< w 128)))
+
+;; little-endian byte lists (two's-complement for negatives: the
+;; runtime's arithmetic-shift is sign-extending and bitwise-and works
+;; on tagged fixnums directly)
+(define (bc-u8 n) (list (bitwise-and n 255)))
+(define (bc-le n nbytes)
+  (let loop ([k 0] [v n] [acc '()])
+    (if (eq? k nbytes)
+        (reverse acc)
+        (loop (+ k 1) (arithmetic-shift v -8) (cons (bitwise-and v 255) acc)))))
+(define (bc-u16 n) (bc-le n 2))
+(define (bc-u32 n) (bc-le n 4))
+(define (bc-i64 n) (bc-le n 8))
+
+;; byte size of an encoded instruction
+(define (bc-instr-size i)
+  (match i
+    [`(label ,_) 0]
+    [`(imm ,_ ,w) (if (bc-imm8? w) 4 11)]
+    [`(,op ,ops ...)
+     (cond
+       [(eq? op 'mov) 5]
+       [(eq? op 'sym) 5] [(eq? op 'str) 5] [(eq? op 'funref) 5]
+       [(eq? op 'gget) 5] [(eq? op 'gset) 5]
+       [(eq? op 'neg) 5]
+       [(eq? op 'add) 7] [(eq? op 'mul) 7] [(eq? op 'lt) 7] [(eq? op 'eq) 7]
+       [(eq? op 'jmp) 5]
+       [(eq? op 'br) 9]
+       [(eq? op 'call) 10] [(eq? op 'calli) 10]
+       [(eq? op 'tcall) 8] [(eq? op 'tcalli) 8]
+       [(eq? op 'prim) 8]
+       [(eq? op 'collect) 4]
+       [(eq? op 'uget) 6] [(eq? op 'uset) 6]
+       [(eq? op 'ret) 3]
+       [else (error "bc-instr-size: unknown op")])]))
+
+(define (render-pbc p)
+  (define info (program-info p))
+  (define defns (program-defns p))
+  (define symbols (hash-ref/default info 'symbols '()))
+  (define strings (hash-ref/default info 'strings '()))
+  (define n-globals (hash-ref/default info 'globals 0))
+  (define fun-names
+    (map (lambda (d) (match d [`(define ,_ (,f ,_ ...) ,_) f])) defns))
+  (define fun-idx
+    (let loop ([xs fun-names] [i 0] [acc (hash)])
+      (if (null? xs) acc (loop (cdr xs) (+ i 1) (hash-set acc (car xs) i)))))
+  (define entry-idx (hash-ref fun-idx entry-symbol))
+  (define (opcode name) (bc-u8 (hash-ref bc-opcodes name)))
+  ;; the bytes of a Puffin (byte) string
+  (define (str-bytes s)
+    (let loop ([i 0] [acc '()])
+      (if (< i (string-length s))
+          (loop (+ i 1) (cons (string-byte s i) acc))
+          (reverse acc))))
+  ;; length-prefixed byte string: u32 len ++ bytes
+  (define (lstr s)
+    (define bs (str-bytes s))
+    (bc-app (bc-u32 (length bs)) bs))
+  ;; ---- encode one function's items to a byte list -----------------
+  (define (encode-fun items)
+    (define offsets
+      (let loop ([its items] [off 0] [acc (hash)])
+        (match its
+          ['() acc]
+          [`((label ,l) . ,rest) (loop rest off (hash-set acc l off))]
+          [`(,i . ,rest) (loop rest (+ off (bc-instr-size i)) acc)])))
+    (define (label-off l) (hash-ref offsets l))
+    (define (enc i)
+      (match i
+        [`(label ,_) '()]
+        [`(mov ,d ,s)    (bc-app (opcode 'mov) (bc-u16 d) (bc-u16 s))]
+        [`(imm ,d ,w)
+         (if (bc-imm8? w)
+             (bc-app (opcode 'imm8) (bc-u16 d) (bc-u8 (bitwise-and w 255)))
+             (bc-app (opcode 'imm) (bc-u16 d) (bc-i64 w)))]
+        [`(sym ,d ,i2)   (bc-app (opcode 'sym) (bc-u16 d) (bc-u16 i2))]
+        [`(str ,d ,i2)   (bc-app (opcode 'str) (bc-u16 d) (bc-u16 i2))]
+        [`(funref ,d ,ff) (bc-app (opcode 'funref) (bc-u16 d) (bc-u16 (hash-ref fun-idx ff)))]
+        [`(neg ,d ,a)    (bc-app (opcode 'neg) (bc-u16 d) (bc-u16 a))]
+        [`(add ,d ,a ,b) (bc-app (opcode 'add) (bc-u16 d) (bc-u16 a) (bc-u16 b))]
+        [`(mul ,d ,a ,b) (bc-app (opcode 'mul) (bc-u16 d) (bc-u16 a) (bc-u16 b))]
+        [`(lt ,d ,a ,b)  (bc-app (opcode 'lt) (bc-u16 d) (bc-u16 a) (bc-u16 b))]
+        [`(eq ,d ,a ,b)  (bc-app (opcode 'eq) (bc-u16 d) (bc-u16 a) (bc-u16 b))]
+        [`(jmp ,l)       (bc-app (opcode 'jmp) (bc-u32 (label-off l)))]
+        [`(br ,cc ,a ,b ,l)
+         (define opname (cond [(eq? cc 'eq) 'br-eq] [(eq? cc 'lt) 'br-lt]
+                              [(eq? cc 'le) 'br-le] [(eq? cc 'gt) 'br-gt]
+                              [else 'br-ge]))
+         (bc-app (opcode opname) (bc-u16 a) (bc-u16 b) (bc-u32 (label-off l)))]
+        [`(call ,d ,ff ,base ,n ,ar)
+         (bc-app (opcode 'call) (bc-u16 d) (bc-u16 (hash-ref fun-idx ff)) (bc-u16 base) (bc-u8 n) (bc-u16 ar))]
+        [`(calli ,d ,fs ,base ,n ,ar)
+         (bc-app (opcode 'calli) (bc-u16 d) (bc-u16 fs) (bc-u16 base) (bc-u8 n) (bc-u16 ar))]
+        [`(tcall ,ff ,base ,n ,ar)
+         (bc-app (opcode 'tcall) (bc-u16 (hash-ref fun-idx ff)) (bc-u16 base) (bc-u8 n) (bc-u16 ar))]
+        [`(tcalli ,fs ,base ,n ,ar)
+         (bc-app (opcode 'tcalli) (bc-u16 fs) (bc-u16 base) (bc-u8 n) (bc-u16 ar))]
+        [`(prim ,d ,pid ,base ,n)
+         (bc-app (opcode 'prim) (bc-u16 d) (bc-u16 pid) (bc-u16 base) (bc-u8 n))]
+        [`(collect ,d ,k) (bc-app (opcode 'collect) (bc-u16 d) (bc-u8 k))]
+        [`(uget ,d ,a ,i2) (bc-app (opcode 'uget) (bc-u16 d) (bc-u16 a) (bc-u8 i2))]
+        [`(uset ,a ,i2 ,s) (bc-app (opcode 'uset) (bc-u16 a) (bc-u8 i2) (bc-u16 s))]
+        [`(gget ,d ,g) (bc-app (opcode 'gget) (bc-u16 d) (bc-u16 g))]
+        [`(gset ,g ,s) (bc-app (opcode 'gset) (bc-u16 g) (bc-u16 s))]
+        [`(ret ,s) (bc-app (opcode 'ret) (bc-u16 s))]))
+    (foldr (lambda (i acc) (bc-app (enc i) acc)) '() items))
+  ;; ---- per-function code + table rows -----------------------------
+  (define encoded
+    (map (lambda (d) (match d [`(define ,_ (,_ ,_ ...) ,items) (encode-fun items)])) defns))
+  (define enc-lengths (map length encoded))
+  (define code-offsets
+    (let loop ([ls enc-lengths] [off 0] [acc '()])
+      (if (null? ls) (reverse acc) (loop (cdr ls) (+ off (car ls)) (cons off acc)))))
+  (define total-code (bc-append-all encoded))
+  (define total-code-len (length total-code))
+  ;; ---- the unit ----------------------------------------------------
+  (define header
+    (bc-app (list 80 85 70 1)      ;; 'P' 'U' 'F' 0x01
+            (bc-u32 bc-version)
+            (bc-u32 0)))           ;; reserved
+  (define symtab
+    (bc-app (bc-u32 (length symbols))
+            (foldr (lambda (s acc) (bc-app (lstr (symbol->string s)) acc)) '() symbols)))
+  (define strtab
+    (bc-app (bc-u32 (length strings))
+            (foldr (lambda (s acc) (bc-app (lstr s) acc)) '() strings)))
+  (define globals-sec (bc-u32 n-globals))
+  (define (fun-row d elen off)
+    (match d
+      [`(define ,dinfo (,f ,formals ...) ,_)
+       (bc-app (lstr (symbol->string f))
+               (bc-u32 (length formals))
+               (bc-u8 (if (hash-ref dinfo 'variadic) 1 0))
+               (bc-u8 (hash-ref dinfo 'kfixed))
+               (bc-u16 0)           ;; pad
+               (bc-u32 (hash-ref dinfo 'nlocals))
+               (bc-u32 off)
+               (bc-u32 elen))]))
+  (define (fun-rows ds els offs)
+    (if (null? ds)
+        '()
+        (bc-app (fun-row (car ds) (car els) (car offs))
+                (fun-rows (cdr ds) (cdr els) (cdr offs)))))
+  (define funtab
+    (bc-app (bc-u32 (length defns))
+            (fun-rows defns enc-lengths code-offsets)))
+  (define trailer
+    (bc-app (bc-u32 entry-idx)
+            (bc-u32 total-code-len)
+            total-code))
+  (bytes->string
+   (bc-append-all (list header symtab strtab globals-sec funtab trailer))))

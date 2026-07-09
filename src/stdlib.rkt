@@ -307,7 +307,16 @@
    ;; string-const materializes the i-th string literal; only the
    ;; desugared form (string-lit s) lowers to it.
    (prim-spec 'string-const 1 'pf_string_const #f #f
-              "INTERNAL: the i-th string literal in the constant table.")))
+              "INTERNAL: the i-th string literal in the constant table.")
+   ;; bytes->string builds a byte string from a list of byte values
+   ;; (0-255): the char-free way to EMIT binary output, used by the
+   ;; bytecode backend's render-pbc to assemble a .pbc unit. The
+   ;; inverse of string-byte. Appended to the manifest, so every
+   ;; existing prim id (a manifest index) is unchanged -- .pbc bytes
+   ;; for programs that never call it are byte-identical.
+   (prim-spec 'bytes->string 1 'pf_bytes_to_string #f
+              (λ (lst) (list->string (map integer->char lst)))
+              "INTERNAL: a byte string from a list of byte values 0-255.")))
 
 ;; ---------------------------------------------------------------------
 ;; Derived views (used by irs.rkt, the backends, and interpreters.rkt)

@@ -96,17 +96,27 @@
         (cons 'uncover-locals uncover-locals)))
 
 (define (backend-chain)
-  (if (eq? current-target 'x86-64)
-      (list (cons 'select-instructions select-instructions-x86)
-            (cons 'allocate-registers allocate-registers-x86)
-            (cons 'patch-instructions patch-instructions-x86)
-            (cons 'prelude-and-conclusion prelude-and-conclusion-x86)
-            (cons 'render-asm render-x86))
-      (list (cons 'select-instructions select-instructions-arm64)
-            (cons 'allocate-registers allocate-registers-arm64)
-            (cons 'patch-instructions patch-instructions-arm64)
-            (cons 'prelude-and-conclusion prelude-and-conclusion-arm64)
-            (cons 'render-asm render-arm64))))
+  (cond
+    ;; bytecode target: cut after uncover-locals, same as native, but
+    ;; target the frame-slot VM (docs/BYTECODE.md). render-pbc yields
+    ;; a byte string that IS the .pbc artifact -- no assembler/linker.
+    [(eq? current-target 'bytecode)
+     (list (cons 'select-instructions select-instructions-bc)
+           (cons 'allocate-slots allocate-slots-bc)
+           (cons 'linearize linearize-bc)
+           (cons 'render-pbc render-pbc))]
+    [(eq? current-target 'x86-64)
+     (list (cons 'select-instructions select-instructions-x86)
+           (cons 'allocate-registers allocate-registers-x86)
+           (cons 'patch-instructions patch-instructions-x86)
+           (cons 'prelude-and-conclusion prelude-and-conclusion-x86)
+           (cons 'render-asm render-x86))]
+    [else
+     (list (cons 'select-instructions select-instructions-arm64)
+           (cons 'allocate-registers allocate-registers-arm64)
+           (cons 'patch-instructions patch-instructions-arm64)
+           (cons 'prelude-and-conclusion prelude-and-conclusion-arm64)
+           (cons 'render-asm render-arm64))]))
 
 ;; render an IR readably for diffing: hashes/sets become sorted,
 ;; tagged lists (src/diff-ir.rkt normalizes the reference the same
@@ -239,6 +249,10 @@
        (let ([result (compile-forms forms)])
          (cond
            [(eq? result 'dumped) (void)]
+           ;; bytecode: result is the .pbc byte string. write-file
+           ;; writes its bytes verbatim (no clang, no .s check).
+           [(eq? current-target 'bytecode)
+            (if opt-output (write-file opt-output result) (display result))]
            [(not opt-output) (display result)]
            [(ends-with? opt-output ".s") (write-file opt-output result)]
            [else (assemble-and-link result opt-output)]))))]
