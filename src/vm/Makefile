@@ -42,8 +42,9 @@ vm-prims.inc: ../stdlib.rkt ../gen-vm-prims.rkt
 # ---------------------------------------------------------------
 
 # Install location of wasi-sdk (override on the command line if you
-# put it elsewhere: `make wasm WASI_SDK=/path/to/wasi-sdk`).
-WASI_SDK    ?= /opt/wasi-sdk
+# put it elsewhere: `make wasm WASI_SDK=/path/to/wasi-sdk`). Prefer a
+# no-sudo ~/opt/wasi-sdk install if present, else the system /opt path.
+WASI_SDK    ?= $(if $(wildcard $(HOME)/opt/wasi-sdk),$(HOME)/opt/wasi-sdk,/opt/wasi-sdk)
 WASM_CC     := $(WASI_SDK)/bin/clang
 WASM_SYSROOT := $(WASI_SDK)/share/wasi-sysroot
 WASM_BIN    := ../../bin/puffin-vm.wasm

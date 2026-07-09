@@ -16,14 +16,25 @@ extern pf pf_cons(pf, pf);                                    // lib/pairs.c
 
 // argv, captured before the generated main runs. Apple's dyld and
 // glibc both pass (argc, argv, envp) to constructor functions, so no
-// codegen cooperation is needed.
+// codegen cooperation is needed on native.
 static int pf_saved_argc = 0;
 static char **pf_saved_argv = NULL;
 
+#ifndef __wasm__
 __attribute__((constructor)) static void pf_capture_args(int argc, char **argv) {
   pf_saved_argc = argc;
   pf_saved_argv = argv;
 }
+#else
+// wasm has no ctor-with-args ABI (wasm-ld: "constructor functions
+// cannot take arguments"). The reactor host sets argv explicitly via
+// pf_set_args before invoking a puffincc unit (docs/WASM-VM.md §5.1);
+// until then command-line-args is empty.
+void pf_set_args(int argc, char **argv) {
+  pf_saved_argc = argc;
+  pf_saved_argv = argv;
+}
+#endif
 
 static const char *cstr_of(pf v) {
   pf_expect_kind(v, PF_KIND_STRING);
@@ -83,11 +94,20 @@ pf pf_command_line_args(void) {
   return args;
 }
 
-// (system cmd): run a shell command, return its exit code
+// (system cmd): run a shell command, return its exit code. Native
+// only: the wasm VM has no subprocesses, and puffincc's -t bytecode
+// path (the only path the browser runs) never shells out -- bytecode
+// is the final artifact, no assembler/linker step (docs/WASM-VM.md).
 pf pf_system(pf cmd) {
+#ifdef __wasm__
+  (void)cmd;
+  pf_fatal("system: subprocesses are unavailable in the wasm VM");
+  return PF_VOID; // unreachable
+#else
   int rc = system(cstr_of(cmd));
   if (rc == -1) pf_fatal("system: fork failed");
   return PF_FIX((int64_t)(rc >> 8) & 0xFF);
+#endif
 }
 
 void pf_lib_io_init(void) {}
