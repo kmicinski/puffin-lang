@@ -72,6 +72,25 @@ pf pf_string_concat(pf xs) {
   return out;
 }
 
+// (bytes->string xs): a fresh string whose bytes are the LIST of
+// fixnum byte values xs (each masked to 0-255). The char-free way to
+// BUILD binary output (backends.puf's .pbc renderer assembles a unit
+// this way); the inverse of string-byte. Embedded NULs are fine --
+// the length is the list length, not strlen.
+pf pf_bytes_to_string(pf xs) {
+  int64_t n = 0;
+  for (pf p = xs; p != PF_NIL; p = pf_heap_ptr(p)[2]) {
+    pf_expect_kind(p, PF_KIND_PAIR);
+    n++;
+  }
+  pf out = pf_alloc_atomic(PF_KIND_STRING, n, n + 1);
+  char *w = (char *)(pf_heap_ptr(out) + 1);
+  for (pf p = xs; p != PF_NIL; p = pf_heap_ptr(p)[2])
+    *w++ = (char)(PF_UNFIX(pf_heap_ptr(p)[1]) & 0xFF);
+  *w = '\0';
+  return out;
+}
+
 pf pf_string_huh(pf v) { return PF_BOOL(pf_is_kind(v, PF_KIND_STRING)); }
 
 pf pf_symbol_to_string(pf v) {
