@@ -517,17 +517,25 @@ static void disassemble(void) {
 // Entry
 // ---------------------------------------------------------------
 
+extern void pf_set_args(int argc, char **argv); // lib/io.c
+
 int main(int argc, char **argv) {
   int dis = 0;
   const char *path = NULL;
+  int path_idx = 0;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-d") == 0) dis = 1;
-    else if (!path) path = argv[i];
+    else if (!path) { path = argv[i]; path_idx = i; }
   }
   if (!path) {
     fprintf(stderr, "usage: puffin-vm [-d] prog.pbc [args...]\n");
     return 2;
   }
+  // Forward the hosted program's own argv: argv[0] = the unit path,
+  // argv[1..] = everything after it. So (command-line-args) inside the
+  // running unit — e.g. puffincc compiling under the VM — sees its own
+  // args, not the VM's. (The io.c ctor captured the VM's raw argv.)
+  pf_set_args(argc - path_idx, &argv[path_idx]);
   const char *depth = getenv("PUFFIN_VM_MAX_DEPTH");
   if (depth) cmax = (size_t)atoll(depth);
 

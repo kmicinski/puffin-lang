@@ -25,16 +25,16 @@ __attribute__((constructor)) static void pf_capture_args(int argc, char **argv) 
   pf_saved_argc = argc;
   pf_saved_argv = argv;
 }
-#else
-// wasm has no ctor-with-args ABI (wasm-ld: "constructor functions
-// cannot take arguments"). The reactor host sets argv explicitly via
-// pf_set_args before invoking a puffincc unit (docs/WASM-VM.md §5.1);
-// until then command-line-args is empty.
+#endif
+// Override the captured argv. The bytecode VM uses this to forward a
+// HOSTED program's own args: `puffin-vm puffincc.pbc foo.puf -o x` must
+// give puffincc command-line-args (foo.puf -o x), not the VM's argv.
+// On wasm there is no ctor-with-args ABI, so this is the ONLY way argv
+// arrives; the reactor sets it before each unit (docs/WASM-VM.md §5.1).
 void pf_set_args(int argc, char **argv) {
   pf_saved_argc = argc;
   pf_saved_argv = argv;
 }
-#endif
 
 static const char *cstr_of(pf v) {
   pf_expect_kind(v, PF_KIND_STRING);
