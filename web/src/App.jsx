@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, For, Show, lazy, Suspense } from 'solid-js';
 import { createEditor, setupMonaco } from './monaco-setup.js';
 import { EXAMPLES } from './examples.js';
+import { engineName } from './engine/index.js';
 
 // pipeline visualizer (and its 449KB sample trace) load on demand
 const Pipeline = lazy(() => import('./Pipeline.jsx'));
@@ -128,6 +129,10 @@ export default function App() {
       input: parseStdin(stdinText()),
       files: files(),
       entry: files() ? 'main.puf' : null,
+      // engine is resolved on the main thread: a Web Worker's
+      // `location` is the worker script's URL, not the page's, so the
+      // worker can't read ?engine= itself.
+      engine: engineName(),
     });
   }
 

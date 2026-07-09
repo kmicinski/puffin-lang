@@ -5,7 +5,7 @@
 // doesn't flood the message channel but output still streams while
 // the (synchronous) interpreter is running.
 
-import { run } from './engine/index.js';
+import { run, setEngine } from './engine/index.js';
 
 let buffer = '';
 let lastFlush = 0;
@@ -23,13 +23,16 @@ function out(s) {
   if (buffer.length > 8192 || Date.now() - lastFlush > 50) flush();
 }
 
-onmessage = (e) => {
+onmessage = async (e) => {
   const msg = e.data;
   if (msg.type !== 'run') return;
+  if (msg.engine) setEngine(msg.engine); // resolved on the main thread
   const t0 = performance.now();
   let res;
   try {
-    res = run(msg.source, {
+    // run() is async (the VM engine compiles on the wasm VM); the JS
+    // interpreter path resolves immediately.
+    res = await run(msg.source, {
       input: msg.input, onOutput: out,
       files: msg.files || null, entry: msg.entry || null,
     });

@@ -21,8 +21,8 @@
 // escape hatch (§7.3) before web/src/puffin/ is deleted (§7.4).
 
 // ---- the default (JS interpreter) surface, re-exported verbatim ----
+import { run as jsRun } from '../puffin/index.js';
 export {
-  run,
   Session,
   render,
   defaultInput,
@@ -35,12 +35,23 @@ export {
 } from '../puffin/index.js';
 
 // ---- the VM engine, available but gated (see vm-engine.js) ----
+import { run as vmRun } from './vm-engine.js';
 export {
   runUnit as vmRunUnit,
   vmAvailable,
   EngineNotReady,
 } from './vm-engine.js';
 export { PuffinAbort } from './wasi-shim.js';
+
+// run(source, opts) dispatches on the selected engine. The VM path
+// (?engine=vm) compiles+typechecks with the real puffincc on the wasm
+// VM; the default 'js' path is the hand-written interpreter. Always
+// async so callers await uniformly (jsRun is sync -> resolves at once).
+// docs/WASM-VM.md §7.1: the JS interp stays default until VM parity
+// (Phase 3) + the VM REPL (Phase 4) land.
+export async function run(source, opts = {}) {
+  return engineName() === 'vm' ? vmRun(source, opts) : jsRun(source, opts);
+}
 
 // Which engine should this session use? 'js' (default) or 'vm'.
 // Sources, in order: an explicit override, the ?engine= query param,

@@ -100,16 +100,80 @@ export async function runUnit(pbcBytes, { input, stdin, onOutput, files } = {}) 
   }
 }
 
+// puffincc, compiled to bytecode: the compiler that runs ON the VM to
+// turn editor source into a runnable unit (docs/WASM-VM.md §5.1).
+let puffinccBytes = null;
+async function puffinccPbc() {
+  if (puffinccBytes) return puffinccBytes;
+  let resp;
+  try { resp = await fetch(PUFFINCC_PBC_URL); }
+  catch (e) { throw new EngineNotReady(`cannot fetch ${PUFFINCC_PBC_URL}: ${e.message}`); }
+  if (!resp.ok) {
+    throw new EngineNotReady(
+      `${PUFFINCC_PBC_URL} not found (HTTP ${resp.status}). Generate it: \`tools/gen-web-vm.sh\`.`);
+  }
+  puffinccBytes = new Uint8Array(await resp.arrayBuffer());
+  return puffinccBytes;
+}
+
+// Instantiate the VM once against an in-memory FS and run to _start's
+// completion. Returns the shim (its .fs holds anything written) plus
+// the exit disposition.
+async function execUnit({ files, args, stdin, onOutput }) {
+  const module = await vmModule();
+  const shim = new WasiShim({ stdin, onOutput: onOutput || (() => {}), files, args });
+  const instance = await WebAssembly.instantiate(module, shim.imports());
+  shim.bindMemory(instance.exports.memory);
+  let aborted = false, code = 0;
+  try { instance.exports._start(); }
+  catch (e) {
+    if (e instanceof PuffinAbort) { aborted = true; code = e.code; }
+    else throw e;
+  }
+  return { shim, aborted, code };
+}
+
 // ---- the engine interface (§5.1) -------------------------------
 
-// run(source, opts): compile source to bytecode on the VM, then run
-// it -- the endpoint that retires the JS interpreter. Gated on the
-// reactor-style VM + puffincc.pbc (M5).
-export async function run(_source, _opts = {}) {
-  await vmModule(); // surface the "wasm missing" gate first
-  throw new EngineNotReady(
-    'VM run(): in-browser compilation needs the reactor-style VM exports and puffincc.pbc (docs/WASM-VM.md §5.1, milestone M5). ' +
-    'Precompiled units run today via runUnit(); the façade falls back to the JS interpreter for source.');
+// run(source, opts): compile source to bytecode with puffincc-on-the-VM
+// (typechecking it), then run the resulting unit -- the endpoint that
+// replaces the JS interpreter. Two command-model instances share the
+// shim's JS-side FS: no reactor needed (proven by web/test-vm-compile.mjs).
+//   opts: { input, stdin, onOutput, files, entry }
+export async function run(source, opts = {}) {
+  const { input, stdin, onOutput, files, entry } = opts;
+  const out = onOutput || (() => {});
+  const cc = await puffinccPbc();
+  const enc = new TextEncoder();
+
+  // FS: the compiler unit + the program's module file(s).
+  const fs = { '/puffincc.pbc': cc };
+  let entryPath;
+  if (files) {
+    for (const [name, src] of Object.entries(files)) fs['/' + name] = enc.encode(src);
+    entryPath = '/' + (entry || 'main.puf');
+  } else {
+    fs['/main.puf'] = enc.encode(source);
+    entryPath = '/main.puf';
+  }
+
+  // 1. compile + typecheck on the VM. Diagnostics (typecheck/parse
+  //    errors) are captured, not streamed as program output, matching
+  //    the JS interpreter (errors are returned, not printed).
+  let diag = '';
+  const compile = await execUnit({
+    files: fs,
+    args: ['/puffincc.pbc', entryPath, '-t', 'bytecode', '-o', '/out.pbc'],
+    stdin: new Uint8Array(0),
+    onOutput: (s) => { diag += s; },
+  });
+  const outPbc = compile.shim.fs.get('/out.pbc');
+  if (!outPbc || outPbc.length === 0) {
+    return { ok: false, error: diag.trim() || `compiler exited with code ${compile.code}` };
+  }
+
+  // 2. run the compiled unit with the user's stdin, streaming output.
+  return runUnit(outPbc, { input, stdin, onOutput: out });
 }
 
 // Session: REPL over link-by-name units (§5.2). Gated on REPL-mode
