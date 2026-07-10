@@ -1,10 +1,14 @@
-// puffin-vm.c -- the Puffin bytecode VM (docs/WASM-VM.md M2, native
+// puffin-vm.c -- the Puffin bytecode VM (docs/WASM-VM.md M2/M5, native
 // build; docs/BYTECODE.md is the format contract).
 //
-//   puffin-vm prog.pbc [args...]     load and run a unit
-//   puffin-vm -d prog.pbc            disassemble a unit
+//   puffin-vm prog.pbc [args...]      load and run a unit
+//   puffin-vm -d prog.pbc             disassemble a unit
+//   puffin-vm --session u1.pbc u2...  ONE session, MANY units (REPL
+//                                     semantics: v2 units link their
+//                                     named globals into the shared
+//                                     session cell table)
 //
-// Design (docs/WASM-VM.md §3):
+// Design (docs/WASM-VM.md §3, §5.2):
 //  - The VM *hosts* the existing runtime: this file links against
 //    src/runtime/libpuffin.a (core.c + lib/*.c + vendored Boehm) and
 //    calls the same pf_* entry points native code calls. Values are
@@ -20,8 +24,23 @@
 //    prologue's COLLECT spilling the six argument slots to
 //    pf_arg_spill and calling pf_collect_rest -- the very same C
 //    function, unchanged.
-//  - M2 uses Boehm as-is (native build); the linear-memory collector
-//    with safepoint discipline is M4's work.
+//  - MULTI-UNIT SESSIONS (M5): one VM instance may load many units.
+//    Each unit's functions append to ONE global function table, so a
+//    closure's slot-0 function index (biased by the unit's func_base
+//    at FUNREF time) stays valid across units -- a closure made in
+//    unit A calls correctly from unit B. Symbols intern globally at
+//    load (eq? agreement across units, as always); string caches are
+//    per unit. v1 (whole-program) units keep private zero-seeded
+//    globals; v2 (REPL) units link their NAMED globals into the
+//    session cell table, cells seeded with the unbound sentinel
+//    #<undef> (immediate 34) so reading a never-defined name is an
+//    error carrying the variable's name.
+//  - The wasm reactor build (-DPVM_REACTOR, `make wasm-repl`) exports
+//    pvm_boot/pvm_alloc/pvm_load_run so the browser engine drives a
+//    persistent session: one heap, one cell table, many evals.
+//    Results of REPL top-level expressions are delivered through the
+//    RESULT opcode -> vm_host_repl_result (a host import on wasm; on
+//    native builds each result prints as its own stdout line).
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,12 +63,13 @@ extern pf pf_print_result(pf);
 extern pf pf_collect_rest(pf, pf);
 extern pf pf_arg_spill[8];
 extern pf pf_string_from_bytes(const char *, int64_t);
+extern pf pf_to_string(pf);
 extern void *pf_alloc_raw(int64_t);
 
-// Boehm: frame chunks are malloc'd and registered as root regions
-// (allocating 8 MB blocks from the GC heap itself trips its
-// large-block warning on stderr, and frame slots are roots, not
-// collectable objects).
+// Boehm (native) / wasm-gc.c (wasm): malloc'd arrays that hold pf
+// values (frame chunks, unit string caches, unit globals, session
+// cells) are registered as root regions so every live slot is
+// scanned. The metadata around them stays plain malloc memory.
 extern void GC_add_roots(void *low, void *high_plus_1);
 
 // The compiler's whole-program literal tables are weak externs in
@@ -59,6 +79,12 @@ const char *puffin_symbol_names[1] = {0};
 int64_t puffin_symbol_count = 0;
 const char *puffin_string_consts[1] = {0};
 int64_t puffin_string_const_count = 0;
+
+// The unbound-cell sentinel: immediate 34 = (4 << 3) | 2, reserved
+// after #f=2 #t=10 void=18 '()=26 (docs/WASM-VM.md §4). Session
+// cells seed to it; GGET of an undefined cell is a runtime error
+// naming the variable. It never appears in whole-program units.
+#define PF_UNDEF ((pf)34)
 
 // ---------------------------------------------------------------
 // The prim table, generated from the stdlib manifest (prim ids are
@@ -88,14 +114,17 @@ enum {
   OP_PRIM = 0x16, OP_COLLECT = 0x17,
   OP_UGET = 0x18, OP_USET = 0x19,
   OP_GGET = 0x1A, OP_GSET = 0x1B,
-  OP_RET = 0x1C,
+  OP_RET = 0x1C, OP_RESULT = 0x1D,
 };
 
-#define PBC_VERSION 1
+#define PBC_VERSION 1       // whole-program units
+#define PBC_VERSION_REPL 2  // REPL units: named globals, RESULT legal
 
 // ---------------------------------------------------------------
-// The unit
+// Units and the global function table
 // ---------------------------------------------------------------
+
+typedef struct Unit Unit;
 
 typedef struct {
   char *name;      // diagnostics
@@ -105,25 +134,82 @@ typedef struct {
   u32 nlocals;     // total frame slots (>= 6)
   u32 code_off;
   u32 code_len;
+  Unit *unit;      // owning unit: code base, literal tables, globals
 } VMFunc;
 
-typedef struct {
-  u32 nsyms;   pf *symvals;          // unit symbol id -> tagged symbol
+struct Unit {
+  u32 version;
+  u32 nsyms;   char **symnames;      // kept for disassembly
+  pf *symvals;                       // unit symbol id -> tagged symbol
   u32 nstrs;   char **strs; u32 *strlens;
-  pf *strcache;                      // lazy per-unit heap strings
-  u32 nglobals; pf *globals;
-  u32 nfuncs;  VMFunc *funcs;
-  u32 entry;
+  pf *strcache;                      // lazy per-unit heap strings (rooted)
+  u32 nglobals;
+  char **gnames;                     // v2 only: cell names
+  pf *globals;                       // v1: private array, fixnum-0 seeded (rooted)
+  pf **cells;                        // v2: session cells, by name (cells rooted)
+  u32 nfuncs;
+  u32 func_base;                     // index of this unit's funcs[0] in the global table
+  u32 entry;                         // unit-local entry function index
   u8 *code;    u32 code_len;
-} Unit;
+};
 
-// Static so the GC's data-segment scan roots the globals array, the
-// string cache, and (transitively) the frame chunks.
-static Unit U;
+static VMFunc *funcs = NULL;
+static u32 total_funcs = 0, funcs_cap = 0;
 
 static void vm_die(const char *msg) {
+  fflush(stdout);
   fprintf(stderr, "puffin-vm: %s\n", msg);
   exit(255);
+}
+
+static void *xmalloc(size_t n) {
+  void *p = malloc(n ? n : 1);
+  if (!p) vm_die("out of memory");
+  return p;
+}
+
+// malloc'd, zeroed, and registered as a GC root region: for arrays
+// that hold live pf values outside the GC heap.
+static void *rooted_alloc(size_t bytes) {
+  void *p = xmalloc(bytes ? bytes : 8);
+  memset(p, 0, bytes ? bytes : 8);
+  GC_add_roots(p, (char *)p + (bytes ? bytes : 8));
+  return p;
+}
+
+// ---------------------------------------------------------------
+// The session cell table (docs/WASM-VM.md §5.2): mangled name -> one
+// pf cell, shared by every v2 unit in the session. Cells live in
+// fixed blocks (each block a registered root region, never moved);
+// the name index is plain malloc'd metadata.
+// ---------------------------------------------------------------
+
+#define CELL_BLOCK 256
+static pf *cell_block = NULL;      // current block
+static u32 cell_block_used = CELL_BLOCK;
+static char **cell_names = NULL;   // name per cell, session-wide
+static pf **cell_ptrs = NULL;
+static u32 ncells = 0, cells_cap = 0;
+
+static pf *session_cell(const char *name) {
+  for (u32 i = 0; i < ncells; i++)
+    if (strcmp(cell_names[i], name) == 0) return cell_ptrs[i];
+  if (cell_block_used == CELL_BLOCK) {
+    cell_block = rooted_alloc(CELL_BLOCK * sizeof(pf));
+    for (u32 i = 0; i < CELL_BLOCK; i++) cell_block[i] = PF_UNDEF;
+    cell_block_used = 0;
+  }
+  pf *cell = &cell_block[cell_block_used++];
+  if (ncells == cells_cap) {
+    cells_cap = cells_cap ? cells_cap * 2 : 128;
+    cell_names = realloc(cell_names, cells_cap * sizeof(char *));
+    cell_ptrs = realloc(cell_ptrs, cells_cap * sizeof(pf *));
+    if (!cell_names || !cell_ptrs) vm_die("out of memory (cell table)");
+  }
+  cell_names[ncells] = strdup(name);
+  cell_ptrs[ncells] = cell;
+  ncells++;
+  return cell;
 }
 
 // ---- loader -----------------------------------------------------
@@ -136,8 +222,7 @@ static u32 rd_u32(Rd *r) { if (r->p + 4 > r->end) vm_die("truncated unit"); u32 
 static char *rd_lstr(Rd *r, u32 *len_out) {
   u32 n = rd_u32(r);
   if (r->p + n > r->end) vm_die("truncated unit");
-  char *s = malloc(n + 1);
-  if (!s) vm_die("out of memory");
+  char *s = xmalloc(n + 1);
   memcpy(s, r->p, n);
   s[n] = 0;
   r->p += n;
@@ -145,33 +230,40 @@ static char *rd_lstr(Rd *r, u32 *len_out) {
   return s;
 }
 
-// Parse the malloc'd side of the unit (no GC yet: called before
-// pf_init so nothing here may allocate GC memory).
-static char **sym_names_tmp; // interned after pf_init
-
-static void load_unit(const u8 *buf, size_t len) {
+// Parse a unit out of `buf` (malloc side only -- copies everything it
+// keeps, so the caller may free buf afterward).
+static Unit *load_unit(const u8 *buf, size_t len) {
+  Unit *u = xmalloc(sizeof(Unit));
+  memset(u, 0, sizeof(Unit));
   Rd r = {buf, buf + len};
   if (len < 12 || buf[0] != 'P' || buf[1] != 'U' || buf[2] != 'F' || buf[3] != 1)
     vm_die("not a Puffin bytecode unit (bad magic)");
   r.p += 4;
-  u32 version = rd_u32(&r);
-  if (version != PBC_VERSION) {
-    fprintf(stderr, "puffin-vm: unit version %u, this VM implements %u\n", version, PBC_VERSION);
+  u->version = rd_u32(&r);
+  if (u->version != PBC_VERSION && u->version != PBC_VERSION_REPL) {
+    fflush(stdout);
+    fprintf(stderr, "puffin-vm: unit version %u, this VM implements %u and %u\n",
+            u->version, PBC_VERSION, PBC_VERSION_REPL);
     exit(255);
   }
   rd_u32(&r); // reserved
-  U.nsyms = rd_u32(&r);
-  sym_names_tmp = malloc(sizeof(char *) * (U.nsyms ? U.nsyms : 1));
-  for (u32 i = 0; i < U.nsyms; i++) sym_names_tmp[i] = rd_lstr(&r, NULL);
-  U.nstrs = rd_u32(&r);
-  U.strs = malloc(sizeof(char *) * (U.nstrs ? U.nstrs : 1));
-  U.strlens = malloc(sizeof(u32) * (U.nstrs ? U.nstrs : 1));
-  for (u32 i = 0; i < U.nstrs; i++) U.strs[i] = rd_lstr(&r, &U.strlens[i]);
-  U.nglobals = rd_u32(&r);
-  U.nfuncs = rd_u32(&r);
-  U.funcs = malloc(sizeof(VMFunc) * (U.nfuncs ? U.nfuncs : 1));
-  for (u32 i = 0; i < U.nfuncs; i++) {
-    VMFunc *f = &U.funcs[i];
+  u->nsyms = rd_u32(&r);
+  u->symnames = xmalloc(sizeof(char *) * (u->nsyms ? u->nsyms : 1));
+  for (u32 i = 0; i < u->nsyms; i++) u->symnames[i] = rd_lstr(&r, NULL);
+  u->nstrs = rd_u32(&r);
+  u->strs = xmalloc(sizeof(char *) * (u->nstrs ? u->nstrs : 1));
+  u->strlens = xmalloc(sizeof(u32) * (u->nstrs ? u->nstrs : 1));
+  for (u32 i = 0; i < u->nstrs; i++) u->strs[i] = rd_lstr(&r, &u->strlens[i]);
+  u->nglobals = rd_u32(&r);
+  if (u->version == PBC_VERSION_REPL) {
+    // v2: the globals section carries the cell NAMES (link-by-name)
+    u->gnames = xmalloc(sizeof(char *) * (u->nglobals ? u->nglobals : 1));
+    for (u32 i = 0; i < u->nglobals; i++) u->gnames[i] = rd_lstr(&r, NULL);
+  }
+  u->nfuncs = rd_u32(&r);
+  VMFunc *fs = xmalloc(sizeof(VMFunc) * (u->nfuncs ? u->nfuncs : 1));
+  for (u32 i = 0; i < u->nfuncs; i++) {
+    VMFunc *f = &fs[i];
     f->name = rd_lstr(&r, NULL);
     f->nformals = rd_u32(&r);
     f->variadic = rd_u8(&r);
@@ -180,28 +272,48 @@ static void load_unit(const u8 *buf, size_t len) {
     f->nlocals = rd_u32(&r);
     f->code_off = rd_u32(&r);
     f->code_len = rd_u32(&r);
+    f->unit = u;
     if (f->nlocals < 6) vm_die("function frame smaller than 6 slots");
   }
-  U.entry = rd_u32(&r);
-  if (U.entry >= U.nfuncs) vm_die("entry index out of range");
-  U.code_len = rd_u32(&r);
-  if (r.p + U.code_len > r.end) vm_die("truncated code section");
-  U.code = malloc(U.code_len ? U.code_len : 1);
-  memcpy(U.code, r.p, U.code_len);
-  for (u32 i = 0; i < U.nfuncs; i++)
-    if ((u64)U.funcs[i].code_off + U.funcs[i].code_len > U.code_len)
+  u->entry = rd_u32(&r);
+  if (u->entry >= u->nfuncs) vm_die("entry index out of range");
+  u->code_len = rd_u32(&r);
+  if (r.p + u->code_len > r.end) vm_die("truncated code section");
+  u->code = xmalloc(u->code_len ? u->code_len : 1);
+  memcpy(u->code, r.p, u->code_len);
+  for (u32 i = 0; i < u->nfuncs; i++)
+    if ((u64)fs[i].code_off + fs[i].code_len > u->code_len)
       vm_die("function code out of range");
+  // append this unit's functions to the global table (func_base is
+  // the bias FUNREF/CALL/TCALL apply to unit-relative indices)
+  if (total_funcs + u->nfuncs > funcs_cap) {
+    funcs_cap = funcs_cap ? funcs_cap : 256;
+    while (funcs_cap < total_funcs + u->nfuncs) funcs_cap *= 2;
+    funcs = realloc(funcs, funcs_cap * sizeof(VMFunc));
+    if (!funcs) vm_die("out of memory (function table)");
+  }
+  u->func_base = total_funcs;
+  memcpy(funcs + total_funcs, fs, u->nfuncs * sizeof(VMFunc));
+  total_funcs += u->nfuncs;
+  free(fs);
+  return u;
 }
 
-// GC-side unit finalization: intern symbols, seed globals/caches.
-static void finish_unit(void) {
-  U.symvals = pf_alloc_raw(sizeof(pf) * (U.nsyms ? U.nsyms : 1));
-  for (u32 i = 0; i < U.nsyms; i++)
-    U.symvals[i] = (pf_intern_symbol(sym_names_tmp[i]) << 3) | PF_TAG_SYMBOL;
-  U.strcache = pf_alloc_raw(sizeof(pf) * (U.nstrs ? U.nstrs : 1));
-  memset(U.strcache, 0, sizeof(pf) * (U.nstrs ? U.nstrs : 1));
-  U.globals = pf_alloc_raw(sizeof(pf) * (U.nglobals ? U.nglobals : 1));
-  memset(U.globals, 0, sizeof(pf) * (U.nglobals ? U.nglobals : 1)); // PF_FIX(0), like native .space
+// GC-side unit finalization (requires pf_init): intern symbols, seed
+// globals/caches, and -- for v2 -- link named globals to session cells.
+static void finish_unit(Unit *u) {
+  u->symvals = xmalloc(sizeof(pf) * (u->nsyms ? u->nsyms : 1));
+  for (u32 i = 0; i < u->nsyms; i++)
+    u->symvals[i] = (pf_intern_symbol(u->symnames[i]) << 3) | PF_TAG_SYMBOL;
+  u->strcache = rooted_alloc(sizeof(pf) * (u->nstrs ? u->nstrs : 1));
+  if (u->version == PBC_VERSION_REPL) {
+    u->cells = xmalloc(sizeof(pf *) * (u->nglobals ? u->nglobals : 1));
+    for (u32 i = 0; i < u->nglobals; i++)
+      u->cells[i] = session_cell(u->gnames[i]);
+  } else {
+    // v1: private zero-seeded array (PF_FIX(0)), like native .space
+    u->globals = rooted_alloc(sizeof(pf) * (u->nglobals ? u->nglobals : 1));
+  }
 }
 
 // ---------------------------------------------------------------
@@ -267,7 +379,7 @@ static void frame_free(VChunk *chunk, size_t top_before) {
 // ---------------------------------------------------------------
 
 typedef struct {
-  u32 func;      // function index
+  u32 func;      // GLOBAL function index
   u32 ret_ip;    // where THIS frame resumes after its pending call
   u32 dst;       // caller slot that receives this frame's result
   pf *slots;
@@ -290,21 +402,60 @@ static CFrame *cpush(void) {
   return &cstack[cdepth++];
 }
 
+// Reset execution state between session evals: a previous eval may
+// have aborted mid-run (docs/WASM-VM.md §3.4 -- the heap, cells, and
+// interned symbols survive; frames do not).
+static void reset_exec_state(void) {
+  cdepth = 0;
+  chunk_cur = chunk_head;
+  if (chunk_cur) chunk_cur->top = 0;
+}
+
+// ---------------------------------------------------------------
+// REPL result delivery (the RESULT opcode; docs/WASM-VM.md §5.2).
+// The value is rendered VM-side by the runtime's own value->string
+// so formatting is identical to display. On wasm the bytes go to the
+// host_repl_result import (wasm/wasm-host.c); natively each result
+// prints as its own stdout line (the transcript surface --session
+// runs produce).
+// ---------------------------------------------------------------
+
+#if defined(PVM_REACTOR) || defined(__wasi__)
+// wasm builds (command and reactor): wasm/wasm-host.c forwards to the
+// host_repl_result import (module "puffin", name "repl_result").
+extern void vm_host_repl_result(const char *bytes, i64 len);
+#else
+// native: each result prints as its own stdout line (the transcript
+// surface --session runs produce).
+static void vm_host_repl_result(const char *bytes, i64 len) {
+  fwrite(bytes, 1, (size_t)len, stdout);
+  fputc('\n', stdout);
+}
+#endif
+
+static void vm_deliver_result(pf v) {
+  if (v == PF_VOID) return;
+  pf s = pf_to_string(v);
+  i64 *p = pf_heap_ptr(s);
+  vm_host_repl_result((const char *)(p + 1), pf_len_of(s));
+}
+
 // ---------------------------------------------------------------
 // The dispatch loop
 // ---------------------------------------------------------------
 
-static pf vm_run(void) {
-  const VMFunc *fn = &U.funcs[U.entry];
+static pf vm_run(u32 entry_gidx) {
+  const VMFunc *fn = &funcs[entry_gidx];
+  Unit *un = fn->unit;
   CFrame *cf = cpush();
-  cf->func = U.entry;
+  cf->func = entry_gidx;
   cf->ret_ip = 0;
   cf->dst = 0;
   cf->slots = frame_alloc(fn->nlocals, &cf->chunk, &cf->top_before);
   cf->cap = fn->nlocals;
   memset(cf->slots, 0, fn->nlocals * sizeof(pf));
 
-  const u8 *code = U.code + fn->code_off;
+  const u8 *code = un->code + fn->code_off;
   u32 ip = 0;
   pf areg = PF_FIX(0); // the arity register (native r10/x12)
 
@@ -320,15 +471,15 @@ static pf vm_run(void) {
     case OP_MOV: { u16 d = RD16(), s = RD16(); cf->slots[d] = cf->slots[s]; break; }
     case OP_IMM: { u16 d = RD16(); i64 w = RD64(); cf->slots[d] = (pf)w; break; }
     case OP_IMM8: { u16 d = RD16(); i64 w = (int8_t)RD8(); cf->slots[d] = (pf)w; break; }
-    case OP_SYM: { u16 d = RD16(), i = RD16(); cf->slots[d] = U.symvals[i]; break; }
+    case OP_SYM: { u16 d = RD16(), i = RD16(); cf->slots[d] = un->symvals[i]; break; }
     case OP_STR: {
       u16 d = RD16(), i = RD16();
-      if (U.strcache[i] == 0)
-        U.strcache[i] = pf_string_from_bytes(U.strs[i], (int64_t)U.strlens[i]);
-      cf->slots[d] = U.strcache[i];
+      if (un->strcache[i] == 0)
+        un->strcache[i] = pf_string_from_bytes(un->strs[i], (int64_t)un->strlens[i]);
+      cf->slots[d] = un->strcache[i];
       break;
     }
-    case OP_FUNREF: { u16 d = RD16(), f = RD16(); cf->slots[d] = PF_FIX(f); break; }
+    case OP_FUNREF: { u16 d = RD16(), f = RD16(); cf->slots[d] = PF_FIX(un->func_base + f); break; }
     case OP_NEG: { u16 d = RD16(), a = RD16(); cf->slots[d] = (pf)(0 - (u64)cf->slots[a]); break; }
     case OP_ADD: { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = (pf)((u64)cf->slots[a] + (u64)cf->slots[b]); break; }
     case OP_MUL: { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = (pf)((u64)(cf->slots[a] >> 3) * (u64)cf->slots[b]); break; }
@@ -344,16 +495,16 @@ static pf vm_run(void) {
       u16 d = RD16();
       u32 fi;
       if (op == OP_CALL) {
-        fi = RD16();
+        fi = un->func_base + RD16();
       } else {
         u16 fs = RD16();
         pf v = cf->slots[fs];
-        if ((v & PF_TAG_MASK) != PF_TAG_FIXNUM || (u64)PF_UNFIX(v) >= U.nfuncs)
+        if ((v & PF_TAG_MASK) != PF_TAG_FIXNUM || (u64)PF_UNFIX(v) >= total_funcs)
           pf_fatal("application of a non-procedure");
         fi = (u32)PF_UNFIX(v);
       }
       u16 b = RD16(); u8 n = RD8(); u16 ar = RD16();
-      const VMFunc *g = &U.funcs[fi];
+      const VMFunc *g = &funcs[fi];
       cf->ret_ip = ip;
       CFrame *nf = cpush();
       cf = &cstack[cdepth - 2]; // cpush may realloc
@@ -366,23 +517,24 @@ static pf vm_run(void) {
       areg = PF_FIX(ar);
       cf = nf;
       fn = g;
-      code = U.code + g->code_off;
+      un = g->unit;
+      code = un->code + g->code_off;
       ip = 0;
       break;
     }
     case OP_TCALL: case OP_TCALLI: {
       u32 fi;
       if (op == OP_TCALL) {
-        fi = RD16();
+        fi = un->func_base + RD16();
       } else {
         u16 fs = RD16();
         pf v = cf->slots[fs];
-        if ((v & PF_TAG_MASK) != PF_TAG_FIXNUM || (u64)PF_UNFIX(v) >= U.nfuncs)
+        if ((v & PF_TAG_MASK) != PF_TAG_FIXNUM || (u64)PF_UNFIX(v) >= total_funcs)
           pf_fatal("application of a non-procedure");
         fi = (u32)PF_UNFIX(v);
       }
       u16 b = RD16(); u8 n = RD8(); u16 ar = RD16();
-      const VMFunc *g = &U.funcs[fi];
+      const VMFunc *g = &funcs[fi];
       if (g->nlocals <= cf->cap) {
         // frame reuse in place: staging slots sit at or above the
         // formal slots, so a forward memmove is safe
@@ -399,7 +551,8 @@ static pf vm_run(void) {
       cf->func = fi;
       areg = PF_FIX(ar);
       fn = g;
-      code = U.code + g->code_off;
+      un = g->unit;
+      code = un->code + g->code_off;
       ip = 0;
       break;
     }
@@ -427,8 +580,29 @@ static pf vm_run(void) {
     }
     case OP_UGET: { u16 d = RD16(), a = RD16(); u8 i = RD8(); cf->slots[d] = pf_heap_ptr(cf->slots[a])[1 + i]; break; }
     case OP_USET: { u16 a = RD16(); u8 i = RD8(); u16 s = RD16(); pf_heap_ptr(cf->slots[a])[1 + i] = cf->slots[s]; break; }
-    case OP_GGET: { u16 d = RD16(), g = RD16(); cf->slots[d] = U.globals[g]; break; }
-    case OP_GSET: { u16 g = RD16(), s = RD16(); U.globals[g] = cf->slots[s]; break; }
+    case OP_GGET: {
+      u16 d = RD16(), g = RD16();
+      if (un->cells) {
+        pf v = *un->cells[g];
+        if (v == PF_UNDEF) {
+          char msg[256];
+          snprintf(msg, sizeof msg, "%s: undefined; cannot reference an identifier before its definition",
+                   un->gnames[g]);
+          pf_fatal(msg);
+        }
+        cf->slots[d] = v;
+      } else {
+        cf->slots[d] = un->globals[g];
+      }
+      break;
+    }
+    case OP_GSET: {
+      u16 g = RD16(), s = RD16();
+      if (un->cells) *un->cells[g] = cf->slots[s];
+      else un->globals[g] = cf->slots[s];
+      break;
+    }
+    case OP_RESULT: { u16 s = RD16(); vm_deliver_result(cf->slots[s]); break; }
     case OP_RET: {
       u16 s = RD16();
       pf v = cf->slots[s];
@@ -438,36 +612,94 @@ static pf vm_run(void) {
       if (cdepth == 0) return v;
       cf = &cstack[cdepth - 1];
       cf->slots[rd] = v;
-      fn = &U.funcs[cf->func];
-      code = U.code + fn->code_off;
+      fn = &funcs[cf->func];
+      un = fn->unit;
+      code = un->code + fn->code_off;
       ip = cf->ret_ip;
       break;
     }
     default:
+      fflush(stdout);
       fprintf(stderr, "puffin-vm: illegal opcode 0x%02x at %s+%u\n", op, fn->name, ip - 1);
       exit(255);
     }
   }
 }
 
+// Load, link, and run one unit in the current session. v1 units
+// print their entry result (the native conclusion); v2 REPL units'
+// mains return void -- their results already flowed through RESULT.
+static pf run_unit_bytes(const u8 *buf, size_t len) {
+  Unit *u = load_unit(buf, len);
+  finish_unit(u);
+  pf result = vm_run(u->func_base + u->entry);
+  if (u->version == PBC_VERSION) pf_print_result(result);
+  return result;
+}
+
+// ---------------------------------------------------------------
+// Reactor entry points (wasm REPL sessions; docs/WASM-VM.md §5.2).
+// Built with -DPVM_REACTOR -mexec-model=reactor (`make wasm-repl`):
+// the host instantiates once, calls pvm_boot once, then
+// pvm_alloc+pvm_load_run per eval. Aborts (pf_error/pf_fatal ->
+// __wrap_exit -> host_abort throw) unwind to the host, which
+// restores __stack_pointer and keeps the instance: the heap, the
+// interned symbols, and the session cells survive; pvm_load_run
+// resets the frame stacks on entry.
+// ---------------------------------------------------------------
+
+#ifdef PVM_REACTOR
+
+__attribute__((export_name("pvm_boot")))
+void pvm_boot(void) {
+  static char *repl_argv[] = { (char *)"repl", NULL };
+  extern void pf_set_args(int argc, char **argv); // lib/io.c
+  pf_set_args(1, repl_argv);
+  const char *depth = getenv("PUFFIN_VM_MAX_DEPTH");
+  if (depth) cmax = (size_t)atoll(depth);
+  pf_init();
+}
+
+__attribute__((export_name("pvm_alloc")))
+void *pvm_alloc(int32_t n) {
+  return xmalloc((size_t)(n > 0 ? n : 1));
+}
+
+__attribute__((export_name("pvm_load_run")))
+int32_t pvm_load_run(uint8_t *buf, int32_t len) {
+  reset_exec_state();
+  run_unit_bytes(buf, (size_t)len);
+  free(buf);
+  fflush(stdout);
+  return 0;
+}
+
+#else // ---- native / command-model build ---------------------------
+
 // ---------------------------------------------------------------
 // Disassembler (puffin-vm -d unit.pbc): the debugging surface that
 // replaces reading .s files.
 // ---------------------------------------------------------------
 
-static void disassemble(void) {
-  printf("puffin bytecode unit, version %u\n", PBC_VERSION);
-  printf("symbols (%u):", U.nsyms);
-  for (u32 i = 0; i < U.nsyms; i++) printf(" %u=%s", i, sym_names_tmp[i]);
-  printf("\nstrings (%u):", U.nstrs);
-  for (u32 i = 0; i < U.nstrs; i++) printf(" %u=%.20s", i, U.strs[i]);
-  printf("\nglobals: %u\nentry: %u (%s)\n", U.nglobals, U.entry, U.funcs[U.entry].name);
-  for (u32 f = 0; f < U.nfuncs; f++) {
-    VMFunc *fn = &U.funcs[f];
+static void disassemble(Unit *u) {
+  printf("puffin bytecode unit, version %u\n", u->version);
+  printf("symbols (%u):", u->nsyms);
+  for (u32 i = 0; i < u->nsyms; i++) printf(" %u=%s", i, u->symnames[i]);
+  printf("\nstrings (%u):", u->nstrs);
+  for (u32 i = 0; i < u->nstrs; i++) printf(" %u=%.20s", i, u->strs[i]);
+  printf("\nglobals: %u", u->nglobals);
+  if (u->gnames) {
+    printf(" (named:");
+    for (u32 i = 0; i < u->nglobals; i++) printf(" %u=%s", i, u->gnames[i]);
+    printf(")");
+  }
+  printf("\nentry: %u (%s)\n", u->entry, funcs[u->func_base + u->entry].name);
+  for (u32 fidx = 0; fidx < u->nfuncs; fidx++) {
+    VMFunc *fn = &funcs[u->func_base + fidx];
     printf("\n[%u] %s: formals=%u%s locals=%u code=%u bytes\n",
-           f, fn->name, fn->nformals,
+           fidx, fn->name, fn->nformals,
            fn->variadic ? " variadic" : "", fn->nlocals, fn->code_len);
-    const u8 *code = U.code + fn->code_off;
+    const u8 *code = u->code + fn->code_off;
     u32 ip = 0;
     while (ip < fn->code_len) {
       printf("  %4u  ", ip);
@@ -476,9 +708,9 @@ static void disassemble(void) {
       case OP_MOV:  { u16 d = RD16(), s = RD16(); printf("mov   r%u, r%u\n", d, s); break; }
       case OP_IMM:  { u16 d = RD16(); i64 w = RD64(); printf("imm   r%u, %" PRId64 "\n", d, w); break; }
       case OP_IMM8: { u16 d = RD16(); i64 w = (int8_t)RD8(); printf("imm8  r%u, %" PRId64 "\n", d, w); break; }
-      case OP_SYM:  { u16 d = RD16(), i = RD16(); printf("sym   r%u, %s\n", d, sym_names_tmp[i]); break; }
-      case OP_STR:  { u16 d = RD16(), i = RD16(); printf("str   r%u, \"%.20s\"\n", d, U.strs[i]); break; }
-      case OP_FUNREF: { u16 d = RD16(), i = RD16(); printf("fnref r%u, %s\n", d, U.funcs[i].name); break; }
+      case OP_SYM:  { u16 d = RD16(), i = RD16(); printf("sym   r%u, %s\n", d, u->symnames[i]); break; }
+      case OP_STR:  { u16 d = RD16(), i = RD16(); printf("str   r%u, \"%.20s\"\n", d, u->strs[i]); break; }
+      case OP_FUNREF: { u16 d = RD16(), i = RD16(); printf("fnref r%u, %s\n", d, funcs[u->func_base + i].name); break; }
       case OP_NEG:  { u16 d = RD16(), a = RD16(); printf("neg   r%u, r%u\n", d, a); break; }
       case OP_ADD:  { u16 d = RD16(), a = RD16(), b = RD16(); printf("add   r%u, r%u, r%u\n", d, a, b); break; }
       case OP_MUL:  { u16 d = RD16(), a = RD16(), b = RD16(); printf("mul   r%u, r%u, r%u\n", d, a, b); break; }
@@ -492,11 +724,11 @@ static void disassemble(void) {
         break;
       }
       case OP_CALL:  { u16 d = RD16(), i = RD16(), b = RD16(); u8 n = RD8(); u16 ar = RD16();
-        printf("call  r%u, %s, base=r%u, n=%u, arity=%u\n", d, U.funcs[i].name, b, n, ar); break; }
+        printf("call  r%u, %s, base=r%u, n=%u, arity=%u\n", d, funcs[u->func_base + i].name, b, n, ar); break; }
       case OP_CALLI: { u16 d = RD16(), s = RD16(), b = RD16(); u8 n = RD8(); u16 ar = RD16();
         printf("calli r%u, r%u, base=r%u, n=%u, arity=%u\n", d, s, b, n, ar); break; }
       case OP_TCALL: { u16 i = RD16(), b = RD16(); u8 n = RD8(); u16 ar = RD16();
-        printf("tcall %s, base=r%u, n=%u, arity=%u\n", U.funcs[i].name, b, n, ar); break; }
+        printf("tcall %s, base=r%u, n=%u, arity=%u\n", funcs[u->func_base + i].name, b, n, ar); break; }
       case OP_TCALLI: { u16 s = RD16(), b = RD16(); u8 n = RD8(); u16 ar = RD16();
         printf("tcalli r%u, base=r%u, n=%u, arity=%u\n", s, b, n, ar); break; }
       case OP_PRIM: { u16 d = RD16(), p = RD16(), b = RD16(); u8 n = RD8();
@@ -504,9 +736,16 @@ static void disassemble(void) {
       case OP_COLLECT: { u16 d = RD16(); u8 k = RD8(); printf("collect r%u, kfixed=%u\n", d, k); break; }
       case OP_UGET: { u16 d = RD16(), a = RD16(); u8 i = RD8(); printf("uget  r%u, r%u[%u]\n", d, a, i); break; }
       case OP_USET: { u16 a = RD16(); u8 i = RD8(); u16 s = RD16(); printf("uset  r%u[%u], r%u\n", a, i, s); break; }
-      case OP_GGET: { u16 d = RD16(), g = RD16(); printf("gget  r%u, g%u\n", d, g); break; }
-      case OP_GSET: { u16 g = RD16(), s = RD16(); printf("gset  g%u, r%u\n", g, s); break; }
+      case OP_GGET: { u16 d = RD16(), g = RD16();
+        if (u->gnames) printf("gget  r%u, g%u (%s)\n", d, g, u->gnames[g]);
+        else printf("gget  r%u, g%u\n", d, g);
+        break; }
+      case OP_GSET: { u16 g = RD16(), s = RD16();
+        if (u->gnames) printf("gset  g%u (%s), r%u\n", g, u->gnames[g], s);
+        else printf("gset  g%u, r%u\n", g, s);
+        break; }
       case OP_RET:  { u16 s = RD16(); printf("ret   r%u\n", s); break; }
+      case OP_RESULT: { u16 s = RD16(); printf("result r%u\n", s); break; }
       default: printf("??    0x%02x\n", op); return;
       }
     }
@@ -517,36 +756,71 @@ static void disassemble(void) {
 // Entry
 // ---------------------------------------------------------------
 
-int main(int argc, char **argv) {
-  int dis = 0;
-  const char *path = NULL;
-  for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "-d") == 0) dis = 1;
-    else if (!path) path = argv[i];
-  }
-  if (!path) {
-    fprintf(stderr, "usage: puffin-vm [-d] prog.pbc [args...]\n");
-    return 2;
-  }
-  const char *depth = getenv("PUFFIN_VM_MAX_DEPTH");
-  if (depth) cmax = (size_t)atoll(depth);
+extern void pf_set_args(int argc, char **argv); // lib/io.c
 
+static u8 *read_file_bytes(const char *path, size_t *len_out) {
   FILE *f = fopen(path, "rb");
-  if (!f) { fprintf(stderr, "puffin-vm: cannot open %s\n", path); return 2; }
+  if (!f) { fflush(stdout); fprintf(stderr, "puffin-vm: cannot open %s\n", path); exit(2); }
   fseek(f, 0, SEEK_END);
   long n = ftell(f);
   fseek(f, 0, SEEK_SET);
-  u8 *buf = malloc(n > 0 ? (size_t)n : 1);
-  if (!buf) vm_die("out of memory");
+  u8 *buf = xmalloc(n > 0 ? (size_t)n : 1);
   if (n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) vm_die("short read");
   fclose(f);
+  *len_out = (size_t)(n > 0 ? n : 0);
+  return buf;
+}
 
-  load_unit(buf, (size_t)n);
-  if (dis) { disassemble(); return 0; }
+int main(int argc, char **argv) {
+  int dis = 0, session = 0;
+  const char *path = NULL;
+  int path_idx = 0;
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-d") == 0) dis = 1;
+    else if (strcmp(argv[i], "--session") == 0) session = 1;
+    else if (!path) { path = argv[i]; path_idx = i; }
+  }
+  if (!path) {
+    fprintf(stderr, "usage: puffin-vm [-d] prog.pbc [args...]\n"
+                    "       puffin-vm --session u1.pbc [u2.pbc ...]\n");
+    return 2;
+  }
+  // Forward the hosted program's own argv: argv[0] = the unit path,
+  // argv[1..] = everything after it. So (command-line-args) inside the
+  // running unit — e.g. puffincc compiling under the VM — sees its own
+  // args, not the VM's. (The io.c ctor captured the VM's raw argv.)
+  // In session mode every trailing argument is another unit, so the
+  // hosted argv is just the first unit's path.
+  pf_set_args(session ? 1 : argc - path_idx, &argv[path_idx]);
+  const char *depth = getenv("PUFFIN_VM_MAX_DEPTH");
+  if (depth) cmax = (size_t)atoll(depth);
+
+  if (dis) {
+    size_t n;
+    u8 *buf = read_file_bytes(path, &n);
+    Unit *u = load_unit(buf, n);
+    disassemble(u);
+    return 0;
+  }
 
   pf_init();
-  finish_unit();
-  pf result = vm_run();
-  pf_print_result(result);
+  if (session) {
+    // one session, many units: load+run each in order, one heap, one
+    // cell table -- the native mirror of the browser REPL
+    for (int i = path_idx; i < argc; i++) {
+      if (strcmp(argv[i], "--session") == 0) continue;
+      size_t n;
+      u8 *buf = read_file_bytes(argv[i], &n);
+      run_unit_bytes(buf, n);
+      free(buf);
+      reset_exec_state();
+    }
+    return 0;
+  }
+  size_t n;
+  u8 *buf = read_file_bytes(path, &n);
+  run_unit_bytes(buf, n);
   return 0;
 }
+
+#endif // PVM_REACTOR

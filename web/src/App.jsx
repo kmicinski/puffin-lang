@@ -308,7 +308,7 @@ export default function App() {
         <div class="brand">
           <span class="logo">🐧</span>
           <span class="name">Puffin</span>
-          <span class="target-note">interpreter</span>
+          <span class="target-note">puffincc · wasm vm</span>
         </div>
         <div class="mode-switch" role="tablist">
           <button classList={{ active: mode() === 'play' }} onClick={() => switchMode('play')}>Playground</button>

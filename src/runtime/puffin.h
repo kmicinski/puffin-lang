@@ -85,7 +85,12 @@ typedef int64_t pf; // a tagged Puffin value
 #define PF_KIND_MAX     64
 
 static inline int64_t *pf_heap_ptr(pf v)    { return (int64_t *)(v - PF_TAG_HEAP); }
-static inline pf       pf_heap_ref(void *p) { return ((pf)(intptr_t)p) | PF_TAG_HEAP; }
+// Route the pointer->pf cast through uintptr_t, not intptr_t: on
+// wasm32 intptr_t is 32-bit, so an address above 2 GB would
+// sign-extend into the tag bits and corrupt the value. uintptr_t
+// zero-extends. Native-safe (identical codegen on LP64). See
+// docs/WASM-VM.md §2.1.
+static inline pf       pf_heap_ref(void *p) { return ((pf)(uintptr_t)p) | PF_TAG_HEAP; }
 static inline int      pf_is_heap(pf v)     { return (v & PF_TAG_MASK) == PF_TAG_HEAP; }
 static inline int      pf_kind_of(pf v)     { return (int)(pf_heap_ptr(v)[0] & 0xFF); }
 static inline int64_t  pf_len_of(pf v)      { return pf_heap_ptr(v)[0] >> 8; }

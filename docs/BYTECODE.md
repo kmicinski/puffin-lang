@@ -1,13 +1,19 @@
-# The Puffin bytecode (.pbc), version 1
+# The Puffin bytecode (.pbc), versions 1 and 2
 
-> **Status:** IMPLEMENTED (docs/WASM-VM.md milestones M1–M2, variant
-> B). This document is the format contract — the lockstep surface
-> between the bytecode backend (src/backend-bytecode.rkt, later
-> backends.puf) and the VM (src/vm/puffin-vm.c). Any change to an
-> encoding, an opcode, or the unit layout bumps the version word,
-> and the VM refuses versions it does not implement. The format is
-> **not** a stable distribution contract: the compiler and the VM
-> ship together; nothing archives .pbc files.
+> **Status:** IMPLEMENTED (docs/WASM-VM.md milestones M1–M2 for v1;
+> M5's REPL units are v2). This document is the format contract — the
+> lockstep surface between the bytecode backend
+> (src/backend-bytecode.rkt and backends.puf) and the VM
+> (src/vm/puffin-vm.c). Any change to an encoding, an opcode, or the
+> unit layout bumps the version word, and the VM refuses versions it
+> does not implement. The format is **not** a stable distribution
+> contract: the compiler and the VM ship together; nothing archives
+> .pbc files.
+>
+> **Version 1** is a whole-program unit. **Version 2** is a REPL unit
+> (`--repl`; docs/WASM-VM.md §4/§5.2): identical layout except the
+> globals section carries the cells' NAMES (§3.1) and the RESULT
+> opcode may appear. v1 bytes are unchanged by v2's existence.
 
 ## 0. Quick use
 
@@ -16,7 +22,12 @@ bin/puffin -t bytecode prog.puf          # compile to a unit and run it on the V
 bin/puffin -c -t bytecode prog.puf       # produce prog.pbc
 bin/puffin-vm prog.pbc                   # run a unit
 bin/puffin-vm -d prog.pbc                # disassemble a unit
+bin/puffin-vm --session u1.pbc u2.pbc    # one SESSION, many units (REPL semantics)
+racket src/main.rkt -f --repl -o e.pbc e.puf   # compile one REPL eval (v2)
+build/puffincc --repl e.puf -o e.pbc     # same, self-hosted
+build/puffincc --repl-prelude -o p.pbc   # the prelude as a REPL unit
 make -C src/vm                           # build bin/puffin-vm (native)
+make -C src/vm wasm wasm-repl            # the wasm command + reactor builds
 racket src/test.rkt -m bytecode -O 0     # the golden corpus through this route
 ```
 
@@ -100,13 +111,12 @@ strings (`u32 len` + bytes; embedded NULs legal in the string pool).
 
 ```
 header    'P' 'U' 'F' 0x01            4 bytes of magic
-          u32 version                 this document: 1
+          u32 version                 1 = whole-program, 2 = REPL unit
           u32 reserved                0
 symtab    u32 n, then n names         every symbol literal in the unit
 strtab    u32 n, then n byte strings  the string-lit pool
-globals   u32 count                   (v1: whole-program units carry no
-                                       names; the REPL's link-by-name
-                                       table is a later version)
+globals   u32 count                   v1: count only (private array)
+          [v2 only] count names       cell names, index order (§3.1)
 funcs     u32 n, then per function:
             name                      length-prefixed (diagnostics only)
             u32 nformals
@@ -129,10 +139,38 @@ symbols — the same promise MODULES.md §3 makes for separate native
 compilation, by the same mechanism. String literals materialize
 **lazily, once per literal per unit** (the `pf_string_const` cache
 behavior, kept: repeated evaluation of one literal is `eq?`).
-Globals are zero-seeded (`fixnum 0`), like the native `.space`
+v1 globals are zero-seeded (`fixnum 0`), like the native `.space`
 array.
 
-## 4. The instruction set (28 opcodes)
+### 3.1 Sessions and v2 link-by-name globals (docs/WASM-VM.md §5.2)
+
+One VM instance may load MANY units (`--session` natively; the wasm
+reactor build in the browser). Each unit's functions append to one
+**global function table**: FUNREF/CALL/TCALL operands are
+unit-relative and biased by the unit's `func_base` at dispatch, so
+the tagged function index in a closure's slot 0 stays valid across
+units — a closure made in unit A calls correctly from unit B.
+CALLI/TCALLI dispatch on the global index directly.
+
+A **v2 (REPL) unit's** globals section carries the cells' names. At
+load, each name resolves against the **session cell table** (name →
+one pf cell, a GC root), creating cells on demand seeded with the
+reserved unbound sentinel `#<undef>` (immediate 34, after `#f`=2
+`#t`=10 void=18 `'()`=26). GGET of an `#<undef>` cell is a runtime
+error carrying the variable's name; GSET stores through the shared
+cell, which is how redefinition replaces and cross-eval references
+resolve at call time. v1 units keep their private zero-seeded arrays
+and pay no check.
+
+The wasm **reactor** build (`make -C src/vm wasm-repl`,
+`-DPVM_REACTOR -mexec-model=reactor`) exports the session boundary:
+`pvm_boot()` once, then `pvm_alloc(len)` + `pvm_load_run(ptr, len)`
+per unit, all in one instance. Aborts (§WASM-VM 3.4) unwind only the
+wasm frames; the host restores the exported `__stack_pointer` and
+the session (heap, interned symbols, cells) survives —
+`pvm_load_run` resets the VM frame stacks on entry.
+
+## 4. The instruction set (29 opcodes)
 
 Operands: `d`/`a`/`b`/`s`/`fs` are u16 frame-slot indices, `base` a
 u16 slot index (first staged argument), `n` a u8 physical argument
@@ -173,9 +211,10 @@ compress; WASM-VM.md §6 names that seam.)
 | 0x17 COLLECT| `d k`          | variadic prologue: spill slots 0–5 to `pf_arg_spill`, `R[d] = pf_collect_rest(fix(k), arity)` |
 | 0x18 UGET   | `d a i`        | `R[d] = heap(R[a])[1+i]` (unsafe-vector-ref) |
 | 0x19 USET   | `a i s`        | `heap(R[a])[1+i] = R[s]` (unsafe-vector-set!) |
-| 0x1A GGET   | `d g`          | `R[d] = G[g]` |
-| 0x1B GSET   | `g s`          | `G[g] = R[s]` |
-| 0x1C RET    | `s`            | return `R[s]`; RET from the entry frame halts the VM |
+| 0x1A GGET   | `d g`          | `R[d] = G[g]` (v2: through the named cell; `#<undef>` errors with the name) |
+| 0x1B GSET   | `g s`          | `G[g] = R[s]` (v2: through the named cell) |
+| 0x1C RET    | `s`            | return `R[s]`; RET from the entry frame ends the unit's run |
+| 0x1D RESULT | `s`            | v2 only: if `R[s]` is not void, render it with the runtime's value->string and deliver it as a REPL result (wasm: the `puffin.repl_result` host import; native: one stdout line) |
 
 Notes:
 
@@ -229,6 +268,16 @@ calls become CALL/TCALL, and fused compare branches use the BRcc
 family. The full golden corpus is green through this route at -O0,
 -O1, and -O2.
 
+**REPL mode** (`--repl`, docs/WASM-VM.md §4; both compiler sources):
+collect-globals compiles every top-level define — functions included
+— into a NAMED cell (function defines become lambda initializers run
+in source order), late-binds free variables by name, and wraps each
+top-level expression in the internal `#%repl-result` prim, which
+select-instructions-bc lowers to RESULT. reveal-functions then has
+nothing to reveal (only the synthesized entry exists), so every
+top-level call is indirect — which is exactly what makes redefinition
+retroactive. REPL units always compile at -O0 and render as v2.
+
 ## 6. The VM (src/vm/puffin-vm.c)
 
 One C file (~550 lines) linking libpuffin.a:
@@ -250,16 +299,20 @@ One C file (~550 lines) linking libpuffin.a:
   and I/O are the very same code native programs run, which is why
   the corpus gate is byte-for-byte.
 
-## 7. Known gaps (tracked for M3+)
+## 7. Known gaps
 
-- **command-line-args under the VM** reports the VM's argv (the
-  first entry is the .pbc path): lib/io.c captures argv in a
-  constructor, and the VM cannot shift it without a runtime seam.
-  Needed for puffincc-on-the-VM (M3).
-- The globals section carries a count, not names; REPL link-by-name
-  units (WASM-VM.md §5.2) will need the name table and a version
-  bump.
 - No re-encoding assembler: `puffin-vm -d` is a decoder/printer.
   The corpus (294 checks x 3 optimization levels) is the gate.
 - GC stress mode (`PUFFIN_VM_GC_STRESS`) arrives with the M4
-  collector; under Boehm there is no safepoint to stress.
+  collector; under Boehm there is no safepoint to stress, and the
+  wasm build's scaffold allocator never collects (long REPL
+  sessions grow monotonically until the collector lands).
+- Units are never unloaded: a very long session accumulates code
+  and function-table rows per eval (small; bounded by eval count).
+- REPL evals may not define `main` (the entry name is synthesized
+  per unit); the compile error returns to the session without
+  killing it.
+
+(Resolved since M2: the argv seam — `pf_set_args` lets the VM hand
+the hosted program its own argv; the globals name table and version
+bump landed as v2, above.)

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test-corpus.mjs"
+    "test": "node test-vm-corpus.mjs && node test-vm-repl.mjs && node test-vm-compile.mjs && node test-vm-smoke.mjs"
   },
   "dependencies": {
     "monaco-editor": "^0.52.2",

@@ -58,8 +58,11 @@
 
 (module+ main
   (match-define (vector pass-name prog rest ...) (current-command-line-arguments))
-  (define tgt (match rest [(vector t _ ...) (string->symbol t)] [_ 'arm64]))
-  (define olvl (match rest [(vector _ o) (string->number o)] [_ 1]))
+  ;; `rest` is a LIST of the remaining argv (optional [target] [olvl]);
+  ;; parse positionally (the old (vector ...) patterns never matched a
+  ;; list, so target/olvl were silently stuck at arm64/1)
+  (define tgt (if (>= (length rest) 1) (string->symbol (first rest)) 'arm64))
+  (define olvl (if (>= (length rest) 2) (string->number (second rest)) 1))
   ;; reference side
   (define program (read-program-file prog))
   (define ref

@@ -205,9 +205,14 @@
 ;; ---------------------------------------------------------------------
 
 (define (run-bytecode-tests progs)
-  (define vm (build-path here ".." "bin" "puffin-vm"))
+  ;; PUFFIN_VM_BIN overrides which VM binary under bin/ runs the units,
+  ;; so the same corpus + goldens can verify alternate VM builds --
+  ;; e.g. PUFFIN_VM_BIN=puffin-vm-gctest exercises the wasm GC seam
+  ;; natively (make -C src/vm gctest; docs/WASM-VM.md §3.3). Defaults
+  ;; to the native Boehm VM.
+  (define vm (build-path here ".." "bin" (or (getenv "PUFFIN_VM_BIN") "puffin-vm")))
   (unless (file-exists? vm)
-    (error 'bytecode "bin/puffin-vm not built (make -C src/vm)"))
+    (error 'bytecode "~a not built (make -C src/vm)" vm))
   (define pbc (build-path (find-system-path 'temp-dir) (format "puffin-test-~a.pbc" (current-milliseconds))))
   (for ([prog progs])
     (define compiled?

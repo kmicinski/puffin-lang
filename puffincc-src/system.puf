@@ -45,6 +45,15 @@
 (define entry-symbol 'main)
 (define conclusion-name 'conclusion)
 
+;; REPL-mode compilation (docs/WASM-VM.md §4, §5.2; mirrors
+;; src/system.rkt repl-mode?): one eval's forms compile into a
+;; link-by-name unit -- every top-level define becomes a NAMED global
+;; cell, free variables late-bind by name, and top-level expression
+;; values travel through the #%repl-result prim (the RESULT opcode).
+;; Always -O0, target bytecode. Whole-program compilation (this flag
+;; off) is byte-for-byte unaffected.
+(define repl-mode #f)
+
 ;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
 
 (: tag-fixnum (-> Int Int))
@@ -68,6 +77,12 @@
 (define intrinsic-unary '(-))
 (define intrinsic-binary '(+ * eq? <))
 
+;; internal operators the compiler introduces mid-pipeline (never in
+;; source, never in the manifest): #%repl-result is REPL-mode result
+;; delivery -- collect-globals wraps each top-level expression with it
+;; and select-instructions-bc lowers it to the RESULT opcode
+(define internal-prims '(#%repl-result))
+
 (: cmp? (-> _ Bool))
 (define (cmp? op) (if (member op '(eq? < <= > >=)) #t #f))
 (: shrunk-cmp? (-> _ Bool))
@@ -78,12 +93,14 @@
   (and (symbol? op)
        (or (stdlib-prim? op)
            (if (member op intrinsic-unary) #t #f)
-           (if (member op intrinsic-binary) #t #f))))
+           (if (member op intrinsic-binary) #t #f)
+           (if (member op internal-prims) #t #f))))
 
 (: prim-arity (-> Sym Int))
 (define (prim-arity op)
   (cond [(member op intrinsic-unary) 1]
         [(member op intrinsic-binary) 2]
+        [(member op internal-prims) 1]
         [else (stdlib-arity op)]))
 
 (: surface-prim? (-> _ Bool))

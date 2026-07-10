@@ -420,7 +420,12 @@
       [else (match raw
               [`((program ,inner ...)) inner]
               [fs fs])]))
-  `(program ,@(prelude-forms forms) ,@forms))
+  ;; REPL units get no prelude: the session loads the prelude once as
+  ;; its own REPL unit, and every prelude name late-binds by cell
+  ;; (docs/WASM-VM.md §5.2), so user redefinition shadows it.
+  (if (repl-mode?)
+      `(program ,@forms)
+      `(program ,@(prelude-forms forms) ,@forms)))
 
 ;;
 ;; Main entrypoint
@@ -443,6 +448,12 @@
                         (target (string->symbol tgt))]
      [("-O" "--optimize") lvl "Optimization level: 0, 1 (default), 2"
                           (optimize-level (string->number lvl))]
+     [("--repl") "Compile one REPL eval's forms as a link-by-name unit (implies -t bytecode -O 0, no prelude; docs/WASM-VM.md §4)"
+                 (repl-mode? #t)
+                 (target 'bytecode)
+                 (optimize-level 0)
+                 (write-stdout-mode #f)
+                 (retain-trace? #f)]
      [("-o" "--output") out "Executable output path"
                         (executable-file out)]
      #:args leftover

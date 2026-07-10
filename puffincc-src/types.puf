@@ -1,0 +1,617 @@
+;; puffincc -- types.puf: the gradual typechecker (docs/TYPES.md),
+;; the Puffin port of src/types.rkt.
+;;
+;; Runs on the module-resolved SURFACE program, invoked at the top of
+;; desugar (so every route checks: interp, chain, both backends).
+;; Bidirectional with the Siek-Taha consistency relation: `_` (Any) is
+;; consistent with everything; consistency is congruent and NOT
+;; transitive. Unannotated code is `_`-typed by construction and never
+;; errors. v1 is check-then-erase (desugar drops annotations).
+;;
+;; Dialect notes vs src/types.rkt (Racket):
+;;  - no structs: adt registry is two mutable hashes (name->params,
+;;    ctor->(list owner params fields)); no multiple values.
+;;  - no exceptions: a type error calls the runtime `error` prim,
+;;    which aborts the compile with the message on stderr.
+;;  - no `(or ...)` match patterns and no `match*`: head symbols are
+;;    dispatched with #:when guards; `consistent?` uses cond.
+;;  - the literal type `_` is matched with (eq? t '_), never a bare
+;;    `_` pattern (that is puffincc's wildcard).
+;;  - the manifest-agreement assertion of src/types.rkt is dropped:
+;;    it is a load-time sanity check on the prim table, not part of
+;;    the checker's verdict; the puffincc prim-table is generated from
+;;    the same src/stdlib.rkt the Racket table is asserted against.
+
+(require "system.puf")   ;; prim?, prim-arity
+
+;; side-effecting iteration (no for-each in the prelude)
+(define (for-each f xs)
+  (if (null? xs) (void) (begin (f (car xs)) (for-each f (cdr xs)))))
+
+;; ---- type errors ----------------------------------------------------
+(define (type-error msg) (error (string-append "typecheck: " msg)))
+
+;; ---- type syntax helpers --------------------------------------------
+
+;; a type variable is a symbol whose first character is lowercase
+(define (tyvar? t)
+  (and (symbol? t)
+       (let ([s (symbol->string t)])
+         (and (> (string-length s) 0)
+              (let ([b (string-byte s 0)]) (and (>= b 97) (<= b 122)))))))
+
+(define (base-type? s) (if (member s '(Int Bool Sym Str Void _)) #t #f))
+
+;; ---- the ADT registry -----------------------------------------------
+;; adts:  mutable hash  name -> params-list
+;; ctors: mutable hash  ctor -> (list owner params fields)
+
+(define (ctor-owner ci) (first ci))
+(define (ctor-params ci) (second ci))
+(define (ctor-fields ci) (third ci))
+
+;; collected in two passes (heads, then bodies): all of a module's
+;; types are mutually recursive. Returns (list adts ctors).
+(define (collect-adts forms)
+  (define adts (make-hash))
+  (define ctors (make-hash))
+  ;; pass 1: heads
+  (for-each
+   (lambda (f)
+     (match f
+       [`(define-type ,head ,_ ...)
+        (let ([np (match head
+                    [`(,n ,ps ...) (cons n ps)]
+                    [n (cons n '())])])
+          (let ([n (car np)] [ps (cdr np)])
+            (when (hash-has-key? adts n)
+              (type-error (format "type ~a defined twice" n)))
+            (hash-set! adts n ps)))]
+       [_ (void)]))
+   forms)
+  ;; pass 2: constructor signatures
+  (for-each
+   (lambda (f)
+     (match f
+       [`(define-type ,head ,cs ...)
+        (let ([n (match head [`(,n ,_ ...) n] [n n])])
+          (let ([ps (hash-ref adts n)])
+            (for-each
+             (lambda (c)
+               (match c
+                 [`(,cn ,fts ...)
+                  (when (hash-has-key? ctors cn)
+                    (type-error (format "constructor ~a defined twice" cn)))
+                  (for-each (lambda (ft) (check-type-wf ft ps adts)) fts)
+                  (hash-set! ctors cn (list n ps fts))]))
+             cs)))]
+       [_ (void)]))
+   forms)
+  (list adts ctors))
+
+;; well-formedness: names resolve, arities match
+(define (check-type-wf t params adts)
+  (match t
+    [(? symbol? s)
+     (unless (or (base-type? s) (if (member s params) #t #f) (tyvar? s)
+                 (and (hash-has-key? adts s) (null? (hash-ref adts s))))
+       (when (and (hash-has-key? adts s) (pair? (hash-ref adts s)))
+         (type-error (format "type ~a expects ~a parameters"
+                             s (length (hash-ref adts s))))))]
+    [`(,h ,a ,b) #:when (or (eq? h 'Pairof) (eq? h 'Hash))
+     (check-type-wf a params adts) (check-type-wf b params adts)]
+    [`(,h ,a) #:when (or (eq? h 'List) (eq? h 'Vec) (eq? h 'Set))
+     (check-type-wf a params adts)]
+    [`(-> ,ts ...) (for-each (lambda (s) (check-type-wf s params adts)) ts)]
+    [`(,n ,args ...) #:when (symbol? n)
+     (cond [(hash-has-key? adts n)
+            (unless (eq? (length args) (length (hash-ref adts n)))
+              (type-error (format "type ~a expects ~a parameters, got ~a"
+                                  n (length (hash-ref adts n)) (length args))))
+            (for-each (lambda (s) (check-type-wf s params adts)) args)]
+           [else (type-error (format "unknown type constructor ~a in ~a" n t))])]
+    [_ (type-error (format "malformed type: ~a" t))]))
+
+;; ---- substitution & consistency -------------------------------------
+
+(define (subst t env)   ;; env: hash tyvar -> type
+  (match t
+    [(? symbol? s) (hash-ref/default env s s)]
+    [`(,h ,ts ...) `(,h ,@(map (lambda (s) (subst s env)) ts))]
+    [_ t]))
+
+(define (all-consistent? as bs)
+  (cond [(and (null? as) (null? bs)) #t]
+        [(or (null? as) (null? bs)) #f]
+        [(consistent? (car as) (car bs)) (all-consistent? (cdr as) (cdr bs))]
+        [else #f]))
+
+;; one-step unfold of (List a) as nil-or-pair for consistency against
+;; Pairof (docs/TYPES.md: equi-recursive List)
+(define (consistent? t1 t2)
+  (cond
+    [(eq? t1 '_) #t]
+    [(eq? t2 '_) #t]
+    [(tyvar? t1) #t]
+    [(tyvar? t2) #t]
+    [(and (symbol? t1) (symbol? t2)) (eq? t1 t2)]
+    [(symbol? t1) #f]
+    [(symbol? t2) #f]
+    [else
+     (match (list t1 t2)
+       [`((List ,a) (Pairof ,x ,y))
+        (and (consistent? x a) (consistent? y (list 'List a)))]
+       [`((Pairof ,x ,y) (List ,a))
+        (and (consistent? x a) (consistent? y (list 'List a)))]
+       [`((,h1 ,as ...) (,h2 ,bs ...))
+        (and (eq? h1 h2) (eq? (length as) (length bs)) (all-consistent? as bs))]
+       [_ #f])]))
+
+;; side-effecting parallel walk (lengths assumed equal)
+(define (each2 f xs ys)
+  (if (or (null? xs) (null? ys))
+      (void)
+      (begin (f (car xs) (car ys)) (each2 f (cdr xs) (cdr ys)))))
+
+;; greedy instantiation: bind formal's tyvars against actual; first
+;; concrete binding wins, `_` never binds
+(define (instantiate! formal actual env)
+  (cond
+    [(tyvar? formal)
+     (unless (or (hash-has-key? env formal) (eq? actual '_))
+       (hash-set! env formal actual))]
+    [(and (pair? formal) (eq? (car formal) 'List))
+     (let ([a (car (cdr formal))])
+       (match actual
+         [`(List ,x) (instantiate! a x env)]
+         [`(Pairof ,x ,y) (instantiate! a x env)]
+         [_ (void)]))]
+    [(pair? formal)
+     (let ([h (car formal)] [as (cdr formal)])
+       (match actual
+         [`(,h2 ,bs ...) #:when (and (eq? h h2) (eq? (length as) (length bs)))
+          (each2 (lambda (a b) (instantiate! a b env)) as bs)]
+         [_ (void)]))]
+    [else (void)]))
+
+;; join for match-clause / if results: equal stays, else _
+(define (type-join a b)
+  (cond [(equal? a b) a]
+        [(consistent? a b) (if (eq? a '_) b (if (eq? b '_) a '_))]
+        [else '_]))
+
+(define (tyvars-of t)
+  (cond [(tyvar? t) (set t)]
+        [(pair? t) (foldl (lambda (x s) (set-union s (tyvars-of x))) (set) (cdr t))]
+        [else (set)]))
+
+(define (blank-tyvars t)
+  (cond [(tyvar? t) '_]
+        [(pair? t) (cons (car t) (map blank-tyvars (cdr t)))]
+        [else t]))
+
+;; ---- prim types (mirrors src/types.rkt) -----------------------------
+
+(define prim-types
+  (foldl (lambda (pr acc) (hash-set acc (car pr) (cdr pr)))
+         (hash)
+         (list
+          (cons '+ '(-> Int Int Int)) (cons '- '(-> Int Int Int)) (cons '* '(-> Int Int Int))
+          (cons 'quotient '(-> Int Int Int)) (cons 'remainder '(-> Int Int Int)) (cons 'modulo '(-> Int Int Int))
+          (cons 'bitwise-and '(-> Int Int Int)) (cons 'bitwise-ior '(-> Int Int Int))
+          (cons 'bitwise-xor '(-> Int Int Int)) (cons 'arithmetic-shift '(-> Int Int Int))
+          (cons '< '(-> Int Int Bool)) (cons '<= '(-> Int Int Bool)) (cons '> '(-> Int Int Bool)) (cons '>= '(-> Int Int Bool))
+          (cons 'eq? '(-> a b Bool)) (cons 'equal? '(-> a b Bool)) (cons 'not '(-> a Bool))
+          (cons 'cons '(-> a b (Pairof a b))) (cons 'car '(-> (Pairof a b) a)) (cons 'cdr '(-> (Pairof a b) b))
+          (cons 'pair? '(-> a Bool)) (cons 'null? '(-> a Bool))
+          (cons 'make-vector '(-> Int (Vec _))) (cons 'vector-ref '(-> (Vec a) Int a))
+          (cons 'vector-set! '(-> (Vec a) Int a Void)) (cons 'vector-length '(-> (Vec a) Int))
+          (cons 'vector? '(-> a Bool))
+          (cons 'string? '(-> a Bool)) (cons 'string-length '(-> Str Int))
+          (cons 'string-append '(-> Str Str Str)) (cons 'string=? '(-> Str Str Bool))
+          (cons 'string<? '(-> Str Str Bool)) (cons 'substring '(-> Str Int Int Str))
+          (cons 'string-byte '(-> Str Int Int))
+          (cons 'symbol->string '(-> Sym Str)) (cons 'string->symbol '(-> Str Sym))
+          (cons 'number->string '(-> Int Str)) (cons 'string->number '(-> Str _))
+          (cons 'value->string '(-> a Str))
+          (cons 'hash-set '(-> (Hash k v) k v (Hash k v))) (cons 'hash-remove '(-> (Hash k v) k (Hash k v)))
+          (cons 'hash-ref '(-> (Hash k v) k v)) (cons 'hash-ref/default '(-> (Hash k v) k v v))
+          (cons 'hash-has-key? '(-> (Hash k v) k Bool)) (cons 'hash-count '(-> (Hash k v) Int))
+          (cons 'hash-keys '(-> (Hash k v) (List k))) (cons 'hash? '(-> a Bool))
+          (cons 'hash-set! '(-> (Hash k v) k v Void)) (cons 'hash-remove! '(-> (Hash k v) k Void))
+          (cons 'set-add '(-> (Set a) a (Set a))) (cons 'set-remove '(-> (Set a) a (Set a)))
+          (cons 'set-member? '(-> (Set a) a Bool)) (cons 'set-count '(-> (Set a) Int))
+          (cons 'set->list '(-> (Set a) (List a))) (cons 'set? '(-> a Bool))
+          (cons 'set-add! '(-> (Set a) a Void)) (cons 'set-remove! '(-> (Set a) a Void))
+          (cons 'fixnum? '(-> a Bool)) (cons 'boolean? '(-> a Bool)) (cons 'symbol? '(-> a Bool))
+          (cons 'void? '(-> a Bool)) (cons 'procedure? '(-> a Bool))
+          (cons 'println '(-> a Void)) (cons 'display '(-> a Void)) (cons 'newline '(-> Void))
+          (cons 'error '(-> a _)) (cons 'read '(-> Int)) (cons 'read-all '(-> Str))
+          (cons 'gensym '(-> Sym Sym))
+          (cons 'read-file '(-> Str Str)) (cons 'write-file '(-> Str Str Void))
+          (cons 'file-exists? '(-> Str Bool)) (cons 'command-line-args '(-> (List Str)))
+          (cons 'system '(-> Str Int)))))
+
+(define (prim-type-of op)
+  (if (hash-has-key? prim-types op)
+      (hash-ref prim-types op)
+      (if (prim? op)
+          `(-> ,@(map (lambda (dummy) '_) (range 0 (prim-arity op))) _)
+          '_)))
+
+;; ---- application checking (pure; closes over nothing) ---------------
+
+(define (split-arrow ft)   ;; (-> t1 ... tn res) -> (formals . res)
+  (let loop ([xs (cdr ft)] [acc '()])
+    (if (null? (cdr xs))
+        (cons (reverse acc) (car xs))
+        (loop (cdr xs) (cons (car xs) acc)))))
+
+;; check an application of `ft` to synthesized arg types.
+;; Discipline (the gradual guarantee): a formal's CONCRETE structure is
+;; a contract -- violating it errors. A constraint that exists only
+;; because greedy instantiation bound a type VARIABLE from a sibling
+;; argument is an inference hint -- a conflict there demotes the
+;; variable to _ instead of erroring.
+(define (check-app ft arg-ts where)
+  (cond
+    [(eq? ft '_) '_]
+    [(tyvar? ft) '_]
+    [(and (pair? ft) (eq? (car ft) '->))
+     (let* ([fr (split-arrow ft)]
+            [formals (car fr)]
+            [res (cdr fr)])
+       (unless (eq? (length formals) (length arg-ts))
+         (type-error (format "~a expects ~a arguments, got ~a"
+                             where (length formals) (length arg-ts))))
+       (let ([tenv (make-hash)])
+         (each2 (lambda (f a) (instantiate! f a tenv)) formals arg-ts)
+         (let ([conflicted (make-set)])
+           (each2 (lambda (f a)
+                    (let ([fstar (subst f tenv)])
+                      (unless (consistent? a fstar)
+                        (if (consistent? a (blank-tyvars f))
+                            (for-each (lambda (v) (set-add! conflicted v))
+                                      (set->list (tyvars-of f)))
+                            (type-error (format "~a: argument has type ~a, expected ~a"
+                                                where a fstar))))))
+                  formals arg-ts)
+           (for-each (lambda (v) (hash-set! tenv v '_)) (set->list conflicted))
+           (subst res tenv))))]
+    [else (type-error (format "~a: applying a non-function of type ~a" where ft))]))
+
+(define (lambda-head? s) (or (eq? s 'lambda) (eq? s 'λ)))
+(define (arith-op? x) (if (member x '(+ - *)) #t #f))
+
+;; the #:when clause marker (a #:kw literal breaks the hosted build if
+;; written directly; build it from its string, like desugar.puf)
+(define kw-when (string->symbol "#:when"))
+
+;; ---------------------------------------------------------------------
+;; the checker proper: everything below closes over adts/ctors/top
+;; ---------------------------------------------------------------------
+
+(define (typecheck-program p)
+  (match p
+    [`(program ,forms ...)
+     (define ac (collect-adts forms))
+     (define adts (car ac))
+     (define ctors (car (cdr ac)))
+     (define top (make-hash))
+
+     ;; formal helpers for populating `top`
+     (define (formal-type f) (match f [`(,x : ,t) t] [_ '_]))
+     (define (formal-name f) (match f [`(,x : ,t) x] [x x]))
+     (define (valid-formals? formals)
+       (andmap (lambda (x) (or (symbol? x) (and (list? x) (eq? (length x) 3)))) formals))
+
+     (define (lookup env x)
+       (let ([hit (assoc x env)])
+         (if hit
+             (cdr hit)
+             (let ([tv (hash-ref/default top x #f)])
+               (if tv tv (if (prim? x) (prim-type-of x) '_))))))
+
+     ;; collect the binders a quasiquote pattern introduces (all typed
+     ;; _; the point is that they ENTER the env so a later reference
+     ;; does not fall through to a same-named top-level binding).
+     (define (qq-pattern-binds tmpl depth)
+       (match tmpl
+         [(list 'unquote sub)
+          (if (eq? depth 1)
+              (map (lambda (b) (cons (car b) '_)) (pattern-bindings sub '_))
+              (qq-pattern-binds sub (- depth 1)))]
+         [(list 'unquote-splicing sub)
+          (if (eq? depth 1)
+              (map (lambda (b) (cons (car b) '_)) (pattern-bindings sub '_))
+              (qq-pattern-binds sub (- depth 1)))]
+         [(list 'quasiquote inner) (qq-pattern-binds inner (+ depth 1))]
+         [(? pair? _)
+          (append (if (eq? (car tmpl) '...) '() (qq-pattern-binds (car tmpl) depth))
+                  (qq-pattern-binds (cdr tmpl) depth))]
+         [_ '()]))
+
+     (define (cons-scrut st)
+       (match st
+         [`(Pairof ,a ,d) (cons a d)]
+         [`(List ,a) (cons a (list 'List a))]
+         [_ (cons '_ '_)]))
+
+     (define (fields-bindings ps fts tenv)
+       (if (or (null? ps) (null? fts))
+           '()
+           (append (pattern-bindings (car ps) (subst (car fts) tenv))
+                   (fields-bindings (cdr ps) (cdr fts) tenv))))
+
+     ;; pattern: returns bindings ((x . t) ...) and checks ctor shapes
+     (define (pattern-bindings pat scrut-t)
+       (match pat
+         [(? symbol? s)
+          (if (eq? s '_)
+              '()
+              (let ([info (hash-ref/default ctors s #f)])
+                (if info
+                    (begin
+                      (unless (null? (ctor-fields info))
+                        (type-error (format "constructor ~a used bare but has ~a fields"
+                                            s (length (ctor-fields info)))))
+                      '())
+                    (list (cons s (if (eq? scrut-t '_) '_ scrut-t))))))]
+         [(list 'quote _) '()]
+         [(list 'quasiquote tmpl) (qq-pattern-binds tmpl 1)]
+         [(? fixnum? _) '()]
+         [(? boolean? _) '()]
+         [(? string? _) '()]
+         [(list 'cons p0 p1)
+          (let* ([ad (cons-scrut scrut-t)])
+            (append (pattern-bindings p0 (car ad)) (pattern-bindings p1 (cdr ad))))]
+         [(cons 'list ps)
+          (let ([a (match scrut-t [`(List ,a) a] [_ '_])])
+            (append-map (lambda (p) (pattern-bindings p a)) ps))]
+         [(cons 'vector ps)
+          (let ([a (match scrut-t [`(Vec ,a) a] [_ '_])])
+            (append-map (lambda (p) (pattern-bindings p a)) ps))]
+         [(list '? _ p) (pattern-bindings p '_)]
+         [`(,cn ,ps ...) #:when (hash-has-key? ctors cn)
+          (let ([info (hash-ref ctors cn)])
+            (unless (eq? (length ps) (length (ctor-fields info)))
+              (type-error (format "constructor ~a expects ~a fields, got ~a in pattern"
+                                  cn (length (ctor-fields info)) (length ps))))
+            (let ([tenv (make-hash)])
+              (match scrut-t
+                [`(,n ,args ...) #:when (eq? n (ctor-owner info))
+                 (each2 (lambda (p a) (hash-set! tenv p a)) (ctor-params info) args)]
+                [_ (void)])
+              (fields-bindings ps (ctor-fields info) tenv)))]
+         [_ '()]))
+
+     ;; --- bidirectional core: synth returns the expression's type ---
+
+     (define (synth-cond clauses env)
+       (foldl
+        (lambda (cl t)
+          (match cl
+            [`(else ,body ...) (type-join t (synth-body body env))]
+            [`(,g ,body ...) (synth g env) (type-join t (synth-body body env))]))
+        '_ clauses))
+
+     (define (synth-case-clauses clauses env)
+       (for-each
+        (lambda (cl)
+          (match cl
+            [`(else ,body ...) (synth-body body env)]
+            [`(,_ ,body ...) (synth-body body env)]))
+        clauses))
+
+     (define (match-clause-parts cl)
+       (match cl
+         [`(,pat ,kw ,guard ,body ...) #:when (eq? kw kw-when) (cons pat (cons guard body))]
+         [`(,pat ,body ...) (cons pat (cons #f body))]))
+
+     (define (synth-match scrut clauses env)
+       (let ([st (synth scrut env)])
+         (let loop ([cls clauses] [t '_] [first #t])
+           (if (null? cls)
+               t
+               (let* ([pgb (match-clause-parts (car cls))]
+                      [pat (car pgb)]
+                      [guard (car (cdr pgb))]
+                      [body (cdr (cdr pgb))]
+                      [env+ (append (pattern-bindings pat st) env)])
+                 (when (not (eq? guard #f)) (synth guard env+))
+                 (let ([bt (synth-body body env+)])
+                   (loop (cdr cls) (if first bt (type-join t bt)) #f)))))))
+
+     (define (synth-named-let loop-name bindings body env)
+       (let* ([bs (map binding-parts bindings)]
+              [env+ (append (map (lambda (b) (cons (car b) (car (cdr b)))) bs) env)])
+         (for-each (lambda (b) (check-binding b env)) bs)
+         (synth-body body (cons (cons loop-name '_) env+))))
+
+     (define (synth-let bindings body env star?)
+       (let ([env+ (foldl
+                    (lambda (b acc)
+                      (let ([parts (binding-parts b)])
+                        (check-binding parts (if star? acc env))
+                        (cons (cons (car parts) (car (cdr parts))) acc)))
+                    env bindings)])
+         (synth-body body env+)))
+
+     (define (synth-lambda formals body env)
+       (let* ([fts (map formal-type* formals)]
+              [rb (match body
+                    [`(: ,t ,rest ...) (cons t rest)]
+                    [_ (cons '_ body)])]
+              [rt (car rb)]
+              [body* (cdr rb)]
+              [env+ (append (map2 (lambda (n t) (cons n t)) (map formal-name* formals) fts) env)]
+              [bt (synth-body body* env+)])
+         (when (and (not (eq? rt '_)) (not (consistent? bt rt)))
+           (type-error (format "lambda body has type ~a, declared ~a" bt rt)))
+         `(-> ,@fts ,(if (eq? rt '_) bt rt))))
+
+     (define (synth-set! x e0 env)
+       (let ([xt (lookup env x)] [et (synth e0 env)])
+         (unless (consistent? et xt)
+           (type-error (format "(set! ~a ...): value has type ~a, variable is ~a" x et xt)))
+         'Void))
+
+     (define (synth-arith op es env)
+       (for-each
+        (lambda (s)
+          (let ([t (synth s env)])
+            (unless (consistent? t 'Int)
+              (type-error (format "~a: argument has type ~a, expected Int" op t)))))
+        es)
+       'Int)
+
+     (define (synth-app rator rands env)
+       (let ([ft (synth rator env)]
+             [arg-ts (map (lambda (r) (synth r env)) rands)])
+         (check-app ft arg-ts (if (symbol? rator) rator "application"))))
+
+     (define (synth e env)
+       (match e
+         [(? fixnum? _) 'Int]
+         [#t 'Bool]
+         [#f 'Bool]
+         [(? string? _) 'Str]
+         [`(void) 'Void]
+         [`(read) 'Int]
+         [`(quote ,d) (cond [(symbol? d) 'Sym] [(null? d) '(List _)] [else '_])]
+         [(list 'quasiquote _) '_]
+         [(? symbol? x) (lookup env x)]
+         [`(ann ,e0 ,t)
+          (check-type-wf t '() adts)
+          (let ([et (synth e0 env)])
+            (unless (consistent? et t)
+              (type-error (format "(ann ...) claims ~a but expression has type ~a" t et)))
+            t)]
+         [`(if ,g ,then ,els)
+          (synth g env) (type-join (synth then env) (synth els env))]
+         [`(cond ,clauses ...) (synth-cond clauses env)]
+         [`(when ,g ,body ...) (synth g env) (synth-body body env) '_]
+         [`(unless ,g ,body ...) (synth g env) (synth-body body env) '_]
+         [`(case ,k ,clauses ...) (synth k env) (synth-case-clauses clauses env) '_]
+         [`(match ,scrut ,clauses ...) (synth-match scrut clauses env)]
+         [`(let ,loop-name (,bindings ...) ,body ...) #:when (symbol? loop-name)
+          (synth-named-let loop-name bindings body env)]
+         [`(let (,bindings ...) ,body ...) (synth-let bindings body env #f)]
+         [`(let* (,bindings ...) ,body ...) (synth-let bindings body env #t)]
+         [`(,lam ,formals ,body ...) #:when (and (lambda-head? lam) (list? formals))
+          (synth-lambda formals body env)]
+         [`(,lam ,formals ,body ...) #:when (lambda-head? lam) '_]
+         [`(begin ,es ... ,lastx)
+          (for-each (lambda (s) (synth s env)) es) (synth lastx env)]
+         [`(while ,g ,body ...) (synth g env) (synth-body body env) 'Void]
+         [`(set! ,x ,e0) (synth-set! x e0 env)]
+         [`(and ,es ...) (for-each (lambda (s) (synth s env)) es) '_]
+         [`(or ,es ...) (for-each (lambda (s) (synth s env)) es) '_]
+         [`(list ,es ...) (list 'List (foldl (lambda (s t) (type-join t (synth s env))) '_ es))]
+         [`(vector ,es ...) (list 'Vec (foldl (lambda (s t) (type-join t (synth s env))) '_ es))]
+         [`(hash ,es ...) '(Hash _ _)]
+         [`(set ,es ...) '(Set _)]
+         [`(make-hash) '(Hash _ _)]
+         [`(make-set) '(Set _)]
+         [`(,op ,es ...) #:when (arith-op? op) (synth-arith op es env)]
+         [`(,rator ,rands ...) (synth-app rator rands env)]
+         [_ '_]))
+
+     (define (synth-body body env)
+       (let* ([names (filter-map
+                      (lambda (f)
+                        (match f
+                          [`(define (,g ,_ ...) ,_ ...) g]
+                          [`(define ,x ,_) #:when (symbol? x) x]
+                          [_ #f]))
+                      body)]
+              [env+ (append (map (lambda (n) (cons n '_)) names) env)])
+         (foldl
+          (lambda (f t)
+            (match f
+              [`(define ,_ ,_ ...) '_]
+              [e (synth e env+)]))
+          '_ body)))
+
+     (define (binding-parts b)
+       (match b
+         [`(,x : ,t ,e) (check-type-wf t '() adts) (list x t e)]
+         [`(,x ,e) (list x '_ e)]))
+
+     (define (check-binding parts env)
+       (let ([x (car parts)] [t (car (cdr parts))] [e (car (cdr (cdr parts)))])
+         (let ([et (synth e env)])
+           (unless (consistent? et t)
+             (type-error (format "~a is declared ~a but its value has type ~a" x t et))))))
+
+     (define (formal-type* f)
+       (match f [`(,x : ,t) (check-type-wf t '() adts) t] [_ '_]))
+     (define (formal-name* f)
+       (match f [`(,x : ,t) x] [x x]))
+
+     ;; --- populate `top`: declared types, ctors, annotated defines ---
+
+     (for-each
+      (lambda (f)
+        (match f
+          [`(: ,n ,t) (check-type-wf t '() adts) (hash-set! top n t)]
+          [`(define-type ,_ ,cs ...)
+           (for-each
+            (lambda (c)
+              (match c
+                [`(,cn ,fts ...)
+                 (let* ([info (hash-ref ctors cn)]
+                        [owner (ctor-owner info)]
+                        [params (ctor-params info)]
+                        [res (cons owner params)]
+                        [res* (if (null? params) owner res)])
+                   (hash-set! top cn (if (null? fts) res* `(-> ,@fts ,res*))))]))
+            cs)]
+          [_ (void)]))
+      forms)
+
+     (for-each
+      (lambda (f)
+        (match f
+          [`(define (,g ,formals ...) : ,rt ,_ ...) #:when (valid-formals? formals)
+           (unless (hash-has-key? top g)
+             (hash-set! top g `(-> ,@(map formal-type formals) ,rt)))]
+          [`(define (,g ,formals ...) ,_ ...) #:when (valid-formals? formals)
+           (unless (hash-has-key? top g)
+             (hash-set! top g `(-> ,@(map formal-type formals) _)))]
+          [`(define ,x ,_) #:when (symbol? x)
+           (unless (hash-has-key? top x) (hash-set! top x '_))]
+          [_ (void)]))
+      forms)
+
+     ;; --- check every top-level form under `top` ---
+
+     (for-each
+      (lambda (f)
+        (match f
+          [`(define-type ,_ ,_ ...) (void)]
+          [`(: ,_ ,_) (void)]
+          [`(define (,g ,formals ...) ,body0 ...) #:when (valid-formals? formals)
+           (let* ([rb (match body0
+                        [`(: ,t ,rest ...) (check-type-wf t '() adts) (cons t rest)]
+                        [_ (cons '_ body0)])]
+                  [rt (car rb)]
+                  [body (cdr rb)]
+                  [ft (hash-ref top g)]
+                  [fts (match ft [`(-> ,as ... ,_) as] [_ (map (lambda (dummy) '_) formals)])]
+                  [env (map2 (lambda (n t) (cons n t)) (map formal-name* formals) fts)])
+             (for-each (lambda (fm) (formal-type* fm)) formals)
+             (let ([bt (synth-body body env)])
+               (unless (or (eq? rt '_) (consistent? bt rt))
+                 (type-error (format "~a: body has type ~a, declared ~a" g bt rt)))))]
+          [`(define (,_ . ,_) ,_ ...) (void)]
+          [`(define ,x ,e) #:when (symbol? x)
+           (let* ([et (synth e '())]
+                  [dt (hash-ref/default top x '_)])
+             (unless (consistent? et dt)
+               (type-error (format "~a is declared ~a but its value has type ~a" x dt et)))
+             (when (eq? dt '_) (hash-set! top x et)))]
+          [e (synth e '())]))
+      forms)
+
+     p]))
