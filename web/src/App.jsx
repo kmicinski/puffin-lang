@@ -7,6 +7,9 @@ const Pipeline = lazy(() => import('./Pipeline.jsx'));
 
 const MAX_LINES = 2000; // capped ring so the console stays smooth
 
+// starter buffer for "New" — a near-empty program that still runs
+const BLANK_PROGRAM = ';; A blank Puffin program — press Run (Cmd/Ctrl+Enter).\n;; New to Puffin? Open the Tutorial (top right).\n\n(println "Hello, Puffin! 🐧")\n';
+
 function parseStdin(text) {
   return text.split(/\s+/).filter((s) => s !== '' && /^[+-]?\d+$/.test(s)).map(Number);
 }
@@ -287,6 +290,16 @@ export default function App() {
     if (editor) editor.dispose();
   });
 
+  // reset to a fresh single-file blank program
+  function newProgram() {
+    if (!editor) return;
+    setFiles(null);
+    setActiveFile('main.puf');
+    editor.setValue(BLANK_PROGRAM);
+    editor.setScrollTop(0);
+    editor.focus();
+  }
+
   function loadExample(ev) {
     const ex = EXAMPLES.find((x) => x.id === ev.target.value);
     if (!ex || !editor) return;
@@ -315,6 +328,7 @@ export default function App() {
           <button classList={{ active: mode() === 'pipeline' }} onClick={() => switchMode('pipeline')}>Pipeline</button>
         </div>
         <Show when={mode() === 'play'}>
+          <button class="btn new" onClick={newProgram} title="Start a fresh blank program">+ New</button>
           <button class="btn run" onClick={doRun} title="Run (Cmd/Ctrl+Enter)">Run ▸</button>
           <Show when={running()}>
             <button class="btn stop" onClick={doStop}>Stop</button>
@@ -325,12 +339,18 @@ export default function App() {
             </For>
           </select>
         </Show>
-        <Show when={running()}>
-          <div class="running-indicator">
-            <span class="dot" />
-            running… {(elapsed() / 1000).toFixed(1)}s
-          </div>
-        </Show>
+        <div class="header-right">
+          <Show when={running()}>
+            <div class="running-indicator">
+              <span class="dot" />
+              running… {(elapsed() / 1000).toFixed(1)}s
+            </div>
+          </Show>
+          <a class="tutorial-link" href="/tutorial.html" target="_blank" rel="noopener"
+             title="Open the Puffin tutorial in a new tab">
+            📖 Tutorial ↗
+          </a>
+        </div>
       </header>
 
       {/* Playground stays mounted (hidden) so the editor, workers and console survive mode switches */}
