@@ -24,11 +24,14 @@ src/
   regalloc.rkt      live-range register allocation (shared)          (NEW)
   backend-x86.rkt   x86-64: select/allocate/patch/prelude/render     (from p5 code)
   backend-arm64.rkt AArch64: the same five passes                    (NEW)
+  backend-bytecode.rkt  the .pbc bytecode backend (2026-07; docs/BYTECODE.md)
+  vm/               the bytecode VM: bin/puffin-vm + the wasm builds (NEW)
   runtime/          partitioned C runtime + Boehm GC -> libpuffin.a  (NEW)
   test-programs/    all r0-..r5-* class examples + puffin-* tests
   input-files/ goldens/
 bin/puffin          the day-to-day entry point
-web/                browser interpreter + REPL (Monaco, solarized light)
+web/                browser playground: puffincc on the wasm bytecode VM
+                    (Monaco, solarized light; docs/WASM-VM.md)
 docs/STDLIB.md      generated from the manifest — never edit by hand
 ```
 
@@ -47,7 +50,9 @@ racket src/test.rkt -m gen       # regenerate goldens from the reference
 The full corpus — every example program from p1 through p5, unmodified,
 plus new `puffin-*` feature tests — passes on the reference interpreter,
 the x86-64 backend (under Rosetta), and the arm64 backend: 168 checks
-per route, byte-identical output.
+per route, byte-identical output. *(2026-07-10: the corpus has since
+grown to 300 checks per route — 100 programs × 3 inputs — and gained a
+fourth route, the bytecode VM: `racket src/test.rkt -m bytecode`.)*
 
 ## 1. The big semantic shift: tagged values
 
@@ -244,6 +249,11 @@ prologue), `'spill-bytes`.
 
 ## 5. Two backends, one shape
 
+*(2026-07-10: three backends now — `'bytecode` joined, emitting `.pbc`
+units for the VM in `src/vm/`; same cut point, same shape, see
+docs/BYTECODE.md. The section below predates it and describes the two
+native backends.)*
+
 `system.rkt` has a `target` parameter (`'x86-64` | `'arm64`, default =
 host). `main.rkt` splices the target's five backend passes after
 uncover-locals; everything earlier is target-independent (even
@@ -346,16 +356,21 @@ Racket boxes.
   limitation: a REPL define may not *shadow* a primitive name
   (files can).
 
-## 8. The web REPL (`web/`)
+## 8. The web playground (`web/`)
 
-A browser interpreter + REPL: Vite + SolidJS (fine-grained reactive
-signals), Monaco editor with a Puffin tokenizer and a solarized-light
-theme, the interpreter running in a Web Worker (long computations
-never block the UI; runs are cancellable), a persistent REPL session
-pane, an examples dropdown seeded from the corpus, and a stdin box
-for `(read)`. The JS interpreter (BigInt fixnums, `Symbol.for`
-symbols, Map/Set-backed hashes/sets) is held to the *same 168
-goldens* via `node web/test-corpus.mjs`. See `web/README.md`.
+*(Rewritten 2026-07-10; the JS interpreter this section used to
+describe was retired — docs/WASM-VM.md §7/M6.)* The browser
+playground runs the **real toolchain**: puffincc, compiled to
+bytecode, executes on a WebAssembly build of the bytecode VM,
+compiling + typechecking editor source in the tab and running the
+result on the same VM — no JS reimplementation of the language. The
+UI is Vite + SolidJS, Monaco with a Puffin tokenizer and a
+solarized-light theme, the engine in a Web Worker (cancellable runs),
+a persistent REPL session pane (a reactor-model VM instance loading
+one link-by-name unit per eval), an examples dropdown, and a stdin
+box for `(read)`. It is held to the same goldens as every other
+route via `node web/test-vm-corpus.mjs` (300 checks). See
+`web/README.md` and docs/WASM-VM.md.
 
 ## 9. IR provenance and the pipeline visualizer
 
@@ -458,6 +473,9 @@ Three coordinated moves, each documented in its own file:
   implementations: `src/modules.rkt` (one hook in `read-program-file`
   covers every route), `web/src/puffin/modules.js` (virtual file map;
   the playground grew file tabs), and `puffincc-src/modules.puf`.
+  *(2026-07-10: modules.js was deleted with the JS interpreter; the
+  playground now resolves modules through puffincc's own resolver
+  against the shim's in-memory FS — two implementations remain.)*
   Corpus: `modules-1..6` (the stack-VM, LC-interpreter, and sudoku
   programs split into modules, byte-identical to their single-file
   originals); failure modes in `src/test-modules.rkt`.
@@ -494,7 +512,10 @@ a shifted-page part + remainder, both implementations).
 - **Separate compilation** (docs/MODULES.md §3) — the `.pufi`/`.o`
   cache and link-time DAG assembly; the interface format is designed,
   the whole-program resolver is the semantic reference.
-- **Gradual types** — the planned next step. The natural seam: a
+- **Gradual types** — ~~the planned next step~~ *(shipped 2026-07:
+  docs/TYPES.md; the checker lives in both compiler sources —
+  src/types.rkt and puffincc-src/types.puf — and runs on every
+  route, including in the browser)*. The natural seam: a
   `typecheck` pass between desugar and shrink, annotations via
   `(: name type)` forms, tag checks elided where types are known.
   The tagged representation was chosen so checked/unchecked code can

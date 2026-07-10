@@ -77,6 +77,12 @@ they are listed in `src/irs.rkt`.
 | `bitwise-xor` | 2 | `pf_bitwise_xor` | Bitwise exclusive OR of two integers. |
 | `arithmetic-shift` | 2 | `pf_arith_shift` | Shift left (positive count) or right (negative count). |
 | `modulo` | 2 | `pf_modulo` | Integer modulus; the result's sign follows the divisor (checked). |
+| `string-concat` | 1 | `pf_string_concat` | Concatenate a list of strings in one allocation (linear; string-join's backbone). |
+| `read-file` | 1 | `pf_read_file` | The named file's bytes, as a string (exits with an error if unreadable). |
+| `write-file` | 2 | `pf_write_file` | (Re)write the named file with the string's bytes. |
+| `file-exists?` | 1 | `pf_file_exists_huh` | Whether the named file exists and is readable. |
+| `command-line-args` | 0 | `pf_command_line_args` | The program's command-line arguments (a list of strings, argv[0] excluded). |
+| `system` | 1 | `pf_system` | Run a shell command; its exit code. |
 
 ## Compiler-internal primitives
 
@@ -84,6 +90,7 @@ they are listed in `src/irs.rkt`.
 |---|---|---|---|
 | `make-closure` | 1 | `pf_make_closure` | INTERNAL: allocate a closure record with n slots. |
 | `string-const` | 1 | `pf_string_const` | INTERNAL: the i-th string literal in the constant table. |
+| `bytes->string` | 1 | `pf_bytes_to_string` | INTERNAL: a byte string from a list of byte values 0-255. |
 
 ## Adding a primitive
 
