@@ -177,6 +177,15 @@
 (define opt-output (ann #f _))
 (define opt-runtime "src/runtime/libpuffin.a")
 (define opt-input (ann #f _))
+;; REPL-mode compilation (docs/WASM-VM.md §4/§5.2):
+;;   --repl          compile ONE eval's forms (the input file) as a
+;;                   link-by-name v2 unit: -t bytecode, -O 0, no
+;;                   prelude injection (the session loads the prelude
+;;                   as its own REPL unit, so redefinition shadows it)
+;;   --repl-prelude  compile the embedded prelude itself as that REPL
+;;                   unit (no input file)
+(define opt-repl #f)
+(define opt-repl-prelude #f)
 
 (: parse-args (-> (List Str) Void))
 (define (parse-args args)
@@ -198,6 +207,10 @@
     [(string=? (car args) "--runtime")
      (begin (set! opt-runtime (flag-arg "--runtime" (cdr args)))
             (parse-args (cdr (cdr args))))]
+    [(string=? (car args) "--repl")
+     (begin (set! opt-repl #t) (parse-args (cdr args)))]
+    [(string=? (car args) "--repl-prelude")
+     (begin (set! opt-repl #t) (set! opt-repl-prelude #t) (parse-args (cdr args)))]
     [else
      (begin
        (when opt-input (error "puffincc: expected at most one input file"))
@@ -206,6 +219,11 @@
 
 (parse-args (command-line-args))
 (set! optimize-level opt-level)
+;; --repl implies the bytecode target at -O0 with repl-mode passes
+(when opt-repl
+  (begin (set! repl-mode #t)
+         (set! current-target 'bytecode)
+         (set! optimize-level 0)))
 
 (: compile-forms (-> (List _) _))
 (define (compile-forms raw-forms)
@@ -214,7 +232,11 @@
     (match raw-forms
       [`((program ,inner ...)) inner]
       [_ raw-forms]))
-  (run-chain `(program ,@(prelude-inject user-forms) ,@user-forms)))
+  ;; REPL units get no prelude: the session loads the prelude once as
+  ;; its own REPL unit, and every prelude name late-binds by cell
+  (if repl-mode
+      (run-chain `(program ,@user-forms))
+      (run-chain `(program ,@(prelude-inject user-forms) ,@user-forms))))
 
 (: ends-with? (-> Str Str Bool))
 (define (ends-with? s suffix)
@@ -236,6 +258,11 @@
     (error (str-cat "puffincc: assembler/linker failed: " cmd))))
 
 (cond
+  ;; --repl-prelude: compile the embedded prelude as a REPL unit (the
+  ;; session's first unit; docs/WASM-VM.md §5.2). No input file.
+  [opt-repl-prelude
+   (let ([result (compile-forms prelude-forms-data)])
+     (if opt-output (write-file opt-output result) (display result)))]
   ;; file mode: the entry of a module DAG (or a plain single file)
   [opt-input
    (let* ([raw (read-forms-from-string (read-file opt-input))]

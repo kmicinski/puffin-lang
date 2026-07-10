@@ -1,26 +1,25 @@
 // vm-engine.js -- the bytecode-VM implementation of the engine
-// interface (docs/WASM-VM.md §5.1). It runs the REAL compiler's
-// output on puffin-vm.wasm instead of the hand-written JS interpreter.
+// interface (docs/WASM-VM.md §5.1/§5.2). It runs the REAL compiler's
+// output on the wasm VM instead of the hand-written JS interpreter.
 //
-// STATUS: scaffold, GATED. Nothing here can run until two artifacts
-// exist, both produced only once wasi-sdk is installed and the wasm
-// build is turned on (src/vm/Makefile `wasm`):
-//   - puffin-vm.wasm   -- the VM (src/vm/*.c compiled for wasm32-wasi)
-//   - puffincc.pbc     -- puffincc compiled to bytecode (for run()/Session)
+// Three artifacts (built by tools/gen-web-vm.sh into web/public/ and
+// bin/):
+//   - puffin-vm.wasm      -- the VM, command model: one _start per
+//                            whole-program run (run(), runUnit(), and
+//                            each per-eval compiler invocation)
+//   - puffin-vm-repl.wasm -- the VM, reactor model: ONE persistent
+//                            instance per REPL Session (make -C
+//                            src/vm wasm-repl)
+//   - puffincc.pbc        -- puffincc compiled to bytecode; runs ON
+//                            the VM to compile editor source
 //
-// What IS implemented and ready to run the instant puffin-vm.wasm
-// exists: runUnit(), which loads a precompiled .pbc and runs it on the
-// VM through the WASI shim. That is exactly the browser smoke test the
-// .pbc fixtures (web/src/engine/fixtures/) are for -- it exercises the
-// whole wasm + shim path without needing puffincc.pbc.
-//
-// The full engine-interface run()/Session -- compiling user source to
-// bytecode *in the browser* via puffincc-on-the-VM (§5.1/§5.2) --
-// additionally needs the VM built as a wasm "reactor" that exports
-// load/run entry points (so compile-then-run is two calls into one
-// heap) plus the REPL-mode compilation flag (§4). Those are the M5
-// boundary; until then run()/Session throw EngineNotReady so the
-// façade cleanly falls back to the JS interpreter.
+// run(): compile + typecheck user source with puffincc-on-the-VM,
+// then run the produced unit -- two command instances sharing the
+// shim's JS-side FS. Session: a persistent reactor instance loading
+// one v2 link-by-name unit per eval (docs/WASM-VM.md §5.2); defines
+// persist as named session cells, redefinition replaces, results
+// arrive via the puffin.repl_result import. Missing artifacts throw
+// EngineNotReady so the façade cleanly falls back to the JS engine.
 
 import { WasiShim, PuffinAbort } from './wasi-shim.js';
 
@@ -32,9 +31,19 @@ export class EngineNotReady extends Error {
 // (vite serves web/public/ at the root; the Makefile's install step
 // will drop puffin-vm.wasm + puffincc.pbc there.)
 const VM_WASM_URL = '/puffin-vm.wasm';
+const VM_REPL_WASM_URL = '/puffin-vm-repl.wasm';
 const PUFFINCC_PBC_URL = '/puffincc.pbc';
 
-let compiledModule = null; // cached WebAssembly.Module
+let compiledModule = null;     // cached WebAssembly.Module (command)
+let compiledReplModule = null; // cached WebAssembly.Module (reactor)
+
+// Test seam: node harnesses (web/test-vm-*.mjs) have no fetch of
+// vite-served paths; they hand the artifact bytes in directly.
+export function preloadArtifacts({ vmWasm, vmReplWasm, puffincc } = {}) {
+  if (vmWasm) compiledModule = new WebAssembly.Module(vmWasm);
+  if (vmReplWasm) compiledReplModule = new WebAssembly.Module(vmReplWasm);
+  if (puffincc) puffinccBytes = puffincc;
+}
 
 // Fetch + compile the VM module once. Throws EngineNotReady with an
 // actionable message if the asset is absent (the gated state).
@@ -52,6 +61,23 @@ async function vmModule() {
   }
   compiledModule = await WebAssembly.compileStreaming(resp);
   return compiledModule;
+}
+
+// The reactor build (persistent REPL sessions; docs/WASM-VM.md §5.2).
+async function vmReplModule() {
+  if (compiledReplModule) return compiledReplModule;
+  let resp;
+  try {
+    resp = await fetch(VM_REPL_WASM_URL);
+  } catch (e) {
+    throw new EngineNotReady(`cannot fetch ${VM_REPL_WASM_URL}: ${e.message}`);
+  }
+  if (!resp.ok) {
+    throw new EngineNotReady(
+      `${VM_REPL_WASM_URL} not found (HTTP ${resp.status}). Build it: \`make -C src/vm wasm-repl\` and copy bin/puffin-vm-repl.wasm to web/public/.`);
+  }
+  compiledReplModule = await WebAssembly.compileStreaming(resp);
+  return compiledReplModule;
 }
 
 // Has the VM asset been built and served? Lets the UI decide whether
@@ -176,12 +202,134 @@ export async function run(source, opts = {}) {
   return runUnit(outPbc, { input, stdin, onOutput: out });
 }
 
-// Session: REPL over link-by-name units (§5.2). Gated on REPL-mode
-// compilation + reactor exports (M5).
+// ---- the REPL Session (§5.2, milestone M5) ----------------------
+//
+// A persistent session = ONE reactor VM instance (one heap, one
+// symbol table, one session cell table) loading MANY v2 units:
+//
+//   boot:  compile the embedded prelude to a REPL unit with
+//          puffincc-on-the-VM (command instance; cached), instantiate
+//          puffin-vm-repl.wasm, pvm_boot, load+run the prelude unit;
+//   eval:  compile the eval's forms with `puffincc --repl` (a fresh
+//          command instance sharing nothing but bytes), then
+//          pvm_load_run the v2 unit in the session instance --
+//          defines persist as named cells, redefinition replaces,
+//          cross-eval calls resolve at call time, results arrive via
+//          the puffin.repl_result import (one per non-void form);
+//   errors: (error v) prints through onOutput and exits 1 -- the
+//          eval still reports ok (JS Session parity: PuffinHalt keeps
+//          results-so-far); pf_fatal exits 255 with the message on
+//          stderr -> { ok: false, error }. Either way the abort only
+//          unwinds wasm frames: the engine restores __stack_pointer
+//          and the session (heap, cells, symbols) lives on.
+
+// the prelude REPL unit, compiled once per page (pure function of
+// puffincc.pbc)
+let preludeReplBytes = null;
+async function preludeReplPbc() {
+  if (preludeReplBytes) return preludeReplBytes;
+  const cc = await puffinccPbc();
+  let diag = '';
+  const r = await execUnit({
+    files: { '/puffincc.pbc': cc },
+    args: ['/puffincc.pbc', '--repl-prelude', '-o', '/prelude.pbc'],
+    stdin: new Uint8Array(0),
+    onOutput: (s) => { diag += s; },
+  });
+  const out = r.shim.fs.get('/prelude.pbc');
+  if (!out || out.length === 0) {
+    throw new EngineNotReady(`REPL prelude compile failed: ${diag.trim() || `exit ${r.code}`}`);
+  }
+  preludeReplBytes = out;
+  return out;
+}
+
 export class Session {
-  constructor() {
-    throw new EngineNotReady(
-      'VM Session: the REPL needs link-by-name units + REPL-mode compilation (docs/WASM-VM.md §5.2, milestone M5).');
+  // opts: { input: number[], stdin: string|Uint8Array, onOutput }
+  constructor({ input, stdin, onOutput } = {}) {
+    this.onOutput = onOutput || (() => {});
+    this._stdin = stdin != null
+      ? (typeof stdin === 'string' ? new TextEncoder().encode(stdin) : stdin)
+      : defaultInputBytes(input);
+    this._results = null; // the current eval's results sink
+    this._errText = '';
+    this._ready = this._boot();
+    this._ready.catch(() => {}); // surfaced per-eval; avoid unhandled rejection
+  }
+
+  async _boot() {
+    const prelude = await preludeReplPbc();
+    const module = await vmReplModule();
+    this._shim = new WasiShim({
+      stdin: this._stdin,
+      onOutput: (s) => this.onOutput(s),
+      onStderr: (s) => { this._errText += s; },
+      onReplResult: (s) => { if (this._results) this._results.push(s); },
+      files: {},
+      args: ['repl'],
+    });
+    this._instance = await WebAssembly.instantiate(module, this._shim.imports());
+    const ex = this._instance.exports;
+    this._shim.bindMemory(ex.memory);
+    ex._initialize();
+    ex.pvm_boot();
+    // the shadow-stack pointer at rest: restored before every eval,
+    // because an abort unwinds the wasm frames without unwinding it
+    this._sp0 = ex.__stack_pointer.value;
+    const r = this._loadRun(prelude);
+    if (r.code !== 0) {
+      throw new EngineNotReady(`REPL prelude unit failed: ${this._errText.trim() || `code ${r.code}`}`);
+    }
+  }
+
+  // Load + run one unit in the persistent instance. Returns { code }:
+  // 0 = clean, 1 = (error v) (already printed), 255 = pf_fatal.
+  _loadRun(bytes) {
+    const ex = this._instance.exports;
+    ex.__stack_pointer.value = this._sp0;
+    const ptr = ex.pvm_alloc(bytes.length);
+    new Uint8Array(ex.memory.buffer, ptr, bytes.length).set(bytes);
+    try {
+      ex.pvm_load_run(ptr, bytes.length);
+      return { code: 0 };
+    } catch (e) {
+      if (e instanceof PuffinAbort) return { code: e.code };
+      throw e;
+    }
+  }
+
+  // eval(text) -> { ok, results: string[], error? }  (async; the JS
+  // Session's surface, awaited by repl-worker.js)
+  async eval(code) {
+    try {
+      await this._ready;
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e), results: [] };
+    }
+    // 1. compile this eval's forms to a v2 unit (fresh compiler
+    //    instance; diagnostics are returned, not streamed)
+    const cc = await puffinccPbc();
+    let diag = '';
+    const compile = await execUnit({
+      files: { '/puffincc.pbc': cc, '/eval.puf': new TextEncoder().encode(code) },
+      args: ['/puffincc.pbc', '--repl', '/eval.puf', '-o', '/out.pbc'],
+      stdin: new Uint8Array(0),
+      onOutput: (s) => { diag += s; },
+    });
+    const unit = compile.shim.fs.get('/out.pbc');
+    if (!unit || unit.length === 0) {
+      return { ok: false, error: diag.trim() || `puffincc exited with code ${compile.code}`, results: [] };
+    }
+    // 2. run it in the session
+    this._results = [];
+    this._errText = '';
+    const r = this._loadRun(unit);
+    const results = this._results;
+    this._results = null;
+    // (error v) = exit 1: printed through onOutput already; the eval
+    // itself reports ok with results-so-far (JS Session parity).
+    if (r.code === 0 || r.code === 1) return { ok: true, results };
+    return { ok: false, error: this._errText.trim() || `program exited with code ${r.code}`, results };
   }
 }
 

@@ -799,7 +799,105 @@
 ;; Output programs carry their global count: (program ,n ,defns ...).
 ;; ---------------------------------------------------------------------
 
+;; REPL mode (docs/WASM-VM.md §4, §5.2): compile one eval's forms as a
+;; link-by-name unit. Differences from whole-program mode, exactly:
+;;   - EVERY top-level define -- functions included -- claims a NAMED
+;;     global cell; function defines become lambda initializers run in
+;;     source order, so a redefinition replaces the cell's closure and
+;;     every earlier unit's call (indirect by construction: reveal-
+;;     functions sees no top-level functions) picks it up at call time;
+;;   - free variables that are neither locals nor prims become
+;;     late-bound cells resolved by NAME against the VM's session
+;;     table (reading a still-unbound cell errors at run time with the
+;;     variable's name) instead of compile-time errors;
+;;   - each top-level expression is wrapped in (#%repl-result e): the
+;;     RESULT opcode delivers non-void values to the host, one per
+;;     form, and main's own result is (void).
+;; The unit's info carries 'global-names (cell index -> source name,
+;; in claim order: defines in source order, then free names in
+;; first-use order) and 'repl #t; render-pbc emits them as the v2
+;; globals section.
+(define (collect-globals-repl p)
+  (match-define `(program ,forms ...) p)
+  ;; the entry symbol is synthesized here, same as whole-program mode
+  (for ([form forms])
+    (match form
+      [`(define (,f ,_ ...) ,_)
+       #:when (equal? f (entry-symbol))
+       (error 'collect-globals "~a is reserved for the program entry point" f)]
+      [`(define ,(? symbol? x) ,_)
+       #:when (equal? x (entry-symbol))
+       (error 'collect-globals "~a is reserved for the program entry point" x)]
+      [_ (void)]))
+  ;; the cell table, grown on demand (deterministically: defines are
+  ;; claimed in source order first, then the walk below runs in source
+  ;; order, so free names are claimed in first-use order)
+  (define name->idx (make-hash))
+  (define names-rev '())
+  (define (slot! x)
+    (cond [(hash-ref name->idx x #f) => values]
+          [else
+           (define i (hash-count name->idx))
+           (hash-set! name->idx x i)
+           (set! names-rev (cons x names-rev))
+           i]))
+  (for ([form forms])
+    (match form
+      [`(define (,f ,_ ...) ,_) (slot! f)]
+      [`(define ,(? symbol? x) ,_) (slot! x)]
+      [_ (void)]))
+  ;; rewrite variable reads/writes; `shadowed` holds locally-bound
+  ;; names -- everything else is a cell, by name
+  (define (walk e shadowed) (prov (walk-core e shadowed) e))
+  (define (walk-core e shadowed)
+    (match e
+      [(? fixnum?) e]
+      [(? boolean?) e]
+      [`(void) e]
+      [`(nil) e]
+      [`(read) e]
+      [`(quote ,_) e]
+      [`(string-lit ,_) e]
+      [(? symbol? x)
+       (if (set-member? shadowed x) x `(global-ref ,(slot! x)))]
+      [`(if ,e0 ,e1 ,e2) `(if ,(walk e0 shadowed) ,(walk e1 shadowed) ,(walk e2 shadowed))]
+      [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
+       `(let ([_ (while ,(walk e-g shadowed) ,(walk e-b shadowed))]) ,(walk e-r shadowed))]
+      [`(let ([_ ,e]) ,e-b)
+       `(let ([_ ,(walk e shadowed)]) ,(walk e-b shadowed))]
+      [`(let ([,x ,e]) ,e-b)
+       `(let ([,x ,(walk e shadowed)]) ,(walk e-b (set-add shadowed x)))]
+      [`(set! ,x ,e)
+       (if (set-member? shadowed x)
+           `(set! ,x ,(walk e shadowed))
+           `(global-set! ,(slot! x) ,(walk e shadowed)))]
+      [`(lambda (,xs ...) ,e-b)
+       `(lambda ,xs ,(walk e-b (set-union shadowed (list->set xs))))]
+      [`(,(? prim? op) ,es ...) `(,op ,@(map (λ (e) (walk e shadowed)) es))]
+      [`(,e-f ,e-args ...) `(,(walk e-f shadowed) ,@(map (λ (e) (walk e shadowed)) e-args))]))
+  ;; main: every form is an effect step, in source order; the unit's
+  ;; own result is void (results travel through #%repl-result)
+  (define main-steps
+    (for/list ([form forms])
+      (match form
+        [`(define (,f ,xs ...) ,e-b)
+         `(global-set! ,(slot! f) (lambda ,xs ,(walk e-b (list->set xs))))]
+        [`(define ,(? symbol? x) ,e)
+         `(global-set! ,(slot! x) ,(walk e (set)))]
+        [e `(#%repl-result ,(walk e (set)))])))
+  (define main-body
+    (foldr (λ (step acc) `(let ([_ ,step]) ,acc)) '(void) main-steps))
+  `(program ,(hash 'globals (hash-count name->idx)
+                   'global-names (reverse names-rev)
+                   'repl #t)
+            (define (,(entry-symbol)) ,main-body)))
+
 (define (collect-globals p)
+  (if (repl-mode?)
+      (collect-globals-repl p)
+      (collect-globals-whole p)))
+
+(define (collect-globals-whole p)
   (match-define `(program ,forms ...) p)
   ;; the entry symbol is synthesized here; a user definition of it
   ;; would collide silently, so reject it loudly

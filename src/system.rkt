@@ -65,6 +65,16 @@
 ;; its clients (see docs/OPTIMIZER.md)
 (define optimize-level (make-parameter 1))
 
+;; REPL-mode compilation (docs/WASM-VM.md §4, §5.2): one eval's forms
+;; compile into a link-by-name unit -- every top-level define
+;; (functions included) becomes a NAMED global cell, free variables
+;; that are neither locals nor prims become late-bound cells resolved
+;; at link/run time, and top-level expression values are delivered
+;; through the #%repl-result prim (the RESULT opcode). REPL units
+;; always compile at -O0 for target 'bytecode; whole-program
+;; compilation (this flag off) is byte-for-byte unaffected.
+(define repl-mode? (make-parameter #f))
+
 ;; The synthesized entry function's name. Whole-program compilation
 ;; always uses 'main; separate compilation (docs/MODULES.md §3)
 ;; parameterizes it to the module's init symbol so collect-globals'

@@ -168,7 +168,9 @@ export default function App() {
   function spawnReplWorker() {
     replWorker = new Worker(new URL('./repl-worker.js', import.meta.url), { type: 'module' });
     replWorker.onmessage = handleReplMessage;
-    replWorker.postMessage({ type: 'reset', input: parseStdin(stdinText()) });
+    // engine resolved on the main thread, like the run message above:
+    // a Worker can't read ?engine= itself.
+    replWorker.postMessage({ type: 'reset', input: parseStdin(stdinText()), engine: engineName() });
   }
 
   function resetSession() {

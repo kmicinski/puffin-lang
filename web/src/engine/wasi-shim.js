@@ -51,9 +51,15 @@ const dec = new TextDecoder();
 // in-memory FS (path -> Uint8Array) seeded from the module file map,
 // plus an open-file table for fds >= FIRST_USER_FD.
 export class WasiShim {
-  // opts: { stdin: Uint8Array, onOutput: (str)=>void, files: {path:string|Uint8Array}, args: string[] }
-  constructor({ stdin = new Uint8Array(0), onOutput = () => {}, files = {}, args = [] } = {}) {
+  // opts: { stdin: Uint8Array, onOutput: (str)=>void, files: {path:string|Uint8Array}, args: string[],
+  //         onStderr: (str)=>void   -- optional; default: merged into onOutput,
+  //         onReplResult: (str)=>void -- REPL sessions (docs/WASM-VM.md §5.2):
+  //           one rendered string per non-void top-level form, delivered by
+  //           the VM's RESULT opcode through the puffin.repl_result import }
+  constructor({ stdin = new Uint8Array(0), onOutput = () => {}, files = {}, args = [], onStderr = null, onReplResult = () => {} } = {}) {
     this.onOutput = onOutput;
+    this.onStderr = onStderr;
+    this.onReplResult = onReplResult;
     this.stdin = stdin;
     this.stdinPos = 0;
     this.args = ['puffin-vm', ...args];
@@ -144,10 +150,13 @@ export class WasiShim {
         const mem = this.u8();
         if (fd === 1 || fd === 2) {
           // streamed synchronously; the run-worker's 8KB/50ms buffer
-          // still handles flood control (§3.5).
+          // still handles flood control (§3.5). stderr goes to
+          // onStderr when provided (the REPL session captures fatal
+          // runtime errors there), else merges into onOutput.
           let s = '';
           for (const [base, len] of chunks) s += dec.decode(mem.subarray(base, base + len));
-          this.onOutput(s);
+          if (fd === 2 && this.onStderr) this.onStderr(s);
+          else this.onOutput(s);
         } else {
           const f = this.open.get(fd);
           if (!f || !f.writable) return ERRNO_BADF;
@@ -279,9 +288,14 @@ export class WasiShim {
 
     return {
       wasi_snapshot_preview1: wasiProxy,
-      // §3.4: the host_abort import that __wrap_exit calls.
       puffin: {
+        // §3.4: the host_abort import that __wrap_exit calls.
         abort: (code) => { throw new PuffinAbort(code); },
+        // §5.2: RESULT opcode delivery -- the VM rendered the value
+        // with its own value->string; the bytes land here.
+        repl_result: (ptr, len) => {
+          this.onReplResult(dec.decode(this.u8().subarray(ptr, ptr + len)));
+        },
       },
     };
   }

@@ -51,6 +51,10 @@
 ;; refuses units whose version it does not implement.
 ;; ---------------------------------------------------------------------
 (define pbc-version 1)
+;; version 2 = a REPL unit (docs/WASM-VM.md §5.2): identical layout
+;; except the globals section is count + that many names (link-by-name
+;; cells), and the RESULT opcode may appear. v1 units are unchanged.
+(define pbc-version-repl 2)
 
 ;; prim ids: the index of the prim in the stdlib manifest, in
 ;; manifest order -- the VM's table (src/vm/vm-prims.inc) is
@@ -184,6 +188,11 @@
       [`(papp ,n (fun-ref ,f) ,args ...) (emit-call d `(fun-ref ,f) args n)]
       [`(app ,a-f ,args ...)          (emit-call d a-f args (length args))]
       [`(papp ,n ,a-f ,args ...)      (emit-call d a-f args n)]
+      ;; REPL-mode result delivery (docs/WASM-VM.md §4): pure effect,
+      ;; the destination slot is never written
+      [`(#%repl-result ,a)
+       (define-values (i0 s0) (src-operand a 0))
+       `(,@i0 (result ,s0))]
       [`(,(? stdlib-prim? op) ,args ...)
        `(,@(stage-args args)
          (prim ,d ,(prim-id op) (stage 0) ,(length args)))]
@@ -268,7 +277,7 @@
         'call '(0 2)  'calli '(0 1 2) 'tcall '(1) 'tcalli '(0 1)
         'prim '(0 2)  'collect '(0)
         'uget '(0 1)  'uset '(0 2)
-        'ret '(0)))
+        'ret '(0)     'result '(0)))
 
 (define (allocate-slots-bc p)
   (define (per-defn defn)
@@ -384,7 +393,7 @@
         'prim #x16 'collect #x17
         'uget #x18 'uset #x19
         'gget #x1A 'gset #x1B
-        'ret #x1C))
+        'ret #x1C 'result #x1D))
 
 (define (imm8? w) (and (>= w -128) (< w 128)))
 
@@ -407,13 +416,19 @@
     [`(collect ,_ ,_) 4]
     [`(uget ,_ ,_ ,_) 6]
     [`(uset ,_ ,_ ,_) 6]
-    [`(ret ,_) 3]))
+    [`(ret ,_) 3]
+    [`(result ,_) 3]))
 
 (define (render-pbc p)
   (match-define `(program ,info ,defns ...) p)
   (define symbols (hash-ref info 'symbols '()))
   (define strings (hash-ref info 'strings '()))
   (define n-globals (hash-ref info 'globals 0))
+  ;; REPL units are version 2: the globals section carries the cell
+  ;; NAMES (index order), which the VM links against its session
+  ;; table. Whole-program units stay version 1, byte for byte.
+  (define repl? (hash-ref info 'repl #f))
+  (define global-names (hash-ref info 'global-names '()))
   (define fun-names (map (λ (d) (match d [`(define ,_ (,f ,_ ...) ,_) f])) defns))
   (define fun-idx (for/hash ([f fun-names] [i (in-naturals)]) (values f i)))
   (define entry-idx (hash-ref fun-idx (entry-symbol)
@@ -482,7 +497,8 @@
          (op 'uset) (b16 a) (b8 i*) (b16 s)]
         [`(gget ,d ,g) (op 'gget) (b16 d) (b16 g)]
         [`(gset ,g ,s) (op 'gset) (b16 g) (b16 s)]
-        [`(ret ,s)     (op 'ret) (b16 s)]))
+        [`(ret ,s)     (op 'ret) (b16 s)]
+        [`(result ,s)  (op 'result) (b16 s)]))
     (get-output-bytes body))
   ;; ---- per-function code + table rows ---------------------------------
   (define encoded (map (λ (d) (match d [`(define ,_ (,_ ,_ ...) ,items) (encode-fun items)])) defns))
@@ -494,13 +510,15 @@
   (define total-code (apply bytes-append encoded))
   ;; ---- the unit --------------------------------------------------------
   (write-bytes (bytes (char->integer #\P) (char->integer #\U) (char->integer #\F) 1) out)
-  (u32 pbc-version)
+  (u32 (if repl? pbc-version-repl pbc-version))
   (u32 0) ;; reserved
   (u32 (length symbols))
   (for ([s symbols]) (lstr (string->bytes/utf-8 (symbol->string s))))
   (u32 (length strings))
   (for ([s strings]) (lstr (string->bytes/utf-8 s)))
   (u32 n-globals)
+  (when repl?
+    (for ([x global-names]) (lstr (string->bytes/utf-8 (symbol->string x)))))
   (u32 (length defns))
   (for ([d defns] [e encoded] [off code-offsets])
     (match-define `(define ,dinfo (,f ,formals ...) ,_) d)

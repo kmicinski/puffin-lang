@@ -1803,6 +1803,11 @@
       [`(papp ,n (fun-ref ,f) ,args ...) (emit-call d `(fun-ref ,f) args n)]
       [`(app ,a-f ,args ...)             (emit-call d a-f args (length args))]
       [`(papp ,n ,a-f ,args ...)         (emit-call d a-f args n)]
+      ;; REPL-mode result delivery (docs/WASM-VM.md §4): pure effect,
+      ;; the destination slot is never written
+      [`(#%repl-result ,a)
+       (define p0 (src-operand a 0))
+       (bc-app (first p0) (list `(result ,(second p0))))]
       [`(,(? stdlib-prim? op) ,args ...)
        (bc-app (stage-args args)
                (list `(prim ,d ,(bc-prim-id op) (stage 0) ,(length args))))]
@@ -1883,7 +1888,7 @@
         'call '(0 2) 'calli '(0 1 2) 'tcall '(1) 'tcalli '(0 1)
         'prim '(0 2) 'collect '(0)
         'uget '(0 1) 'uset '(0 2)
-        'ret '(0)))
+        'ret '(0) 'result '(0)))
 
 (define (allocate-slots-bc p)
   (define (per-defn defn)
@@ -1997,6 +2002,10 @@
 ;; ---------------------------------------------------------------------
 
 (define bc-version 1)
+;; version 2 = a REPL unit (docs/WASM-VM.md §5.2): identical layout
+;; except the globals section is count + that many names (link-by-name
+;; cells), and the RESULT opcode may appear. v1 units are unchanged.
+(define bc-version-repl 2)
 
 ;; opcode numbers -- keep in sync with docs/BYTECODE.md and
 ;; src/vm/puffin-vm.c (any change bumps bc-version)
@@ -2008,7 +2017,7 @@
         'prim 22 'collect 23
         'uget 24 'uset 25
         'gget 26 'gset 27
-        'ret 28))
+        'ret 28 'result 29))
 
 (define (bc-imm8? w) (and (>= w -128) (< w 128)))
 
@@ -2045,6 +2054,7 @@
        [(eq? op 'collect) 4]
        [(eq? op 'uget) 6] [(eq? op 'uset) 6]
        [(eq? op 'ret) 3]
+       [(eq? op 'result) 3]
        [else (error "bc-instr-size: unknown op")])]))
 
 (define (render-pbc p)
@@ -2053,6 +2063,11 @@
   (define symbols (hash-ref/default info 'symbols '()))
   (define strings (hash-ref/default info 'strings '()))
   (define n-globals (hash-ref/default info 'globals 0))
+  ;; REPL units are version 2: the globals section carries the cell
+  ;; NAMES (index order), which the VM links against its session
+  ;; table. Whole-program units stay version 1, byte for byte.
+  (define repl? (hash-ref/default info 'repl #f))
+  (define global-names (hash-ref/default info 'global-names '()))
   (define fun-names
     (map (lambda (d) (match d [`(define ,_ (,f ,_ ...) ,_) f])) defns))
   (define fun-idx
@@ -2116,7 +2131,8 @@
         [`(uset ,a ,i2 ,s) (bc-app (opcode 'uset) (bc-u16 a) (bc-u8 i2) (bc-u16 s))]
         [`(gget ,d ,g) (bc-app (opcode 'gget) (bc-u16 d) (bc-u16 g))]
         [`(gset ,g ,s) (bc-app (opcode 'gset) (bc-u16 g) (bc-u16 s))]
-        [`(ret ,s) (bc-app (opcode 'ret) (bc-u16 s))]))
+        [`(ret ,s) (bc-app (opcode 'ret) (bc-u16 s))]
+        [`(result ,s) (bc-app (opcode 'result) (bc-u16 s))]))
     (foldr (lambda (i acc) (bc-app (enc i) acc)) '() items))
   ;; ---- per-function code + table rows -----------------------------
   (define encoded
@@ -2130,7 +2146,7 @@
   ;; ---- the unit ----------------------------------------------------
   (define header
     (bc-app (list 80 85 70 1)      ;; 'P' 'U' 'F' 0x01
-            (bc-u32 bc-version)
+            (bc-u32 (if repl? bc-version-repl bc-version))
             (bc-u32 0)))           ;; reserved
   (define symtab
     (bc-app (bc-u32 (length symbols))
@@ -2138,7 +2154,12 @@
   (define strtab
     (bc-app (bc-u32 (length strings))
             (foldr (lambda (s acc) (bc-app (lstr s) acc)) '() strings)))
-  (define globals-sec (bc-u32 n-globals))
+  (define globals-sec
+    (if repl?
+        (bc-app (bc-u32 n-globals)
+                (foldr (lambda (x acc) (bc-app (lstr (symbol->string x)) acc))
+                       '() global-names))
+        (bc-u32 n-globals)))
   (define (fun-row d elen off)
     (match d
       [`(define ,dinfo (,f ,formals ...) ,_)

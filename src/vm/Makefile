@@ -89,6 +89,32 @@ wasm: vm-prims.inc $(WASM_CC)-check
 	@echo "built $(WASM_BIN)"
 	@ls -la $(WASM_BIN)
 
+# ---------------------------------------------------------------
+# The REPL reactor build (docs/WASM-VM.md §5.2, milestone M5): the
+# SAME sources compiled as a wasm *reactor* -- no _start/main; the
+# host calls _initialize once, then pvm_boot once, then
+# pvm_alloc+pvm_load_run per REPL eval, all in ONE instance (one
+# heap, one session cell table). Two artifacts by design: the
+# command-model puffin-vm.wasm keeps running whole programs (and the
+# smoke/compile tests) unchanged; puffin-vm-repl.wasm serves
+# persistent sessions. __stack_pointer is exported so the JS engine
+# can restore the shadow stack after an abort unwinds the wasm frames
+# (web/src/engine/vm-engine.js Session).
+# ---------------------------------------------------------------
+WASM_REPL_BIN := ../../bin/puffin-vm-repl.wasm
+
+WASM_REPL_CFLAGS := -Wall -Wextra -O2 \
+	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
+	-mexec-model=reactor -DPVM_REACTOR \
+	-I wasm/include -I ../runtime
+
+wasm-repl: vm-prims.inc $(WASM_CC)-check
+	$(WASM_CC) $(WASM_REPL_CFLAGS) $(WASM_LDFLAGS) \
+	  -Wl,--export=__stack_pointer \
+	  $(WASM_SRCS) -o $(WASM_REPL_BIN)
+	@echo "built $(WASM_REPL_BIN)"
+	@ls -la $(WASM_REPL_BIN)
+
 # Fail with the exact install instructions if the SDK is absent,
 # rather than a confusing "clang: not found".
 $(WASM_CC)-check:
@@ -130,6 +156,6 @@ $(GCTEST_BIN): $(GCTEST_SRCS) vm-prims.inc ../runtime/puffin.h wasm/wasm-gc.c wa
 	@echo "built $(GCTEST_BIN) (native VM through the wasm GC seam)"
 
 clean:
-	rm -f $(BIN) $(WASM_BIN) $(GCTEST_BIN)
+	rm -f $(BIN) $(WASM_BIN) $(WASM_REPL_BIN) $(GCTEST_BIN)
 
-.PHONY: all clean wasm gctest $(WASM_CC)-check
+.PHONY: all clean wasm wasm-repl gctest $(WASM_CC)-check
