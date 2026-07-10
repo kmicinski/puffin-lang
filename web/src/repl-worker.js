@@ -2,15 +2,11 @@
 // persist across evals until the main thread sends 'reset' (or
 // respawns the worker).
 //
-// The engine is resolved on the main thread and passed in the reset
-// message (a Worker can't read ?engine= itself; same pattern as
-// run-worker.js). 'js' = the hand-written interpreter Session
-// (default); 'vm' = the bytecode-VM Session (docs/WASM-VM.md §5.2):
-// a persistent wasm reactor instance running puffincc-compiled
-// link-by-name units. Session.eval is awaited uniformly -- the JS
-// Session's sync result resolves at once.
+// The session is the bytecode-VM Session (docs/WASM-VM.md §5.2): a
+// persistent wasm reactor instance running puffincc-compiled
+// link-by-name units. Session.eval is async and awaited.
 
-import { createSession, setEngine } from './engine/index.js';
+import { createSession } from './engine/index.js';
 
 let session = null;
 let input = [];
@@ -26,7 +22,6 @@ onmessage = async (e) => {
   const msg = e.data;
   switch (msg.type) {
     case 'reset':
-      if (msg.engine) setEngine(msg.engine);
       input = msg.input || [];
       makeSession();
       postMessage({ type: 'reset-done' });

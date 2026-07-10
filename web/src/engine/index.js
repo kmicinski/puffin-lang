@@ -1,86 +1,47 @@
-// engine/index.js -- the ONE engine interface App and the workers
-// import (docs/WASM-VM.md §5.1, migration step §7.1).
+// engine/index.js -- THE engine interface App and the workers import
+// (docs/WASM-VM.md §5).
 //
-// Today it is a thin façade over the hand-written JS interpreter
-// (web/src/puffin/), which stays the DEFAULT and the only implementation
-// wired for source `run`/`Session`. This is deliberately a pure
-// refactor: every name below is re-exported straight from
-// web/src/puffin/index.js, so repointing a consumer from
-// '../puffin/index.js' to '../engine/index.js' changes nothing
-// observable (the gate for §7.1 is `node web/test-corpus.mjs` staying
-// green).
+// There is exactly one engine: the real toolchain. puffincc (the
+// self-hosting compiler, itself compiled to bytecode) runs ON the wasm
+// VM to compile + typecheck editor source, and the VM runs the result;
+// the REPL is a persistent reactor session loading link-by-name units
+// (§5.2). The hand-written JS interpreter this façade once fronted
+// (web/src/puffin/) is deleted (§7.4): one compiler, one typechecker,
+// one semantics — browser, native, and REPL alike. Racket src/ remains
+// the offline consistency oracle (diff-ir + goldens), not a runtime.
 //
-// Beside it sits the bytecode-VM engine (vm-engine.js), added but not
-// yet default. When milestone M5 lands (VM reactor exports +
-// puffincc.pbc + REPL-mode compilation), flipping the default is:
-//   1. build the wasm (install wasi-sdk; `make -C src/vm wasm`),
-//   2. serve puffin-vm.wasm + puffincc.pbc from web/public/,
-//   3. make the workers await the async VM run()/Session and select
-//      the engine via engineName() below.
-// The JS interpreter then stays selectable for one release as the
-// escape hatch (§7.3) before web/src/puffin/ is deleted (§7.4).
+// Artifacts (vite serves web/public/): puffin-vm.wasm,
+// puffin-vm-repl.wasm, puffincc.pbc — built by tools/gen-web-vm.sh.
 
-// ---- the default (JS interpreter) surface, re-exported verbatim ----
-import { run as jsRun, Session as JsSession } from '../puffin/index.js';
-export {
-  Session,
-  render,
-  defaultInput,
-  surfacePrimNames,
-  resolveModules,
-  moduleForms,
-  ModuleError,
-  ReadError,
-  PuffinError,
-} from '../puffin/index.js';
-
-// ---- the VM engine (see vm-engine.js) ----
 import { run as vmRun, Session as VmSession } from './vm-engine.js';
+
 export {
   runUnit as vmRunUnit,
   vmAvailable,
+  preloadArtifacts,
   EngineNotReady,
+  Session,
 } from './vm-engine.js';
 export { PuffinAbort } from './wasi-shim.js';
 
-// createSession(opts) dispatches on the selected engine, like run().
-// The VM Session (docs/WASM-VM.md §5.2) is a persistent reactor
-// instance running real puffincc-compiled link-by-name units; its
-// eval() is async, so callers await session.eval(...) uniformly (the
-// JS Session's sync eval resolves at once).
-export function createSession(opts = {}) {
-  return engineName() === 'vm' ? new VmSession(opts) : new JsSession(opts);
-}
+// The editor's builtin-name list derives from the stdlib manifest
+// (generated: tools/gen-prim-names.rkt), not from an interpreter.
+export { surfacePrimNames } from './prim-names.js';
 
-// run(source, opts) dispatches on the selected engine. The VM path
-// (?engine=vm) compiles+typechecks with the real puffincc on the wasm
-// VM; the default 'js' path is the hand-written interpreter. Always
-// async so callers await uniformly (jsRun is sync -> resolves at once).
-// docs/WASM-VM.md §7.1: the JS interp stays default until VM parity
-// (Phase 3) + the VM REPL (Phase 4) land.
+// run(source, opts): compile + typecheck + run through the real
+// compiler. Async: the workers await it.
 export async function run(source, opts = {}) {
-  if (engineName() === 'vm') {
-    const r = await vmRun(source, opts);
-    // puffincc's diagnostics already carry the "error: " prefix and the
-    // app adds its own when displaying — strip it here so both engines
-    // return bare messages like the JS interpreter does.
-    if (!r.ok && r.error) r.error = r.error.replace(/^error:\s*/, '');
-    return r;
-  }
-  return jsRun(source, opts);
+  const r = await vmRun(source, opts);
+  // puffincc's diagnostics carry the "error: " prefix and the app adds
+  // its own when displaying — return bare messages.
+  if (!r.ok && r.error) r.error = r.error.replace(/^error:\s*/, '');
+  return r;
 }
 
-// Which engine should this session use? 'js' (default) or 'vm'.
-// Sources, in order: an explicit override, the ?engine= query param,
-// then the default. Kept trivial now; the settings toggle (§7.2)
-// writes the override.
-let engineOverride = null;
-export function setEngine(name) { engineOverride = name; }
-export function engineName() {
-  if (engineOverride) return engineOverride;
-  if (typeof location !== 'undefined' && location.search) {
-    const m = /[?&]engine=(js|vm)\b/.exec(location.search);
-    if (m) return m[1];
-  }
-  return 'js';
+// createSession(opts): a persistent VM REPL session (async eval).
+export function createSession(opts = {}) {
+  return new VmSession(opts);
 }
+
+// Kept for the UI badge; the answer no longer varies.
+export function engineName() { return 'vm'; }

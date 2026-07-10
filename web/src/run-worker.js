@@ -5,7 +5,7 @@
 // doesn't flood the message channel but output still streams while
 // the (synchronous) interpreter is running.
 
-import { run, setEngine } from './engine/index.js';
+import { run } from './engine/index.js';
 
 let buffer = '';
 let lastFlush = 0;
@@ -26,7 +26,6 @@ function out(s) {
 onmessage = async (e) => {
   const msg = e.data;
   if (msg.type !== 'run') return;
-  if (msg.engine) setEngine(msg.engine); // resolved on the main thread
   const t0 = performance.now();
   let res;
   try {

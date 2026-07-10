@@ -1,7 +1,6 @@
 import { createSignal, onMount, onCleanup, For, Show, lazy, Suspense } from 'solid-js';
 import { createEditor, setupMonaco } from './monaco-setup.js';
 import { EXAMPLES } from './examples.js';
-import { engineName } from './engine/index.js';
 
 // pipeline visualizer (and its 449KB sample trace) load on demand
 const Pipeline = lazy(() => import('./Pipeline.jsx'));
@@ -129,10 +128,6 @@ export default function App() {
       input: parseStdin(stdinText()),
       files: files(),
       entry: files() ? 'main.puf' : null,
-      // engine is resolved on the main thread: a Web Worker's
-      // `location` is the worker script's URL, not the page's, so the
-      // worker can't read ?engine= itself.
-      engine: engineName(),
     });
   }
 
@@ -168,9 +163,7 @@ export default function App() {
   function spawnReplWorker() {
     replWorker = new Worker(new URL('./repl-worker.js', import.meta.url), { type: 'module' });
     replWorker.onmessage = handleReplMessage;
-    // engine resolved on the main thread, like the run message above:
-    // a Worker can't read ?engine= itself.
-    replWorker.postMessage({ type: 'reset', input: parseStdin(stdinText()), engine: engineName() });
+    replWorker.postMessage({ type: 'reset', input: parseStdin(stdinText()) });
   }
 
   function resetSession() {
@@ -315,7 +308,7 @@ export default function App() {
         <div class="brand">
           <span class="logo">🐧</span>
           <span class="name">Puffin</span>
-          <span class="target-note">interpreter</span>
+          <span class="target-note">puffincc · wasm vm</span>
         </div>
         <div class="mode-switch" role="tablist">
           <button classList={{ active: mode() === 'play' }} onClick={() => switchMode('play')}>Playground</button>
