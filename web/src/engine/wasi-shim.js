@@ -198,11 +198,16 @@ export class WasiShim {
       },
       fd_fdstat_get: (fd, statPtr) => {
         // filetype 4 = regular file, 3 = directory; minimal fields.
+        // Rights must advertise everything: wasi-libc's access() (and
+        // so the runtime's file-exists?) checks the preopen dir's
+        // rights bits and treats missing rights as EACCES — zeroed
+        // rights made file-exists? always #f, breaking the module
+        // resolver under the shim.
         const dv = this.dv();
         dv.setUint8(statPtr, fd === PREOPEN_FD ? 3 : 4);
         dv.setUint16(statPtr + 2, 0, true); // flags
-        dv.setBigUint64(statPtr + 8, 0n, true);  // rights base
-        dv.setBigUint64(statPtr + 16, 0n, true); // rights inheriting
+        dv.setBigUint64(statPtr + 8, 0xFFFFFFFFFFFFFFFFn, true);  // rights base: all
+        dv.setBigUint64(statPtr + 16, 0xFFFFFFFFFFFFFFFFn, true); // rights inheriting: all
         return ERRNO_SUCCESS;
       },
       fd_fdstat_set_flags: () => ERRNO_SUCCESS,
