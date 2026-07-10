@@ -41,17 +41,26 @@
 (define intrinsic-unary  '(-))          ;; negation
 (define intrinsic-binary '(+ * eq? <))
 
+;; Internal operators the compiler introduces mid-pipeline (never in
+;; source, never in the stdlib manifest). #%repl-result is REPL-mode
+;; result delivery (docs/WASM-VM.md §4): collect-globals wraps each
+;; top-level expression with it and the bytecode backend lowers it to
+;; the RESULT opcode. Whole-program units never contain it.
+(define internal-prims '(#%repl-result))
+
 ;; Any operator that may appear applied in post-desugar IRs.
 (define (prim? op)
   (and (symbol? op)
        (or (stdlib-prim? op)
            (member op intrinsic-unary)
-           (member op intrinsic-binary))
+           (member op intrinsic-binary)
+           (member op internal-prims))
        #t))
 
 (define (prim-arity op)
   (cond [(member op intrinsic-unary)  1]
         [(member op intrinsic-binary) 2]
+        [(member op internal-prims)   1]
         [else (stdlib-arity op)]))
 
 ;; Operators allowed in *source* programs: surface library prims,
