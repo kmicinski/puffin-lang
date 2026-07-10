@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puffin for Racketeers</title>
+<style>
+:root {
+  --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8880;
+  --accent: #2a78d6; --accent-2: #1baf7a; --racket: #eda100;
+  --card: #f6f5f2; --border: #e4e2dc; --grid: #eceae5;
+  --win: #0ca30c; --lose: #d03b3b;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8a887d;
+  --accent: #3987e5; --accent-2: #199e70; --racket: #c98500;
+  --card: #232322; --border: #34342f; --grid: #2b2b29;
+  --win: #35c235; --lose: #e66767;
+} }
+:root[data-theme="light"] {
+  --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8880;
+  --accent: #2a78d6; --accent-2: #1baf7a; --racket: #eda100;
+  --card: #f6f5f2; --border: #e4e2dc; --grid: #eceae5;
+  --win: #0ca30c; --lose: #d03b3b;
+}
+:root[data-theme="dark"] {
+  --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8a887d;
+  --accent: #3987e5; --accent-2: #199e70; --racket: #c98500;
+  --card: #232322; --border: #34342f; --grid: #2b2b29;
+  --win: #35c235; --lose: #e66767;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font: 15px/1.55 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  color: var(--text-primary); background: var(--surface-1);
+  margin: 0;
+}
+.layout { max-width: 1160px; margin: 0 auto; padding: 28px 20px 90px;
+  display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 40px; }
+nav.toc { position: sticky; top: 22px; align-self: start; font-size: 13.5px; }
+nav.toc summary { display: none; }
+nav.toc a { display: block; color: var(--text-secondary); text-decoration: none;
+  padding: 4px 10px; border-left: 2px solid var(--grid); }
+nav.toc a:hover { color: var(--text-primary); }
+nav.toc a.active { color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+nav.toc .toc-title { font-weight: 650; font-size: 12px; letter-spacing: 0.6px;
+  text-transform: uppercase; color: var(--text-muted); margin: 0 0 8px 12px; }
+#theme { position: fixed; top: 14px; right: 14px; z-index: 5; font: inherit; font-size: 15px;
+  background: var(--card); color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: 999px; width: 34px; height: 34px; cursor: pointer; line-height: 1; }
+#theme:hover { color: var(--text-primary); }
+main { min-width: 0; }
+h1 { font-size: 27px; margin: 0 0 4px; letter-spacing: -0.3px; }
+h2 { font-size: 20px; margin: 52px 0 8px; padding-top: 8px; border-top: 1px solid var(--grid); }
+h3 { font-size: 16px; margin: 30px 0 4px; }
+p, li { color: var(--text-primary); }
+.lede, .sub { color: var(--text-secondary); }
+.lede { font-size: 16px; }
+a { color: var(--accent); }
+code { font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--card); border: 1px solid var(--border); border-radius: 5px; padding: 0 4px; }
+pre { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 15px; overflow-x: auto; margin: 12px 0; }
+pre code { background: none; border: 0; padding: 0; font-size: 12.5px; tab-size: 2; display: block; }
+pre.err { border-left: 4px solid var(--lose); }
+pre.err code { color: var(--lose); }
+.cm { color: var(--text-muted); font-style: italic; }
+.st { color: var(--accent-2); }
+.kw { color: var(--accent); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0 4px; }
+@media (max-width: 880px) { .pair { grid-template-columns: 1fr; } }
+.pair pre { margin: 6px 0 0; height: calc(100% - 26px); }
+.side-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; }
+.side-label.rkt { color: var(--racket); }
+.side-label.puf { color: var(--accent); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 22px 0; }
+.tile { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .n { font-size: 22px; font-weight: 650; letter-spacing: -0.5px; }
+.tile .l { font-size: 12.5px; color: var(--text-secondary); }
+.qa { border: 1px solid var(--border); border-left: 4px solid var(--accent);
+  background: var(--card); border-radius: 10px; padding: 14px 18px; margin: 28px 0; }
+.qa .q { font-weight: 650; margin: 0 0 6px; }
+.qa .q::before { content: "Q. "; color: var(--accent); }
+.qa p { margin: 8px 0; }
+.qa pre { background: var(--surface-1); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 12px 0; }
+th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+thead th { color: var(--text-secondary); font-weight: 600; }
+.note { color: var(--text-secondary); font-size: 13px; }
+.badge { display: inline-block; background: var(--card); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 11px; font-size: 12.5px; color: var(--text-secondary); margin: 2px 6px 2px 0; }
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; gap: 12px; }
+  nav.toc { position: static; }
+  nav.toc summary { display: list-item; cursor: pointer; font-weight: 650; color: var(--text-secondary); }
+  nav.toc .toc-title { display: none; }
+}
+</style>
+</head>
+<body>
+<button id="theme" title="Toggle light/dark">◐</button>
+<div class="layout">
+<nav class="toc" aria-label="Contents">
+  <details id="tocbox" open>
+    <summary>Contents</summary>
+    <div class="toc-title">Puffin for Racketeers</div>
+    <a href="#hero">What Puffin is</a>
+    <a href="#core">The familiar core</a>
+    <a href="#matching">Pattern matching</a>
+    <a href="#types">Gradual types</a>
+    <a href="#modules">Modules</a>
+    <a href="#xmodules">Types across modules</a>
+    <a href="#running">Run it yourself</a>
+  </details>
+</nav>
+<main>
+
+<section id="hero">
+<h1>Puffin for Racketeers</h1>
+<p class="lede">Puffin is a Racket-family language that started as a PL-course
+compiler and grew real: a <strong>self-hosting compiler</strong> with native
+(arm64, x86-64) and bytecode backends, <strong>gradual types</strong> built on
+algebraic datatypes, a file-based <strong>module system</strong> with separate
+compilation — and it now beats Racket-on-Chez on its own benchmark suite. The
+same compiler runs in the <a href="#running">browser playground</a>, compiled to
+bytecode on a WebAssembly VM. If you took an undergrad PL course and
+know Racket, you already know most of Puffin. This tutorial is about the
+<em>differences</em>: each one shown as a Racket/Puffin pair, with a paragraph on why.</p>
+
+<div class="tiles">
+  <div class="tile"><div class="n">0.95×</div><div class="l">geometric-mean wall time vs Racket 8.15 (Chez), 14 paired benchmarks, arm64 (&lt;1 is faster) — <code>bench/report.html</code></div></div>
+  <div class="tile"><div class="n">stage 3 ≡ stage 2</div><div class="l">self-hosting fixpoint: <code>puffincc</code>, the compiler written in Puffin, compiles itself byte-identically</div></div>
+  <div class="tile"><div class="n">297 / 297</div><div class="l">untyped corpus programs that still pass under the typechecker — the gradual guarantee, measured</div></div>
+  <div class="tile"><div class="n">9 ms</div><div class="l">process startup for a compiled Puffin binary (vs 147 ms for <code>racket</code>)</div></div>
+</div>
+
+<p>Ten lines of typed Puffin — an interpreter, of course:</p>
+<pre><code>(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (eval-expr a) (eval-expr b))]
+    [(Mul a b) (* (eval-expr a) (eval-expr b))]))
+
+(println (eval-expr (Add (Mul (Num 3) (Num 4)) (Num 1))))   ;; 13
+</code></pre>
+<p class="note">Every example on this page is real: it was run (and typechecked)
+with <code>bin/puffin -i</code> — the Racket-hosted oracle CLI — in July 2026,
+when this page was written. Error messages are quoted verbatim. Every example
+also pastes straight into the <a href="#running">web playground</a>, which runs
+the real compiler.</p>
+</section>
+
+<section id="core">
+<h2>The familiar core</h2>
+<p>Most of your Racket muscle memory transfers directly:</p>
+<p>
+<span class="badge">only <code>#f</code> is false</span>
+<span class="badge">proper tail calls</span>
+<span class="badge">named <code>let</code></span>
+<span class="badge">internal defines (letrec*-scoped)</span>
+<span class="badge">first-class closures</span>
+<span class="badge">quasiquote + splicing</span>
+<span class="badge"><code>match</code></span>
+<span class="badge">interned symbols, <code>eq?</code>/<code>equal?</code></span>
+</p>
+<p>A million-iteration loop in O(1) stack, exactly as you would write it in Racket:</p>
+<pre><code>(let loop ([i 0] [acc 0])
+  (if (&lt; i 1000000)
+      (loop (+ i 1) (+ acc i))
+      (println acc)))          ;; 499999500000
+</code></pre>
+
+<h3>Hashes and sets: one immutable default</h3>
+<div class="pair">
+<div><div class="side-label rkt">In Racket</div>
+<pre><code>#lang racket
+(define h0 (hash 'a 1 'b 2))    ; immutable
+(define h1 (hash-set h0 'c 3))  ; functional update
+(hash-count h0)                 ; 2 — h0 untouched
+;; ...but pick your flavor: hash, hasheq,
+;; hasheqv, make-hash, make-hasheq,
+;; make-weak-hasheq, ...
+</code></pre></div>
+<div><div class="side-label puf">In Puffin</div>
+<pre><code>(define h0 (hash 'a 1 'b 2))    ;; THE hash
+(define h1 (hash-set h0 'c 3))  ;; a NEW hash
+(println (hash-count h0))       ;; 2 — h0 untouched
+(println (hash-count h1))       ;; 3
+(println (equal? (hash 'x 1 'y 2)
+                 (hash 'y 2 'x 1)))  ;; #t
+(define m (make-hash))          ;; the tolerated
+(hash-set! m 'hits 0)           ;; mutable variant
+(hash-set! m 'hits (+ 1 (hash-ref m 'hits)))
+(println (hash-ref m 'hits))    ;; 1
+</code></pre></div>
+</div>
+<p>Racket and Puffin agree that immutable is the right default, but Puffin keeps
+exactly <em>one</em> flavor: <code>(hash)</code> is an eq?-keyed persistent HAMT in
+the native runtime — <code>hash-set</code> is O(log n) structural sharing, not a
+copy — and immutable collections compare by value under <code>equal?</code>.
+Mutation exists where you ask for it (<code>make-hash</code>,
+<code>hash-set!</code>), and those tables compare by identity. Sets
+(<code>set</code>/<code>set-add</code>, <code>make-set</code>/<code>set-add!</code>)
+follow the same story. Pairs are immutable, full stop: there is no
+<code>set-car!</code>.</p>
+
+<h3>Numbers: 61-bit fixnums only</h3>
+<div class="pair">
+<div><div class="side-label rkt">In Racket</div>
+<pre><code>(expt 2 100)  ; 1267650600228229401496703205376
+(/ 1 3)       ; 1/3 — an exact rational
+(sqrt -1)     ; 0+1i — the full tower
+</code></pre></div>
+<div><div class="side-label puf">In Puffin</div>
+<pre><code>(println (* 1000000 1000000))  ;; 1000000000000
+(println (quotient 7 2))       ;; 3 — checked division
+(println (remainder 7 2))      ;; 1
+;; no floats, no bignums, no rationals:
+;; 61-bit fixnums are the numbers. Stay under ±2^60.
+</code></pre></div>
+</div>
+<p>Puffin trades Racket's numeric tower for one unboxed machine representation:
+fixnums fit in a tagged 64-bit word, so arithmetic compiles to arithmetic. This is
+where a lot of the benchmark numbers come from, and for compilers, interpreters,
+and data-structure work — the language's home turf — it is the honest trade. The
+compiled routes — native code and the bytecode VM the playground runs on — share
+one 61-bit tagged representation; the Racket-hosted reference interpreter uses
+arbitrary precision, so if you overflow 2^60 its answer can disagree with the
+compiled one. The sharp edge is documented, and the type system's roadmap
+(checked casts) is aimed at exactly this class of seam.</p>
+</section>
+
+<section id="matching">
+<h2>Pattern matching</h2>
+<p>Everything you use in Racket's <code>match</code> is here, feature for feature:
+quasiquote patterns, ellipsis (including nested), clause guards with
+<code>#:when</code>, and <code>?</code> predicate patterns. This runs unchanged in
+both languages (modulo <code>#lang</code>):</p>
+<pre><code>(define (analyze e)
+  (match e
+    [`(add ,a ,b) (list 'sum a b)]
+    [`(lambda (,xs ...) ,body) (list 'fn (length xs))]
+    [`(program (define (,ns ,ps ...) ,bs) ...)   ;; nested ellipsis
+     (list 'defs ns (map length ps))]
+    [(? fixnum? n) #:when (&lt; n 0) 'negative]
+    [(? fixnum? n) 'number]
+    [_ 'other]))
+
+(println (analyze '(add 1 2)))          ;; (sum 1 2)
+(println (analyze '(lambda (x y z) x))) ;; (fn 3)
+(println (analyze '(program (define (f a b) 1)
+                            (define (g x) 2))))  ;; (defs (f g) (2 1))
+(println (analyze -5))                  ;; negative
+(println (analyze 7))                   ;; number
+</code></pre>
+<p>Under nested ellipsis each variable collects a list of its per-element matches,
+Racket-style — this is the idiom the Puffin compiler itself is written in. So far,
+no difference. The difference is what you match <em>on</em>.</p>
+
+<h3>The same interpreter, two ways</h3>
+<div class="pair">
+<div><div class="side-label rkt">Racket style: quasiquote over s-expressions</div>
+<pre><code>(define (eval-expr e)
+  (match e
+    [`(num ,n) n]
+    [`(add ,a ,b)
+     (+ (eval-expr a) (eval-expr b))]
+    [`(mul ,a ,b)
+     (* (eval-expr a) (eval-expr b))]
+    [`(neg ,a) (- (eval-expr a))]))
+
+(println
+ (eval-expr
+  '(add (num 1)
+        (mul (num 3) (neg (num 4))))))  ;; -11
+</code></pre></div>
+<div><div class="side-label puf">Puffin style: ADT constructor patterns</div>
+<pre><code>(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (eval-expr a) (eval-expr b))]
+    [(Mul a b) (* (eval-expr a) (eval-expr b))]
+    [(Neg a) (- (eval-expr a))]))
+
+(println
+ (eval-expr
+  (Add (Num 1)
+       (Mul (Num 3) (Neg (Num 4))))))   ;; -11
+</code></pre></div>
+</div>
+<p>Both run in Puffin — the left one is also verbatim Racket. In the quasiquote
+version an expression is "whatever list shape the patterns happen to expect": any
+s-expression can leak in, and nothing owns the set of cases. In the ADT version,
+<code>(Add a b)</code> is a <em>constructor pattern</em> — <code>match</code>
+recognizes it because <code>Add</code> is bound as a constructor — and the type
+declaration is the single place the shape of expressions is defined.</p>
+
+<p>Here is the argument in one typo. Misspell a quasiquote tag and you get a
+clause that silently never matches — your program dies at runtime, on the input
+that should have worked. Misspell a constructor and the compiler stops you
+immediately, even when the bad clause is unreachable:</p>
+<div class="pair">
+<div><div class="side-label rkt">Quasiquote typo: dead clause, runtime failure</div>
+<pre><code>(define (f e)
+  (match e
+    [`(add ,a ,b) (+ a b)]
+    [`(mull ,a ,b) (* a b)]))  ;; oops
+(println (f '(mul 3 4)))
+</code></pre>
+<pre class="err"><code>error: match-failure</code></pre></div>
+<div><div class="side-label puf">Constructor typo: compile-time error</div>
+<pre><code>(match e
+  [(Num n) n]
+  [(Add a b) (+ (eval-expr a) (eval-expr b))]
+  [(Mull a b) (* (eval-expr a) (eval-expr b))])
+;; Mull names no constructor in scope
+</code></pre>
+<pre class="err"><code>error: match: no matching clause for '(Mull a b)</code></pre></div>
+</div>
+<p>And because a module's <code>define-type</code>s are a closed world (see
+<a href="#modules">modules</a>), the compiler knows the complete constructor set of
+every ADT — which is what makes exhaustiveness checking possible at all.</p>
+
+<h3>Nullary constructors are bare names — and patterns nest</h3>
+<pre><code>(define-type Shape
+  (Point)
+  (Circle Int)
+  (Rect Int Int))
+
+(define (classify [s : Shape]) : Sym
+  (match s
+    [Point 'point]              ;; bare nullary name: no (Point) noise
+    [(Circle 0) 'degenerate]    ;; literals nest inside constructors
+    [(Circle _) 'circle]
+    [(Rect w h) #:when (eq? w h) 'square]
+    [_ 'rectangle]))
+
+(println (map classify
+              (list Point (Circle 0) (Circle 9) (Rect 4 4) (Rect 4 2))))
+;; (point degenerate circle square rectangle)
+</code></pre>
+<p>A nullary constructor is a <em>value</em>, not a function you call:
+<code>Point</code>, not <code>(Point)</code> — in expressions and in patterns
+alike. This reads like ML. A bare pattern symbol that names a nullary constructor
+matches that constructor; anything else stays a binder, exactly as today, so
+untyped code cannot change meaning.</p>
+
+<aside class="qa">
+<div class="q">Do types flow into <code>match</code>?</div>
+<p>Yes. The scrutinee's type flows into constructor patterns, so the fields bound
+by <code>(Circle r)</code> have their declared types inside the clause body — and
+misusing them is a compile-time error:</p>
+<pre><code>(define-type Shape (Circle Int))
+(define (f [s : Shape])
+  (match s
+    [(Circle r) (string-length r)]))   ;; r : Int
+</code></pre>
+<pre class="err"><code>error: typecheck: string-length: argument has type Int, expected Str</code></pre>
+</aside>
+
+<aside class="qa">
+<div class="q">Does Puffin check exhaustiveness?</div>
+<p>Not yet — it is explicitly on the roadmap (as a warning first, per
+<code>docs/TYPES.md</code>). What is already true today: because requires form a
+DAG and all of a module's <code>define-type</code>s are closed once the file ends,
+the full constructor set of every ADT is statically known — the property that
+makes exhaustiveness <em>checkable</em>. A fall-through today raises
+<code>error: match-failure</code> at runtime, as in Racket.</p>
+</aside>
+</section>
+
+<section id="types">
+<h2>Gradual types</h2>
+<p>This is the centerpiece. Typed Racket's answer to "how do I type Scheme?" is a
+<em>second language</em>: a separate <code>#lang</code>, subtyping with unions,
+occurrence typing, contracts at module boundaries. Puffin's answer is one language
+where the unannotated type is <code>_</code> (Any) and annotations only ever
+tighten. Whole programs with no annotations typecheck by construction — gradual,
+not optional-but-nagging.</p>
+
+<h3>Declaring types: <code>define-type</code>, implicitly mutually recursive</h3>
+<div class="pair">
+<div><div class="side-label rkt">In Typed Racket</div>
+<pre><code>#lang typed/racket
+(struct Leaf ([n : Integer]))
+(struct Node ([f : Forest]))
+(struct FNil ())
+(struct FCons ([t : Tree] [rest : Forest]))
+(define-type Tree (U Leaf Node))
+(define-type Forest (U FNil FCons))
+
+(: tree-sum (-&gt; Tree Integer))
+(define (tree-sum t)
+  (match t
+    [(Leaf n) n]
+    [(Node f) (forest-sum f)]))
+;; (forest-sum is symmetric)
+</code></pre></div>
+<div><div class="side-label puf">In Puffin</div>
+<pre><code>(define-type Tree
+  (Leaf Int)
+  (Node Forest))     ;; Forest is defined BELOW — fine
+(define-type Forest
+  (FNil)
+  (FCons Tree Forest))
+
+(define (tree-sum [t : Tree]) : Int
+  (match t
+    [(Leaf n) n]
+    [(Node f) (forest-sum f)]))
+(define (forest-sum [f : Forest]) : Int
+  (match f
+    [FNil 0]
+    [(FCons t rest) (+ (tree-sum t) (forest-sum rest))]))
+
+(println (tree-sum
+  (Node (FCons (Leaf 1)
+        (FCons (Node (FCons (Leaf 2) FNil)) FNil)))))  ;; 3
+</code></pre></div>
+</div>
+<p>One form declares the type and its constructors together — no
+struct-per-variant plus a union on the side. And there is no <code>fix</code> or
+<code>and</code> block for mutual recursion: <strong>all
+<code>define-type</code>s in a module form one implicitly mutually recursive
+group</strong>, mirroring how top-level <code>define</code>s are already
+letrec*-recursive. Types behave the way values do; anything else would feel
+foreign. Parameterized types work as you'd expect:
+<code>(define-type (Option a) (None) (Some a))</code> gives
+<code>Some : (-&gt; a (Option a))</code> and <code>None : (Option a)</code>.</p>
+
+<h3>Annotations anywhere, <code>_</code> everywhere else</h3>
+<div class="pair">
+<div><div class="side-label rkt">In Typed Racket</div>
+<pre><code>#lang typed/racket   ; the whole FILE opts in
+(: area (-&gt; Integer Integer))
+(define (area r) (* pi* (* r r)))
+;; ...and now EVERYTHING in this module
+;; must typecheck. Mixing means module
+;; boundaries and require/typed.
+</code></pre></div>
+<div><div class="side-label puf">In Puffin</div>
+<pre><code>(: pi Int)                         ;; declaration form
+(define pi 314159)
+(define (area [r : Int]) : Int     ;; params + result
+  (* pi (* r r)))
+(define (mixed a [b : Int] c)      ;; any subset;
+  (list a b c))                    ;; a, c default to _
+(let ([xs : (List Int) (list 1 2 3)])
+  (println (foldl (lambda ([x : Int] acc) (+ x acc))
+                  0 xs)))          ;; 6
+(println (ann (+ 20 22) Int))      ;; 42 — ascription
+(println (area 2))                 ;; 1256636
+(println (mixed 'anything 5 "goes"))
+</code></pre></div>
+</div>
+<p>Every binding position takes an optional annotation — <code>[x : t]</code>
+formals, <code>: result</code> on defines, <code>(: name t)</code> declarations,
+<code>[x : t e]</code> in <code>let</code>, <code>(ann e t)</code> on any
+expression — and every omitted one is <code>_</code>. There is no typed/untyped
+module split to manage: the granularity of gradualness is the individual
+annotation, in one language, checked by one typechecker on every route — native,
+bytecode, the Racket oracle's interpreter, and the browser playground, which runs
+the same compiler.</p>
+
+<h3>Consistency, not subtyping</h3>
+<p>Where Typed Racket asks "is this type a <em>subtype</em> of that one?", Puffin's
+bidirectional checker asks Siek–Taha <em>consistency</em>: <code>_ ~ τ</code> and
+<code>τ ~ _</code> for every τ, congruent componentwise on containers and arrows,
+and — crucially — <strong>not transitive</strong>: <code>Int ~ _</code> and
+<code>_ ~ Bool</code> prove nothing about <code>Int</code> and <code>Bool</code>.
+Concrete-vs-concrete disagreement is a compile-time error:</p>
+<pre><code>(define (inc [n : Int]) : Int (+ n 1))
+(inc #t)
+</code></pre>
+<pre class="err"><code>error: typecheck: inc: argument has type Bool, expected Int</code></pre>
+<p class="note">These are compile-time errors in the browser too: the playground's
+Run typechecks with the same checker before anything executes, so the red boxes
+in this tutorial reproduce verbatim in its output pane.</p>
+<p>The other pillar of Typed Racket — occurrence typing, where <code>(if (string?
+x) ...)</code> narrows a union — has no analogue in Puffin, because there are no
+unions to narrow. Dynamic dispatch on predicates is what <code>_</code> is for;
+statically known alternatives are what ADTs are for:</p>
+<div class="pair">
+<div><div class="side-label rkt">In Typed Racket: unions + occurrence typing</div>
+<pre><code>#lang typed/racket
+(define (len-or-inc [x : (U String Integer)])
+  (if (string? x)
+      (string-length x)   ; x : String here
+      (add1 x)))          ; x : Integer here
+</code></pre></div>
+<div><div class="side-label puf">In Puffin: <code>_</code> flows, or an ADT owns the cases</div>
+<pre><code>(define (len-or-inc x)    ;; x : _
+  (if (string? x)
+      (string-length x)   ;; _ ~ Str: allowed
+      (+ x 1)))           ;; _ ~ Int: allowed
+(println (len-or-inc "four"))  ;; 4
+(println (len-or-inc 41))      ;; 42
+</code></pre></div>
+</div>
+<p>This is a real trade: Typed Racket proves more about predicate-heavy code;
+Puffin keeps the theory small (one relation, no subtype lattice) and pushes you
+toward constructors, where the checker's answers are exact.</p>
+
+<h3>The gradual guarantee — and contracts vs hints</h3>
+<p>The design rule: <strong>unannotated code never fails to check</strong>. The
+entire pre-types corpus — 297 programs — passes under the checker unchanged; that
+is the regression suite for the claim. Making that true required one careful
+distinction inside applications. A formal's <em>concrete</em> structure is a
+contract — violate it and you get an error:</p>
+<pre><code>(car 5)
+</code></pre>
+<pre class="err"><code>error: typecheck: car: argument has type Int, expected (Pairof a b)</code></pre>
+<p>But a constraint that exists only because inference greedily bound a type
+variable from a <em>sibling argument</em> is a hint, not a contract — a conflict
+there quietly demotes the variable to <code>_</code> instead of erroring, because
+no annotation you wrote is being violated:</p>
+<pre><code>;; hash-set : (-&gt; (Hash k v) k v (Hash k v))
+;; the first argument binds v := Int; the third argument says Str.
+;; v was inferred, not declared — so v demotes to _ and this checks:
+(define h (hash-set (hash 'a 1) 'b "two"))
+(println (hash-ref h 'b))   ;; two
+</code></pre>
+<p>Untyped Scheme programs are full of heterogeneous hashes and lists; treating
+inference guesses as contracts would break them, and then the type system would be
+opt-in after all. Only what you <em>annotate</em> constrains you.</p>
+
+<h3><code>(List a)</code> and <code>(Pairof a d)</code>: equi-recursive, no unions</h3>
+<pre><code>;; cons : (-&gt; a b (Pairof a b)) — so assoc pairs just work,
+;; and (List a) unfolds on demand to (Pairof a (List a))-or-nil:
+(define (lookup [ps : (List (Pairof Sym Int))] [k : Sym]) : Int
+  (match ps
+    ['() -1]
+    [(cons (cons k2 v) rest) (if (eq? k k2) v (lookup rest k))]))
+
+(println (lookup (list (cons 'a 1) (cons 'b 2)) 'b))  ;; 2
+(println (lookup (list (cons 'a 1)) 'z))              ;; -1
+</code></pre>
+<p>In Typed Racket, <code>(Listof a)</code> relates to pairs through the subtype
+lattice. Puffin has no subtyping, so it gets the same effect equi-recursively: the
+consistency checker unfolds <code>(List a)</code> one step when it meets a
+<code>Pairof</code>, and <code>'() : (List _)</code>. Proper lists and dotted
+pairs both get honest types, with neither unions nor a lattice in the theory.</p>
+
+<h3>Erasure semantics (v1) — checked, then erased</h3>
+<p>Types are checked, then erased during desugaring; the runtime's existing tag
+checks are the dynamic safety net. That means v1 has no casts and no blame — the
+classic gradual-guarantee machinery of inserting checked casts at
+<code>_</code>→concrete boundaries is the roadmap (the checker already identifies
+every such point). One honest representation leak while the dedicated heap kind is
+pending: a constructor instance is a tagged vector, so <code>(println (Some
+1))</code> prints <code>#(Some 1)</code> and <code>(vector? (Some 1))</code> is
+<code>#t</code>.</p>
+
+<table>
+<thead><tr><th></th><th>Typed Racket</th><th>Puffin</th></tr></thead>
+<tbody>
+<tr><td>How you opt in</td><td>separate <code>#lang typed/racket</code>, per module</td><td>one language; per-annotation, <code>_</code> is the default</td></tr>
+<tr><td>Core relation</td><td>subtyping, with unions + occurrence typing</td><td>consistency (<code>~</code>), non-transitive, no unions</td></tr>
+<tr><td>Data</td><td>structs + union types</td><td><code>define-type</code> ADTs, constructors in <code>match</code></td></tr>
+<tr><td>Typed/untyped boundary</td><td>contracts generated at module boundaries</td><td>v1: erasure + runtime tag checks; casts/blame on the roadmap</td></tr>
+<tr><td>Unannotated code</td><td>must still typecheck (or live in an untyped module)</td><td>never fails to check — the gradual guarantee</td></tr>
+</tbody>
+</table>
+
+<aside class="qa">
+<div class="q">Can I mix typed and untyped code?</div>
+<p>Yes — that is the point. Typed functions call untyped ones and vice versa, in
+the same file, with <code>_</code> flowing across every unannotated seam:</p>
+<pre><code>(define (dist2 [x : Int] [y : Int]) : Int
+  (+ (* x x) (* y y)))
+(define (untyped-caller p)        ;; p : _
+  (dist2 (car p) (cdr p)))        ;; _ ~ Int at both arguments
+(println (untyped-caller (cons 3 4)))   ;; 25
+</code></pre>
+<p>Annotate the boundaries and the tricky spots; local inference (define/let
+right-hand sides synthesize their types) covers most of the rest.</p>
+</aside>
+
+<aside class="qa">
+<div class="q">What happens at runtime if types are wrong at a <code>_</code> boundary?</div>
+<p>v1 is erasure: the checker can't see through <code>_</code>, so a lie crossing
+it is caught by the runtime's tag checks — heap operations (<code>car</code>,
+<code>vector-ref</code>, hash/set ops) are always checked:</p>
+<pre><code>(define (first-of [p : (Pairof Int Int)]) : Int (car p))
+(define (sneaky x) (first-of x))    ;; x : _ — checks fine
+(println (sneaky (cons 1 2)))       ;; 1
+(println (sneaky 'oops))            ;; runtime, not compile time:
+</code></pre>
+<pre class="err"><code>error: car: contract violation
+  expected: pair?
+  given: 'oops</code></pre>
+<p>The known gap: arithmetic on non-fixnums is unchecked in <em>compiled</em> code
+(the interpreter errors). Phase 3 inserts casts with blame labels at every
+<code>_</code>→concrete boundary, turning these into precise, early errors.</p>
+</aside>
+</section>
+
+<section id="modules">
+<h2>Modules</h2>
+<p>Puffin takes Racket's discipline — <strong>a file is a module</strong>, with
+<code>provide</code> and <code>require</code> — and mixes in an SML sensibility:
+optional signature files, arity checking, and genuine separate compilation.</p>
+<div class="pair">
+<div><div class="side-label rkt">In Racket</div>
+<pre><code>#lang racket   ; every file: a #lang module
+(require "geometry.rkt"
+         (prefix-in u: "util.rkt")
+         (only-in "list.rkt" twice)
+         (rename-in "old.rkt" [twice do-twice]))
+(provide area)
+</code></pre></div>
+<div><div class="side-label puf">In Puffin</div>
+<pre><code>;; no #lang line — a .puf file IS a module
+(require "geometry.puf")
+(require "util.puf" #:as U)          ;; qualified: U.twice
+(require "list.puf" #:only (twice)
+                    #:rename ((twice do-twice)))
+(provide area)
+;; no provide form at all = everything is exported
+</code></pre></div>
+</div>
+<p>A complete two-module program (both files verified together):</p>
+<pre><code>;; ---- geometry.puf ----------------------------------------
+(provide area perimeter)
+(define pi 314159)                   ;; private: not provided
+(define scale 100000)
+(define (area r) (quotient (* pi (* r r)) scale))
+(define (perimeter r) (quotient (* 2 (* pi r)) scale))
+
+;; ---- util.puf --------------------------------------------
+(provide twice)
+(define (twice f x) (f (f x)))
+
+;; ---- main.puf --------------------------------------------
+(require "geometry.puf")
+(require "util.puf" #:as U)
+(println (area 10))                  ;; 314
+(println (perimeter 10))             ;; 62
+(println (U.twice (lambda (x) (* x x)) 3))   ;; 81
+</code></pre>
+<p>Differences from Racket worth knowing:</p>
+<ul>
+<li><strong>Requires must form a DAG</strong> — cycles are a compile-time error
+naming the cycle. This is deliberate, not a limitation to route around: it gives a
+well-defined initialization order, it is what makes separate compilation's
+interface files possible, and it makes each module's types a closed world (the
+property exhaustiveness checking needs).</li>
+<li><strong>Top-level effects run once, in depth-first postorder</strong> of the
+require DAG — dependencies before dependents, each module exactly once, however
+many paths reach it.</li>
+<li><strong>Import collisions are errors</strong>, never silent shadowing: two
+modules providing the same name, or an import colliding with a local define, stops
+the compile — disambiguate with <code>#:as</code> or <code>#:rename</code>.</li>
+</ul>
+
+<h3>Signatures: <code>.pufs</code> files</h3>
+<pre><code>;; ---- ring.pufs — a signature file -------------------------
+(signature RING
+  (val zero)          ;; a value
+  (fun add 2)         ;; a function of stated arity
+  (fun neg 1))
+
+;; ---- int-ring.puf ------------------------------------------
+(provide #:sig "ring.pufs")   ;; exports become EXACTLY the sig
+(define zero 0)
+(define (add a b) (+ a b))
+(define (neg a) (- a))
+(define (helper x) x)         ;; outside the sig: private
+
+;; ---- main.puf ----------------------------------------------
+(require "int-ring.puf")
+(println (add (neg 3) zero))  ;; -3   ...but (helper 1) is
+                              ;; "unbound id helper": narrowed away
+</code></pre>
+<p>Ascription checks that every signature name is defined and that
+<code>fun</code> arities match, and it <em>narrows</em>: names outside the
+signature are private even though they were defined. Racket's closest analogue is
+a contracted provide; the <code>.pufs</code> file is closer to an SML signature —
+a separable, client-readable interface. When you want none of this, write nothing:
+specs are optional all the way down. And separate compilation falls out:
+<code>bin/puffin -c --separate main.puf -o prog</code> compiles each module in the
+DAG to a cached <code>.o</code> + interface file and links, rebuilding only what
+changed.</p>
+</section>
+
+<section id="xmodules">
+<h2>Types across modules</h2>
+<aside class="qa">
+<div class="q">What if a type is defined in another module — can you still use it?</div>
+<p><strong>Yes for values and matching; partially for annotations.</strong> The
+honest split, both halves verified:</p>
+<p><strong>The part that just works:</strong> constructors are ordinary top-level
+names, so they provide, require, qualify, and rename like functions do. You can
+build foreign ADT values, pass them around, return them, and pattern-match them
+freely — bare or as <code>T.Ctor</code>, in expressions and in patterns:</p>
+<pre><code>;; ---- shapes.puf --------------------------------------------
+(provide Point Circle Rect area)
+(define-type Shape
+  (Point)
+  (Circle Int)
+  (Rect Int Int))
+(define (area [s : Shape]) : Int      ;; annotated HERE: fine
+  (match s
+    [Point 0]
+    [(Circle r) (* 3 (* r r))]
+    [(Rect w h) (* w h)]))
+
+;; ---- main.puf ----------------------------------------------
+(require "shapes.puf")
+(define shapes (list Point (Circle 5) (Rect 3 4)))
+(println (map area shapes))           ;; (0 75 12)
+(define (describe s)                  ;; s : _ at the boundary
+  (match s
+    [Point 'dot]
+    [(Circle _) 'round]
+    [(Rect w h) #:when (eq? w h) 'square]
+    [(Rect _ _) 'box]))
+(println (map describe shapes))       ;; (dot round box)
+</code></pre>
+<p>Qualified imports work the same way, constructors included:</p>
+<pre><code>(require "shapes.puf" #:as S)
+(define (describe s)
+  (match s
+    [S.Point 'dot]
+    [(S.Circle r) (list 'round r)]
+    [(S.Rect w h) (list 'box w h)]))
+(println (describe (S.Circle 7)))     ;; (round 7)
+(println (describe S.Point))          ;; dot
+</code></pre>
+<p><strong>The current boundary:</strong> writing the imported type's
+<em>name</em> in an annotation does not yet resolve across modules. Module
+resolution mangles the defining module's names, so the checker sees the mangled
+type on one side and your spelling on the other:</p>
+<pre><code>;; main.puf
+(require "shapes.puf")
+(define (describe [s : Shape]) : Sym   ;; the type NAME crosses — not yet
+  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))
+(println (describe (Circle 7)))
+</code></pre>
+<pre class="err"><code>error: typecheck: describe: argument has type Shape_shapes_826109a6, expected Shape</code></pre>
+<p>So today the idiom is: annotate <em>inside the defining module</em> (as
+<code>area</code> does above) and let <code>_</code> flow at module boundaries —
+gradual typing makes that seam painless rather than illegal, and constructor
+patterns still give you compile-time typo checking on the consuming side. The
+roadmap fix is for <code>provide</code> to carry type names with their
+constructors (and for <code>.pufs</code> signatures to grow typed entries like
+<code>(fun area (-&gt; Shape Int))</code>), at which point the annotation above
+starts meaning what it says.</p>
+</aside>
+</section>
+
+<section id="running">
+<h2>Run it yourself</h2>
+<p>The compiler is <code>puffincc</code> — written in Puffin, compiled by Puffin,
+byte-stable at its own fixpoint — with three backends: arm64, x86-64, and
+bytecode for the VM:</p>
+<pre><code>bin/build-puffincc               # stage-1 bootstrap, then:
+build/puffincc prog.puf -o prog  # compile + link natively, or...
+build/puffincc -t bytecode prog.puf -o prog.pbc   # ...compile to bytecode
+bin/puffin-vm prog.pbc           # and run it on the native VM
+build/puffincc -O 2 prog.puf -o prog   # optimization levels 0 / 1 (default) / 2
+
+tools/gen-web-vm.sh              # build the browser engine artifacts, then:
+(cd web &amp;&amp; npm run dev)          # the playground: puffincc in wasm
+
+bin/puffin prog.puf              # the Racket-hosted oracle: compile + run
+bin/puffin -i prog.puf           # ...or interpret (same typechecker runs first)
+bin/puffin                       # REPL (,help ,env ,quit)
+bin/puffin -c --separate main.puf -o prog   # separate compilation + link
+</code></pre>
+<p>Module programs work everywhere a single file does — point any route at the
+entry file and the require DAG resolves from disk. <code>-O1</code> (the default)
+is cp0-style contraction and bounded inlining plus safe open-coding of
+data-structure primitives; <code>-O2</code> adds an AAM-based interprocedural
+analysis and its clients.</p>
+<p>The zero-install route is the <strong>web playground</strong> under
+<code>web/</code> — and it is not a JavaScript approximation of the language: it
+runs <em>puffincc itself</em>, compiled to bytecode, on a WebAssembly build of
+the bytecode VM. <strong>Run</strong> typechecks and compiles the editor source
+with the real compiler (the type errors quoted in this tutorial appear in the
+output pane), file tabs turn the editor into a module DAG, and the REPL is a
+<em>persistent VM session</em>: defines persist across evals, redefinition
+replaces, cross-eval mutual recursion and <code>define-type</code> work — until
+you press Reset session. Emacs keybindings, Cmd/Ctrl+Enter to run — every example
+in this tutorial pastes straight in.</p>
+<p class="note">Going deeper: <code>docs/LANGUAGE.md</code> (the day-to-day
+reference), <code>docs/TYPES.md</code> (the type system design),
+<code>docs/MODULES.md</code> (modules and separate compilation),
+<code>docs/OPTIMIZER.md</code> (the three optimization levels),
+<code>docs/BYTECODE.md</code> + <code>docs/WASM-VM.md</code> (the bytecode VM and
+the browser architecture), and <code>bench/report.html</code> (the full benchmark
+report this page's numbers come from).</p>
+</section>
+
+</main>
+</div>
+<script>
+(function () {
+  // --- theme toggle: data-theme overrides prefers-color-scheme ---
+  var root = document.documentElement;
+  var saved = null;
+  try { saved = localStorage.getItem('puffin-tutorial-theme'); } catch (e) {}
+  if (saved === 'light' || saved === 'dark') root.dataset.theme = saved;
+  document.getElementById('theme').addEventListener('click', function () {
+    var dark = root.dataset.theme
+      ? root.dataset.theme === 'dark'
+      : matchMedia('(prefers-color-scheme: dark)').matches;
+    var next = dark ? 'light' : 'dark';
+    root.dataset.theme = next;
+    try { localStorage.setItem('puffin-tutorial-theme', next); } catch (e) {}
+  });
+
+  // --- tiny syntax highlighter (the bench/report.html viewer approach) ---
+  var KW = {};
+  ('define define-type lambda λ match let let* letrec if cond case when unless ' +
+   'begin set! quote quasiquote require provide signature ann while and or not ' +
+   'else struct').split(' ').forEach(function (w) { KW[w] = 1; });
+  function hl(code) {
+    var h = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    h = h.replace(/"(?:[^"\\]|\\.)*"/g, function (m) { return '\u0001' + m + '\u0002'; });
+    h = h.replace(/(^|[^&\w]);[^\n\u0001]*/g, function (m, pre) {
+      return pre + '\u0003' + m.slice(pre.length) + '\u0004';
+    });
+    h = h.replace(/\(([^\s()\[\]]+)/g, function (m, w) {
+      return KW[w] ? '(<span class="kw">' + w + '</span>' : m;
+    });
+    h = h.replace(/(^|\n)(#lang [^\n]*)/g, '$1<span class="kw">$2</span>');
+    return h.replace(/\u0001/g, '<span class="st">').replace(/\u0002/g, '</span>')
+            .replace(/\u0003/g, '<span class="cm">').replace(/\u0004/g, '</span>');
+  }
+  document.querySelectorAll('pre:not(.err) code').forEach(function (c) {
+    c.innerHTML = hl(c.textContent);
+  });
+
+  // --- TOC: collapse on narrow screens, highlight active section ---
+  var tocbox = document.getElementById('tocbox');
+  if (window.innerWidth < 960) tocbox.removeAttribute('open');
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var sections = links.map(function (a) {
+    return document.getElementById(a.getAttribute('href').slice(1));
+  });
+  function setActive() {
+    var y = window.scrollY + 90, i = 0;
+    for (var k = 0; k < sections.length; k++)
+      if (sections[k] && sections[k].offsetTop <= y) i = k;
+    links.forEach(function (a, k) { a.classList.toggle('active', k === i); });
+  }
+  addEventListener('scroll', setActive, { passive: true });
+  setActive();
+})();
+</script>
+</body>
+</html>

@@ -70,6 +70,11 @@ node test-vm-smoke.mjs   # precompiled fixtures through the WASI shim
   and `define-type` work, until **Reset session**.
 - The **stdin** box supplies whitespace-separated integers to
   `(read)`; when empty, the input stream is `0 1 2 …`.
+- **+ New** (header) resets the editor to a fresh single-file blank
+  program; **Tutorial** (top right) opens `/tutorial.html` in a new
+  tab — served from `public/tutorial.html`, a committed copy of
+  `../docs/tutorial.html` (refresh it with
+  `cp ../docs/tutorial.html public/tutorial.html`).
 - **Pipeline** mode is unchanged: it talks to the Racket trace server
   (`racket ../src/ir-server.rkt`) in dev, with a bundled sample trace
   as fallback.
