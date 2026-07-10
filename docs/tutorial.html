@@ -119,10 +119,12 @@ thead th { color: var(--text-secondary); font-weight: 600; }
 <section id="hero">
 <h1>Puffin for Racketeers</h1>
 <p class="lede">Puffin is a Racket-family language that started as a PL-course
-compiler and grew real: a <strong>self-hosting native compiler</strong> (arm64 and
-x86-64), <strong>gradual types</strong> built on algebraic datatypes, a file-based
-<strong>module system</strong> with separate compilation — and it now beats
-Racket-on-Chez on its own benchmark suite. If you took an undergrad PL course and
+compiler and grew real: a <strong>self-hosting compiler</strong> with native
+(arm64, x86-64) and bytecode backends, <strong>gradual types</strong> built on
+algebraic datatypes, a file-based <strong>module system</strong> with separate
+compilation — and it now beats Racket-on-Chez on its own benchmark suite. The
+same compiler runs in the <a href="#running">browser playground</a>, compiled to
+bytecode on a WebAssembly VM. If you took an undergrad PL course and
 know Racket, you already know most of Puffin. This tutorial is about the
 <em>differences</em>: each one shown as a Racket/Puffin pair, with a paragraph on why.</p>
 
@@ -148,8 +150,10 @@ know Racket, you already know most of Puffin. This tutorial is about the
 (println (eval-expr (Add (Mul (Num 3) (Num 4)) (Num 1))))   ;; 13
 </code></pre>
 <p class="note">Every example on this page is real: it was run (and typechecked)
-with <code>bin/puffin -i</code> on the branch this file ships with. Error messages
-are quoted verbatim.</p>
+with <code>bin/puffin -i</code> — the Racket-hosted oracle CLI — in July 2026,
+when this page was written. Error messages are quoted verbatim. Every example
+also pastes straight into the <a href="#running">web playground</a>, which runs
+the real compiler.</p>
 </section>
 
 <section id="core">
@@ -225,9 +229,11 @@ follow the same story. Pairs are immutable, full stop: there is no
 fixnums fit in a tagged 64-bit word, so arithmetic compiles to arithmetic. This is
 where a lot of the benchmark numbers come from, and for compilers, interpreters,
 and data-structure work — the language's home turf — it is the honest trade. The
-interpreters use arbitrary precision, so if you overflow 2^60 the compiled and
-interpreted answers can disagree; the sharp edge is documented, and the type
-system's roadmap (checked casts) is aimed at exactly this class of seam.</p>
+compiled routes — native code and the bytecode VM the playground runs on — share
+one 61-bit tagged representation; the Racket-hosted reference interpreter uses
+arbitrary precision, so if you overflow 2^60 its answer can disagree with the
+compiled one. The sharp edge is documented, and the type system's roadmap
+(checked casts) is aimed at exactly this class of seam.</p>
 </section>
 
 <section id="matching">
@@ -464,8 +470,9 @@ formals, <code>: result</code> on defines, <code>(: name t)</code> declarations,
 <code>[x : t e]</code> in <code>let</code>, <code>(ann e t)</code> on any
 expression — and every omitted one is <code>_</code>. There is no typed/untyped
 module split to manage: the granularity of gradualness is the individual
-annotation, in one language, checked by one compiler on every route (the
-interpreter typechecks too).</p>
+annotation, in one language, checked by one typechecker on every route — native,
+bytecode, the Racket oracle's interpreter, and the browser playground, which runs
+the same compiler.</p>
 
 <h3>Consistency, not subtyping</h3>
 <p>Where Typed Racket asks "is this type a <em>subtype</em> of that one?", Puffin's
@@ -478,6 +485,9 @@ Concrete-vs-concrete disagreement is a compile-time error:</p>
 (inc #t)
 </code></pre>
 <pre class="err"><code>error: typecheck: inc: argument has type Bool, expected Int</code></pre>
+<p class="note">These are compile-time errors in the browser too: the playground's
+Run typechecks with the same checker before anything executes, so the red boxes
+in this tutorial reproduce verbatim in its output pane.</p>
 <p>The other pillar of Typed Racket — occurrence typing, where <code>(if (string?
 x) ...)</code> narrows a union — has no analogue in Puffin, because there are no
 unions to narrow. Dynamic dispatch on predicates is what <code>_</code> is for;
@@ -753,34 +763,45 @@ starts meaning what it says.</p>
 
 <section id="running">
 <h2>Run it yourself</h2>
-<pre><code>bin/puffin prog.puf              # compile natively + run
-bin/puffin -i prog.puf           # interpret (same typechecker runs first)
-bin/puffin                       # REPL (,help ,env ,quit)
-bin/puffin -c prog.puf -o prog   # compile only
-bin/puffin -t x86-64 prog.puf    # cross-target (runs under Rosetta)
-bin/puffin -O 2 prog.puf         # optimization levels 0 / 1 (default) / 2
-bin/puffin -c --separate main.puf -o prog   # separate compilation + link
-bin/puffin --lean prog.puf       # low-memory mode: keep no pass history
+<p>The compiler is <code>puffincc</code> — written in Puffin, compiled by Puffin,
+byte-stable at its own fixpoint — with three backends: arm64, x86-64, and
+bytecode for the VM:</p>
+<pre><code>bin/build-puffincc               # stage-1 bootstrap, then:
+build/puffincc prog.puf -o prog  # compile + link natively, or...
+build/puffincc -t bytecode prog.puf -o prog.pbc   # ...compile to bytecode
+bin/puffin-vm prog.pbc           # and run it on the native VM
+build/puffincc -O 2 prog.puf -o prog   # optimization levels 0 / 1 (default) / 2
 
-build/puffincc prog.puf -o prog  # the self-hosted compiler: written in
-                                 # Puffin, compiled by Puffin, byte-stable
-                                 # at its own fixpoint
-build/puffincc -O 2 -t x86-64 prog.puf -o prog.s
+tools/gen-web-vm.sh              # build the browser engine artifacts, then:
+(cd web &amp;&amp; npm run dev)          # the playground: puffincc in wasm
+
+bin/puffin prog.puf              # the Racket-hosted oracle: compile + run
+bin/puffin -i prog.puf           # ...or interpret (same typechecker runs first)
+bin/puffin                       # REPL (,help ,env ,quit)
+bin/puffin -c --separate main.puf -o prog   # separate compilation + link
 </code></pre>
 <p>Module programs work everywhere a single file does — point any route at the
 entry file and the require DAG resolves from disk. <code>-O1</code> (the default)
 is cp0-style contraction and bounded inlining plus safe open-coding of
 data-structure primitives; <code>-O2</code> adds an AAM-based interprocedural
-analysis and its clients. There is also a <strong>web playground</strong> under
-<code>web/</code>: the same language in the browser, with file tabs that turn the
-editor into a module DAG, an inline REPL, Emacs keybindings, and
-Cmd/Ctrl+Enter to run — every example in this tutorial pastes straight in.</p>
+analysis and its clients.</p>
+<p>The zero-install route is the <strong>web playground</strong> under
+<code>web/</code> — and it is not a JavaScript approximation of the language: it
+runs <em>puffincc itself</em>, compiled to bytecode, on a WebAssembly build of
+the bytecode VM. <strong>Run</strong> typechecks and compiles the editor source
+with the real compiler (the type errors quoted in this tutorial appear in the
+output pane), file tabs turn the editor into a module DAG, and the REPL is a
+<em>persistent VM session</em>: defines persist across evals, redefinition
+replaces, cross-eval mutual recursion and <code>define-type</code> work — until
+you press Reset session. Emacs keybindings, Cmd/Ctrl+Enter to run — every example
+in this tutorial pastes straight in.</p>
 <p class="note">Going deeper: <code>docs/LANGUAGE.md</code> (the day-to-day
 reference), <code>docs/TYPES.md</code> (the type system design),
 <code>docs/MODULES.md</code> (modules and separate compilation),
-<code>docs/OPTIMIZER.md</code> (the three optimization levels), and
-<code>bench/report.html</code> (the full benchmark report this page's numbers come
-from).</p>
+<code>docs/OPTIMIZER.md</code> (the three optimization levels),
+<code>docs/BYTECODE.md</code> + <code>docs/WASM-VM.md</code> (the bytecode VM and
+the browser architecture), and <code>bench/report.html</code> (the full benchmark
+report this page's numbers come from).</p>
 </section>
 
 </main>
