@@ -244,6 +244,46 @@ async function preludeReplPbc() {
   return out;
 }
 
+// ---- cross-eval define-type persistence -------------------------
+// The JS Session kept desugar's constructor tables alive across evals;
+// on the VM path each eval compiles in isolation, so the session
+// re-plays its accumulated (define-type ...) forms at the top of every
+// later unit. Types erase and constructors are pure top-level
+// functions, so re-registering per eval is semantically free (the
+// ctor cells are re-defined with equal closures). Keyed by type name:
+// redefining a type replaces its earlier form instead of colliding.
+// The scanner only needs top-level forms; it skips ; comments and
+// string literals.
+function topLevelDefineTypes(code) {
+  const forms = [];
+  let i = 0;
+  const n = code.length;
+  const skipString = () => { i++; while (i < n && code[i] !== '"') i += code[i] === '\\' ? 2 : 1; i++; };
+  while (i < n) {
+    const c = code[i];
+    if (c === ';') { while (i < n && code[i] !== '\n') i++; continue; }
+    if (c === '"') { skipString(); continue; }
+    if (c === '(' || c === '[') {
+      const start = i;
+      let depth = 0;
+      while (i < n) {
+        const d = code[i];
+        if (d === ';') { while (i < n && code[i] !== '\n') i++; continue; }
+        if (d === '"') { skipString(); continue; }
+        if (d === '(' || d === '[') depth++;
+        else if (d === ')' || d === ']') { depth--; i++; if (depth === 0) break; continue; }
+        i++;
+      }
+      const form = code.slice(start, i);
+      const m = /^[([]\s*define-type\s+[([]?\s*([^\s()[\]]+)/.exec(form);
+      if (m) forms.push([m[1], form]);
+      continue;
+    }
+    i++;
+  }
+  return forms;
+}
+
 export class Session {
   // opts: { input: number[], stdin: string|Uint8Array, onOutput }
   constructor({ input, stdin, onOutput } = {}) {
@@ -253,6 +293,7 @@ export class Session {
       : defaultInputBytes(input);
     this._results = null; // the current eval's results sink
     this._errText = '';
+    this._types = new Map(); // type name -> its (define-type ...) form
     this._ready = this._boot();
     this._ready.catch(() => {}); // surfaced per-eval; avoid unhandled rejection
   }
@@ -307,11 +348,23 @@ export class Session {
       return { ok: false, error: String((e && e.message) || e), results: [] };
     }
     // 1. compile this eval's forms to a v2 unit (fresh compiler
-    //    instance; diagnostics are returned, not streamed)
+    //    instance; diagnostics are returned, not streamed). Earlier
+    //    evals' define-type forms are re-played first so their
+    //    constructors/patterns/types are in scope (see
+    //    topLevelDefineTypes above).
     const cc = await puffinccPbc();
+    // types this eval itself (re)defines must not also be re-played,
+    // or the unit would define them twice
+    const newTypes = topLevelDefineTypes(code);
+    const newNames = new Set(newTypes.map(([n]) => n));
+    const replayed = [...this._types.entries()]
+      .filter(([n]) => !newNames.has(n))
+      .map(([, f]) => f)
+      .join('\n');
+    const unitSource = replayed ? `${replayed}\n${code}` : code;
     let diag = '';
     const compile = await execUnit({
-      files: { '/puffincc.pbc': cc, '/eval.puf': new TextEncoder().encode(code) },
+      files: { '/puffincc.pbc': cc, '/eval.puf': new TextEncoder().encode(unitSource) },
       args: ['/puffincc.pbc', '--repl', '/eval.puf', '-o', '/out.pbc'],
       stdin: new Uint8Array(0),
       onOutput: (s) => { diag += s; },
@@ -320,6 +373,8 @@ export class Session {
     if (!unit || unit.length === 0) {
       return { ok: false, error: diag.trim() || `puffincc exited with code ${compile.code}`, results: [] };
     }
+    // the eval compiled: remember its type definitions for later evals
+    for (const [name, form] of newTypes) this._types.set(name, form);
     // 2. run it in the session
     this._results = [];
     this._errText = '';

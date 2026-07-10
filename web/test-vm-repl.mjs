@@ -82,6 +82,20 @@ const transcript = [
   { code: '(length (list 1 2))', compareOutput: true },
   // quasiquote reaches for the prelude's append
   { code: '(define ys (list 2 3)) `(1 ,@ys 4)', compareOutput: true },
+  // cross-eval define-type: constructors, match patterns, and the
+  // type itself stay usable in later evals (the session re-plays
+  // accumulated define-type forms per unit)
+  { code: '(define-type Shape (Circle Int) (Rect Int Int))', compareOutput: true },
+  { code: '(define (area [s : Shape]) : Int (match s [(Circle r) (* 3 (* r r))] [(Rect w h) (* w h)]))', compareOutput: true },
+  { code: '(area (Circle 3))', compareOutput: true },
+  { code: '(area (Rect 2 5))', compareOutput: true },
+  // values built in one eval flow through pattern matches in another
+  { code: '(define c (Circle 4))', compareOutput: true },
+  { code: '(match c [(Circle r) r] [_ 0])', compareOutput: true },
+  // redefining a type replaces its earlier form
+  { code: '(define-type Pt (Pt2 Int Int))', compareOutput: true },
+  { code: '(define-type Pt (Pt2 Int Int) (Pt3 Int Int Int))', compareOutput: true },
+  { code: '(match (Pt3 1 2 3) [(Pt3 _ _ z) z] [_ 0])', compareOutput: true },
 ];
 
 const input = [7, 8, 9, 10, 11];
