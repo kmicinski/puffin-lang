@@ -1,5 +1,15 @@
 # Bootstrapping Puffin: assessment, evaluation, and the feature report
 
+> *(2026-07-10, reader's note: this report is a point-in-time
+> document; its history sections stand as written. Since then: the
+> "web interpreter" execution route it mentions was retired — the
+> browser now runs puffincc itself on the wasm bytecode VM
+> (docs/WASM-VM.md), so "all four routes" reads today as reference
+> interpreter, x86-64, arm64, and the bytecode VM; the corpus is 300
+> checks per route; and puffincc gained the gradual typechecker
+> (docs/TYPES.md) and the bytecode backend (docs/BYTECODE.md) beyond
+> the self-hosting milestone §5 records.)*
+
 The goal: rewrite the Puffin compiler (today ~5,400 lines of Racket
 in `src/*.rkt` + `prelude.puf`, over a ~1,400-line C runtime) in
 Puffin itself. This report covers (1) an evaluation of the

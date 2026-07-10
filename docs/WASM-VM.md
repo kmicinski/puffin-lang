@@ -1,6 +1,82 @@
 # Puffin in the browser: a bytecode VM, and the end of the JS interpreter
 
-> **Status:** DESIGN (2026-07-07). Nothing here is implemented. The
+> **STATUS (2026-07-10): SHIPPED.** Everything below §STATUS is the
+> original design document, kept as written; this block records what
+> actually happened. All milestones landed, plus the retirement the
+> design promised:
+>
+> - **M1** — bytecode spec (docs/BYTECODE.md, the new lockstep
+>   contract) + reference backend (src/backend-bytecode.rkt) +
+>   disassembler (`puffin-vm -d`).
+> - **M2** — the VM in C (src/vm/puffin-vm.c), native
+>   (`bin/puffin-vm`) and wasm (wasi-sdk); corpus green natively and
+>   under node.
+> - **M3** — puffincc's third backend (backends.puf `-t bytecode`);
+>   the stage-2 fixpoint holds on the new target (puffincc-on-the-VM
+>   compiles byte-identically to native puffincc).
+> - **M4** — wasm packaging + the JS boundary (web/src/engine/:
+>   wasi-shim.js, vm-engine.js; tools/gen-web-vm.sh).
+> - **M5** — REPL sessions: `--repl` v2 link-by-name units, the
+>   reactor build, session cell table; 31/31 parity steps against the
+>   frozen JS-Session transcript (web/repl-golden.json).
+> - **M6** — the JS interpreter is deleted (§7 step 4:
+>   web/src/puffin/ is gone; prelude.js, interp.js, modules.js died
+>   with it). The web engine is puffincc-on-the-VM, exclusively.
+>
+> The corpus grew from 294 to **300 checks** (100 programs × 3
+> inputs) along the way; all suites are green on every route,
+> including `node web/test-vm-corpus.mjs` (the full corpus compiled
+> *by puffincc running on the wasm VM* and run per input).
+>
+> **Where the built system deviates from the design:**
+>
+> - **Run needs no reactor.** §5.1 planned one instance doing
+>   compile + execute ("two `main` invocations, one heap"); shipped
+>   `run()` uses **two command-model instances** sharing the shim's
+>   JS-side FS (compile writes /out.pbc, a fresh instance runs it).
+>   Simpler, and the second instantiation is ~1 ms.
+> - **Two wasm artifacts**, not one: `puffin-vm.wasm` (command model,
+>   whole-program runs and per-eval compiler invocations) and
+>   `puffin-vm-repl.wasm` (reactor model, `-DPVM_REACTOR`, one
+>   persistent instance per REPL session exporting
+>   `pvm_boot`/`pvm_alloc`/`pvm_load_run`).
+> - **REPL results are an opcode.** Instead of §5.2's
+>   `host_repl_result` conclusion hook, the unit format grew a
+>   version 2 (REPL) variant with named globals and a RESULT opcode;
+>   results are rendered VM-side (value->string) and delivered via
+>   the `puffin.repl_result` import (one stdout line natively).
+>   There is also no HALT opcode: `main` ends in RET and the host
+>   prints via `pf_print_result`. Details: docs/BYTECODE.md.
+> - **The §3.3 collector is the one deferred piece.** The wasm build
+>   ships a **scaffold non-collecting allocator**
+>   (src/vm/wasm/wasm-gc.c: wasi-libc dlmalloc behind the
+>   GC_MALLOC ABI, never frees — the §3.3 "grow, don't collect"
+>   failure mode made total). Correct but monotonic: long REPL
+>   sessions grow until the real mark-sweep + safepoint collector
+>   lands behind the same seam. GC stress mode waits with it.
+>   The native VM uses Boehm, as designed.
+> - **Migration was compressed.** §7's two-engines-behind-a-toggle
+>   phase was skipped: the corpus + REPL-parity gates ran, the JS
+>   Session's observable behavior was frozen into
+>   web/repl-golden.json, and the JS interpreter was deleted in the
+>   same change series.
+> - **§6's budgets: raw sizes over, everything else far under.**
+>   Measured artifacts (2026-07-10): puffin-vm.wasm **374,954 B raw /
+>   127,236 B gz** (budget ≤350 KB raw — 7% over, and the reactor
+>   build adds a second ~368 KB artifact §6 didn't price in);
+>   puffincc.pbc **1,439,866 B raw / 527,407 B gz** (budget ≤1 MB
+>   raw — 40% over). Latency estimates were pessimistic by one to
+>   two orders of magnitude — see the measured block in §6.
+> - **The §11.7 kill-criterion factor, measured** (Apple M4 Pro,
+>   macOS 26.5, node 23.9; details in §6): the wasm VM runs
+>   compute-bound bytecode **13–20× slower than native `-O1`
+>   compiled code** (native VM: 7–12×) — inside the design's 15–40×
+>   envelope and nowhere near a ×40 kill. And the number that
+>   mattered most never materialized: *compiling* is prim/allocation
+>   dominated, so puffincc-on-the-VM compiles typical programs in
+>   **2–35 ms**, not the feared 100–500 ms.
+>
+> **Original status:** DESIGN (2026-07-07). Nothing here is implemented. The
 > design is written against the current contract (puffin.h tag scheme
 > + kind registry, the 16-pass pipeline mirrored in src/ and
 > puffincc-src/, the stdlib.rkt manifest, modules on every route,
@@ -767,6 +843,62 @@ Startup and latency:
 | user-code speed vs JS interpreter | 3–20× faster (compute-bound) | i64 fixnums vs BigInt tree-walking; measured head-to-head at M5 with bench/ pairs |
 | user-code speed vs native | 15–40× slower | classic bytecode-VM range for this design (no JIT); fib35 ≈ 4–10 s vs 0.25 s (m) native |
 
+### §6-measured (2026-07-10) — the estimates above, validated
+
+Apple M4 Pro, macOS 26.5; node v23.9.0 for the wasm rows; wasi-sdk 33
+(`-O2`, switch dispatch); everything built from this tree
+(`make -C src/vm wasm wasm-repl`, `tools/gen-web-vm.sh`). Native and
+native-VM rows are whole-process wall time, best of 5 (≈2 ms process
+startup included); wasm rows time `_start` only on a fresh instance
+of a pre-compiled module, best of 3–5.
+
+Artifacts vs budgets:
+
+| Artifact | Measured raw | gzip -9 | Budget | Verdict |
+|---|---|---|---|---|
+| puffin-vm.wasm (command) | 374,954 B | 127,236 B | ≤ 350 KB raw | **7% over** |
+| puffin-vm-repl.wasm (reactor) | 368,488 B | 125,504 B | (not budgeted) | second artifact, §STATUS |
+| puffincc.pbc | 1,439,866 B | 527,407 B | ≤ 1 MB raw | **40% over** |
+| **Total added** | **~2.18 MB raw** | **~780 KB gz** | ~0.5–1.3 MB raw | over raw, lazy-loaded; gz is what the wire sees |
+
+Interpretation factor (same .pbc on `bin/puffin-vm` vs under node
+through the WasiShim, against `build/puffincc`-compiled native `-O1`):
+
+| Workload | native -O1 | native VM | wasm VM (node) | nVM / wasm factor |
+|---|---|---|---|---|
+| fib(30) | 6.7 ms | 45 ms | 72 ms | 6.7× / 10.7× |
+| fib(35) | 40 ms | 460 ms | 820 ms | 11.5× / 20× |
+| tail-loop 20M adds | 45 ms | 317 ms | 593 ms | 7.0× / 13.2× |
+| HAMT 200k insert+lookup | 109 ms | 125 ms | 1,309 ms | 1.15× / 12× |
+
+So: **7–12× (native VM) and 13–20× (wasm VM) on compute-bound
+code** — inside the 15–40× envelope, well clear of a ×40 kill
+(§11.7). Two notes the estimates missed: (a) prim-dominated work
+(HAMT) is nearly native speed on the native VM because the time is
+in the C runtime, not the dispatch loop; (b) the same workload is
+~10× worse on the *wasm* build — allocation-heavy code pays for the
+scaffold allocator (calloc + never-free + memory.grow) until the
+real collector lands. (fib35 native measured 40 ms here vs the 0.25 s
+(m) above — that older number predates `-O1` and this machine.)
+
+In-browser-equivalent Run latency (puffincc-on-the-wasm-VM, `_start`
+timed, compile to /out.pbc): hello-world **2 ms**, small typed
+program **3–4 ms**, fib **33 ms**, the HAMT program **6 ms** — vs
+the 100–500 ms estimate. Compilation is prim/allocation-bound (reader,
+HAMTs, strings), which the VM executes as native C, so the compiler's
+effective interpretation factor is ~1.2–2×, not 15–40×. End-to-end
+`run()` (compile + instantiate + execute) under node: hello **2–3 ms**,
+fib(30) **~100 ms** (of which ~72 ms is running fib(30) itself).
+
+REPL (engine Session over the reactor build, per test-vm-repl.mjs's
+path): first-ever boot including wasm module compile **~165 ms**;
+session boot + first eval with warm modules **2–4 ms**; per-eval
+**1.5–8 ms** for one-liners through a 100k-iteration loop — vs the
+10–100 ms estimate.
+
+Full `node web/test-vm-corpus.mjs` (every corpus program compiled by
+puffincc-on-the-VM and run per input, 300 checks): **33.8 s wall**.
+
 If the ×15–40 interpretation factor comes in materially worse at M2,
 the fallback levers are, in order: open-code the hot prims as opcodes
 (§2.3), superinstructions for the `MOV`-heavy patterns select emits,
@@ -938,6 +1070,9 @@ design); FFI in the browser; in-browser provenance for Pipeline mode
    compile, seconds worst-case — acceptable for the playground, or
    should M2's measured interpretation factor gate the whole project
    (i.e., a kill criterion at ×N)?
+   *[Measured 2026-07-10 (§6-measured): the interpretation factor is
+   7–12× native VM / 13–20× wasm VM on compute-bound code — no kill;
+   typical in-browser compiles measured 2–35 ms, not 100–500 ms.]*
 8. **Retirement**: JS interpreter deleted one release after the
    default flips (§7). Comfortable, or keep it indefinitely as a
    reference implementation despite the lockstep cost?
