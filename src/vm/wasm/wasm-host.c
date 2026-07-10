@@ -27,6 +27,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 // --- §3.4: host abort import -------------------------------------
 
@@ -42,9 +43,26 @@ extern void host_abort(int32_t code);
 // session. Instead we hand control to the host, which unwinds us.
 __attribute__((noreturn))
 void __wrap_exit(int code) {
+  // exit() would have flushed stdio; the abort route must too, or
+  // buffered program output written just before an (error v) is lost.
+  fflush(stdout);
+  fflush(stderr);
   host_abort(code);
   // host_abort throws and never returns; satisfy 'noreturn' anyway.
   __builtin_unreachable();
+}
+
+// --- §5.2: REPL result delivery ----------------------------------
+
+// One rendered result per non-void top-level form of a REPL unit
+// (the RESULT opcode; puffin-vm.c renders via the runtime's own
+// value->string, so formatting is display's). The host pushes the
+// string onto the current eval's results array.
+__attribute__((import_module("puffin"), import_name("repl_result")))
+extern void host_repl_result(const char *bytes, int32_t len);
+
+void vm_host_repl_result(const char *bytes, int64_t len) {
+  host_repl_result(bytes, (int32_t)len);
 }
 
 // --- §3.2: open_memstream fallback (opt-in) ----------------------

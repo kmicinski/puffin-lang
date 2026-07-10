@@ -420,9 +420,13 @@ static void reset_exec_state(void) {
 // runs produce).
 // ---------------------------------------------------------------
 
-#ifdef PVM_REACTOR
-extern void vm_host_repl_result(const char *bytes, i64 len); // wasm/wasm-host.c
+#if defined(PVM_REACTOR) || defined(__wasi__)
+// wasm builds (command and reactor): wasm/wasm-host.c forwards to the
+// host_repl_result import (module "puffin", name "repl_result").
+extern void vm_host_repl_result(const char *bytes, i64 len);
 #else
+// native: each result prints as its own stdout line (the transcript
+// surface --session runs produce).
 static void vm_host_repl_result(const char *bytes, i64 len) {
   fwrite(bytes, 1, (size_t)len, stdout);
   fputc('\n', stdout);

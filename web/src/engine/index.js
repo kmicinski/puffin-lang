@@ -21,7 +21,7 @@
 // escape hatch (§7.3) before web/src/puffin/ is deleted (§7.4).
 
 // ---- the default (JS interpreter) surface, re-exported verbatim ----
-import { run as jsRun } from '../puffin/index.js';
+import { run as jsRun, Session as JsSession } from '../puffin/index.js';
 export {
   Session,
   render,
@@ -34,14 +34,23 @@ export {
   PuffinError,
 } from '../puffin/index.js';
 
-// ---- the VM engine, available but gated (see vm-engine.js) ----
-import { run as vmRun } from './vm-engine.js';
+// ---- the VM engine (see vm-engine.js) ----
+import { run as vmRun, Session as VmSession } from './vm-engine.js';
 export {
   runUnit as vmRunUnit,
   vmAvailable,
   EngineNotReady,
 } from './vm-engine.js';
 export { PuffinAbort } from './wasi-shim.js';
+
+// createSession(opts) dispatches on the selected engine, like run().
+// The VM Session (docs/WASM-VM.md §5.2) is a persistent reactor
+// instance running real puffincc-compiled link-by-name units; its
+// eval() is async, so callers await session.eval(...) uniformly (the
+// JS Session's sync eval resolves at once).
+export function createSession(opts = {}) {
+  return engineName() === 'vm' ? new VmSession(opts) : new JsSession(opts);
+}
 
 // run(source, opts) dispatches on the selected engine. The VM path
 // (?engine=vm) compiles+typechecks with the real puffincc on the wasm
