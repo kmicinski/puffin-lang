@@ -72,6 +72,12 @@ const cases = [
   { name: 'fact',   src: '(define (fact [n : Int]) : Int (if (eq? n 0) 1 (* n (fact (- n 1)))))\n(println (fact 10))\n', expect: '3628800' },
   { name: 'adts',   src: '(define-type Expr (Num Int) (Plus Expr Expr))\n(define (ev [e : Expr]) : Int (match e [(Num n) n] [(Plus a b) (+ (ev a) (ev b))]))\n(println (ev (Plus (Num 20) (Num 22))))\n', expect: '42' },
   { name: 'reject', src: '(define-type Expr (Num Int) (Plus Expr Expr))\n(println (Plus 5 5))\n', expectError: 'typecheck: Plus' },
+  // an UNBOUND name must be a compile-time rejection, not a runaway
+  // program: it used to compile into a 0-seeded cell that CALLI
+  // dispatched as function index 0 = the entry, so the program
+  // re-entered main until the control stack died (the browser printed
+  // its own output over and over)
+  { name: 'unbound', src: '(define-type Expr (Num Int) (Add Expr Expr))\n(define (ev [e : Expr]) : Int (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))\n(println (ev (Add (Num 1) (Num 2))))\n(ev (Plus 20 20))\n', expectError: 'unbound variable Plus' },
 ];
 
 let pass = 0, fail = 0;

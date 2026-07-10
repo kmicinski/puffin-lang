@@ -24,7 +24,7 @@
 
 (provide typecheck-program type-error?)
 
-(require "stdlib.rkt" "irs.rkt")
+(require "stdlib.rkt" "irs.rkt" "system.rkt")
 
 (struct exn:type-error exn:fail ())
 (define (type-error? e) (exn:type-error? e))
@@ -263,6 +263,14 @@
             (hash-set! top g `(-> ,@(map formal-type formals) _)))]
          [`(define ,(? symbol? x) ,_)
           (unless (hash-has-key? top x) (hash-set! top x '_))]
+         ;; variadic defines -- (define (f a b . rest) ...) -- have
+         ;; dotted formal lists the typed clauses above can't match;
+         ;; they are dynamic in v1 but must still BIND, or references
+         ;; to them (weigh, the prelude's format, ...) are rejected as
+         ;; unbound by the strict lookup below
+         [`(define (,g . ,_) ,_ ...)
+          #:when (symbol? g)
+          (unless (hash-has-key? top g) (hash-set! top g '_))]
          [_ (void)]))
 
      ;; instantiate a possibly-polymorphic type at a use site
@@ -274,7 +282,24 @@
        (cond [(assq x env) => cdr]
              [(hash-ref top x #f)]
              [(prim? x) (prim-type-of x)]
-             [else '_]))   ;; prelude names, unknowns: dynamic
+             ;; desugar-level forms the prim-type table types but the
+             ;; manifest doesn't know (<=, >, >= rewrite to < in shrink)
+             [(hash-ref prim-types x #f)]
+             ;; separate compilation: imported names live in other
+             ;; units, typed dynamically here
+             [(hash-ref (module-ext-funs) x #f) '_]
+             [(hash-ref (module-ext-globals) x #f) '_]
+             ;; REPL units late-bind by name (a still-unbound cell
+             ;; errors at run time carrying the name)
+             [(repl-mode?) '_]
+             ;; everywhere else an unknown variable is an ERROR. It
+             ;; used to fall through as _ ("dynamic"), and no later
+             ;; pass checked scope either: the reference compiled into
+             ;; an uninitialized cell holding fixnum 0, which CALLI
+             ;; happily dispatched as function index 0 = the program
+             ;; entry -- calling a typo'd name re-entered main until
+             ;; the stack died. Scope errors are compile-time errors.
+             [else (type-error "unbound variable ~a" x)]))
 
      ;; check an application of `ft` to synthesized arg types.
      ;; Discipline (the gradual guarantee): a formal's CONCRETE
@@ -476,6 +501,10 @@
           'Void]
          [`(and ,es ...) (for ([s es]) (synth s env)) '_]
          [`(or ,es ...) (for ([s es]) (synth s env)) '_]
+         ;; `not` is a desugar-level form (shrink: (not e) -> (if e #f #t)),
+         ;; not a prim or prelude function -- without a case here the
+         ;; app fallthrough would look it up as a variable
+         [`(not ,e0) (synth e0 env) 'Bool]
          [`(list ,es ...)
           (define t (for/fold ([t '_]) ([s es]) (type-join t (synth s env))))
           `(List ,t)]
