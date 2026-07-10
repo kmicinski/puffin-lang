@@ -50,7 +50,15 @@ export { PuffinAbort } from './wasi-shim.js';
 // docs/WASM-VM.md §7.1: the JS interp stays default until VM parity
 // (Phase 3) + the VM REPL (Phase 4) land.
 export async function run(source, opts = {}) {
-  return engineName() === 'vm' ? vmRun(source, opts) : jsRun(source, opts);
+  if (engineName() === 'vm') {
+    const r = await vmRun(source, opts);
+    // puffincc's diagnostics already carry the "error: " prefix and the
+    // app adds its own when displaying — strip it here so both engines
+    // return bare messages like the JS interpreter does.
+    if (!r.ok && r.error) r.error = r.error.replace(/^error:\s*/, '');
+    return r;
+  }
+  return jsRun(source, opts);
 }
 
 // Which engine should this session use? 'js' (default) or 'vm'.
