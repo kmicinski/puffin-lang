@@ -78,4 +78,24 @@
          (define (f e) (match e [`(,a ,ps ...) (car ps)] [_ 0]))
          (f `(1 2 3))")
 
+;; scope: unknown variables are compile-time errors (outside REPL
+;; mode). Before the fix they fell to _ and compiled into an
+;; uninitialized cell (fixnum 0), which the bytecode VM's CALLI
+;; dispatched as function index 0 = the program entry -- calling a
+;; typo'd name re-entered main until the stack died.
+(rejects #rx"unbound variable Plus"
+         "(define-type Expr (Num Int) (Add Expr Expr))
+          (define (ev [e : Expr]) : Int
+            (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))
+          (ev (Plus 20 20))")
+(rejects #rx"unbound variable typo"
+         "(define (f x) (* x 2)) (f typo)")
+(rejects #rx"unbound variable nope"
+         "(set! nope 5)")
+;; ...but the forms the fallback used to paper over stay admitted:
+;; desugar-level not/<=/>/>=, and variadic defines (dotted formals)
+(admits "(println (not (<= 3 2))) (println (>= 4 4)) (println (> 2 1))")
+(admits "(define (weigh a b . extras) (list a b extras))
+         (println (weigh 1 2 3 4))")
+
 (displayln "type tests: all passed")

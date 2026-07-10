@@ -305,12 +305,31 @@
      (define (valid-formals? formals)
        (andmap (lambda (x) (or (symbol? x) (and (list? x) (eq? (length x) 3)))) formals))
 
+     ;; A name that is neither locally bound, top-level, nor a prim is
+     ;; an ERROR outside REPL mode (mirrors src/types.rkt). REPL units
+     ;; late-bind by name -- a still-unbound cell errors at run time
+     ;; carrying the name. It used to fall through as _ ("dynamic"),
+     ;; and no later pass checked scope either: the reference compiled
+     ;; into an uninitialized cell holding fixnum 0, which CALLI
+     ;; dispatched as function index 0 = the program entry -- calling a
+     ;; typo'd name re-entered main until the stack died.
      (define (lookup env x)
        (let ([hit (assoc x env)])
          (if hit
              (cdr hit)
              (let ([tv (hash-ref/default top x #f)])
-               (if tv tv (if (prim? x) (prim-type-of x) '_))))))
+               (if tv
+                   tv
+                   (if (prim? x)
+                       (prim-type-of x)
+                       ;; desugar-level forms the prim-type table types
+                       ;; but the manifest doesn't know (<= > >=)
+                       (let ([pt (hash-ref/default prim-types x #f)])
+                         (if pt
+                             pt
+                             (if repl-mode
+                                 '_
+                                 (type-error (format "unbound variable ~a" x)))))))))))
 
      ;; collect the binders a quasiquote pattern introduces (all typed
      ;; _; the point is that they ENTER the env so a later reference
@@ -507,6 +526,10 @@
          [`(set! ,x ,e0) (synth-set! x e0 env)]
          [`(and ,es ...) (for-each (lambda (s) (synth s env)) es) '_]
          [`(or ,es ...) (for-each (lambda (s) (synth s env)) es) '_]
+         ;; `not` is a desugar-level form (shrink: (not e) -> (if e #f #t)),
+         ;; not a prim or prelude function -- without a case here the
+         ;; app fallthrough would look it up as a variable
+         [`(not ,e0) (begin (synth e0 env) 'Bool)]
          [`(list ,es ...) (list 'List (foldl (lambda (s t) (type-join t (synth s env))) '_ es))]
          [`(vector ,es ...) (list 'Vec (foldl (lambda (s t) (type-join t (synth s env))) '_ es))]
          [`(hash ,es ...) '(Hash _ _)]
@@ -581,6 +604,12 @@
              (hash-set! top g `(-> ,@(map formal-type formals) _)))]
           [`(define ,x ,_) #:when (symbol? x)
            (unless (hash-has-key? top x) (hash-set! top x '_))]
+          ;; variadic defines -- (define (f a b . rest) ...) -- have
+          ;; dotted formal lists the typed clauses above can't match;
+          ;; dynamic in v1 but must still BIND, or references to them
+          ;; are rejected as unbound by the strict lookup
+          [`(define (,g . ,_) ,_ ...) #:when (symbol? g)
+           (unless (hash-has-key? top g) (hash-set! top g '_))]
           [_ (void)]))
       forms)
 
