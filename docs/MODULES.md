@@ -125,7 +125,12 @@ What the type-name story adds around that:
   s`), and the display element of ADT cast descs (`cast: expected
   Shape, ...` — the desc's constructor TAG list stays mangled, since
   those are the runtime identities the check compares). Byte-identical
-  across the two compilers; `src/test-modules.rkt` pins that.
+  across the two compilers; `src/test-modules.rkt` pins that. Known
+  edge: two modules exporting same-named types demangle to the same
+  spelling, so confusing one for the other reads `argument has type
+  Shape, expected Shape` — correct (they ARE different types) but
+  unqualified; qualifying colliding spellings by module stem is a
+  possible refinement.
 - **Unknown types are errors.** Annotating with a type name that does
   not resolve — e.g. importing from a module that did NOT provide it —
   is `typecheck: unknown type Shape`, not a silently opaque type that
