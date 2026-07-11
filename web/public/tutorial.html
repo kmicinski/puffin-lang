@@ -557,13 +557,17 @@ consistency checker unfolds <code>(List a)</code> one step when it meets a
 <code>Pairof</code>, and <code>'() : (List _)</code>. Proper lists and dotted
 pairs both get honest types, with neither unions nor a lattice in the theory.</p>
 
-<h3>Erasure semantics (v1) — checked, then erased</h3>
-<p>Types are checked, then erased during desugaring; the runtime's existing tag
-checks are the dynamic safety net. That means v1 has no casts and no blame — the
-classic gradual-guarantee machinery of inserting checked casts at
-<code>_</code>→concrete boundaries is the roadmap (the checker already identifies
-every such point). Constructor instances have their own heap kind — not vectors —
-so <code>(println (Some 1))</code> prints <code>(Some 1)</code> (a nullary
+<h3>Cast semantics — checked, then guarded</h3>
+<p>Types are checked, then every <em>declared</em> boundary is guarded with a
+transient (first-order) cast before annotations erase: annotated parameters check
+on function entry, declared results on return, and <code>ann</code>, annotated
+<code>let</code>s, and <code>(: …)</code> defines check their values. A failed
+cast is a precise runtime error carrying a <strong>blame label</strong> naming
+the boundary — <code>cast: expected Int, got #t (blame: f's argument x)</code> —
+instead of whatever tag check the value happened to hit later. Unannotated code
+gets no casts at all (it compiles byte-identically), so the gradual guarantee is
+free. Constructor instances have their own heap kind — not vectors — so
+<code>(println (Some 1))</code> prints <code>(Some 1)</code> (a nullary
 constructor prints bare: <code>None</code>), <code>(vector? (Some 1))</code> is
 <code>#f</code>, and <code>adt?</code> is the disjoint predicate.</p>
 
@@ -573,7 +577,7 @@ constructor prints bare: <code>None</code>), <code>(vector? (Some 1))</code> is
 <tr><td>How you opt in</td><td>separate <code>#lang typed/racket</code>, per module</td><td>one language; per-annotation, <code>_</code> is the default</td></tr>
 <tr><td>Core relation</td><td>subtyping, with unions + occurrence typing</td><td>consistency (<code>~</code>), non-transitive, no unions</td></tr>
 <tr><td>Data</td><td>structs + union types</td><td><code>define-type</code> ADTs, constructors in <code>match</code></td></tr>
-<tr><td>Typed/untyped boundary</td><td>contracts generated at module boundaries</td><td>v1: erasure + runtime tag checks; casts/blame on the roadmap</td></tr>
+<tr><td>Typed/untyped boundary</td><td>contracts generated at module boundaries</td><td>transient casts with blame at every declared boundary (first-order checks; ADT casts verify the constructor set)</td></tr>
 <tr><td>Unannotated code</td><td>must still typecheck (or live in an untyped module)</td><td>never fails to check — the gradual guarantee</td></tr>
 </tbody>
 </table>
@@ -594,20 +598,20 @@ right-hand sides synthesize their types) covers most of the rest.</p>
 
 <aside class="qa">
 <div class="q">What happens at runtime if types are wrong at a <code>_</code> boundary?</div>
-<p>v1 is erasure: the checker can't see through <code>_</code>, so a lie crossing
-it is caught by the runtime's tag checks — heap operations (<code>car</code>,
-<code>vector-ref</code>, hash/set ops) are always checked:</p>
+<p>The checker can't see through <code>_</code> — that's what makes it gradual —
+so a lie crossing an unannotated seam is caught by the <em>cast</em> guarding the
+declared boundary it lands on, at the boundary, with blame:</p>
 <pre><code>(define (first-of [p : (Pairof Int Int)]) : Int (car p))
 (define (sneaky x) (first-of x))    ;; x : _ — checks fine
 (println (sneaky (cons 1 2)))       ;; 1
-(println (sneaky 'oops))            ;; runtime, not compile time:
+(println (sneaky 'oops))            ;; dies at first-of's door, not inside car:
 </code></pre>
-<pre class="err"><code>error: car: contract violation
-  expected: pair?
-  given: 'oops</code></pre>
-<p>The known gap: arithmetic on non-fixnums is unchecked in <em>compiled</em> code
-(the interpreter errors). Phase 3 inserts casts with blame labels at every
-<code>_</code>→concrete boundary, turning these into precise, early errors.</p>
+<pre class="err"><code>puffin runtime error: cast: expected Pairof, got oops (blame: first-of's argument p)</code></pre>
+<p>The check is first-order (transient): it validates the value's outermost shape
+— for an ADT type, that the value's constructor belongs to that type — and trusts
+the checker for the rest. Fully unannotated code has no declared boundaries, so
+it carries no casts and the runtime's ordinary tag checks remain the net, exactly
+as before.</p>
 </aside>
 </section>
 

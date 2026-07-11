@@ -54,9 +54,11 @@ flavors: `(->* (τ ...) τr τres) ~ (-> σ ... σres)` when the fixed
 arrow supplies at least the fixed arguments (extras against τr).
 
 Type variables are scoped to the `define-type` or annotation that
-introduces them; there is no explicit `forall` in v1 — top-level
+introduces them; there is no explicit `forall` **by design** — top-level
 function annotations with free lowercase names are implicitly
-prenex-polymorphic, instantiated per use.
+prenex-polymorphic, instantiated per use. (A deliberate, permanent
+choice, not a staging artifact: with greedy per-use instantiation an
+explicit binder buys no expressiveness and costs syntax.)
 
 ## 2. Algebraic datatypes
 
@@ -168,10 +170,11 @@ An inconsistency is a compile-time type error. Inference is *local*:
 bindings are precisely typed without annotations); unannotated lambda
 parameters synthesize `_` unless the lambda is checked against an
 arrow type (then parameters flow in). No unification variables escape
-an expression; no Hindley–Milner generalization in v1 — ADT
-constructors and prenex-polymorphic prims instantiate their type
-variables greedily against argument types, with `_` filling anything
-underdetermined.
+an expression; there is no Hindley–Milner generalization **by design**
+(inference stays local and predictable — the gradual answer to an
+underdetermined type is `_`, not a quantifier) — ADT constructors and
+prenex-polymorphic prims instantiate their type variables greedily
+against argument types, with `_` filling anything underdetermined.
 
 **Lists vs pairs.** `cons : (-> a b (Pairof a b))` (so `(cons 1 2)`
 is fine in any code), and `(List a)` is treated equi-recursively: the
@@ -180,7 +183,7 @@ consistency checker unfolds `(List a)` one step to
 assoc-pairs and proper lists honest types simultaneously without
 unions or subtyping.
 
-**Cast semantics (v1, shipped).** Types are checked, then LOWERED —
+**Cast semantics (shipped).** Types are checked, then LOWERED —
 not merely erased — in desugar: every *declared* `_`→concrete
 boundary is guarded by a transient-style cast before the annotation
 disappears. Both compilers (src/compile.rkt and
