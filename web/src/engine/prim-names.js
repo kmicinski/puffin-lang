@@ -12,6 +12,7 @@ export function surfacePrimNames() {
     "command-line-args",
     "cons",
     "display",
+    "eprintln",
     "equal?",
     "error",
     "file-exists?",

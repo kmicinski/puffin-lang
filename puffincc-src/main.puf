@@ -159,7 +159,11 @@
 
 ;; ---- the entry point --------------------------------------------------
 ;;
-;;   puffincc [-t <target>] [-O <0|1|2>] [-o <out>] [--runtime <lib>] [file.puf]
+;;   puffincc [-t <target>] [-O <0|1|2>] [-o <out>] [--runtime <lib>]
+;;            [--strict-types] [file.puf]
+;;
+;; --strict-types promotes the typechecker's exhaustiveness warning
+;; (docs/TYPES.md §2) to a compile-time error (mirrors bin/puffin).
 ;;
 ;; With a file: read it (resolving require/provide modules from disk),
 ;; compile, and either print assembly (no -o), write assembly (-o

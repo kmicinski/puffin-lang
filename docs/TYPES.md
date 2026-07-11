@@ -1,18 +1,22 @@
 # Puffin gradual types: ADTs first, `_` everywhere else
 
-> **Status:** §1–§4 are LIVE in the reference implementation on this
-> branch: `src/types.rkt` (the bidirectional checker, invoked at the
-> top of desugar so every route checks), ADT dynamic semantics
-> end-to-end on both backends, annotations parsing + erasing
-> everywhere. `typed-1` is a golden corpus program; the rejection
-> matrix lives in `src/test-types.rkt`; the whole untyped corpus
-> passes unchanged (297/297 — the gradual guarantee). One refinement
-> beyond the design: in applications, a formal's CONCRETE structure
-> is a contract (violations error) but a constraint that exists only
-> because greedy instantiation bound a type variable from a sibling
-> argument is an inference hint — conflicts there demote the variable
-> to `_`. Still ahead: prim types folding into the manifest, web +
-> puffincc dynamic-semantics parity, casts/blame, exhaustiveness.
+> **Status:** §1–§5 are LIVE in BOTH checkers — `src/types.rkt` (the
+> reference, invoked at the top of desugar so every route checks) and
+> `puffincc-src/types.puf` (byte-identical messages) — including the
+> formerly-v1-deferred pieces: variadic `(->* ...)` types, the
+> `(Mut ...)` container wrapper, exhaustiveness checking over closed
+> ADTs (a stderr warning; `--strict-types` on both CLIs promotes it
+> to an error), and prim types folded into the manifest (`prim-spec`'s
+> `#:type` field is the single source of truth; `tables.puf` and
+> docs/STDLIB.md carry it). `typed-1`/`typed-2` are golden corpus
+> programs; the rejection matrix lives in `src/test-types.rkt`; the
+> whole corpus passes unchanged (300/300 — the gradual guarantee).
+> One refinement beyond the design: in applications, a formal's
+> CONCRETE structure is a contract (violations error) but a
+> constraint that exists only because greedy instantiation bound a
+> type variable from a sibling argument is an inference hint —
+> conflicts there demote the variable to `_`. Still ahead:
+> casts/blame, the dedicated ADT heap kind, typed `.pufs` signatures.
 
 Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
@@ -31,12 +35,23 @@ the rest locally.
     | Int | Bool | Sym | Str | Void     base types
     | (Pairof τ τ)                       cons cells
     | (List τ)                           proper lists (see §4: μ-treatment)
-    | (Vec τ) | (Hash τ τ) | (Set τ)     containers (both mutability flavors)
+    | (Vec τ) | (Hash τ τ) | (Set τ)     containers (persistent / read-only view)
+    | (Mut τ)                            mutable-container wrapper (τ: Hash/Vec/Set)
     | (-> τ ... τ)                       functions, fixed arity
     | (->* (τ ...) τ τ)                  variadic: fixed args, rest-elem, result
     | (Name τ ...)                       ADT instances, e.g. (Option Int)
     | a b c ...                          type variables (lowercase)
 ```
+
+**Variadics.** A dotted define `(define (f a b . rest) ...)` derives
+`(->* (τa τb) _ rt)` from its (possibly annotated) fixed formals — so
+the arity floor is checked at every application even in untyped code —
+and a `(: f (->* (τ ...) τrest τres))` declaration tightens it: fixed
+arguments check against their types, every extra argument against
+τrest, and `rest` is `(List τrest)` in the body. Variadic lambdas
+synthesize `->*` the same way. Consistency relates the two arrow
+flavors: `(->* (τ ...) τr τres) ~ (-> σ ... σres)` when the fixed
+arrow supplies at least the fixed arguments (extras against τr).
 
 Type variables are scoped to the `define-type` or annotation that
 introduces them; there is no explicit `forall` in v1 — top-level
@@ -73,8 +88,20 @@ prenex-polymorphic, instantiated per use.
 - **Pattern matching**: `(Ctor p ...)` is a constructor pattern when
   `Ctor` names an in-scope constructor; a bare pattern symbol that
   names a nullary constructor matches that constructor (anything else
-  stays a binder, as today). Exhaustiveness over a closed ADT is a
-  warning, not an error, in v1.
+  stays a binder, as today).
+- **Exhaustiveness** (implemented): a `match` whose scrutinee's
+  synthesized type is a concrete known ADT is checked against the
+  type's constructor set; missing constructors produce a stderr
+  warning (`typecheck warning: match on <Name> is not exhaustive:
+  missing <C1>, <C2>` — declaration order) and compilation proceeds.
+  `--strict-types` (both `bin/puffin` and `puffincc`;
+  `strict-exhaustiveness?` in `system.rkt`) promotes it to an error
+  with the same text. Coverage is conservative in the
+  no-false-warnings direction: a wildcard/binder clause, a guarded
+  catch-all, or any pattern the checker cannot prove partial counts
+  as covering everything, and a constructor pattern covers its
+  constructor even under a `#:when` guard. A `_`-typed scrutinee is
+  exempt (the gradual guarantee: untyped code never warns).
 
 ### Implicit mutual recursion (the fix-block question)
 
@@ -156,21 +183,40 @@ elimination position).
 
 ## 5. Prim and container types come from the manifest
 
-`prim-spec` grows a `type` field — the single-source-of-truth
-invariant extends to types. Representative entries:
+`prim-spec` carries a `#:type` field (default `#f` = untyped, giving
+`(-> _ ... _)` from the arity) — the single-source-of-truth invariant
+extends to types: `src/types.rkt` reads it directly,
+`gen-puffincc-tables.rkt` emits it into `puffincc-src/tables.puf` for
+`types.puf`, `gen-stdlib-docs.rkt` renders it as docs/STDLIB.md's
+Type column, and the manifest asserts type-arity agreement at load.
+The only local table left in the checkers covers desugar-level
+non-manifest forms (`+ - * eq? < <= > >= not`). Representative
+entries:
 
 ```
 cons        : (-> a b (Pairof a b))        car  : (-> (Pairof a b) a)
-vector-ref  : (-> (Vec a) Int a)           make-vector : (-> Int (Vec _))
+vector-ref  : (-> (Vec a) Int a)           make-vector : (-> Int (Mut (Vec _)))
 hash-set    : (-> (Hash k v) k v (Hash k v))
 hash-ref    : (-> (Hash k v) k v)          set-add : (-> (Set a) a (Set a))
+hash-set!   : (-> (Mut (Hash k v)) k v Void)
 +           : (-> Int Int Int)             eq?  : (-> a b Bool)
 println     : (-> a Void)                  read : (-> Int)
 ```
 
-Both mutability flavors share the container type in v1 (a `(Mut ...)`
-wrapper is future work — gradualness papers over the difference at
-`_` boundaries anyway).
+**`(Mut τ)`** (implemented) separates the mutability flavors:
+allocators produce it (`make-hash : (-> (Mut (Hash _ _)))`,
+`make-set`, `make-vector`, and `(vector ...)` literals — there is no
+persistent vector), mutating prims demand it (`hash-set!`,
+`hash-remove!`, `set-add!`, `set-remove!`, `vector-set!`), and
+persistent operations (`hash`, `hash-set`, `set`, `set-add`, ...)
+stay on the plain types. Read-only accessors (`hash-ref`,
+`hash-count`, `vector-ref`, `set-member?`, ...) are typed over the
+plain container and accept both flavors because consistency is
+**directional**: `(Mut τ) ~ τ'` whenever `τ ~ τ'` (a mutable value
+may be used read-only), but a plain container never fits a `(Mut τ)`
+expectation — `(hash-set! (hash 'a 1) 'b 2)` is a compile-time type
+error when the types are concrete, while `_` papers over the
+difference as usual.
 
 ## 6. Pipeline placement
 
@@ -209,7 +255,12 @@ module system needs no changes. `.pufs` signatures grow typed entries
 
 1. Reference: surface syntax, ADT dynamic semantics end-to-end
    (both backends), the checker, manifest types, `typed-*` corpus.
-2. Web + puffincc: `define-type`/match dynamic semantics for parity.
-3. Casts + blame; typed signatures; the dedicated ADT heap kind;
-   exhaustiveness as an error option; `(Mut ...)` containers.
+   DONE.
+2. Web + puffincc: `define-type`/match dynamic semantics for parity;
+   the ported checker (`types.puf`) with byte-identical messages.
+   DONE.
+3. Variadic `->*`, `(Mut ...)` containers, exhaustiveness (warning +
+   `--strict-types` error option), prim types in the manifest. DONE.
+4. Casts + blame; typed `.pufs` signatures; the dedicated ADT heap
+   kind.
 ```
