@@ -15,71 +15,91 @@
 ;; manifest's prim types -- so injecting the prelude never perturbs
 ;; an unannotated program's compiled output, and the tail loops
 ;; below stay tail (a result cast would un-tail them).
+;;
+;; Doc comments: a `;;>` line above a define is that function's
+;; one-line description in the generated standard-library reference
+;; (tools/gen-stdlib-html.rkt parses them; comments are invisible to
+;; the reader, so they never affect compilation or prelude-data).
 
+;;> The number of elements in a list.
 (#%prelude: length (-> (List a) Int))
 (define (length xs)
   (let loop ([xs xs] [n 0])
     (if (null? xs) n (loop (cdr xs) (+ n 1)))))
 
+;;> A list of xs's elements followed by ys's elements.
 (#%prelude: append (-> (List a) (List a) (List a)))
 (define (append xs ys)
   (if (null? xs) ys (cons (car xs) (append (cdr xs) ys))))
 
+;;> The list in reverse order.
 (#%prelude: reverse (-> (List a) (List a)))
 (define (reverse xs)
   (let loop ([xs xs] [acc '()])
     (if (null? xs) acc (loop (cdr xs) (cons (car xs) acc)))))
 
+;;> Apply f to every element, collecting the results in order.
 (#%prelude: map (-> (-> a b) (List a) (List b)))
 (define (map f xs)
   (if (null? xs) '() (cons (f (car xs)) (map f (cdr xs)))))
 
+;;> The elements for which p holds, in order.
 (#%prelude: filter (-> (-> a Bool) (List a) (List a)))
 (define (filter p xs)
   (cond [(null? xs) '()]
         [(p (car xs)) (cons (car xs) (filter p (cdr xs)))]
         [else (filter p (cdr xs))]))
 
+;;> Fold left to right: acc becomes (f x acc) for each element x.
 (#%prelude: foldl (-> (-> a b b) b (List a) b))
 (define (foldl f acc xs)
   (if (null? xs) acc (foldl f (f (car xs) acc) (cdr xs))))
 
+;;> Fold right to left: (f x1 (f x2 (... acc))).
 (#%prelude: foldr (-> (-> a b b) b (List a) b))
 (define (foldr f acc xs)
   (if (null? xs) acc (f (car xs) (foldr f acc (cdr xs)))))
 
+;;> The i-th element of a list, 0-based (checked).
 (#%prelude: list-ref (-> (List a) Int a))
 (define (list-ref xs i)
   (if (eq? i 0) (car xs) (list-ref (cdr xs) (- i 1))))
 
+;;> The tail of the list starting at the first equal? occurrence of v, or #f.
 (#%prelude: member (-> a (List a) _))
 (define (member v xs)
   (cond [(null? xs) #f]
         [(equal? v (car xs)) xs]
         [else (member v (cdr xs))]))
 
+;;> The first pair whose car is equal? to k, or #f — assoc-list lookup.
 (#%prelude: assoc (-> a (List (Pairof a b)) _))
 (define (assoc k ps)
   (cond [(null? ps) #f]
         [(equal? k (car (car ps))) (car ps)]
         [else (assoc k (cdr ps))]))
 
+;;> The integers a, a+1, ..., b-1, as a list.
 (#%prelude: range (-> Int Int (List Int)))
 (define (range a b)
   (if (< a b) (cons a (range (+ a 1) b)) '()))
 
+;;> Does p hold for every element? (#t on the empty list.)
 (#%prelude: andmap (-> (-> a Bool) (List a) Bool))
 (define (andmap p xs)
   (if (null? xs) #t (if (p (car xs)) (andmap p (cdr xs)) #f)))
 
+;;> The first truthy (p x) going left to right, or #f.
 (#%prelude: ormap (-> (-> a Bool) (List a) Bool))
 (define (ormap p xs)
   (if (null? xs) #f (let ([v (p (car xs))]) (if v v (ormap p (cdr xs))))))
 
+;;> The final element of a nonempty list.
 (#%prelude: last (-> (List a) a))
 (define (last xs)
   (if (null? (cdr xs)) (car xs) (last (cdr xs))))
 
+;;> A fresh mutable vector holding the list's elements in order.
 (#%prelude: list->vector (-> (List a) (Mut (Vec a))))
 (define (list->vector xs)
   (let ([v (make-vector (length xs))])
@@ -88,25 +108,35 @@
           v
           (begin (vector-set! v i (car xs)) (loop (cdr xs) (+ i 1)))))))
 
+;;> A list of the vector's elements, in order.
 (#%prelude: vector->list (-> (Vec a) (List a)))
 (define (vector->list v)
   (let loop ([i (- (vector-length v) 1)] [acc '()])
     (if (< i 0) acc (loop (- i 1) (cons (vector-ref v i) acc)))))
 
+;;> The larger of two integers.
 (#%prelude: max (-> Int Int Int))
 (define (max a b) (if (< a b) b a))
+;;> The smaller of two integers.
 (#%prelude: min (-> Int Int Int))
 (define (min a b) (if (< a b) a b))
+;;> Absolute value.
 (#%prelude: abs (-> Int Int))
 (define (abs n) (if (< n 0) (- n) n))
+;;> n + 1.
 (define (add1 n) (+ n 1))
+;;> n - 1.
 (define (sub1 n) (- n 1))
+;;> Is n zero?
 (#%prelude: zero? (-> Int Bool))
 (define (zero? n) (eq? n 0))
+;;> Is n even?
 (#%prelude: even? (-> Int Bool))
 (define (even? n) (eq? (remainder n 2) 0))
+;;> Is n odd?
 (#%prelude: odd? (-> Int Bool))
 (define (odd? n) (not (eq? (remainder n 2) 0)))
+;;> Is v a proper list — a chain of pairs ending in '()?
 (define (list? v)
   (cond [(null? v) #t]
         [(pair? v) (list? (cdr v))]
@@ -114,11 +144,13 @@
 
 ;; ---- bootstrap batch (see docs/BOOTSTRAP.md) ------------------------
 
+;;> Display a value followed by a newline (display, then newline).
 (define (displayln v) (begin (display v) (newline)))
 
 ;; apply, for the arities the calling convention carries in registers.
 ;; A closure has at most 6 slots for user arguments (one register
 ;; goes to the closure itself); bootstrap code stays within that.
+;;> Call f with the list's elements as its arguments (up to five).
 (define (apply f xs)
   (match xs
     ['() (f)]
@@ -130,6 +162,7 @@
     [_ (error 'apply-supports-at-most-five-arguments)]))
 
 ;; stable merge sort
+;;> Sort a list by the given strict ordering (stable merge sort).
 (#%prelude: sort (-> (List a) (-> a a Bool) (List a)))
 (define (sort xs less?)
   (define (merge a b)
@@ -148,8 +181,10 @@
       (let ([halves (split xs)])
         (merge (sort (car halves) less?) (sort (cdr halves) less?)))))
 
+;;> Lexicographic order on symbol names.
 (define (symbol<? a b) (string<? (symbol->string a) (symbol->string b)))
 
+;;> Concatenate a list of strings with sep between elements (linear).
 (#%prelude: string-join (-> (List Str) Str Str))
 (define (string-join xs sep)
   ;; linear + tail: interleave into a list, one string-concat --
@@ -164,6 +199,7 @@
 
 ;; variadic format: (format "~a + ~a~%" 1 2)
 ;; ~a and ~s both render display-style; ~% newline; ~~ tilde.
+;;> Build a string from a template: ~a inserts a value, ~% a newline, ~~ a tilde.
 (#%prelude: format (->* (Str) _ Str))
 (define (format fmt . args)
   (let loop ([i 0] [acc ""] [args args])
@@ -182,49 +218,66 @@
         acc)))
 
 ;; list utilities the compiler leans on
+;;> The first element of a list (car).
 (#%prelude: first (-> (List a) a))
 (define (first xs) (car xs))
+;;> The second element of a list.
 (#%prelude: second (-> (List a) a))
 (define (second xs) (car (cdr xs)))
+;;> The third element of a list.
 (#%prelude: third (-> (List a) a))
 (define (third xs) (car (cdr (cdr xs))))
+;;> Everything after the first element (cdr).
 (#%prelude: rest (-> (List a) (List a)))
 (define (rest xs) (cdr xs))
+;;> The first n elements of a list.
 (#%prelude: take (-> (List a) Int (List a)))
 (define (take xs n) (if (eq? n 0) '() (cons (car xs) (take (cdr xs) (- n 1)))))
+;;> The list without its first n elements.
 (#%prelude: drop (-> (List a) Int (List a)))
 (define (drop xs n) (if (eq? n 0) xs (drop (cdr xs) (- n 1))))
+;;> The 0-based position of the first equal? occurrence of v, or #f.
 (#%prelude: index-of (-> (List a) a Int))
 (define (index-of xs v)
   (let loop ([xs xs] [i 0])
     (cond [(null? xs) #f]
           [(equal? (car xs) v) i]
           [else (loop (cdr xs) (+ i 1))])))
+;;> Map f over the list and append the resulting lists.
 (define (append-map f xs) (foldr (lambda (x acc) (append (f x) acc)) '() xs))
+;;> Map f over the list, keeping only the truthy results.
 (define (filter-map f xs)
   (foldr (lambda (x acc) (let ([v (f x)]) (if v (cons v acc) acc))) '() xs))
+;;> The list without its first equal? occurrence of v.
 (#%prelude: remove (-> a (List a) (List a)))
 (define (remove v xs)
   (cond [(null? xs) '()]
         [(equal? v (car xs)) (cdr xs)]
         [else (cons (car xs) (remove v (cdr xs)))]))
+;;> The first element for which p holds, or #f.
 (#%prelude: findf (-> (-> a Bool) (List a) _))
 (define (findf p xs)
   (cond [(null? xs) #f]
         [(p (car xs)) (car xs)]
         [else (findf p (cdr xs))]))
+;;> A pair of lists: the elements passing p, and the elements failing it.
 (define (partition p xs)
   (cons (filter p xs) (filter (lambda (x) (not (p x))) xs)))
 
 ;; two-list map (Racket's variadic map, at the arity the compiler uses)
+;;> Map a two-argument function over two lists in lockstep.
 (define (map2 f xs ys)
   (if (or (null? xs) (null? ys))
       '()
       (cons (f (car xs) (car ys)) (map2 f (cdr xs) (cdr ys)))))
 
 ;; set algebra over the immutable sets
+;;> An immutable set of the list's elements.
 (define (list->set xs) (foldl (lambda (x acc) (set-add acc x)) (set) xs))
+;;> An immutable set with every element of both sets.
 (define (set-union a b) (foldl (lambda (x acc) (set-add acc x)) a (set->list b)))
+;;> An immutable set with a's elements that are not in b.
 (define (set-subtract a b) (foldl (lambda (x acc) (set-remove acc x)) a (set->list b)))
+;;> An immutable set with the elements common to both sets.
 (define (set-intersect a b)
   (list->set (filter (lambda (x) (set-member? b x)) (set->list a))))

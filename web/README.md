@@ -75,6 +75,9 @@ node test-vm-smoke.mjs   # precompiled fixtures through the WASI shim
   tab — served from `public/tutorial.html`, a committed copy of
   `../docs/tutorial.html` (refresh it with
   `cp ../docs/tutorial.html public/tutorial.html`).
+- The **standard-library reference** is served at `/stdlib.html`
+  (`public/stdlib.html`, a committed generated page — regenerate both
+  copies with `racket ../tools/gen-stdlib-html.rkt`, never hand-edit).
 - **Pipeline** mode is unchanged: it talks to the Racket trace server
   (`racket ../src/ir-server.rkt`) in dev, with a bundled sample trace
   as fallback.
