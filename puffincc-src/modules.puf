@@ -308,7 +308,21 @@
 
 (: module-id (-> Str Str _ Str))
 (define (module-id path entry-dir ids)
-  (define rel path) ;; paths are already joined from the entry dir
+  ;; the id hashes the ENTRY-RELATIVE path, exactly like the Racket
+  ;; resolver (find-relative-path there): ids -- and therefore mangled
+  ;; spellings -- agree across the two compilers, which diff-ir and
+  ;; .pbc byte-comparison rely on. Paths arrive joined from the entry
+  ;; dir, so relativizing is stripping that prefix; a dep OUTSIDE the
+  ;; entry dir keeps its joined path (the Racket side spells those
+  ;; with ../ -- a known, harmless divergence).
+  (define prefix (str-cat entry-dir "/"))
+  (define np (string-length prefix))
+  (define rel
+    (if (and (> np 1)
+             (>= (string-length path) np)
+             (string=? (substring path 0 np) prefix))
+        (substring path np (string-length path))
+        path))
   (define id (str-cat (path-stem path) "_" (to-hex (fnv1a-32 rel))))
   (begin
     (when (and (hash-has-key? ids (path-key id))

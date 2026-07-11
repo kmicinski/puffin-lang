@@ -1,0 +1,17 @@
+;; #:as-qualified TYPE annotations: S.Shape works in type positions
+;; exactly like S.area does in expressions -- and an own define-type
+;; may reference the imported type in a FIELD position.
+(require "shapes.puf" #:as S)
+(provide describe label Tagged Tag)
+
+(define-type Tagged (Tag Sym S.Shape))
+
+(define (describe [s : S.Shape]) : Sym
+  (match s
+    [S.Point 'dot]
+    [(S.Circle _) 'round]
+    [(S.Rect _ _) 'box]))
+
+(define (label [t : Tagged]) : (List _)
+  (match t
+    [(Tag name s) (list name (describe s) (S.area s))]))
