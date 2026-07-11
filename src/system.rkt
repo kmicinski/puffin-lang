@@ -35,6 +35,13 @@
 ;; off for benchmarking; leave on for day-to-day sanity.
 (define safe-mode (make-parameter #t))
 
+;; Promote the typechecker's exhaustiveness WARNING (a match over a
+;; closed ADT that misses constructors; docs/TYPES.md §2) to a
+;; compile-time error. Off by default: the warning goes to stderr and
+;; compilation proceeds. bin/puffin --strict-types turns it on;
+;; puffincc's flag of the same name mirrors it.
+(define strict-exhaustiveness? (make-parameter #f))
+
 (define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)

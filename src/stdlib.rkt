@@ -16,6 +16,12 @@
 ;;             control flow)
 ;;   doc       one-line documentation (docs/STDLIB.md is generated
 ;;             from these)
+;;   type      OPTIONAL (#:type, default #f): the prim's gradual type
+;;             (docs/TYPES.md), consumed by both typecheckers
+;;             (src/types.rkt and, via gen-puffincc-tables.rkt,
+;;             puffincc-src/types.puf). #f means untyped: the
+;;             checkers derive (-> _ ... _) from the arity. Asserted
+;;             against the arity at load time below.
 ;;
 ;; Derived automatically from this table:
 ;;   - the prim?/arity predicates used by every IR in irs.rkt
@@ -43,7 +49,19 @@
 (require racket/set)
 (provide (all-defined-out))
 
-(struct prim-spec (name arity rt-sym surface? ref-impl doc) #:transparent)
+;; The struct carries the type as a 7th field; `prim-spec` itself is a
+;; thin constructor whose #:type keyword defaults to #f, so entries
+;; (and future appended entries) may omit it.
+(struct prim-spec-data (name arity rt-sym surface? ref-impl doc type) #:transparent)
+(define (prim-spec name arity rt-sym surface? ref-impl doc #:type [type #f])
+  (prim-spec-data name arity rt-sym surface? ref-impl doc type))
+(define prim-spec-name     prim-spec-data-name)
+(define prim-spec-arity    prim-spec-data-arity)
+(define prim-spec-rt-sym   prim-spec-data-rt-sym)
+(define prim-spec-surface? prim-spec-data-surface?)
+(define prim-spec-ref-impl prim-spec-data-ref-impl)
+(define prim-spec-doc      prim-spec-data-doc)
+(define prim-spec-type     prim-spec-data-type)
 
 ;; ---------------------------------------------------------------------
 ;; Reference display / equality -- must render *exactly* like the C
@@ -122,63 +140,87 @@
   (list
    ;; ---- I/O (core.c) -------------------------------------------------
    (prim-spec 'read     0 'pf_read_int #t 'read
-              "Read an integer from standard input.")
+              "Read an integer from standard input."
+              #:type '(-> Int))
    (prim-spec 'println  1 'pf_println #t (λ (v) (display (render-value v)) (newline) (void))
-              "Display a value followed by a newline; returns void.")
+              "Display a value followed by a newline; returns void."
+              #:type '(-> a Void))
    (prim-spec 'display  1 'pf_display #t (λ (v) (display (render-value v)) (void))
-              "Display a value (no newline); returns void.")
+              "Display a value (no newline); returns void."
+              #:type '(-> a Void))
    (prim-spec 'newline  0 'pf_newline #t (λ () (newline) (void))
-              "Print a newline; returns void.")
+              "Print a newline; returns void."
+              #:type '(-> Void))
    (prim-spec 'error    1 'pf_error #t puffin-error-impl
-              "Display `error: <value>` and halt the program.")
+              "Display `error: <value>` and halt the program."
+              #:type '(-> a _))
 
    ;; ---- generic equality (core.c) ------------------------------------
    (prim-spec 'equal?   2 'pf_equal #t puffin-equal?
-              "Structural equality over pairs, vectors, and strings; identity otherwise.")
+              "Structural equality over pairs, vectors, and strings; identity otherwise."
+              #:type '(-> a b Bool))
 
    ;; ---- pairs and lists (lib/pairs.c) --------------------------------
    (prim-spec 'cons     2 'pf_cons #t cons
-              "Allocate a pair of two values.")
+              "Allocate a pair of two values."
+              #:type '(-> a b (Pairof a b)))
    (prim-spec 'car      1 'pf_car #t car
-              "First component of a pair (checked).")
+              "First component of a pair (checked)."
+              #:type '(-> (Pairof a b) a))
    (prim-spec 'cdr      1 'pf_cdr #t cdr
-              "Second component of a pair (checked).")
+              "Second component of a pair (checked)."
+              #:type '(-> (Pairof a b) b))
    (prim-spec 'pair?    1 'pf_pair_huh #t pair?
-              "Is this value a pair?")
+              "Is this value a pair?"
+              #:type '(-> a Bool))
    (prim-spec 'null?    1 'pf_null_huh #t null?
-              "Is this value the empty list '()?")
+              "Is this value the empty list '()?"
+              #:type '(-> a Bool))
 
    ;; ---- vectors (lib/vectors.c) --------------------------------------
    (prim-spec 'make-vector 1 'pf_make_vector #t (λ (n) (make-vector n 0))
-              "Allocate a vector of n slots, initialized to 0.")
+              "Allocate a vector of n slots, initialized to 0."
+              #:type '(-> Int (Mut (Vec _))))
    (prim-spec 'vector-ref  2 'pf_vector_ref #t vector-ref
-              "Fetch a slot (checked: type and bounds; dynamic index).")
+              "Fetch a slot (checked: type and bounds; dynamic index)."
+              #:type '(-> (Vec a) Int a))
    (prim-spec 'vector-set! 3 'pf_vector_set #t (λ (v i x) (vector-set! v i x) (void))
-              "Store into a slot (checked); returns void.")
+              "Store into a slot (checked); returns void."
+              #:type '(-> (Mut (Vec a)) Int a Void))
    (prim-spec 'vector-length 1 'pf_vector_length #t vector-length
-              "Number of slots in a vector.")
+              "Number of slots in a vector."
+              #:type '(-> (Vec a) Int))
    (prim-spec 'vector?  1 'pf_vector_huh #t vector?
-              "Is this value a vector?")
+              "Is this value a vector?"
+              #:type '(-> a Bool))
 
    ;; ---- strings (lib/strings.c) --------------------------------------
    (prim-spec 'string?  1 'pf_string_huh #t string?
-              "Is this value a string?")
+              "Is this value a string?"
+              #:type '(-> a Bool))
    (prim-spec 'string-length 1 'pf_string_length #t string-length
-              "Number of bytes in a string.")
+              "Number of bytes in a string."
+              #:type '(-> Str Int))
    (prim-spec 'string-append 2 'pf_string_append #t string-append
-              "Concatenate two strings.")
+              "Concatenate two strings."
+              #:type '(-> Str Str Str))
    (prim-spec 'string=? 2 'pf_string_equal_huh #t string=?
-              "Are two strings byte-equal?")
+              "Are two strings byte-equal?"
+              #:type '(-> Str Str Bool))
    (prim-spec 'symbol->string 1 'pf_symbol_to_string #t symbol->string
-              "The name of a symbol, as a fresh string.")
+              "The name of a symbol, as a fresh string."
+              #:type '(-> Sym Str))
    (prim-spec 'string->symbol 1 'pf_string_to_symbol #t string->symbol
-              "Intern a string as a symbol.")
+              "Intern a string as a symbol."
+              #:type '(-> Str Sym))
 
    ;; ---- arithmetic helpers (lib/arith.c) ------------------------------
    (prim-spec 'quotient  2 'pf_quotient #t quotient
-              "Integer division truncated toward zero (checked: nonzero divisor).")
+              "Integer division truncated toward zero (checked: nonzero divisor)."
+              #:type '(-> Int Int Int))
    (prim-spec 'remainder 2 'pf_remainder #t remainder
-              "Integer remainder (checked: nonzero divisor).")
+              "Integer remainder (checked: nonzero divisor)."
+              #:type '(-> Int Int Int))
 
    ;; ---- immutable hashes and sets (lib/hamt.c) --------------------------
    ;; The DEFAULT collections: persistent HAMTs (path-copying trie,
@@ -186,117 +228,163 @@
    ;; hash; the input is untouched. Mutability is tolerated, not
    ;; default: see make-hash / make-set below.
    (prim-spec 'hash     0 'pf_ihash_empty #t (λ () (hasheqv))
-              "The empty immutable hash. (hash k v ...) builds one by chained hash-set.")
+              "The empty immutable hash. (hash k v ...) builds one by chained hash-set."
+              #:type '(-> (Hash _ _)))
    (prim-spec 'hash-set 3 'pf_ihash_set #t hash-set
-              "A new immutable hash: like the input, with key mapped to value.")
+              "A new immutable hash: like the input, with key mapped to value."
+              #:type '(-> (Hash k v) k v (Hash k v)))
    (prim-spec 'hash-remove 2 'pf_ihash_remove #t hash-remove
-              "A new immutable hash: like the input, without the key.")
+              "A new immutable hash: like the input, without the key."
+              #:type '(-> (Hash k v) k (Hash k v)))
    (prim-spec 'set      0 'pf_iset_empty #t (λ () (seteqv))
-              "The empty immutable set. (set v ...) builds one by chained set-add.")
+              "The empty immutable set. (set v ...) builds one by chained set-add."
+              #:type '(-> (Set _)))
    (prim-spec 'set-add  2 'pf_iset_add #t set-add
-              "A new immutable set: like the input, with the value present.")
+              "A new immutable set: like the input, with the value present."
+              #:type '(-> (Set a) a (Set a)))
    (prim-spec 'set-remove 2 'pf_iset_remove #t set-remove
-              "A new immutable set: like the input, without the value.")
+              "A new immutable set: like the input, without the value."
+              #:type '(-> (Set a) a (Set a)))
 
    ;; ---- mutable hashes (lib/hashes.c) -----------------------------------
    (prim-spec 'make-hash 0 'pf_make_hash #t (λ () (make-hasheqv))
-              "Allocate an empty MUTABLE key/value map (eq?-keyed, open addressing).")
+              "Allocate an empty MUTABLE key/value map (eq?-keyed, open addressing)."
+              #:type '(-> (Mut (Hash _ _))))
    (prim-spec 'hash-set! 3 'pf_hash_set #t (λ (h k v) (hash-set! h k v) (void))
-              "Map key to value (overwrites); returns void.")
+              "Map key to value (overwrites); returns void."
+              #:type '(-> (Mut (Hash k v)) k v Void))
    (prim-spec 'hash-ref  2 'pf_hash_ref #t (λ (h k) (hash-ref h k (λ () (puffin-error-impl 'hash-ref-key-not-found))))
-              "Look up a key (immutable or mutable hash); runtime error if absent.")
+              "Look up a key (immutable or mutable hash); runtime error if absent."
+              #:type '(-> (Hash k v) k v))
    (prim-spec 'hash-ref/default 3 'pf_hash_ref_default #t (λ (h k d) (hash-ref h k d))
-              "Look up a key; return the default if absent.")
+              "Look up a key; return the default if absent."
+              #:type '(-> (Hash k v) k v v))
    (prim-spec 'hash-has-key? 2 'pf_hash_has #t (λ (h k) (hash-has-key? h k))
-              "Is this key present?")
+              "Is this key present?"
+              #:type '(-> (Hash k v) k Bool))
    (prim-spec 'hash-remove! 2 'pf_hash_remove #t (λ (h k) (hash-remove! h k) (void))
-              "Remove a key if present; returns void.")
+              "Remove a key if present; returns void."
+              #:type '(-> (Mut (Hash k v)) k Void))
    (prim-spec 'hash-count 1 'pf_hash_count #t hash-count
-              "Number of keys present.")
+              "Number of keys present."
+              #:type '(-> (Hash k v) Int))
    (prim-spec 'hash-keys 1 'pf_hash_keys #t (λ (h) (hash-keys h))
-              "A list of the keys present (unspecified order).")
+              "A list of the keys present (unspecified order)."
+              #:type '(-> (Hash k v) (List k)))
    (prim-spec 'hash?    1 'pf_hash_huh #t hash?
-              "Is this value a hash (either flavor)?")
+              "Is this value a hash (either flavor)?"
+              #:type '(-> a Bool))
 
    ;; ---- mutable sets (lib/sets.c) ----------------------------------------
    (prim-spec 'make-set 0 'pf_make_set #t (λ () (mutable-seteqv))
-              "Allocate an empty MUTABLE set (eq?-keyed, open addressing).")
+              "Allocate an empty MUTABLE set (eq?-keyed, open addressing)."
+              #:type '(-> (Mut (Set _))))
    (prim-spec 'set-add! 2 'pf_set_add #t (λ (s v) (set-add! s v) (void))
-              "Add a value; returns void.")
+              "Add a value; returns void."
+              #:type '(-> (Mut (Set a)) a Void))
    (prim-spec 'set-member? 2 'pf_set_member #t (λ (s v) (set-member? s v))
-              "Is this value present?")
+              "Is this value present?"
+              #:type '(-> (Set a) a Bool))
    (prim-spec 'set-remove! 2 'pf_set_remove #t (λ (s v) (set-remove! s v) (void))
-              "Remove a value if present; returns void.")
+              "Remove a value if present; returns void."
+              #:type '(-> (Mut (Set a)) a Void))
    (prim-spec 'set-count 1 'pf_set_count #t set-count
-              "Number of values present.")
+              "Number of values present."
+              #:type '(-> (Set a) Int))
    (prim-spec 'set->list 1 'pf_set_to_list #t (λ (s) (set->list s))
-              "A list of the values present (unspecified order).")
+              "A list of the values present (unspecified order)."
+              #:type '(-> (Set a) (List a)))
    (prim-spec 'set?     1 'pf_set_huh #t (λ (v) (or (set-mutable? v)
                                                     (and (set? v) (not (list? v)))))
-              "Is this value a set (either flavor)?")
+              "Is this value a set (either flavor)?"
+              #:type '(-> a Bool))
 
    ;; ---- type predicates over immediates (lib/predicates.c) -------------
    (prim-spec 'fixnum?  1 'pf_fixnum_huh #t exact-integer?
-              "Is this value an integer?")
+              "Is this value an integer?"
+              #:type '(-> a Bool))
    (prim-spec 'boolean? 1 'pf_boolean_huh #t boolean?
-              "Is this value #t or #f?")
+              "Is this value #t or #f?"
+              #:type '(-> a Bool))
    (prim-spec 'symbol?  1 'pf_symbol_huh #t symbol?
-              "Is this value a symbol?")
+              "Is this value a symbol?"
+              #:type '(-> a Bool))
    (prim-spec 'void?    1 'pf_void_huh #t void?
-              "Is this value void?")
+              "Is this value void?"
+              #:type '(-> a Bool))
    (prim-spec 'procedure? 1 'pf_procedure_huh #t (λ (v) (procedure? v))
-              "Is this value a procedure (closure)?")
+              "Is this value a procedure (closure)?"
+              #:type '(-> a Bool))
 
    ;; ---- bootstrap batch (see docs/BOOTSTRAP.md) --------------------------
    (prim-spec 'gensym   1 'pf_gensym #t (λ (s) (gensym s))
-              "A fresh symbol whose name extends the given one.")
+              "A fresh symbol whose name extends the given one."
+              #:type '(-> Sym Sym))
    (prim-spec 'value->string 1 'pf_to_string #t render-value
-              "Render any value exactly as display would, into a string.")
+              "Render any value exactly as display would, into a string."
+              #:type '(-> a Str))
    (prim-spec 'read-all 0 'pf_read_all #t 'read-all
-              "The rest of standard input, as one string.")
+              "The rest of standard input, as one string."
+              #:type '(-> Str))
    (prim-spec 'substring 3 'pf_substring #t substring
-              "Bytes [i, j) of a string (checked).")
+              "Bytes [i, j) of a string (checked)."
+              #:type '(-> Str Int Int Str))
    (prim-spec 'string<? 2 'pf_string_lt #t string<?
-              "Lexicographic byte order on strings.")
+              "Lexicographic byte order on strings."
+              #:type '(-> Str Str Bool))
    (prim-spec 'string-byte 2 'pf_string_byte #t (λ (s i) (char->integer (string-ref s i)))
-              "The byte at an index (checked; strings are byte strings, ASCII-friendly).")
+              "The byte at an index (checked; strings are byte strings, ASCII-friendly)."
+              #:type '(-> Str Int Int))
    (prim-spec 'number->string 1 'pf_number_to_string #t number->string
-              "Decimal rendering of an integer.")
+              "Decimal rendering of an integer."
+              #:type '(-> Int Str))
    (prim-spec 'string->number 1 'pf_string_to_number #t
               (λ (s) (let ([n (string->number s)]) (if (exact-integer? n) n #f)))
-              "The integer a string spells, or #f.")
+              "The integer a string spells, or #f."
+              #:type '(-> Str _))
    (prim-spec 'bitwise-and 2 'pf_bitwise_and #t bitwise-and
-              "Bitwise AND of two integers.")
+              "Bitwise AND of two integers."
+              #:type '(-> Int Int Int))
    (prim-spec 'bitwise-ior 2 'pf_bitwise_ior #t bitwise-ior
-              "Bitwise inclusive OR of two integers.")
+              "Bitwise inclusive OR of two integers."
+              #:type '(-> Int Int Int))
    (prim-spec 'bitwise-xor 2 'pf_bitwise_xor #t bitwise-xor
-              "Bitwise exclusive OR of two integers.")
+              "Bitwise exclusive OR of two integers."
+              #:type '(-> Int Int Int))
    (prim-spec 'arithmetic-shift 2 'pf_arith_shift #t arithmetic-shift
-              "Shift left (positive count) or right (negative count).")
+              "Shift left (positive count) or right (negative count)."
+              #:type '(-> Int Int Int))
    (prim-spec 'modulo   2 'pf_modulo #t modulo
-              "Integer modulus; the result's sign follows the divisor (checked).")
+              "Integer modulus; the result's sign follows the divisor (checked)."
+              #:type '(-> Int Int Int))
 
    ;; ---- io: files, argv, subprocesses (lib/io.c) -------------------------
    ;; What a self-contained compiler driver needs: puffincc reads its
    ;; input modules, writes assembly, and shells out to the assembler.
    (prim-spec 'string-concat 1 'pf_string_concat #t
               (λ (xs) (apply string-append xs))
-              "Concatenate a list of strings in one allocation (linear; string-join's backbone).")
+              "Concatenate a list of strings in one allocation (linear; string-join's backbone)."
+              #:type '(-> (List Str) Str))
    (prim-spec 'read-file 1 'pf_read_file #t
               (λ (p) (file->string p))
-              "The named file's bytes, as a string (exits with an error if unreadable).")
+              "The named file's bytes, as a string (exits with an error if unreadable)."
+              #:type '(-> Str Str))
    (prim-spec 'write-file 2 'pf_write_file #t
               (λ (p s) (call-with-output-file p #:exists 'replace (λ (o) (display s o))) (void))
-              "(Re)write the named file with the string's bytes.")
+              "(Re)write the named file with the string's bytes."
+              #:type '(-> Str Str Void))
    (prim-spec 'file-exists? 1 'pf_file_exists_huh #t
               (λ (p) (file-exists? p))
-              "Whether the named file exists and is readable.")
+              "Whether the named file exists and is readable."
+              #:type '(-> Str Bool))
    (prim-spec 'command-line-args 0 'pf_command_line_args #t
               (λ () (vector->list (current-command-line-arguments)))
-              "The program's command-line arguments (a list of strings, argv[0] excluded).")
+              "The program's command-line arguments (a list of strings, argv[0] excluded)."
+              #:type '(-> (List Str)))
    (prim-spec 'system 1 'pf_system #t
               (λ (cmd) (system/exit-code cmd))
-              "Run a shell command; its exit code.")
+              "Run a shell command; its exit code."
+              #:type '(-> Str Int))
 
    ;; ---- compiler-internal ----------------------------------------------
    ;; make-closure allocates a closure record (kind 4): slot 0 holds
@@ -316,7 +404,32 @@
    ;; for programs that never call it are byte-identical.
    (prim-spec 'bytes->string 1 'pf_bytes_to_string #f
               (λ (lst) (list->string (map integer->char lst)))
-              "INTERNAL: a byte string from a list of byte values 0-255.")))
+              "INTERNAL: a byte string from a list of byte values 0-255.")
+
+   ;; ---- diagnostics (core.c) ---------------------------------------------
+   ;; eprintln is the typecheckers' non-fatal diagnostics channel
+   ;; (exhaustiveness warnings must not pollute stdout, which the
+   ;; golden harnesses compare). Appended to the manifest, so every
+   ;; existing prim id (a manifest index) is unchanged.
+   (prim-spec 'eprintln 1 'pf_eprintln #t
+              (λ (v) (displayln (render-value v) (current-error-port)) (void))
+              "Display a value followed by a newline on standard error; returns void."
+              #:type '(-> a Void))))
+
+;; manifest self-agreement: a typed prim's arrow arity must equal its
+;; declared arity (the type field cannot drift from the manifest it
+;; lives in). ->* types never appear here: manifest prims have fixed
+;; arity by construction.
+(for ([s stdlib-primitives])
+  (define t (prim-spec-type s))
+  (when t
+    (match t
+      [`(-> ,args ... ,_)
+       (unless (= (prim-spec-arity s) (length args))
+         (error 'stdlib "manifest type arity mismatch for ~a: arity ~a, type ~a"
+                (prim-spec-name s) (prim-spec-arity s) t))]
+      [_ (error 'stdlib "manifest type for ~a is not an arrow: ~a"
+                (prim-spec-name s) t)])))
 
 ;; ---------------------------------------------------------------------
 ;; Derived views (used by irs.rkt, the backends, and interpreters.rkt)
@@ -337,6 +450,7 @@
 (define (stdlib-rt-sym op)  (prim-spec-rt-sym (stdlib-spec op)))
 (define (stdlib-arity op)   (prim-spec-arity (stdlib-spec op)))
 (define (stdlib-ref-impl op) (prim-spec-ref-impl (stdlib-spec op)))
+(define (stdlib-type op)    (prim-spec-type (stdlib-spec op)))  ;; #f = untyped
 
 ;; All runtime entry points the generated assembly may reference
 ;; (externs for the dump passes).

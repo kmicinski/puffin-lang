@@ -207,6 +207,8 @@
     [(string=? (car args) "--runtime")
      (begin (set! opt-runtime (flag-arg "--runtime" (cdr args)))
             (parse-args (cdr (cdr args))))]
+    [(string=? (car args) "--strict-types")
+     (begin (set! strict-exhaustiveness #t) (parse-args (cdr args)))]
     [(string=? (car args) "--repl")
      (begin (set! opt-repl #t) (parse-args (cdr args)))]
     [(string=? (car args) "--repl-prelude")

@@ -54,6 +54,13 @@
 ;; off) is byte-for-byte unaffected.
 (define repl-mode #f)
 
+;; Promote the typechecker's exhaustiveness WARNING (a match over a
+;; closed ADT that misses constructors; docs/TYPES.md §2) to a
+;; compile-time error. Off by default: the warning goes to stderr
+;; (the eprintln prim) and compilation proceeds. --strict-types turns
+;; it on (mirrors src/system.rkt strict-exhaustiveness?).
+(define strict-exhaustiveness #f)
+
 ;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
 
 (: tag-fixnum (-> Int Int))

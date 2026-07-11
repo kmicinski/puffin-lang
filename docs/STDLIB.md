@@ -11,86 +11,90 @@ Compiler *intrinsics* — `+`, `-`, `*`, `eq?`, `<` (and the comparators that sh
 them: `<=`, `>`, `>=`, `not`) — are open-coded by the backends and are not library calls;
 they are listed in `src/irs.rkt`.
 
-| Primitive | Arity | Runtime entry | Description |
-|---|---|---|---|
-| `read` | 0 | `pf_read_int` | Read an integer from standard input. |
-| `println` | 1 | `pf_println` | Display a value followed by a newline; returns void. |
-| `display` | 1 | `pf_display` | Display a value (no newline); returns void. |
-| `newline` | 0 | `pf_newline` | Print a newline; returns void. |
-| `error` | 1 | `pf_error` | Display `error: <value>` and halt the program. |
-| `equal?` | 2 | `pf_equal` | Structural equality over pairs, vectors, and strings; identity otherwise. |
-| `cons` | 2 | `pf_cons` | Allocate a pair of two values. |
-| `car` | 1 | `pf_car` | First component of a pair (checked). |
-| `cdr` | 1 | `pf_cdr` | Second component of a pair (checked). |
-| `pair?` | 1 | `pf_pair_huh` | Is this value a pair? |
-| `null?` | 1 | `pf_null_huh` | Is this value the empty list '()? |
-| `make-vector` | 1 | `pf_make_vector` | Allocate a vector of n slots, initialized to 0. |
-| `vector-ref` | 2 | `pf_vector_ref` | Fetch a slot (checked: type and bounds; dynamic index). |
-| `vector-set!` | 3 | `pf_vector_set` | Store into a slot (checked); returns void. |
-| `vector-length` | 1 | `pf_vector_length` | Number of slots in a vector. |
-| `vector?` | 1 | `pf_vector_huh` | Is this value a vector? |
-| `string?` | 1 | `pf_string_huh` | Is this value a string? |
-| `string-length` | 1 | `pf_string_length` | Number of bytes in a string. |
-| `string-append` | 2 | `pf_string_append` | Concatenate two strings. |
-| `string=?` | 2 | `pf_string_equal_huh` | Are two strings byte-equal? |
-| `symbol->string` | 1 | `pf_symbol_to_string` | The name of a symbol, as a fresh string. |
-| `string->symbol` | 1 | `pf_string_to_symbol` | Intern a string as a symbol. |
-| `quotient` | 2 | `pf_quotient` | Integer division truncated toward zero (checked: nonzero divisor). |
-| `remainder` | 2 | `pf_remainder` | Integer remainder (checked: nonzero divisor). |
-| `hash` | 0 | `pf_ihash_empty` | The empty immutable hash. (hash k v ...) builds one by chained hash-set. |
-| `hash-set` | 3 | `pf_ihash_set` | A new immutable hash: like the input, with key mapped to value. |
-| `hash-remove` | 2 | `pf_ihash_remove` | A new immutable hash: like the input, without the key. |
-| `set` | 0 | `pf_iset_empty` | The empty immutable set. (set v ...) builds one by chained set-add. |
-| `set-add` | 2 | `pf_iset_add` | A new immutable set: like the input, with the value present. |
-| `set-remove` | 2 | `pf_iset_remove` | A new immutable set: like the input, without the value. |
-| `make-hash` | 0 | `pf_make_hash` | Allocate an empty MUTABLE key/value map (eq?-keyed, open addressing). |
-| `hash-set!` | 3 | `pf_hash_set` | Map key to value (overwrites); returns void. |
-| `hash-ref` | 2 | `pf_hash_ref` | Look up a key (immutable or mutable hash); runtime error if absent. |
-| `hash-ref/default` | 3 | `pf_hash_ref_default` | Look up a key; return the default if absent. |
-| `hash-has-key?` | 2 | `pf_hash_has` | Is this key present? |
-| `hash-remove!` | 2 | `pf_hash_remove` | Remove a key if present; returns void. |
-| `hash-count` | 1 | `pf_hash_count` | Number of keys present. |
-| `hash-keys` | 1 | `pf_hash_keys` | A list of the keys present (unspecified order). |
-| `hash?` | 1 | `pf_hash_huh` | Is this value a hash (either flavor)? |
-| `make-set` | 0 | `pf_make_set` | Allocate an empty MUTABLE set (eq?-keyed, open addressing). |
-| `set-add!` | 2 | `pf_set_add` | Add a value; returns void. |
-| `set-member?` | 2 | `pf_set_member` | Is this value present? |
-| `set-remove!` | 2 | `pf_set_remove` | Remove a value if present; returns void. |
-| `set-count` | 1 | `pf_set_count` | Number of values present. |
-| `set->list` | 1 | `pf_set_to_list` | A list of the values present (unspecified order). |
-| `set?` | 1 | `pf_set_huh` | Is this value a set (either flavor)? |
-| `fixnum?` | 1 | `pf_fixnum_huh` | Is this value an integer? |
-| `boolean?` | 1 | `pf_boolean_huh` | Is this value #t or #f? |
-| `symbol?` | 1 | `pf_symbol_huh` | Is this value a symbol? |
-| `void?` | 1 | `pf_void_huh` | Is this value void? |
-| `procedure?` | 1 | `pf_procedure_huh` | Is this value a procedure (closure)? |
-| `gensym` | 1 | `pf_gensym` | A fresh symbol whose name extends the given one. |
-| `value->string` | 1 | `pf_to_string` | Render any value exactly as display would, into a string. |
-| `read-all` | 0 | `pf_read_all` | The rest of standard input, as one string. |
-| `substring` | 3 | `pf_substring` | Bytes [i, j) of a string (checked). |
-| `string<?` | 2 | `pf_string_lt` | Lexicographic byte order on strings. |
-| `string-byte` | 2 | `pf_string_byte` | The byte at an index (checked; strings are byte strings, ASCII-friendly). |
-| `number->string` | 1 | `pf_number_to_string` | Decimal rendering of an integer. |
-| `string->number` | 1 | `pf_string_to_number` | The integer a string spells, or #f. |
-| `bitwise-and` | 2 | `pf_bitwise_and` | Bitwise AND of two integers. |
-| `bitwise-ior` | 2 | `pf_bitwise_ior` | Bitwise inclusive OR of two integers. |
-| `bitwise-xor` | 2 | `pf_bitwise_xor` | Bitwise exclusive OR of two integers. |
-| `arithmetic-shift` | 2 | `pf_arith_shift` | Shift left (positive count) or right (negative count). |
-| `modulo` | 2 | `pf_modulo` | Integer modulus; the result's sign follows the divisor (checked). |
-| `string-concat` | 1 | `pf_string_concat` | Concatenate a list of strings in one allocation (linear; string-join's backbone). |
-| `read-file` | 1 | `pf_read_file` | The named file's bytes, as a string (exits with an error if unreadable). |
-| `write-file` | 2 | `pf_write_file` | (Re)write the named file with the string's bytes. |
-| `file-exists?` | 1 | `pf_file_exists_huh` | Whether the named file exists and is readable. |
-| `command-line-args` | 0 | `pf_command_line_args` | The program's command-line arguments (a list of strings, argv[0] excluded). |
-| `system` | 1 | `pf_system` | Run a shell command; its exit code. |
+The *Type* column is the manifest's gradual type (docs/TYPES.md), consumed by both
+typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the arity).
+
+| Primitive | Arity | Type | Runtime entry | Description |
+|---|---|---|---|---|
+| `read` | 0 | `(-> Int)` | `pf_read_int` | Read an integer from standard input. |
+| `println` | 1 | `(-> a Void)` | `pf_println` | Display a value followed by a newline; returns void. |
+| `display` | 1 | `(-> a Void)` | `pf_display` | Display a value (no newline); returns void. |
+| `newline` | 0 | `(-> Void)` | `pf_newline` | Print a newline; returns void. |
+| `error` | 1 | `(-> a _)` | `pf_error` | Display `error: <value>` and halt the program. |
+| `equal?` | 2 | `(-> a b Bool)` | `pf_equal` | Structural equality over pairs, vectors, and strings; identity otherwise. |
+| `cons` | 2 | `(-> a b (Pairof a b))` | `pf_cons` | Allocate a pair of two values. |
+| `car` | 1 | `(-> (Pairof a b) a)` | `pf_car` | First component of a pair (checked). |
+| `cdr` | 1 | `(-> (Pairof a b) b)` | `pf_cdr` | Second component of a pair (checked). |
+| `pair?` | 1 | `(-> a Bool)` | `pf_pair_huh` | Is this value a pair? |
+| `null?` | 1 | `(-> a Bool)` | `pf_null_huh` | Is this value the empty list '()? |
+| `make-vector` | 1 | `(-> Int (Mut (Vec _)))` | `pf_make_vector` | Allocate a vector of n slots, initialized to 0. |
+| `vector-ref` | 2 | `(-> (Vec a) Int a)` | `pf_vector_ref` | Fetch a slot (checked: type and bounds; dynamic index). |
+| `vector-set!` | 3 | `(-> (Mut (Vec a)) Int a Void)` | `pf_vector_set` | Store into a slot (checked); returns void. |
+| `vector-length` | 1 | `(-> (Vec a) Int)` | `pf_vector_length` | Number of slots in a vector. |
+| `vector?` | 1 | `(-> a Bool)` | `pf_vector_huh` | Is this value a vector? |
+| `string?` | 1 | `(-> a Bool)` | `pf_string_huh` | Is this value a string? |
+| `string-length` | 1 | `(-> Str Int)` | `pf_string_length` | Number of bytes in a string. |
+| `string-append` | 2 | `(-> Str Str Str)` | `pf_string_append` | Concatenate two strings. |
+| `string=?` | 2 | `(-> Str Str Bool)` | `pf_string_equal_huh` | Are two strings byte-equal? |
+| `symbol->string` | 1 | `(-> Sym Str)` | `pf_symbol_to_string` | The name of a symbol, as a fresh string. |
+| `string->symbol` | 1 | `(-> Str Sym)` | `pf_string_to_symbol` | Intern a string as a symbol. |
+| `quotient` | 2 | `(-> Int Int Int)` | `pf_quotient` | Integer division truncated toward zero (checked: nonzero divisor). |
+| `remainder` | 2 | `(-> Int Int Int)` | `pf_remainder` | Integer remainder (checked: nonzero divisor). |
+| `hash` | 0 | `(-> (Hash _ _))` | `pf_ihash_empty` | The empty immutable hash. (hash k v ...) builds one by chained hash-set. |
+| `hash-set` | 3 | `(-> (Hash k v) k v (Hash k v))` | `pf_ihash_set` | A new immutable hash: like the input, with key mapped to value. |
+| `hash-remove` | 2 | `(-> (Hash k v) k (Hash k v))` | `pf_ihash_remove` | A new immutable hash: like the input, without the key. |
+| `set` | 0 | `(-> (Set _))` | `pf_iset_empty` | The empty immutable set. (set v ...) builds one by chained set-add. |
+| `set-add` | 2 | `(-> (Set a) a (Set a))` | `pf_iset_add` | A new immutable set: like the input, with the value present. |
+| `set-remove` | 2 | `(-> (Set a) a (Set a))` | `pf_iset_remove` | A new immutable set: like the input, without the value. |
+| `make-hash` | 0 | `(-> (Mut (Hash _ _)))` | `pf_make_hash` | Allocate an empty MUTABLE key/value map (eq?-keyed, open addressing). |
+| `hash-set!` | 3 | `(-> (Mut (Hash k v)) k v Void)` | `pf_hash_set` | Map key to value (overwrites); returns void. |
+| `hash-ref` | 2 | `(-> (Hash k v) k v)` | `pf_hash_ref` | Look up a key (immutable or mutable hash); runtime error if absent. |
+| `hash-ref/default` | 3 | `(-> (Hash k v) k v v)` | `pf_hash_ref_default` | Look up a key; return the default if absent. |
+| `hash-has-key?` | 2 | `(-> (Hash k v) k Bool)` | `pf_hash_has` | Is this key present? |
+| `hash-remove!` | 2 | `(-> (Mut (Hash k v)) k Void)` | `pf_hash_remove` | Remove a key if present; returns void. |
+| `hash-count` | 1 | `(-> (Hash k v) Int)` | `pf_hash_count` | Number of keys present. |
+| `hash-keys` | 1 | `(-> (Hash k v) (List k))` | `pf_hash_keys` | A list of the keys present (unspecified order). |
+| `hash?` | 1 | `(-> a Bool)` | `pf_hash_huh` | Is this value a hash (either flavor)? |
+| `make-set` | 0 | `(-> (Mut (Set _)))` | `pf_make_set` | Allocate an empty MUTABLE set (eq?-keyed, open addressing). |
+| `set-add!` | 2 | `(-> (Mut (Set a)) a Void)` | `pf_set_add` | Add a value; returns void. |
+| `set-member?` | 2 | `(-> (Set a) a Bool)` | `pf_set_member` | Is this value present? |
+| `set-remove!` | 2 | `(-> (Mut (Set a)) a Void)` | `pf_set_remove` | Remove a value if present; returns void. |
+| `set-count` | 1 | `(-> (Set a) Int)` | `pf_set_count` | Number of values present. |
+| `set->list` | 1 | `(-> (Set a) (List a))` | `pf_set_to_list` | A list of the values present (unspecified order). |
+| `set?` | 1 | `(-> a Bool)` | `pf_set_huh` | Is this value a set (either flavor)? |
+| `fixnum?` | 1 | `(-> a Bool)` | `pf_fixnum_huh` | Is this value an integer? |
+| `boolean?` | 1 | `(-> a Bool)` | `pf_boolean_huh` | Is this value #t or #f? |
+| `symbol?` | 1 | `(-> a Bool)` | `pf_symbol_huh` | Is this value a symbol? |
+| `void?` | 1 | `(-> a Bool)` | `pf_void_huh` | Is this value void? |
+| `procedure?` | 1 | `(-> a Bool)` | `pf_procedure_huh` | Is this value a procedure (closure)? |
+| `gensym` | 1 | `(-> Sym Sym)` | `pf_gensym` | A fresh symbol whose name extends the given one. |
+| `value->string` | 1 | `(-> a Str)` | `pf_to_string` | Render any value exactly as display would, into a string. |
+| `read-all` | 0 | `(-> Str)` | `pf_read_all` | The rest of standard input, as one string. |
+| `substring` | 3 | `(-> Str Int Int Str)` | `pf_substring` | Bytes [i, j) of a string (checked). |
+| `string<?` | 2 | `(-> Str Str Bool)` | `pf_string_lt` | Lexicographic byte order on strings. |
+| `string-byte` | 2 | `(-> Str Int Int)` | `pf_string_byte` | The byte at an index (checked; strings are byte strings, ASCII-friendly). |
+| `number->string` | 1 | `(-> Int Str)` | `pf_number_to_string` | Decimal rendering of an integer. |
+| `string->number` | 1 | `(-> Str _)` | `pf_string_to_number` | The integer a string spells, or #f. |
+| `bitwise-and` | 2 | `(-> Int Int Int)` | `pf_bitwise_and` | Bitwise AND of two integers. |
+| `bitwise-ior` | 2 | `(-> Int Int Int)` | `pf_bitwise_ior` | Bitwise inclusive OR of two integers. |
+| `bitwise-xor` | 2 | `(-> Int Int Int)` | `pf_bitwise_xor` | Bitwise exclusive OR of two integers. |
+| `arithmetic-shift` | 2 | `(-> Int Int Int)` | `pf_arith_shift` | Shift left (positive count) or right (negative count). |
+| `modulo` | 2 | `(-> Int Int Int)` | `pf_modulo` | Integer modulus; the result's sign follows the divisor (checked). |
+| `string-concat` | 1 | `(-> (List Str) Str)` | `pf_string_concat` | Concatenate a list of strings in one allocation (linear; string-join's backbone). |
+| `read-file` | 1 | `(-> Str Str)` | `pf_read_file` | The named file's bytes, as a string (exits with an error if unreadable). |
+| `write-file` | 2 | `(-> Str Str Void)` | `pf_write_file` | (Re)write the named file with the string's bytes. |
+| `file-exists?` | 1 | `(-> Str Bool)` | `pf_file_exists_huh` | Whether the named file exists and is readable. |
+| `command-line-args` | 0 | `(-> (List Str))` | `pf_command_line_args` | The program's command-line arguments (a list of strings, argv[0] excluded). |
+| `system` | 1 | `(-> Str Int)` | `pf_system` | Run a shell command; its exit code. |
+| `eprintln` | 1 | `(-> a Void)` | `pf_eprintln` | Display a value followed by a newline on standard error; returns void. |
 
 ## Compiler-internal primitives
 
-| Primitive | Arity | Runtime entry | Description |
-|---|---|---|---|
-| `make-closure` | 1 | `pf_make_closure` | INTERNAL: allocate a closure record with n slots. |
-| `string-const` | 1 | `pf_string_const` | INTERNAL: the i-th string literal in the constant table. |
-| `bytes->string` | 1 | `pf_bytes_to_string` | INTERNAL: a byte string from a list of byte values 0-255. |
+| Primitive | Arity | Type | Runtime entry | Description |
+|---|---|---|---|---|
+| `make-closure` | 1 | — | `pf_make_closure` | INTERNAL: allocate a closure record with n slots. |
+| `string-const` | 1 | — | `pf_string_const` | INTERNAL: the i-th string literal in the constant table. |
+| `bytes->string` | 1 | — | `pf_bytes_to_string` | INTERNAL: a byte string from a list of byte values 0-255. |
 
 ## Adding a primitive
 

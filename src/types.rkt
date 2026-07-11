@@ -13,14 +13,27 @@
 ;; Types (internal form = surface form):
 ;;   _  Int Bool Sym Str Void
 ;;   (Pairof t t) (List t) (Vec t) (Hash t t) (Set t)
+;;   (Mut t)               mutable-container wrapper (t: Hash/Vec/Set)
 ;;   (-> t ... t)
+;;   (->* (t ...) t t)     variadic: fixed args, rest-elem, result
 ;;   (Name t ...)          ADT instances
 ;;   a b c ...             type variables (lowercase first char)
 ;;
-;; The prim-type table lives here beside the checker and is asserted
-;; against the manifest's arities at load time (the manifest stays the
-;; single source of truth for existence/arity; the `type` field folds
-;; into prim-spec once the system settles).
+;; Prim types come from the manifest (stdlib.rkt prim-spec `type`
+;; field, asserted against the arity there); the tiny table kept here
+;; covers only the desugar-level forms the manifest doesn't know
+;; (the open-coded intrinsics + - * eq? <, the comparators <= > >=
+;; that shrink to <, and `not`).
+;;
+;; (Mut ...) discipline: allocators (make-hash, make-set, make-vector,
+;; the (vector ...) literal) synthesize (Mut ...); mutating prims
+;; (hash-set!, vector-set!, set-add!, ...) REQUIRE it. Consistency is
+;; DIRECTIONAL: a (Mut t) value is consistent where plain t' is
+;; expected (read-only accessors are typed over the plain container
+;; and accept both flavors), but a plain container is NOT consistent
+;; where (Mut t) is demanded -- mutating a persistent hash/set is a
+;; type error when the types are concrete. `_` papers over the
+;; difference as usual (the gradual guarantee).
 
 (provide typecheck-program type-error?)
 
@@ -55,6 +68,7 @@
 (define (collect-adts forms)
   (define adts (make-hasheq))   ;; type name -> adt
   (define ctors (make-hasheq))  ;; ctor name -> ctor-info
+  (define ctor-orders (make-hasheq))  ;; type name -> (ctor ...) in declaration order
   ;; pass 1: heads
   (for ([f forms])
     (match f
@@ -74,6 +88,7 @@
       [`(define-type ,head ,cs ...)
        (define n (match head [`(,n ,_ ...) n] [n n]))
        (define a (hash-ref adts n))
+       (hash-set! ctor-orders n (map car cs))
        (for ([c cs])
          (match c
            [`(,cn ,fts ...)
@@ -83,7 +98,7 @@
             (hash-set! (adt-ctors a) cn fts)
             (hash-set! ctors cn (ctor-info n (adt-params a) fts))]))]
       [_ (void)]))
-  (values adts ctors))
+  (values adts ctors ctor-orders))
 
 ;; well-formedness: names resolve, arities match
 (define (check-type-wf t params adts)
@@ -99,6 +114,15 @@
     [`(,(or 'Pairof 'Hash) ,a ,b)
      (check-type-wf a params adts) (check-type-wf b params adts)]
     [`(,(or 'List 'Vec 'Set) ,a) (check-type-wf a params adts)]
+    [`(Mut ,t0)
+     (match t0
+       [`(,(or 'Hash 'Vec 'Set) ,_ ...) (check-type-wf t0 params adts)]
+       [_ (type-error "(Mut ...) wraps a Hash, Vec, or Set type, got ~a" t0)])]
+    [`(->* (,ts ...) ,tr ,tres)
+     (for ([s ts]) (check-type-wf s params adts))
+     (check-type-wf tr params adts)
+     (check-type-wf tres params adts)]
+    [`(,(or 'Mut '->*) ,_ ...) (type-error "malformed type: ~a" t)]
     [`(-> ,ts ...) (for ([s ts]) (check-type-wf s params adts))]
     [`(,(? symbol? n) ,args ...)
      (cond [(hash-has-key? adts n)
@@ -120,7 +144,12 @@
     [_ t]))
 
 ;; one-step unfold of (List a) as nil-or-pair for consistency against
-;; Pairof (docs/TYPES.md §4: equi-recursive List)
+;; Pairof (docs/TYPES.md §4: equi-recursive List).
+;;
+;; consistent? is called (synthesized, expected) at every site, so the
+;; (Mut ...) rules below are DIRECTIONAL: a (Mut t) value fits a plain
+;; expectation (unwrap on the left), a plain value never fits a (Mut t)
+;; expectation.
 (define (consistent? t1 t2)
   (match* (t1 t2)
     [('_ _) #t]
@@ -128,26 +157,56 @@
     [((? tyvar?) _) #t]      ;; an uninstantiated variable fits anything
     [(_ (? tyvar?)) #t]
     [((? symbol? a) (? symbol? b)) (eq? a b)]
+    [(`(Mut ,a) `(Mut ,b)) (consistent? a b)]
+    [(`(Mut ,a) _) (consistent? a t2)]     ;; elimination accepts both flavors
     [(`(List ,a) `(Pairof ,x ,y))
      (and (consistent? x a) (consistent? y `(List ,a)))]
     [(`(Pairof ,x ,y) `(List ,a))
      (and (consistent? x a) (consistent? y `(List ,a)))]
+    ;; a variadic function fits a fixed arrow that supplies at least
+    ;; the fixed arguments (the extras check against the rest type)
+    [(`(->* (,fs ...) ,fr ,fres) `(-> ,as ... ,ares))
+     (arrows-consistent? fs fr fres as ares)]
+    [(`(-> ,as ... ,ares) `(->* (,fs ...) ,fr ,fres))
+     (arrows-consistent? fs fr fres as ares)]
     [(`(,h1 ,as ...) `(,h2 ,bs ...))
      (and (eq? h1 h2) (= (length as) (length bs))
           (andmap consistent? as bs))]
     [(_ _) #f]))
 
+(define (arrows-consistent? fs fr fres as ares)
+  (and (>= (length as) (length fs))
+       (let-values ([(fixed extra) (split-at as (length fs))])
+         (and (andmap consistent? fs fixed)
+              (andmap (λ (a) (consistent? a fr)) extra)
+              (consistent? fres ares)))))
+
 ;; greedy instantiation: walk formal against actual binding tyvars;
-;; first concrete binding wins, `_` never binds
+;; first concrete binding wins, `_` never binds. A (Mut t) actual
+;; unwraps against a plain formal (mirroring consistency's direction).
 (define (instantiate! formal actual env)
   (match formal
     [(? tyvar? v)
      (unless (or (hash-has-key? env v) (eq? actual '_))
        (hash-set! env v actual))]
+    [`(Mut ,f0)
+     (match actual
+       [`(Mut ,b) (instantiate! f0 b env)]
+       [_ (void)])]
+    [`(,_ ,_ ...)
+     #:when (and (pair? actual) (eq? (car actual) 'Mut))
+     (instantiate! formal (cadr actual) env)]
     [`(List ,a)
      (match actual
        [`(List ,x) (instantiate! a x env)]
        [`(Pairof ,x ,_) (instantiate! a x env)]
+       [_ (void)])]
+    ;; the equi-recursive unfold in the other direction: car/cdr's
+    ;; (Pairof a d) formal against a (List x) actual
+    [`(Pairof ,a ,d)
+     (match actual
+       [`(Pairof ,x ,y) (instantiate! a x env) (instantiate! d y env)]
+       [`(List ,x) (instantiate! a x env) (instantiate! d `(List ,x) env)]
        [_ (void)])]
     [`(,h ,as ...)
      (match actual
@@ -163,64 +222,27 @@
         [else '_]))
 
 ;; ---------------------------------------------------------------------
-;; prim types (asserted against the manifest at load)
+;; prim types: the manifest is the source of truth (stdlib.rkt
+;; prim-spec `type` field, arity-asserted there). The local table
+;; covers only desugar-level non-manifest forms: the open-coded
+;; intrinsics (+ - * eq? <), the comparators that shrink to < (<= >
+;; >=), and `not` (shrinks to if) -- these can also appear as VALUES
+;; (e.g. (map not xs)), so they need lookup entries, not just synth
+;; cases.
 ;; ---------------------------------------------------------------------
 
-(define prim-types
+(define non-manifest-prim-types
   (hasheq
    '+ '(-> Int Int Int) '- '(-> Int Int Int) '* '(-> Int Int Int)
-   'quotient '(-> Int Int Int) 'remainder '(-> Int Int Int) 'modulo '(-> Int Int Int)
-   'bitwise-and '(-> Int Int Int) 'bitwise-ior '(-> Int Int Int)
-   'bitwise-xor '(-> Int Int Int) 'arithmetic-shift '(-> Int Int Int)
    '< '(-> Int Int Bool) '<= '(-> Int Int Bool) '> '(-> Int Int Bool) '>= '(-> Int Int Bool)
-   'eq? '(-> a b Bool) 'equal? '(-> a b Bool) 'not '(-> a Bool)
-   'cons '(-> a b (Pairof a b)) 'car '(-> (Pairof a b) a) 'cdr '(-> (Pairof a b) b)
-   'pair? '(-> a Bool) 'null? '(-> a Bool)
-   'make-vector '(-> Int (Vec _)) 'vector-ref '(-> (Vec a) Int a)
-   'vector-set! '(-> (Vec a) Int a Void) 'vector-length '(-> (Vec a) Int)
-   'vector? '(-> a Bool)
-   'string? '(-> a Bool) 'string-length '(-> Str Int)
-   'string-append '(-> Str Str Str) 'string=? '(-> Str Str Bool)
-   'string<? '(-> Str Str Bool) 'substring '(-> Str Int Int Str)
-   'string-byte '(-> Str Int Int)
-   'symbol->string '(-> Sym Str) 'string->symbol '(-> Str Sym)
-   'number->string '(-> Int Str) 'string->number '(-> Str _)
-   'value->string '(-> a Str)
-   'hash-set '(-> (Hash k v) k v (Hash k v)) 'hash-remove '(-> (Hash k v) k (Hash k v))
-   'hash-ref '(-> (Hash k v) k v) 'hash-ref/default '(-> (Hash k v) k v v)
-   'hash-has-key? '(-> (Hash k v) k Bool) 'hash-count '(-> (Hash k v) Int)
-   'hash-keys '(-> (Hash k v) (List k)) 'hash? '(-> a Bool)
-   'hash-set! '(-> (Hash k v) k v Void) 'hash-remove! '(-> (Hash k v) k Void)
-   'set-add '(-> (Set a) a (Set a)) 'set-remove '(-> (Set a) a (Set a))
-   'set-member? '(-> (Set a) a Bool) 'set-count '(-> (Set a) Int)
-   'set->list '(-> (Set a) (List a)) 'set? '(-> a Bool)
-   'set-add! '(-> (Set a) a Void) 'set-remove! '(-> (Set a) a Void)
-   'fixnum? '(-> a Bool) 'boolean? '(-> a Bool) 'symbol? '(-> a Bool)
-   'void? '(-> a Bool) 'procedure? '(-> a Bool)
-   'println '(-> a Void) 'display '(-> a Void) 'newline '(-> Void)
-   'error '(-> a _) 'read '(-> Int) 'read-all '(-> Str)
-   'gensym '(-> Sym Sym)
-   'read-file '(-> Str Str) 'write-file '(-> Str Str Void)
-   'file-exists? '(-> Str Bool) 'command-line-args '(-> (List Str))
-   'system '(-> Str Int)))
-
-;; manifest agreement: every typed prim exists with the arity its type says
-(for ([(p t) (in-hash prim-types)])
-  (match t
-    [`(-> ,args ... ,_)
-     (when (and (stdlib-prim? p) (surface-stdlib-prim? p))
-       (define spec-arity (prim-arity p))
-       (unless (= spec-arity (length args))
-         (error 'types "prim-type arity mismatch for ~a: manifest ~a, table ~a"
-                p spec-arity (length args))))]))
+   'eq? '(-> a b Bool) 'not '(-> a Bool)))
 
 (define (prim-type-of op)
-  (hash-ref prim-types op
-            (λ ()
-              ;; untyped prim: (-> _ ... _) from the manifest arity
-              (if (prim? op)
-                  `(-> ,@(for/list ([_ (in-range (prim-arity op))]) '_) _)
-                  '_))))
+  (cond [(hash-ref non-manifest-prim-types op #f)]
+        [(and (stdlib-prim? op) (stdlib-type op))]
+        ;; untyped prim: (-> _ ... _) from the manifest arity
+        [(prim? op) `(-> ,@(for/list ([_ (in-range (prim-arity op))]) '_) _)]
+        [else '_]))
 
 ;; ---------------------------------------------------------------------
 ;; the checker
@@ -229,13 +251,24 @@
 (define (typecheck-program p)
   (match p
     [`(program ,forms ...)
-     (define-values (adts ctors) (collect-adts forms))
+     (define-values (adts ctors ctor-orders) (collect-adts forms))
 
      ;; the top-level environment: declared types, annotated defines,
      ;; constructors; everything else _
      (define top (make-hasheq))
      (define (formal-type f) (match f [`(,_ : ,t) t] [_ '_]))
      (define (formal-name f) (match f [`(,x : ,_) x] [x x]))
+     ;; variadic formals: (a b . rest) -- or a bare symbol, as in
+     ;; (lambda args ...). split-dotted returns the fixed formals and
+     ;; the rest binder.
+     (define (dotted-formals? formals)
+       (or (symbol? formals)
+           (and (pair? formals) (dotted-formals? (cdr formals)))))
+     (define (split-dotted formals)
+       (cond [(symbol? formals) (values '() formals)]
+             [else
+              (define-values (fixed rest) (split-dotted (cdr formals)))
+              (values (cons (car formals) fixed) rest)]))
      (for ([f forms])
        (match f
          [`(: ,n ,t)
@@ -263,11 +296,19 @@
             (hash-set! top g `(-> ,@(map formal-type formals) _)))]
          [`(define ,(? symbol? x) ,_)
           (unless (hash-has-key? top x) (hash-set! top x '_))]
-         ;; variadic defines -- (define (f a b . rest) ...) -- have
-         ;; dotted formal lists the typed clauses above can't match;
-         ;; they are dynamic in v1 but must still BIND, or references
-         ;; to them (weigh, the prelude's format, ...) are rejected as
-         ;; unbound by the strict lookup below
+         ;; variadic defines -- (define (f a b . rest) ...) -- derive
+         ;; a (->* (t ...) _ rt) type: annotated fixed formals keep
+         ;; their types, the rest-element type is _ (a (: f (->* ...))
+         ;; declaration tightens it), and the arity floor is known
+         [`(define (,g . ,formals) ,body0 ...)
+          #:when (and (symbol? g) (dotted-formals? formals))
+          (unless (hash-has-key? top g)
+            (define-values (fixed rest-name) (split-dotted formals))
+            (define rt (match body0 [`(: ,t ,_ ...) t] [_ '_]))
+            (hash-set! top g `(->* ,(map formal-type fixed) _ ,rt)))]
+         ;; anything else define-shaped still BINDS (typed _), or
+         ;; references to it are rejected as unbound by the strict
+         ;; lookup below
          [`(define (,g . ,_) ,_ ...)
           #:when (symbol? g)
           (unless (hash-has-key? top g) (hash-set! top g '_))]
@@ -282,9 +323,9 @@
        (cond [(assq x env) => cdr]
              [(hash-ref top x #f)]
              [(prim? x) (prim-type-of x)]
-             ;; desugar-level forms the prim-type table types but the
+             ;; desugar-level forms the local table types but the
              ;; manifest doesn't know (<=, >, >= rewrite to < in shrink)
-             [(hash-ref prim-types x #f)]
+             [(hash-ref non-manifest-prim-types x #f)]
              ;; separate compilation: imported names live in other
              ;; units, typed dynamically here
              [(hash-ref (module-ext-funs) x #f) '_]
@@ -318,6 +359,22 @@
          [(? tyvar?) '_]
          [`(,h ,ts ...) `(,h ,@(map blank-tyvars ts))]
          [_ t]))
+     ;; the shared per-argument discipline: instantiate greedily, then
+     ;; contract-check each argument against its (instantiated) formal,
+     ;; demoting inference-only tyvar conflicts to _
+     (define (check-args formals arg-ts res where)
+       (define tenv (make-hasheq))
+       (for ([f formals] [a arg-ts]) (instantiate! f a tenv))
+       (define conflicted (mutable-seteq))
+       (for ([f formals] [a arg-ts])
+         (define f* (subst f tenv))
+         (unless (consistent? a f*)
+           (if (consistent? a (blank-tyvars f))
+               ;; only the inferred binding conflicts: weaken it
+               (for ([v (in-set (tyvars-of f))]) (set-add! conflicted v))
+               (type-error "~a: argument has type ~a, expected ~a" where a f*))))
+       (for ([v (in-set conflicted)]) (hash-set! tenv v '_))
+       (subst res tenv))
      (define (check-app ft arg-ts where)
        (match ft
          ['_ '_]
@@ -325,18 +382,14 @@
          [`(-> ,formals ... ,res)
           (unless (= (length formals) (length arg-ts))
             (type-error "~a expects ~a arguments, got ~a" where (length formals) (length arg-ts)))
-          (define tenv (make-hasheq))
-          (for ([f formals] [a arg-ts]) (instantiate! f a tenv))
-          (define conflicted (mutable-seteq))
-          (for ([f formals] [a arg-ts])
-            (define f* (subst f tenv))
-            (unless (consistent? a f*)
-              (if (consistent? a (blank-tyvars f))
-                  ;; only the inferred binding conflicts: weaken it
-                  (for ([v (in-set (tyvars-of f))]) (set-add! conflicted v))
-                  (type-error "~a: argument has type ~a, expected ~a" where a f*))))
-          (for ([v (in-set conflicted)]) (hash-set! tenv v '_))
-          (subst res tenv)]
+          (check-args formals arg-ts res where)]
+         [`(->* (,fixed ...) ,trest ,res)
+          (when (< (length arg-ts) (length fixed))
+            (type-error "~a expects at least ~a arguments, got ~a"
+                        where (length fixed) (length arg-ts)))
+          ;; every extra argument checks against the rest-element type
+          (define extras (for/list ([_ (in-range (- (length arg-ts) (length fixed)))]) trest))
+          (check-args (append fixed extras) arg-ts res where)]
          [_ (type-error "~a: applying a non-function of type ~a" where ft)]))
 
      ;; collect the binders a quasiquote pattern introduces. Every
@@ -386,7 +439,7 @@
           (define a (match scrut-t [`(List ,a) a] [_ '_]))
           (append-map (λ (p) (pattern-bindings p a)) ps)]
          [`(vector ,ps ...)
-          (define a (match scrut-t [`(Vec ,a) a] [_ '_]))
+          (define a (match scrut-t [`(Vec ,a) a] [`(Mut (Vec ,a)) a] [_ '_]))
           (append-map (λ (p) (pattern-bindings p a)) ps)]
          [`(? ,_ ,p) (pattern-bindings p '_)]
          [`(,(? (λ (s) (hash-has-key? ctors s)) cn) ,ps ...)
@@ -403,6 +456,47 @@
           (append-map (λ (p ft) (pattern-bindings p (subst ft tenv)))
                       ps (ctor-info-fields info))]
          [_ '()]))
+
+     ;; exhaustiveness over closed ADTs (docs/TYPES.md §2): when the
+     ;; scrutinee's type is a KNOWN ADT (a `_` scrutinee is exempt --
+     ;; the gradual guarantee), compute the constructor set the
+     ;; clauses cover. Conservative in the no-false-warnings
+     ;; direction: a wildcard/binder clause, a #:when-guarded
+     ;; catch-all, or any pattern we cannot prove partial (literals,
+     ;; quasiquote, cons/list/vector, ?-tests) counts as covering
+     ;; everything; a constructor pattern covers its constructor even
+     ;; under a guard. Missing constructors are a WARNING on stderr
+     ;; (strict-exhaustiveness? promotes it to an error).
+     (define (check-match-exhaustiveness st clauses)
+       (define name
+         (match st
+           [(? symbol? s) (and (hash-has-key? adts s) s)]
+           [`(,n ,_ ...) (and (symbol? n) (hash-has-key? adts n) n)]
+           [_ #f]))
+       (when name
+         (define all (hash-ref ctor-orders name '()))
+         (define covered
+           (for/fold ([cov (seteq)]) ([cl clauses])
+             (define p (match cl
+                         [`[,p0 #:when ,_ ,_ ...] p0]
+                         [`[,p0 ,_ ...] p0]))
+             (match p
+               [(? symbol? s)
+                (cond [(hash-ref ctors s #f)
+                       => (λ (info)
+                            (if (eq? (ctor-info-owner info) name) (set-add cov s) cov))]
+                      ;; wildcard or binder: covers everything
+                      [else (set-union cov (list->seteq all))])]
+               [`(,(? (λ (s) (hash-has-key? ctors s)) cn) ,_ ...) (set-add cov cn)]
+               ;; anything we cannot prove partial covers everything
+               [_ (set-union cov (list->seteq all))])))
+         (define missing (filter (λ (c) (not (set-member? covered c))) all))
+         (when (pair? missing)
+           (define msg (format "match on ~a is not exhaustive: missing ~a"
+                               name (string-join (map symbol->string missing) ", ")))
+           (if (strict-exhaustiveness?)
+               (type-error "~a" msg)
+               (eprintf "typecheck warning: ~a\n" msg)))))
 
      ;; bidirectional core: synth returns the expression's type
      (define (synth e env)
@@ -441,16 +535,19 @@
           '_]
          [`(match ,scrut ,clauses ...)
           (define st (synth scrut env))
-          (for/fold ([t '_] [first #t] #:result t)
-                    ([cl clauses])
-            (define-values (pat guard body)
-              (match cl
-                [`[,p #:when ,g ,body ...] (values p g body)]
-                [`[,p ,body ...] (values p #f body)]))
-            (define env+ (append (pattern-bindings pat st) env))
-            (when guard (synth guard env+))
-            (define bt (synth-body body env+))
-            (values (if first bt (type-join t bt)) #f))]
+          (define res
+            (for/fold ([t '_] [first #t] #:result t)
+                      ([cl clauses])
+              (define-values (pat guard body)
+                (match cl
+                  [`[,p #:when ,g ,body ...] (values p g body)]
+                  [`[,p ,body ...] (values p #f body)]))
+              (define env+ (append (pattern-bindings pat st) env))
+              (when guard (synth guard env+))
+              (define bt (synth-body body env+))
+              (values (if first bt (type-join t bt)) #f)))
+          (check-match-exhaustiveness st clauses)
+          res]
          [`(let ,(? symbol? loop) (,bindings ...) ,body ...)
           (define bs (map binding-parts bindings))
           (define env+ (append (map (λ (b) (cons (first b) (second b))) bs) env))
@@ -477,7 +574,24 @@
           (when (and (not (eq? rt '_)) (not (consistent? bt rt)))
             (type-error "lambda body has type ~a, declared ~a" bt rt))
           `(-> ,@fts ,(if (eq? rt '_) bt rt))]
-         [`(,(or 'lambda 'λ) ,_ ,_ ...) '_]  ;; variadic: dynamic in v1
+         ;; variadic lambda -- (lambda (a . rest) ...) or (lambda args
+         ;; ...): fixed formals may be annotated, the rest binder is
+         ;; (List _) in the body
+         [`(,(or 'lambda 'λ) ,formals ,body ...)
+          #:when (dotted-formals? formals)
+          (define-values (fixed rest-name) (split-dotted formals))
+          (define fts (map formal-type* fixed))
+          (define-values (rt body*)
+            (match body
+              [`(: ,t ,rest ...) (values t rest)]
+              [_ (values '_ body)]))
+          (define env+ (cons (cons rest-name '(List _))
+                             (append (map cons (map formal-name* fixed) fts) env)))
+          (define bt (synth-body body* env+))
+          (when (and (not (eq? rt '_)) (not (consistent? bt rt)))
+            (type-error "lambda body has type ~a, declared ~a" bt rt))
+          `(->* ,fts _ ,(if (eq? rt '_) bt rt))]
+         [`(,(or 'lambda 'λ) ,_ ,_ ...) '_]  ;; malformed formals: dynamic
          [`(begin ,es ... ,last)
           (for ([s es]) (synth s env))
           (synth last env)]
@@ -509,11 +623,15 @@
           (define t (for/fold ([t '_]) ([s es]) (type-join t (synth s env))))
           `(List ,t)]
          [`(vector ,es ...)
+          ;; vector literals allocate a runtime-mutable vector, like
+          ;; make-vector (there is no persistent Vec flavor)
           (define t (for/fold ([t '_]) ([s es]) (type-join t (synth s env))))
-          `(Vec ,t)]
+          `(Mut (Vec ,t))]
+         ;; hash/set literals build PERSISTENT collections: plain
+         ;; (Hash _ _)/(Set _), never (Mut ...). make-hash/make-set
+         ;; type through the manifest ((-> (Mut (Hash _ _))) etc.).
          [`(hash ,es ...) '(Hash _ _)]
          [`(set ,es ...) '(Set _)]
-         [`(make-hash) '(Hash _ _)] [`(make-set) '(Set _)]
          ;; n-ary sugar the prim table types as binary
          [`(,(? (λ (op) (memq op '(+ - *))) op) ,es ...)
           (for ([s es])
@@ -533,6 +651,7 @@
        (define names
          (filter-map (λ (f) (match f
                               [`(define (,g ,_ ...) ,_ ...) g]
+                              [`(define (,g . ,_) ,_ ...) #:when (symbol? g) g]
                               [`(define ,(? symbol? x) ,_) x]
                               [_ #f]))
                      body))
@@ -574,7 +693,28 @@
           (define bt (synth-body body env))
           (unless (or (eq? rt '_) (consistent? bt rt))
             (type-error "~a: body has type ~a, declared ~a" g bt rt))]
-         [`(define (,_ . ,_) ,_ ...) (void)]  ;; variadic: dynamic in v1
+         ;; variadic define: fixed formals get their (declared or
+         ;; annotated) types, the rest binder is (List trest) in the
+         ;; body (docs/TYPES.md §1: ->*)
+         [`(define (,g . ,formals) ,body0 ...)
+          #:when (and (symbol? g) (dotted-formals? formals))
+          (define-values (fixed rest-name) (split-dotted formals))
+          (define-values (rt body)
+            (match body0
+              [`(: ,t ,rest ...) (check-type-wf t '() adts) (values t rest)]
+              [_ (values '_ body0)]))
+          (define ft (hash-ref top g))
+          (define-values (fts trest)
+            (match ft
+              [`(->* (,ts ...) ,tr ,_) #:when (= (length ts) (length fixed)) (values ts tr)]
+              [_ (values (map (λ (_) '_) fixed) '_)]))
+          (for ([fm fixed]) (formal-type* fm))  ;; well-formedness
+          (define env (cons (cons rest-name `(List ,trest))
+                            (map cons (map formal-name* fixed) fts)))
+          (define bt (synth-body body env))
+          (unless (or (eq? rt '_) (consistent? bt rt))
+            (type-error "~a: body has type ~a, declared ~a" g bt rt))]
+         [`(define (,_ . ,_) ,_ ...) (void)]  ;; malformed formals: dynamic
          [`(define ,(? symbol? x) ,e)
           (define et (synth e '()))
           (define dt (hash-ref top x '_))

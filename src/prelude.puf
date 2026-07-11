@@ -72,7 +72,7 @@
 (define (last xs)
   (if (null? (cdr xs)) (car xs) (last (cdr xs))))
 
-(: list->vector (-> (List a) (Vec a)))
+(: list->vector (-> (List a) (Mut (Vec a))))
 (define (list->vector xs)
   (let ([v (make-vector (length xs))])
     (let loop ([xs xs] [i 0])
@@ -156,6 +156,7 @@
 
 ;; variadic format: (format "~a + ~a~%" 1 2)
 ;; ~a and ~s both render display-style; ~% newline; ~~ tilde.
+(: format (->* (Str) _ Str))
 (define (format fmt . args)
   (let loop ([i 0] [acc ""] [args args])
     (if (< i (string-length fmt))

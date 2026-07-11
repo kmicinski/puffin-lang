@@ -212,6 +212,16 @@ pf pf_display(pf v) { pf_display_value(v); return PF_VOID; }
 pf pf_newline(void) { printf("\n"); return PF_VOID; }
 pf pf_println(pf v) { pf_display_value(v); printf("\n"); return PF_VOID; }
 
+// (eprintln v): like println, on standard error. The typecheckers'
+// non-fatal diagnostics channel (warnings must not pollute stdout,
+// which the golden harnesses compare byte-for-byte).
+pf pf_eprintln(pf v) {
+  pf_display_value_to(v, stderr);
+  fprintf(stderr, "\n");
+  fflush(stderr);
+  return PF_VOID;
+}
+
 // The value of the program's main expression: print it (with
 // newline) unless it is void--mirroring how a Racket module body
 // treats its trailing expression.

@@ -125,14 +125,14 @@
       1))
 
 ;; effort: a 1-slot vector of remaining fuel; every copied node costs 1
-(: spend! (-> (Vec Int) Int Bool))
+(: spend! (-> (Mut (Vec Int)) Int Bool))
 (define (spend! effort n)
   (define left (- (vector-ref effort 0) n))
   (begin (vector-set! effort 0 left)
          (> left 0)))
 
 ;; copy e, freshening every bound variable; rn maps old->new
-(define (freshen e [rn : (Hash Sym Sym)] [effort : (Vec Int)])
+(define (freshen e [rn : (Hash Sym Sym)] [effort : (Mut (Vec Int))])
   (and (spend! effort 1)
        (match e
          [(? symbol? x) (hash-ref/default rn x x)]

@@ -8,7 +8,7 @@
 ;; ---- environments: immutable hashes, symbol-keyed ------------------
 (define-type Binding
   (Val _)
-  (Rec (Vec _)))
+  (Rec (Mut (Vec _))))   ;; letrec cells are runtime-mutated
 
 (define (rec-cell) (Rec (vector 'undefined)))
 (define (rec-fill! b v)

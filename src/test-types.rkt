@@ -6,7 +6,7 @@
 ;; inference-leniency cases the corpus can't express as goldens.
 ;; Run: racket src/test-types.rkt
 
-(require rackunit "types.rkt" "modules.rkt")
+(require rackunit "types.rkt" "modules.rkt" "system.rkt")
 
 (define (check-of source)
   (λ () (typecheck-program
@@ -20,6 +20,19 @@
              (check-of src)))
 (define-syntax-rule (admits src)
   (check-not-exn (check-of src)))
+
+;; warning capture: run the checker with stderr redirected; returns
+;; whatever the checker wrote there (exhaustiveness warnings)
+(define (warnings-of source)
+  (define err (open-output-string))
+  (parameterize ([current-error-port err]) ((check-of source)))
+  (get-output-string err))
+(define-syntax-rule (warns rx src) (check-regexp-match rx (warnings-of src)))
+(define-syntax-rule (no-warn src) (check-equal? (warnings-of src) ""))
+(define-syntax-rule (rejects/strict rx src)
+  (parameterize ([strict-exhaustiveness? #t])
+    (check-exn (λ (e) (and (type-error? e) (regexp-match? rx (exn-message e))))
+               (check-of src))))
 
 ;; concrete formals are contracts
 (rejects #rx"argument has type Bool, expected Int"
@@ -97,5 +110,127 @@
 (admits "(println (not (<= 3 2))) (println (>= 4 4)) (println (> 2 1))")
 (admits "(define (weigh a b . extras) (list a b extras))
          (println (weigh 1 2 3 4))")
+
+;; ---------------------------------------------------------------------
+;; variadic function types: (->* (t ...) trest tres)
+;; ---------------------------------------------------------------------
+
+;; derived: unannotated variadic defines get (->* (_ ...) _ _) -- the
+;; arity floor is checked, everything else is dynamic
+(admits "(define (weigh a b . extras) (list a b extras)) (weigh 1 2) (weigh 1 2 3 4)")
+(rejects #rx"weigh expects at least 2 arguments, got 1"
+         "(define (weigh a b . extras) (list a b extras)) (weigh 1)")
+
+;; declared: (: f (->* ...)) types fixed args, extras, and the rest
+;; binder ((List trest)) in the body
+(admits "(: sum+ (->* (Int) Int Int))
+         (define (sum+ a . rest) (if (null? rest) a (+ a (car rest))))
+         (sum+ 1) (sum+ 1 2 3)")
+(rejects #rx"sum\\+: argument has type Str, expected Int"
+         "(: sum+ (->* (Int) Int Int))
+          (define (sum+ a . rest) a)
+          (sum+ \"one\")")
+(rejects #rx"sum\\+: argument has type Str, expected Int"
+         "(: sum+ (->* (Int) Int Int))
+          (define (sum+ a . rest) a)
+          (sum+ 1 2 \"three\")")
+;; the rest binder is (List trest) in the body
+(rejects #rx"\\+: argument has type Str, expected Int"
+         "(: f (->* (Int) Str Int))
+          (define (f a . rest) (+ a (car rest)))")
+;; annotated fixed formals in a variadic define
+(rejects #rx"g: argument has type Bool, expected Int"
+         "(define (g [a : Int] . rest) a) (g #t)")
+;; variadic lambdas
+(admits "((lambda (a . rest) (cons a rest)) 1 2 3) ((lambda args args))")
+(rejects #rx"application expects at least 1 arguments, got 0"
+         "((lambda (a . rest) a))")
+;; a variadic function fits a fixed-arrow expectation that supplies
+;; its fixed arguments
+(admits "(define (v a . r) a)
+         (define (g [f : (-> Int Int)]) : Int (f 1))
+         (g v)")
+;; well-formedness of ->* annotations
+(rejects #rx"unknown type constructor Nope"
+         "(: f (->* ((Nope Int)) Int Int)) (define (f a . r) a)")
+
+;; ---------------------------------------------------------------------
+;; (Mut ...) containers: allocators produce it, mutators demand it,
+;; read-only accessors take both flavors
+;; ---------------------------------------------------------------------
+
+(admits "(hash-set! (make-hash) 'a 1) (set-add! (make-set) 1)
+         (vector-set! (make-vector 3) 0 1) (vector-set! (vector 1 2) 0 5)")
+(admits "(hash-count (make-hash)) (hash-count (hash 'a 1))
+         (hash-keys (make-hash)) (set-member? (make-set) 1)
+         (vector-ref (vector 1 2) 0) (vector-length (make-vector 2))")
+(admits "(let ([v : (Mut (Vec Int)) (make-vector 3)]) (vector-set! v 0 1))")
+;; mutating a persistent collection is a type error when concrete...
+(rejects #rx"hash-set!: argument has type \\(Hash _ _\\), expected \\(Mut \\(Hash Sym Int\\)\\)"
+         "(hash-set! (hash 'a 1) 'b 2)")
+(rejects #rx"hash-set!: argument has type \\(Hash Sym Int\\), expected \\(Mut \\(Hash Sym Int\\)\\)"
+         "(let ([h : (Hash Sym Int) (hash)]) (hash-set! h 'a 1))")
+(rejects #rx"set-add!: argument has type \\(Set _\\), expected \\(Mut \\(Set Int\\)\\)"
+         "(set-add! (set) 1)")
+(rejects #rx"vector-set!: argument has type \\(Vec Int\\), expected \\(Mut \\(Vec Int\\)\\)"
+         "(define (f [v : (Vec Int)]) (vector-set! v 0 1))")
+;; ...but stays dynamic (accepted) through _
+(admits "(define (f h) (hash-set! h 'a 1)) (f (make-hash))")
+;; a Mut value is fine where the plain container is expected
+(admits "(define (count-em [h : (Hash Sym Int)]) : Int (hash-count h))
+         (count-em (make-hash))")
+;; ...the reverse is not: plain where Mut is demanded
+(rejects #rx"f: argument has type \\(Hash Sym Int\\), expected \\(Mut \\(Hash Sym Int\\)\\)"
+         "(define (f [h : (Mut (Hash Sym Int))]) (hash-set! h 'a 1))
+          (define (g [h : (Hash Sym Int)]) (f h))")
+;; well-formedness: Mut wraps containers only
+(rejects #rx"\\(Mut \\.\\.\\.\\) wraps a Hash, Vec, or Set type, got Int"
+         "(define (f [x : (Mut Int)]) x)")
+
+;; ---------------------------------------------------------------------
+;; prim types come from the manifest (spot checks through the checker)
+;; ---------------------------------------------------------------------
+
+(rejects #rx"string-length: argument has type Int, expected Str"
+         "(string-length 5)")
+(rejects #rx"substring: argument has type Sym, expected Str"
+         "(substring 'nope 0 1)")
+(admits "(string-concat (list \"a\" \"b\"))")
+(rejects #rx"string-concat: argument has type \\(List Int\\), expected \\(List Str\\)"
+         "(string-concat (list 1 2))")
+
+;; ---------------------------------------------------------------------
+;; exhaustiveness over closed ADTs: a warning (stderr), an error under
+;; strict-exhaustiveness?
+;; ---------------------------------------------------------------------
+
+(warns #rx"^typecheck warning: match on Option is not exhaustive: missing None\n$"
+       "(define-type (Option a) (None) (Some a))
+        (define (f [o : (Option Int)]) : Int (match o [(Some x) x]))")
+;; missing constructors are listed in declaration order
+(warns #rx"^typecheck warning: match on E is not exhaustive: missing A, C\n$"
+       "(define-type E (A) (B Int) (C))
+        (define (f [e : E]) (match e [(B x) x]))")
+;; the same program is an ERROR in strict mode, with the same text
+(rejects/strict #rx"^typecheck: match on Option is not exhaustive: missing None$"
+                "(define-type (Option a) (None) (Some a))
+                 (define (f [o : (Option Int)]) : Int (match o [(Some x) x]))")
+;; a catch-all clause (wildcard or binder) covers everything
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f [o : (Option Int)]) : Int (match o [(Some x) x] [_ 0]))")
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f [o : (Option Int)]) : Int (match o [(Some x) x] [other 0]))")
+;; conservative: a guarded catch-all still counts as covering
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f [o : (Option Int)]) : Int (match o [(Some x) x] [o2 #:when #t 0]))")
+;; the gradual guarantee: a `_` scrutinee is exempt
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f o) (match o [(Some x) x]))")
+;; a fully covered match is quiet (bare nullary names count)
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f [o : (Option Int)]) : Int (match o [(Some x) x] [None 0]))")
+;; patterns we cannot prove partial count as covering everything
+(no-warn "(define-type (Option a) (None) (Some a))
+          (define (f [o : (Option Int)]) : Int (match o [(? procedure? p) 1]))")
 
 (displayln "type tests: all passed")
