@@ -167,7 +167,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <h2>How do I…</h2>
 <p class="sub">The idioms a PL course leans on daily — each one verified, like everything else on this page.</p>
 <aside class="qa">
-<div class="q">... look things up in an assoc-list environment?</div>
+<div class="q">look things up in an assoc-list environment?</div>
 <p>The interpreter-assignment workhorse: an environment is a list of (name . value) pairs; assoc finds the binding, match takes it apart.</p>
 <pre><code>(define env (list (cons 'x 10) (cons 'y 20)))
 (define (lookup env k)
@@ -176,7 +176,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
     [#f (error (list 'unbound k))]))
 (println (lookup env 'y))   ;; 20</code></pre></aside>
 <aside class="qa">
-<div class="q">... fold over a tree ADT?</div>
+<div class="q">fold over a tree ADT?</div>
 <p>Declare the shape once with define-type; every traversal is a match with one clause per constructor.</p>
 <pre><code>(define-type Tree (Leaf Int) (Node Tree Tree))
 (define (tree-sum [t : Tree]) : Int
@@ -185,16 +185,14 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
     [(Node l r) (+ (tree-sum l) (tree-sum r))]))
 (println (tree-sum (Node (Leaf 1) (Node (Leaf 2) (Leaf 3)))))   ;; 6</code></pre></aside>
 <aside class="qa">
-<div class="q">... write a tail-recursive loop?</div>
+<div class="q">write a tail-recursive loop?</div>
 <p>A named let is the loop: Puffin has proper tail calls, so a million iterations run in O(1) stack.</p>
 <pre><code>(let loop ([i 0] [acc 0])
   (if (&lt; i 1000000)
       (loop (+ i 1) (+ acc i))
-      (println acc)))
-;; prints:
-;;   499999500000</code></pre></aside>
+      (println acc)))   ;; 499999500000</code></pre></aside>
 <aside class="qa">
-<div class="q">... build strings?</div>
+<div class="q">build strings?</div>
 <p>format renders any value with ~a (and ~% is a newline); string-join and string-concat assemble big strings in linear time.</p>
 <pre><code>(define (describe name n)
   (format "~a scored ~a point~a" name n (if (eq? n 1) "" "s")))
@@ -204,7 +202,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 ;;   ada scored 3 points
 ;;   grace scored 1 point</code></pre></aside>
 <aside class="qa">
-<div class="q">... compute graph reachability?</div>
+<div class="q">compute graph reachability?</div>
 <p>Adjacency as a hash of neighbor lists, a worklist, and an immutable set of visited nodes.</p>
 <pre><code>(define g (hash 'a (list 'b 'c) 'b (list 'd) 'c '() 'd '()))
 (define (reachable from)
@@ -218,7 +216,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
                  (set-add seen n)))])))
 (println (sort (map symbol->string (set->list (reachable 'a))) string&lt;?))   ;; (a b c d)</code></pre></aside>
 <aside class="qa">
-<div class="q">... count occurrences?</div>
+<div class="q">count occurrences?</div>
 <p>A mutable hash plus hash-ref/default is the tally idiom.</p>
 <pre><code>(define counts (make-hash))
 (define (tally! k)

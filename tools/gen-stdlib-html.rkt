@@ -350,7 +350,7 @@
 
 (define recipes
   (list
-   (recipe "... look things up in an assoc-list environment?"
+   (recipe "look things up in an assoc-list environment?"
            "The interpreter-assignment workhorse: an environment is a list of (name . value) pairs; assoc finds the binding, match takes it apart."
            (make-ex
             (string-join
@@ -362,7 +362,7 @@
                "(println (lookup env 'y))")
              "\n")
             "20\n"))
-   (recipe "... fold over a tree ADT?"
+   (recipe "fold over a tree ADT?"
            "Declare the shape once with define-type; every traversal is a match with one clause per constructor."
            (make-ex
             (string-join
@@ -374,7 +374,7 @@
                "(println (tree-sum (Node (Leaf 1) (Node (Leaf 2) (Leaf 3)))))")
              "\n")
             "6\n"))
-   (recipe "... write a tail-recursive loop?"
+   (recipe "write a tail-recursive loop?"
            "A named let is the loop: Puffin has proper tail calls, so a million iterations run in O(1) stack."
            (make-ex
             (string-join
@@ -384,7 +384,7 @@
                "      (println acc)))")
              "\n")
             "499999500000\n"))
-   (recipe "... build strings?"
+   (recipe "build strings?"
            "format renders any value with ~a (and ~% is a newline); string-join and string-concat assemble big strings in linear time."
            (make-ex
             (string-join
@@ -394,7 +394,7 @@
                "(println (string-join (map describe2 (list 'a 'b)) \"; \"))")
              "\n")
             "" #:note "placeholder -- replaced below"))
-   (recipe "... compute graph reachability?"
+   (recipe "compute graph reachability?"
            "Adjacency as a hash of neighbor lists, a worklist, and an immutable set of visited nodes."
            (make-ex
             (string-join
@@ -411,7 +411,7 @@
                "(println (sort (map symbol->string (set->list (reachable 'a))) string<?))")
              "\n")
             "(a b c d)\n"))
-   (recipe "... count occurrences?"
+   (recipe "count occurrences?"
            "A mutable hash plus hash-ref/default is the tally idiom."
            (make-ex
             (string-join
@@ -427,7 +427,7 @@
 ;; gets noisy with nested string literals)
 (set! recipes
       (list-set recipes 3
-                (recipe "... build strings?"
+                (recipe "build strings?"
                         "format renders any value with ~a (and ~% is a newline); string-join and string-concat assemble big strings in linear time."
                         (make-ex
                          (string-append
@@ -511,7 +511,7 @@
     (and (= (length out-lines) 1)
          (not (string=? (car out-lines) ""))
          (or (= (length code-lines) 1)
-             (regexp-match? #rx"^\\((println|displayln|display|error)" (last code-lines)))))
+             (regexp-match? #rx"^ *\\((println|displayln|display|error)" (last code-lines)))))
   (define body
     (cond
       [inline?
