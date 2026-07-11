@@ -180,12 +180,57 @@ consistency checker unfolds `(List a)` one step to
 assoc-pairs and proper lists honest types simultaneously without
 unions or subtyping.
 
-**Erasure semantics (v1).** Types are checked, then erased in
-desugar; the runtime's existing tag checks are the dynamic safety
-net. Phase 3 inserts casts with blame labels at `_`→concrete
-boundaries (the classic gradual guarantee); the checker is written so
-cast points are already identified (every use of `_ ~ τ` at an
-elimination position).
+**Cast semantics (v1, shipped).** Types are checked, then LOWERED —
+not merely erased — in desugar: every *declared* `_`→concrete
+boundary is guarded by a transient-style cast before the annotation
+disappears. Both compilers (src/compile.rkt and
+puffincc-src/desugar.puf) insert the same casts:
+
+1. annotated formals `[x : τ]` → a check on `x` at function entry
+   (also for formals typed by a `(: f (-> ...))`/`(->* ...)`
+   declaration, including a declaration over a literal
+   `(define f (lambda ...))`);
+2. declared result types (`: rt`, or the declared arrow's result) →
+   a check in return position (the body is wrapped in `(let () ...)`
+   so internal defines keep letrec* scoping);
+3. `(ann e τ)` → a check on `e`'s value;
+4. annotated let/let*/named-let bindings `[x : τ e]` → a check on
+   `e`'s value;
+5. `(: x τ)` value defines → a check on the initializer.
+
+The check is **first-order** (transient): only the value's outermost
+shape is validated — `Int`/`Bool`/`Sym`/`Str`/`Void` by tag,
+`Pairof`/`List`/`Vec`/`Hash`/`Set` by heap kind (`(Mut τ)` and plain
+`τ` share kinds: same check), and an ADT annotation by the dedicated
+ADT kind *plus* tag membership in the type's constructor set, so
+`(Some 1)` passes an `(Option Int)` cast but a `Shape` instance
+fails it. Element/field types are never traversed. `_` and type
+variables insert **no cast** (the gradual guarantee: unannotated
+programs compile byte-identically to before), and **arrow types
+insert no cast** — on the bytecode VM a bare function value is a
+tagged fixnum function index, indistinguishable from an `Int`, so
+callability cannot be checked soundly; the call site's own failure
+is the arrows' net.
+
+The runtime half is one manifest-appended internal prim,
+`(cast-check v desc blame)` (`pf_cast_check`, src/runtime/lib/cast.c;
+Racket reference impl in the manifest entry). On failure it is fatal,
+byte-identical on every route (interp, native, VM, wasm):
+
+```
+puffin runtime error: cast: expected Int, got #t (blame: f's argument x)
+```
+
+Blame labels name the boundary — `f's argument x`, `f's result`,
+`ann`, `let x`, `define x` (positions aren't tracked). In a REPL
+session a firing cast aborts only that eval; the session survives.
+The PRELUDE's signatures are written `(#%prelude: name τ)`: the
+checkers read them exactly like `(: name τ)`, but they are TRUSTED —
+the same trust class as the manifest's prim types — so no casts are
+inserted for them (and the prelude's tail loops stay tail; a result
+cast would un-tail them). `cast-check` is in no purity table: a cast
+can abort, so the optimizers never drop or fold it. Runtime tests:
+src/test-casts.rkt.
 
 ## 5. Prim and container types come from the manifest
 
@@ -267,6 +312,6 @@ module system needs no changes. `.pufs` signatures grow typed entries
    DONE.
 3. Variadic `->*`, `(Mut ...)` containers, exhaustiveness (warning +
    `--strict-types` error option), prim types in the manifest. DONE.
-4. Casts + blame; typed `.pufs` signatures; the dedicated ADT heap
-   kind.
+4. Casts + blame (DONE — see §4 "Cast semantics"); the dedicated ADT
+   heap kind (DONE). Remaining: typed `.pufs` signatures.
 ```

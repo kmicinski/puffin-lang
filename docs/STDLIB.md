@@ -87,6 +87,7 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `command-line-args` | 0 | `(-> (List Str))` | `pf_command_line_args` | The program's command-line arguments (a list of strings, argv[0] excluded). |
 | `system` | 1 | `(-> Str Int)` | `pf_system` | Run a shell command; its exit code. |
 | `eprintln` | 1 | `(-> a Void)` | `pf_eprintln` | Display a value followed by a newline on standard error; returns void. |
+| `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value a define-type constructor instance? |
 
 ## Compiler-internal primitives
 
@@ -95,6 +96,11 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `make-closure` | 1 | — | `pf_make_closure` | INTERNAL: allocate a closure record with n slots. |
 | `string-const` | 1 | — | `pf_string_const` | INTERNAL: the i-th string literal in the constant table. |
 | `bytes->string` | 1 | — | `pf_bytes_to_string` | INTERNAL: a byte string from a list of byte values 0-255. |
+| `adt-alloc` | 2 | — | `pf_adt_alloc` | INTERNAL: a constructor instance with the tag symbol and n zeroed fields. |
+| `adt-set!` | 3 | — | `pf_adt_set` | INTERNAL: initialize field i of a constructor instance; returns void. |
+| `adt-ref` | 2 | — | `pf_adt_ref` | INTERNAL: field i of a constructor instance (checked). |
+| `adt-tag` | 1 | — | `pf_adt_tag` | INTERNAL: the constructor symbol of an instance. |
+| `cast-check` | 3 | — | `pf_cast_check` | INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise. |
 
 ## Adding a primitive
 
