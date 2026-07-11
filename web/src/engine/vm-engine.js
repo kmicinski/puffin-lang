@@ -197,6 +197,10 @@ export async function run(source, opts = {}) {
   if (!outPbc || outPbc.length === 0) {
     return { ok: false, error: diag.trim() || `compiler exited with code ${compile.code}` };
   }
+  // compile succeeded but produced diagnostics (e.g. exhaustiveness
+  // WARNINGS on stderr): surface them ahead of the program's output
+  // instead of silently discarding them.
+  if (diag.trim() !== '') out(diag);
 
   // 2. run the compiled unit with the user's stdin, streaming output.
   return runUnit(outPbc, { input, stdin, onOutput: out });
@@ -373,6 +377,9 @@ export class Session {
     if (!unit || unit.length === 0) {
       return { ok: false, error: diag.trim() || `puffincc exited with code ${compile.code}`, results: [] };
     }
+    // surface compile WARNINGS (stderr diagnostics on a successful
+    // compile, e.g. exhaustiveness) instead of discarding them
+    if (diag.trim() !== '') this.onOutput(diag);
     // the eval compiled: remember its type definitions for later evals
     for (const [name, form] of newTypes) this._types.set(name, form);
     // 2. run it in the session
