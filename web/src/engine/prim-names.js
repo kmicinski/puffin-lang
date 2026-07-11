@@ -2,6 +2,7 @@
 // Surface primitive names, for the editor (autocomplete/highlight).
 export function surfacePrimNames() {
   return [
+    "adt?",
     "arithmetic-shift",
     "bitwise-and",
     "bitwise-ior",

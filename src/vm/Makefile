@@ -63,7 +63,8 @@ RUNTIME_SRCS := \
 	../runtime/core.c \
 	../runtime/lib/pairs.c ../runtime/lib/vectors.c ../runtime/lib/strings.c \
 	../runtime/lib/table.c ../runtime/lib/hashes.c ../runtime/lib/sets.c \
-	../runtime/lib/hamt.c ../runtime/lib/arith.c ../runtime/lib/predicates.c \
+	../runtime/lib/hamt.c ../runtime/lib/adt.c ../runtime/lib/arith.c \
+	../runtime/lib/predicates.c \
 	../runtime/lib/io.c ../runtime/lib/stdlib_init.c
 
 # The wasm build: VM + allocator + error boundary + the runtime.

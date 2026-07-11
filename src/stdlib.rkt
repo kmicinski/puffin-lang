@@ -46,6 +46,18 @@
 (struct prim-spec (name arity rt-sym surface? ref-impl doc) #:transparent)
 
 ;; ---------------------------------------------------------------------
+;; ADT constructor instances (docs/TYPES.md §2): the reference-side
+;; representation of a define-type constructor instance. A dedicated
+;; struct -- NOT a vector -- mirroring the C runtime's dedicated heap
+;; kind (src/runtime/lib/adt.c, kind 18): (vector? (Some 1)) is #f,
+;; adt? is the disjoint surface predicate. tag is the constructor's
+;; (module-mangled) symbol; fields is a mutable Racket vector, set
+;; once by the desugar-emitted adt-set! calls and read by adt-ref.
+;; ---------------------------------------------------------------------
+
+(struct adt-value (tag fields))
+
+;; ---------------------------------------------------------------------
 ;; Reference display / equality -- must render *exactly* like the C
 ;; runtime's pf_display_value / pf_equal (core.c dispatching through
 ;; the kind registry). Golden tests compare these byte-for-byte.
@@ -75,6 +87,16 @@
          (when (positive? i) (display " " out))
          (render x))
        (display ")" out)]
+      ;; ADT instances: (Some 1); nullary constructors print bare: None
+      [(adt-value? v)
+       (define fs (adt-value-fields v))
+       (cond
+         [(zero? (vector-length fs)) (display (adt-value-tag v) out)]
+         [else
+          (display "(" out)
+          (display (adt-value-tag v) out)
+          (for ([x fs]) (display " " out) (render x))
+          (display ")" out)])]
       [(hash? v)          (display (format "#<hash:~a>" (hash-count v)) out)]
       [(or (set-mutable? v) (set? v))
                           (display (format "#<set:~a>" (set-count v)) out)]
@@ -91,6 +113,12 @@
     [(and (vector? a) (vector? b))
      (and (= (vector-length a) (vector-length b))
           (for/and ([x a] [y b]) (puffin-equal? x y)))]
+    ;; ADT instances: same constructor, equal? fields
+    [(and (adt-value? a) (adt-value? b))
+     (and (eq? (adt-value-tag a) (adt-value-tag b))
+          (= (vector-length (adt-value-fields a)) (vector-length (adt-value-fields b)))
+          (for/and ([x (adt-value-fields a)] [y (adt-value-fields b)])
+            (puffin-equal? x y)))]
     [(and (string? a) (string? b)) (string=? a b)]
     ;; immutable collections are values: compare by contents
     ;; (mutable ones stay identity-compared)
@@ -316,7 +344,31 @@
    ;; for programs that never call it are byte-identical.
    (prim-spec 'bytes->string 1 'pf_bytes_to_string #f
               (λ (lst) (list->string (map integer->char lst)))
-              "INTERNAL: a byte string from a list of byte values 0-255.")))
+              "INTERNAL: a byte string from a list of byte values 0-255.")
+
+   ;; ---- ADT constructor instances (lib/adt.c) ---------------------------
+   ;; The dedicated heap kind for define-type constructor instances
+   ;; (docs/TYPES.md §2, kind 18). Only the desugar lowering emits the
+   ;; internal four -- construction (adt-alloc + adt-set!, mirroring
+   ;; how (vector ...) lowers) and match compilation (adt-tag +
+   ;; adt-ref) -- so user code cannot forge an instance. adt? is the
+   ;; surface predicate, disjoint from vector?. Appended to the
+   ;; manifest: every existing prim id (a manifest index) is unchanged.
+   (prim-spec 'adt-alloc 2 'pf_adt_alloc #f
+              (λ (tag n) (adt-value tag (make-vector n 0)))
+              "INTERNAL: a constructor instance with the tag symbol and n zeroed fields.")
+   (prim-spec 'adt-set! 3 'pf_adt_set #f
+              (λ (a i x) (vector-set! (adt-value-fields a) i x) (void))
+              "INTERNAL: initialize field i of a constructor instance; returns void.")
+   (prim-spec 'adt-ref 2 'pf_adt_ref #f
+              (λ (a i) (vector-ref (adt-value-fields a) i))
+              "INTERNAL: field i of a constructor instance (checked).")
+   (prim-spec 'adt-tag 1 'pf_adt_tag #f
+              adt-value-tag
+              "INTERNAL: the constructor symbol of an instance.")
+   (prim-spec 'adt? 1 'pf_adt_huh #t
+              adt-value?
+              "Is this value a define-type constructor instance?")))
 
 ;; ---------------------------------------------------------------------
 ;; Derived views (used by irs.rkt, the backends, and interpreters.rkt)
