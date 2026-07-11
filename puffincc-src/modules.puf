@@ -13,6 +13,7 @@
 ;; (no base directory to resolve requires against).
 
 (require "reader.puf")
+(require "system.puf")   ;; module-demangle-register! (diagnostic rendering)
 
 ;; string-append is a binary prim; message building wants n-ary
 (define (str-cat . parts)
@@ -516,6 +517,7 @@
                                (module-error (str-cat m-path ": source uses "
                                                             (symbol->string mn)
                                                             ", which collides with a mangled module name")))
+                             (module-demangle-register! mn n)
                              (hash-set ren n mn))))
                        ren0 (set->list top-names))
                 ren0))

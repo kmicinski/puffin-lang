@@ -42,6 +42,24 @@
 ;; puffincc's flag of the same name mirrors it.
 (define strict-exhaustiveness? (make-parameter #f))
 
+;; ---------------------------------------------------------------------
+;; Module-name demangling (docs/MODULES.md). The module resolver gives
+;; every non-entry module's top-level names a mangled spelling
+;; (Shape -> Shape_shapes_826109a6). Checker diagnostics must never
+;; show that spelling: the resolver registers mangled -> source here,
+;; and the typechecker/desugar consult it ONLY when RENDERING a name
+;; or type into an error/warning message or a cast blame -- never when
+;; comparing types (mangled names ARE the identities). Mirrored by
+;; puffincc-src/system.puf.
+;; ---------------------------------------------------------------------
+
+(define module-demangle-table (make-hasheq))
+(define (module-demangle-reset!) (hash-clear! module-demangle-table))
+(define (module-demangle-register! mangled source)
+  (hash-set! module-demangle-table mangled source))
+;; a symbol's source spelling (identity for anything unregistered)
+(define (module-demangle s) (hash-ref module-demangle-table s s))
+
 (define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)

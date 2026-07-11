@@ -103,7 +103,7 @@
   (define (formal-type f) (match f [`(,_ : ,t) t] [_ '_]))
   (define (cast-binding b)
     (match b
-      [`(,x : ,t ,e) `(,x ,(cast-expr e t (string-append "let " (symbol->string x))))]
+      [`(,x : ,t ,e) `(,x ,(cast-expr e t (string-append "let " (nm-str x))))]
       [b b]))
 
   ;; ---- transient casts (docs/TYPES.md §4) ---------------------------
@@ -124,6 +124,16 @@
   ;; The PRELUDE's signatures are (#%prelude: name t) -- the same
   ;; trust class as the manifest's prim types, so they type calls but
   ;; never insert casts (and prelude tail loops stay tail).
+  ;; blame labels and the adt desc's display element carry SOURCE
+  ;; spellings (system.rkt module-demangle): a runtime cast error must
+  ;; say Shape, never Shape_shapes_826109a6. The desc's constructor
+  ;; TAG list stays mangled -- those are the runtime identities the
+  ;; check compares against.
+  (define (nm-str s) (symbol->string (module-demangle s)))
+  (define (demangle-type t)
+    (cond [(symbol? t) (module-demangle t)]
+          [(pair? t) (cons (demangle-type (car t)) (demangle-type (cdr t)))]
+          [else t]))
   (define (cast-desc t)
     (match t
       [(or 'Int 'Bool 'Sym 'Str 'Void) t]
@@ -134,9 +144,9 @@
       [`(Set ,_) 'Set]
       [`(Mut ,t0) (cast-desc t0)]
       [(? symbol? n) #:when (hash-has-key? type-ctors n)
-       `(adt ,n ,@(hash-ref type-ctors n))]
+       `(adt ,(module-demangle n) ,@(hash-ref type-ctors n))]
       [`(,(? symbol? n) ,_ ...) #:when (hash-has-key? type-ctors n)
-       `(adt ,t ,@(hash-ref type-ctors n))]
+       `(adt ,(demangle-type t) ,@(hash-ref type-ctors n))]
       [_ #f]))
   ;; surface rewrite: e checked against t, or e untouched if t has no
   ;; first-order check (h then compiles cast-check like any prim)
@@ -154,7 +164,7 @@
        (λ (x t)
          (define d (cast-desc t))
          (and d `(cast-check ,x (quote ,d)
-                             ,(string-append owner "'s argument " (symbol->string x)))))
+                             ,(string-append owner "'s argument " (nm-str x)))))
        formal-names arg-ts))
     (define body+
       (cond
@@ -187,7 +197,7 @@
           [_ (if da (list-ref (car da) i) '_)])))
     (define rt* (or rt (and da (cdr da))))
     `(define (,f ,@(strip-formals formals))
-       ,@(body-with-casts (symbol->string f) (strip-formals formals)
+       ,@(body-with-casts (nm-str f) (strip-formals formals)
                           arg-ts rt* body)))
 
   ;; `bound` maps every lexically bound name to the name to use for
@@ -735,7 +745,7 @@
              [_ (if ds (list-ref (car ds) i) '_)])))
        (define rt* (or rt (and ds (cdr ds))))
        (list `(define (,f ,@(strip-formals fixed) . ,rest-name)
-                ,@(body-with-casts (symbol->string f) (strip-formals fixed)
+                ,@(body-with-casts (nm-str f) (strip-formals fixed)
                                    arg-ts rt* body)))]
       ;; value defines with a declared type: a concrete non-arrow
       ;; type checks the initializer; a declared arrow over a literal
@@ -749,10 +759,10 @@
           [(`(-> ,as ... ,r) `(,(or 'lambda 'λ) (,(? symbol? xs) ...) ,body ...))
            #:when (= (length as) (length xs))
            `(define ,x (lambda ,xs
-                         ,@(body-with-casts (symbol->string x) xs as r body)))]
+                         ,@(body-with-casts (nm-str x) xs as r body)))]
           [(`(-> ,_ ...) _) form]
           [(`(->* ,_ ...) _) form]
-          [(_ _) `(define ,x ,(cast-expr e t (string-append "define " (symbol->string x))))]))]
+          [(_ _) `(define ,x ,(cast-expr e t (string-append "define " (nm-str x))))]))]
       [form (list form)]))
 
   ;; Top-level definitions shadow stdlib primitives; colliding names

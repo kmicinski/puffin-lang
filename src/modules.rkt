@@ -24,6 +24,8 @@
 ;; unquotes, match-pattern structure (constructor heads, quoted and
 ;; quasiquoted datums), and case-clause datums are left untouched.
 
+(require "system.rkt")  ;; module-demangle-* (diagnostic rendering)
+
 (provide resolve-modules
          module-forms?
          read-module-forms
@@ -357,6 +359,9 @@
 
 (define (resolve-modules entry-path)
   (define-values (mods loaded) (load-modules entry-path))
+  ;; fresh demangling table for this program: every mangled spelling
+  ;; maps back to its source spelling, for diagnostic rendering only
+  (module-demangle-reset!)
   (define (lookup abs) (hash-ref loaded (path->string abs)))
   ;; every symbol mentioned anywhere, for the mangled-name collision check
   (define all-mentions
@@ -413,6 +418,7 @@
           (when (set-member? all-mentions mn)
             (module-error "~a: source uses ~a, which collides with a mangled module name"
                           (mod-path m) mn))
+          (module-demangle-register! mn n)
           (hash-set! ren n mn)))
       ;; qualified M.name resolution (split at the first dot; only
       ;; when the prefix is a module alias)
