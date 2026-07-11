@@ -1,0 +1,60 @@
+;; the dedicated ADT heap kind (docs/TYPES.md §2): constructor
+;; instances are NOT vectors -- they print as (Ctor field ...)
+;; (nullary constructors bare), adt? is the disjoint surface
+;; predicate, and equal? recurses structurally.
+(define-type (Option a)
+  (None)
+  (Some a))
+
+(define-type Shape
+  (Point)
+  (Circle Int)
+  (Rect Int Int))
+
+;; printing: parenthesized ctor + fields; nullary bare
+(println (Some 1))                         ;; (Some 1)
+(println None)                             ;; None
+(println (Rect 3 4))                       ;; (Rect 3 4)
+(println (Some (Some (list 1 2))))         ;; (Some (Some (1 2)))
+(println (list (Circle 5) Point))          ;; ((Circle 5) Point)
+(println (vector (Some 1) None))           ;; #((Some 1) None)
+(display (Some 'sym)) (newline)            ;; (Some sym)
+
+;; the kind is disjoint: vector? says #f, adt? says #t
+(println (vector? (Some 1)))               ;; #f
+(println (adt? (Some 1)))                  ;; #t
+(println (adt? None))                      ;; #t
+(println (adt? (vector 1 2)))              ;; #f
+(println (adt? 42))                        ;; #f
+(println (adt? 'None))                     ;; #f
+
+;; a real vector that merely looks like an instance is neither
+;; adt? nor a match for the constructor pattern
+(define impostor (vector 'Circle 5))
+(println (adt? impostor))                  ;; #f
+(println (match impostor
+           [(Circle r) r]
+           [_ 'not-a-circle]))             ;; not-a-circle
+
+;; equal? is structural over instances; eq? is identity
+(println (equal? (Some 1) (Some 1)))       ;; #t
+(println (equal? (Some 1) (Some 2)))       ;; #f
+(println (equal? (Some 1) (Circle 1)))     ;; #f
+(println (equal? None None))               ;; #t (the singleton)
+(println (eq? None None))                  ;; #t
+(println (eq? (Some 1) (Some 1)))          ;; #f
+(println (equal? (Some (list 1 2)) (Some (list 1 2)))) ;; #t
+(println (equal? (Some 1) (vector 'Some 1)))            ;; #f (kinds differ)
+
+;; match still dispatches on constructor + nesting
+(define (area [s : Shape]) : Int
+  (match s
+    [Point 0]
+    [(Circle r) (* 3 (* r r))]
+    [(Rect w h) (* w h)]))
+(println (area Point))                     ;; 0
+(println (area (Circle 2)))                ;; 12
+(println (area (Rect 6 7)))                ;; 42
+
+;; value->string renders the new form too
+(println (string-append "v = " (value->string (Some (Rect 1 2)))))

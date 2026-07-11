@@ -183,23 +183,22 @@
   ;; otherwise. fail-e is duplicated only at test sites--it is
   ;; always a tiny thunk call. `bound` already contains the pattern
   ;; variables' (possibly renamed) bindings.
-  ;; ADT constructor test + field extraction: an instance is a tagged
-  ;; vector #(Ctor field ...) (docs/TYPES.md §2); the tag check makes
-  ;; nullary constructors safe in patterns even before their define
+  ;; ADT constructor test + field extraction: an instance has its own
+  ;; heap kind (docs/TYPES.md §2, lib/adt.c) carrying the constructor
+  ;; symbol and the fields; the kind + tag check suffices (the tag is
+  ;; unique per constructor and fixes the arity) and makes nullary
+  ;; constructors safe in patterns even before their define
   ;; initializes
   (define (compile-ctor-pattern c ps subject success fail-e bound)
-    (define n (length ps))
     (define (fields ps i success)
       (match ps
         ['() success]
         [`(,p . ,rest)
          (define x (gensym 'adt))
-         `(let ([,x (vector-ref ,subject ,(add1 i))])
+         `(let ([,x (adt-ref ,subject ,i)])
             ,(compile-pattern p x (fields rest (add1 i) success) fail-e bound))]))
-    `(if (if (vector? ,subject)
-             (if (eq? (vector-length ,subject) ,(add1 n))
-                 (eq? (vector-ref ,subject 0) (quote ,c))
-                 #f)
+    `(if (if (adt? ,subject)
+             (eq? (adt-tag ,subject) (quote ,c))
              #f)
          ,(fields ps 0 success)
          ,fail-e))
@@ -584,12 +583,20 @@
   (define (lower-type-form form)
     (match form
       [`(define-type ,_ ,ctors ...)
+       ;; builders allocate the dedicated ADT kind and initialize the
+       ;; fields (adt-alloc + adt-set!, mirroring how (vector ...)
+       ;; lowers); a nullary constructor is its 0-field singleton
        (for/list ([c ctors])
          (match c
-           [`(,cn) `(define ,cn (vector (quote ,cn)))]
+           [`(,cn) `(define ,cn (adt-alloc (quote ,cn) 0))]
            [`(,cn ,fts ...)
             (define xs (for/list ([_ fts]) (gensym 'fld)))
-            `(define (,cn ,@xs) (vector (quote ,cn) ,@xs))]))]
+            (define v (gensym 'adt))
+            `(define (,cn ,@xs)
+               (let ([,v (adt-alloc (quote ,cn) ,(length fts))])
+                 (begin ,@(for/list ([x xs] [i (in-naturals)])
+                            `(adt-set! ,v ,i ,x))
+                        ,v)))]))]
       [`(: ,(? symbol?) ,_) '()]
       [`(define (,f ,formals ...) : ,_ ,body ...)
        #:when (andmap (λ (x) (or (symbol? x) (annotated-formal? x))) formals)

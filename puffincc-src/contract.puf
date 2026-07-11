@@ -24,7 +24,8 @@
                symbol->string string->symbol number->string string->number
                hash hash-set hash-ref hash-ref/default hash-has-key? hash-count hash-keys hash-remove
                set-add set-member? set-count set-remove set->list
-               equal? value->string)))
+               equal? value->string
+               adt-alloc adt-ref adt-tag adt?)))
 
 (: contract-literal? (-> _ Bool))
 (define (contract-literal? e)

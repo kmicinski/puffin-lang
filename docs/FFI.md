@@ -205,7 +205,7 @@ precedent — one runtime module, one `pf_register_kind` call, an
 ext-kind id recorded in the manifest):
 
 ```c
-// lib/foreign.c -- PF_KIND_FOREIGN = 18 (16/17 are the HAMTs)
+// lib/foreign.c -- PF_KIND_FOREIGN = 19 (16/17 are the HAMTs, 18 the ADT kind)
 // payload: | raw pointer | brand (symbol) | destructor fn or 0 |
 ```
 

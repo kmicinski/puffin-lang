@@ -1,0 +1,27 @@
+(Some 1)
+None
+(Rect 3 4)
+(Some (Some (1 2)))
+((Circle 5) Point)
+#((Some 1) None)
+(Some sym)
+#f
+#t
+#t
+#f
+#f
+#f
+#f
+not-a-circle
+#t
+#f
+#f
+#t
+#t
+#f
+#t
+#f
+0
+12
+42
+v = (Some (Rect 1 2))

@@ -76,6 +76,11 @@ extern pf pf_make_closure(pf);
 extern pf pf_string_const(pf);
 extern pf pf_bytes_to_string(pf);
 extern pf pf_eprintln(pf);
+extern pf pf_adt_alloc(pf, pf);
+extern pf pf_adt_set(pf, pf, pf);
+extern pf pf_adt_ref(pf, pf);
+extern pf pf_adt_tag(pf);
+extern pf pf_adt_huh(pf);
 
 static const vm_prim vm_prims[] = {
   {"read", 0, (vm_prim_fn)pf_read_int},
@@ -152,6 +157,11 @@ static const vm_prim vm_prims[] = {
   {"string-const", 1, (vm_prim_fn)pf_string_const},
   {"bytes->string", 1, (vm_prim_fn)pf_bytes_to_string},
   {"eprintln", 1, (vm_prim_fn)pf_eprintln},
+  {"adt-alloc", 2, (vm_prim_fn)pf_adt_alloc},
+  {"adt-set!", 3, (vm_prim_fn)pf_adt_set},
+  {"adt-ref", 2, (vm_prim_fn)pf_adt_ref},
+  {"adt-tag", 1, (vm_prim_fn)pf_adt_tag},
+  {"adt?", 1, (vm_prim_fn)pf_adt_huh},
 };
 
-enum { VM_PRIM_COUNT = 74 };
+enum { VM_PRIM_COUNT = 79 };

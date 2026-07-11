@@ -1020,7 +1020,8 @@ the bridge.
   makes skew a load-time error, not a wrong answer.
 - **What gradual typing asks of all this: nothing, yet.** TYPES.md
   v1 is erasure — the checker runs pre-desugar, no casts exist at
-  runtime, ADTs are tagged vectors the VM already handles. When
+  runtime, ADTs are a dedicated heap kind whose prims (lib/adt.c)
+  reach the VM through the manifest like any others. When
   phase-3 casts land, they arrive as runtime prims with blame labels
   (manifest entries + lib module, per FFI.md's pattern), i.e. `PRIM`
   calls — no opcodes, no VM changes. The FFI itself stays

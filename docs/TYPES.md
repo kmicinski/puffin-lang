@@ -120,17 +120,23 @@ type recursion is impossible** because requires form a DAG, and that
 is a feature (a module's types are a closed world once its file ends,
 which is also what makes exhaustiveness checkable).
 
-### Runtime representation (v1, and the honest caveat)
+### Runtime representation
 
-A constructor instance is a tagged vector: slot 0 holds the
-constructor's (module-mangled) symbol, slots 1..n the fields. `match`
-compiles constructor patterns to a vector-kind + slot-0 `eq?` check —
-all three implementations (reference, web, puffincc) get the dynamic
-semantics with zero runtime changes. The leak: `(vector? (Some 1))`
-is `#t` in v1. The fix — a dedicated heap kind with its own printer
-(`(Some 1)` instead of `#(Some 1)`) and an `adt?` disjoint from
-`vector?` — is one runtime module + kind registration (the HAMT
-precedent), scheduled after the checker settles.
+A constructor instance is its own heap kind (`src/runtime/lib/adt.c`,
+kind 18 — one runtime module + kind registration, the HAMT
+precedent): the layout mirrors a vector's (slot 0 holds the
+constructor's module-mangled symbol, slots 1..n the fields), but the
+dedicated kind closes the old v1 leak — `(vector? (Some 1))` is
+`#f`, and `adt?` is the disjoint surface predicate. Instances print
+as `(Some 1)`; a nullary constructor (a value, referenced bare)
+prints bare: `None`. `equal?` recurses structurally (same
+constructor, `equal?` fields), like vectors; as hash/set keys,
+instances compare by identity, exactly like vectors. Only the
+desugar lowering can construct an instance (via the internal
+`adt-alloc`/`adt-set!` prims) or take one apart positionally
+(`adt-tag`/`adt-ref`): `match` compiles a constructor pattern to an
+`adt?` kind check plus a tag `eq?` — the tag alone fixes the arity —
+so user code cannot forge or mutate one.
 
 ## 3. Annotations: anything, anywhere, defaulting to `_`
 

@@ -562,10 +562,10 @@ pairs both get honest types, with neither unions nor a lattice in the theory.</p
 checks are the dynamic safety net. That means v1 has no casts and no blame — the
 classic gradual-guarantee machinery of inserting checked casts at
 <code>_</code>→concrete boundaries is the roadmap (the checker already identifies
-every such point). One honest representation leak while the dedicated heap kind is
-pending: a constructor instance is a tagged vector, so <code>(println (Some
-1))</code> prints <code>#(Some 1)</code> and <code>(vector? (Some 1))</code> is
-<code>#t</code>.</p>
+every such point). Constructor instances have their own heap kind — not vectors —
+so <code>(println (Some 1))</code> prints <code>(Some 1)</code> (a nullary
+constructor prints bare: <code>None</code>), <code>(vector? (Some 1))</code> is
+<code>#f</code>, and <code>adt?</code> is the disjoint predicate.</p>
 
 <table>
 <thead><tr><th></th><th>Typed Racket</th><th>Puffin</th></tr></thead>
