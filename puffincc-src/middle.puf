@@ -909,9 +909,14 @@
                (return ,tmp))]
         [`(seq ,s ,rst) `(seq ,s ,(untail-tail rst))]
         [t t]))
+    ;; sorted: this loop MINTS gensyms (ret temps), so the visit
+    ;; order must not depend on hash iteration -- HAMT order shifts
+    ;; with symbol intern ids, which move whenever the compiler
+    ;; binary's own symbol table grows (e.g. a manifest append), and
+    ;; that made byte-identical rebuilds impossible
     (foldl (lambda (l acc) (hash-set acc l (untail-tail (hash-ref blocks l))))
            (hash)
-           (hash-keys blocks)))
+           (sort (hash-keys blocks) symbol<?)))
   ;; -------------------------------------------------------------------
   ;; Loop recovery (>= -O1; docs/OPTIMIZER.md §5.5): a self tail call
   ;; runs the full call/return protocol every iteration. Instead,
@@ -948,9 +953,11 @@
        (define moved
          (hash-set (hash-set blocks loophead (hash-ref blocks fname))
                    fname `(goto ,loophead)))
+       ;; sorted for the same reason as untail: rewrite mints
+       ;; looptmp gensyms per self tail call
        (foldl (lambda (l acc) (hash-set acc l (rewrite (hash-ref moved l))))
               (hash)
-              (hash-keys moved))]))
+              (sort (hash-keys moved) symbol<?))]))
   ;; -------------------------------------------------------------------
   ;; Blocks cleanup (>= -O1): (a) jump threading -- a block that is
   ;; exactly (goto M) is bypassed by retargeting its predecessors;
