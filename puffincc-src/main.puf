@@ -69,10 +69,11 @@
                                (not (set-member? included n))))
               (set->list needed)))
     (if (null? new-names)
-        ;; a (: name t) declaration travels with its included function
+        ;; a (#%prelude: name t) signature travels with its function
         (filter (lambda (f)
                   (match f
                     [`(: ,n ,_) (set-member? included n)]
+                    [`(#%prelude: ,n ,_) (set-member? included n)]
                     [_ (set-member? included (defn-name f))]))
                 candidates)
         (grow (foldl (lambda (n acc) (set-union acc (mentions-of (hash-ref by-name n))))

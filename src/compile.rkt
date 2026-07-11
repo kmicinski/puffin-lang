@@ -75,16 +75,22 @@
   ;; rename map is computed.
   (define ctor-arity (make-hasheq))     ;; ctor -> field count
   (define nullary-ctors (mutable-seteq))
+  (define type-ctors (make-hasheq))     ;; ADT name -> (ctor ...), for cast descs
+  (define decl-types (make-hasheq))     ;; (: name t) declarations, for casts
   (match p
     [`(program ,forms ...)
      (for ([f forms])
        (match f
-         [`(define-type ,_ ,ctors ...)
+         [`(define-type ,head ,ctors ...)
+          (hash-set! type-ctors
+                     (match head [`(,n ,_ ...) n] [n n])
+                     (map car ctors))
           (for ([c ctors])
             (match c
               [`(,cn ,fts ...)
                (hash-set! ctor-arity cn (length fts))
                (when (null? fts) (set-add! nullary-ctors cn))]))]
+         [`(: ,(? symbol? n) ,t) (hash-set! decl-types n t)]
          [_ (void)]))])
   (define (ctor-name? x) (and (symbol? x) (hash-has-key? ctor-arity x)))
 
@@ -94,6 +100,95 @@
     (map (λ (f) (match f [`(,x : ,_) x] [x x])) fs))
   (define (annotated-binding? b) (match b [`(,(? symbol?) : ,_ ,_) #t] [_ #f]))
   (define (strip-binding b) (match b [`(,x : ,_ ,e) `(,x ,e)] [b b]))
+  (define (formal-type f) (match f [`(,_ : ,t) t] [_ '_]))
+  (define (cast-binding b)
+    (match b
+      [`(,x : ,t ,e) `(,x ,(cast-expr e t (string-append "let " (symbol->string x))))]
+      [b b]))
+
+  ;; ---- transient casts (docs/TYPES.md §4) ---------------------------
+  ;; A DECLARED concrete type is a runtime boundary: desugar guards it
+  ;; with a first-order cast-check call (outermost shape only). The
+  ;; desc is a bare SYMBOL for every built-in shape -- quoted symbols
+  ;; are immediates, so the cast site allocates nothing -- and
+  ;; (adt <type> tag ...) for define-types (the constructor set is
+  ;; embedded so (Some 1) passes an (Option Int) cast but a Shape
+  ;; instance fails it; those descs are quoted lists, rebuilt per
+  ;; execution). `_` and type VARIABLES get no cast (the gradual
+  ;; guarantee: unannotated code compiles untouched, byte-for-byte).
+  ;; ARROW types get no cast either: on the bytecode VM a bare
+  ;; function value is a tagged fixnum function INDEX,
+  ;; indistinguishable from an Int, so "is this callable" cannot be
+  ;; answered soundly -- the call site's own failure is the net for
+  ;; arrows. (Mut t) shares heap kinds with t at runtime: same check.
+  ;; The PRELUDE's signatures are (#%prelude: name t) -- the same
+  ;; trust class as the manifest's prim types, so they type calls but
+  ;; never insert casts (and prelude tail loops stay tail).
+  (define (cast-desc t)
+    (match t
+      [(or 'Int 'Bool 'Sym 'Str 'Void) t]
+      [`(Pairof ,_ ,_) 'Pairof]
+      [`(List ,_) 'List]
+      [`(Vec ,_) 'Vec]
+      [`(Hash ,_ ,_) 'Hash]
+      [`(Set ,_) 'Set]
+      [`(Mut ,t0) (cast-desc t0)]
+      [(? symbol? n) #:when (hash-has-key? type-ctors n)
+       `(adt ,n ,@(hash-ref type-ctors n))]
+      [`(,(? symbol? n) ,_ ...) #:when (hash-has-key? type-ctors n)
+       `(adt ,t ,@(hash-ref type-ctors n))]
+      [_ #f]))
+  ;; surface rewrite: e checked against t, or e untouched if t has no
+  ;; first-order check (h then compiles cast-check like any prim)
+  (define (cast-expr e t blame)
+    (define d (cast-desc t))
+    (if d `(cast-check ,e (quote ,d) ,blame) e))
+  ;; the shared body rewrite for annotated/declared functions: entry
+  ;; checks on the annotated formals, a result check wrapping the
+  ;; body -- (let () ...) keeps internal-define scoping intact under
+  ;; the wrap. Everything stays SURFACE syntax; the ordinary walker
+  ;; compiles it (and renames the formal references consistently).
+  (define (body-with-casts owner formal-names arg-ts rt body)
+    (define entry
+      (filter-map
+       (λ (x t)
+         (define d (cast-desc t))
+         (and d `(cast-check ,x (quote ,d)
+                             ,(string-append owner "'s argument " (symbol->string x)))))
+       formal-names arg-ts))
+    (define body+
+      (cond
+        [(cast-desc rt)
+         => (λ (d) (list `(cast-check (let () ,@body) (quote ,d)
+                                      ,(string-append owner "'s result"))))]
+        [else body]))
+    (append entry body+))
+  ;; a (: f ...) declaration supplies the formal/result types a
+  ;; define doesn't spell inline (inline annotations win per position)
+  (define (declared-arrow f nargs)
+    (match (hash-ref decl-types f #f)
+      [`(-> ,as ... ,r) #:when (= (length as) nargs) (cons as r)]
+      [_ #f]))
+  (define (declared-star f nfixed)
+    (match (hash-ref decl-types f #f)
+      [`(->* (,as ...) ,_ ,r) #:when (= (length as) nfixed) (cons as r)]
+      [_ #f]))
+  (define (split-dotted-formals formals)
+    (let split ([fo formals] [acc '()])
+      (cond [(symbol? fo) (values (reverse acc) fo)]
+            [(pair? fo) (split (cdr fo) (cons (car fo) acc))]
+            [else (values (reverse acc) fo)])))  ;; malformed: per-form errors
+  (define (lower-annotated-define f formals rt body)
+    (define da (declared-arrow f (length formals)))
+    (define arg-ts
+      (for/list ([fo formals] [i (in-naturals)])
+        (match fo
+          [`(,_ : ,t) t]
+          [_ (if da (list-ref (car da) i) '_)])))
+    (define rt* (or rt (and da (cdr da))))
+    `(define (,f ,@(strip-formals formals))
+       ,@(body-with-casts (symbol->string f) (strip-formals formals)
+                          arg-ts rt* body)))
 
   ;; `bound` maps every lexically bound name to the name to use for
   ;; it downstream. Binding a name that collides with a stdlib
@@ -455,26 +550,33 @@
                  ,(per-clause rest))]))
        `(let ([,k ,(h e-k bound)]) ,(per-clause clauses))]
       [`(match ,e-subj ,clauses ...) (compile-match e-subj clauses bound)]
-      ;; gradual types: expression ascription erases; annotated
-      ;; lambdas/lets normalize to their plain forms (the typecheck
-      ;; pass has already consumed the annotations by now)
-      [`(ann ,e0 ,_) #:when (not (hash-has-key? bound 'ann))
-       (h e0 bound)]
-      [`(,(or 'lambda 'λ) (,formals ...) : ,_ ,body ...)
+      ;; gradual types: annotations LOWER to transient casts guarding
+      ;; the declared boundary (see cast-desc above), then erase; a
+      ;; type with no first-order check erases as before. The rebuilt
+      ;; plain forms re-enter the walker.
+      [`(ann ,e0 ,t) #:when (not (hash-has-key? bound 'ann))
+       (h (cast-expr e0 t "ann") bound)]
+      [`(,(or 'lambda 'λ) (,formals ...) : ,rt ,body ...)
        #:when (andmap (λ (f) (or (symbol? f) (annotated-formal? f))) formals)
-       (h `(lambda ,(strip-formals formals) ,@body) bound)]
+       (h `(lambda ,(strip-formals formals)
+             ,@(body-with-casts "lambda" (strip-formals formals)
+                                (map formal-type formals) rt body))
+          bound)]
       [`(,(or 'lambda 'λ) (,formals ...) ,body ...)
        #:when (ormap annotated-formal? formals)
-       (h `(lambda ,(strip-formals formals) ,@body) bound)]
+       (h `(lambda ,(strip-formals formals)
+             ,@(body-with-casts "lambda" (strip-formals formals)
+                                (map formal-type formals) #f body))
+          bound)]
       [`(let ,(? symbol? loop) (,(? list? bindings) ...) ,body ...)
        #:when (ormap annotated-binding? bindings)
-       (h `(let ,loop ,(map strip-binding bindings) ,@body) bound)]
+       (h `(let ,loop ,(map cast-binding bindings) ,@body) bound)]
       [`(let (,(? list? bindings) ...) ,body ...)
        #:when (ormap annotated-binding? bindings)
-       (h `(let ,(map strip-binding bindings) ,@body) bound)]
+       (h `(let ,(map cast-binding bindings) ,@body) bound)]
       [`(let* (,(? list? bindings) ...) ,body ...)
        #:when (ormap annotated-binding? bindings)
-       (h `(let* ,(map strip-binding bindings) ,@body) bound)]
+       (h `(let* ,(map cast-binding bindings) ,@body) bound)]
       ;; binding
       [`(let ,(? symbol? loop) ([,xs ,es] ...) ,body ...)
        ;; named let: a self-referential closure via set! (assignment
@@ -598,13 +700,59 @@
                             `(adt-set! ,v ,i ,x))
                         ,v)))]))]
       [`(: ,(? symbol?) ,_) '()]
-      [`(define (,f ,formals ...) : ,_ ,body ...)
+      ;; prelude signatures: trusted -- typed by the checker, but no
+      ;; casts (the same trust class as the manifest's prim types)
+      [`(#%prelude: ,(? symbol?) ,_) '()]
+      [`(define (,f ,formals ...) : ,rt ,body ...)
        #:when (andmap (λ (x) (or (symbol? x) (annotated-formal? x))) formals)
-       (list `(define (,f ,@(strip-formals formals)) ,@body))]
+       (list (lower-annotated-define f formals rt body))]
       [`(define (,f ,formals ...) ,body ...)
        #:when (and (andmap (λ (x) (or (symbol? x) (annotated-formal? x))) formals)
-                   (ormap annotated-formal? formals))
-       (list `(define (,f ,@(strip-formals formals)) ,@body))]
+                   (or (ormap annotated-formal? formals)
+                       (declared-arrow f (length formals))))
+       (list (lower-annotated-define f formals #f body))]
+      ;; variadic defines with a declared (->* ...) type or an inline
+      ;; `: rt` / annotated fixed formals: strip + cast the FIXED
+      ;; formals and the result (the rest binder is always a proper
+      ;; list the runtime itself built -- nothing to check).
+      ;; Unannotated variadic defines fall through untouched.
+      [`(define (,f . ,formals) ,body0 ...)
+       #:when (and (symbol? f) (not (list? formals))
+                   (let-values ([(fixed _r) (split-dotted-formals formals)])
+                     (or (ormap annotated-formal? fixed)
+                         (match body0 [`(: ,_ ,_ ...) #t] [_ #f])
+                         (declared-star f (length fixed)))))
+       (define-values (fixed rest-name) (split-dotted-formals formals))
+       (define-values (rt body)
+         (match body0
+           [`(: ,t ,rest ...) (values t rest)]
+           [_ (values #f body0)]))
+       (define ds (declared-star f (length fixed)))
+       (define arg-ts
+         (for/list ([fo fixed] [i (in-naturals)])
+           (match fo
+             [`(,_ : ,t) t]
+             [_ (if ds (list-ref (car ds) i) '_)])))
+       (define rt* (or rt (and ds (cdr ds))))
+       (list `(define (,f ,@(strip-formals fixed) . ,rest-name)
+                ,@(body-with-casts (symbol->string f) (strip-formals fixed)
+                                   arg-ts rt* body)))]
+      ;; value defines with a declared type: a concrete non-arrow
+      ;; type checks the initializer; a declared arrow over a literal
+      ;; lambda pushes entry/result checks into the lambda (an arrow
+      ;; over anything else is uncheckable first-order: no cast)
+      [`(define ,(? symbol? x) ,e)
+       #:when (hash-has-key? decl-types x)
+       (define t (hash-ref decl-types x))
+       (list
+        (match* (t e)
+          [(`(-> ,as ... ,r) `(,(or 'lambda 'λ) (,(? symbol? xs) ...) ,body ...))
+           #:when (= (length as) (length xs))
+           `(define ,x (lambda ,xs
+                         ,@(body-with-casts (symbol->string x) xs as r body)))]
+          [(`(-> ,_ ...) _) form]
+          [(`(->* ,_ ...) _) form]
+          [(_ _) `(define ,x ,(cast-expr e t (string-append "define " (symbol->string x))))]))]
       [form (list form)]))
 
   ;; Top-level definitions shadow stdlib primitives; colliding names
@@ -1591,7 +1739,10 @@
                            [`(seq ,s ,rest) `(seq ,s ,(untail-tail rest))]
                            [_ t]))))
            (hash)
-           (hash-keys blocks)))
+           ;; sorted: this loop MINTS gensyms (ret temps), so the
+           ;; visit order must not depend on hash iteration (mirrors
+           ;; middle.puf: byte-reproducible output)
+           (sort (hash-keys blocks) symbol<?)))
   ;; -------------------------------------------------------------------
   ;; Loop recovery (>= -O1; docs/OPTIMIZER.md §6.5 item 3): a self
   ;; tail call runs the full call/return protocol every iteration.
@@ -1629,8 +1780,10 @@
        (define moved
          (hash-set (hash-set blocks loophead (hash-ref blocks fname))
                    fname `(goto ,loophead)))
-       (for/fold ([acc (hash)]) ([(l t) (in-hash moved)])
-         (hash-set acc l (rewrite t)))]))
+       ;; sorted for the same reason as untail: rewrite mints
+       ;; looptmp gensyms per self tail call
+       (for/fold ([acc (hash)]) ([l (sort (hash-keys moved) symbol<?)])
+         (hash-set acc l (rewrite (hash-ref moved l))))]))
   ;; -------------------------------------------------------------------
   ;; Blocks cleanup (>= -O1): (a) jump threading -- a block that is
   ;; exactly (goto M) is bypassed by retargeting its predecessors;

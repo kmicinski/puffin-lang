@@ -274,6 +274,13 @@
          [`(: ,n ,t)
           (check-type-wf t '() adts)
           (hash-set! top n t)]
+         ;; prelude signatures (src/prelude.puf) are TRUSTED: they
+         ;; type calls exactly like (: n t), but desugar inserts no
+         ;; casts for them (docs/TYPES.md §4) -- the same trust class
+         ;; as the manifest's prim types
+         [`(#%prelude: ,n ,t)
+          (check-type-wf t '() adts)
+          (hash-set! top n t)]
          [`(define-type ,_ ,cs ...)
           (for ([c cs])
             (match c
@@ -679,6 +686,7 @@
        (match f
          [`(define-type ,_ ,_ ...) (void)]
          [`(: ,_ ,_) (void)]
+         [`(#%prelude: ,_ ,_) (void)]
          [`(define (,g ,formals ...) ,body0 ...)
           #:when (andmap (λ (x) (or (symbol? x) (and (list? x) (= 3 (length x))))) formals)
           (define-values (rt body)

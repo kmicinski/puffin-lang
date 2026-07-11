@@ -467,7 +467,57 @@
    (prim-spec 'adt? 1 'pf_adt_huh #t
               adt-value?
               "Is this value a define-type constructor instance?"
-              #:type '(-> a Bool))))
+              #:type '(-> a Bool))
+
+   ;; ---- transient casts (lib/cast.c) -------------------------------------
+   ;; The dynamic half of the gradual types (docs/TYPES.md §4): both
+   ;; desugars guard every DECLARED annotation boundary with a
+   ;; cast-check call. FIRST-ORDER: only the value's outermost shape
+   ;; is validated against desc (a symbol for base kinds and heap
+   ;; shapes; (adt <type> tag ...) for define-types); blame is a
+   ;; compile-time string naming the boundary. On failure the C side
+   ;; pf_fatal's -- this reference impl prints the IDENTICAL line to
+   ;; stderr and exits 255, so the two are byte-for-byte comparable.
+   ;; Appended to the manifest: existing prim ids (manifest indices)
+   ;; are unchanged. Deliberately in NO purity table (src/opt/*,
+   ;; puffincc-src/{contract,aam}.puf): a cast can abort, so it must
+   ;; never be dropped or folded.
+   (prim-spec 'cast-check 3 'pf_cast_check #f
+              (λ (v desc blame)
+                (define ok?
+                  (cond
+                    [(symbol? desc)
+                     (case desc
+                       [(Int)    (exact-integer? v)]
+                       [(Bool)   (boolean? v)]
+                       [(Sym)    (symbol? v)]
+                       [(Str)    (string? v)]
+                       [(Void)   (void? v)]
+                       [(Pairof) (pair? v)]
+                       [(List)   (or (null? v) (pair? v))]
+                       [(Vec)    (vector? v)]
+                       [(Hash)   (hash? v)]
+                       ;; Racket's generic set? is #t for lists and
+                       ;; hashes too; exclude them (C never would)
+                       [(Set)    (or (set-mutable? v)
+                                     (and (set? v) (not (pair? v))
+                                          (not (null? v)) (not (hash? v))))]
+                       [else #t])]
+                    [(and (pair? desc) (eq? (car desc) 'adt))
+                     (and (adt-value? v)
+                          (memq (adt-value-tag v) (cddr desc)) #t)]
+                    [else #t]))
+                (cond
+                  [ok? v]
+                  [else
+                   (define shown
+                     (if (and (pair? desc) (eq? (car desc) 'adt)) (cadr desc) desc))
+                   (flush-output)
+                   (fprintf (current-error-port)
+                            "puffin runtime error: cast: expected ~a, got ~a (blame: ~a)\n"
+                            (render-value shown) (render-value v) (render-value blame))
+                   (exit 255)]))
+              "INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise.")))
 
 ;; manifest self-agreement: a typed prim's arrow arity must equal its
 ;; declared arity (the type field cannot drift from the manifest it

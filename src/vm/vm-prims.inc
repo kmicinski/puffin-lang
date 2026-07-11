@@ -81,6 +81,7 @@ extern pf pf_adt_set(pf, pf, pf);
 extern pf pf_adt_ref(pf, pf);
 extern pf pf_adt_tag(pf);
 extern pf pf_adt_huh(pf);
+extern pf pf_cast_check(pf, pf, pf);
 
 static const vm_prim vm_prims[] = {
   {"read", 0, (vm_prim_fn)pf_read_int},
@@ -162,6 +163,7 @@ static const vm_prim vm_prims[] = {
   {"adt-ref", 2, (vm_prim_fn)pf_adt_ref},
   {"adt-tag", 1, (vm_prim_fn)pf_adt_tag},
   {"adt?", 1, (vm_prim_fn)pf_adt_huh},
+  {"cast-check", 3, (vm_prim_fn)pf_cast_check},
 };
 
-enum { VM_PRIM_COUNT = 79 };
+enum { VM_PRIM_COUNT = 80 };

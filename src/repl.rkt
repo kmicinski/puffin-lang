@@ -32,10 +32,20 @@
     (for/hash ([(k _) (in-hash toplevel)]) (values k k)))
   ;; desugar one interactive form in the context of what's defined
   (define (desugar-form form)
-    (match (desugar `(program ,@(for/list ([(k _) (in-hash toplevel)]) `(define ,k 0))
+    ;; stubs carry type `_`, not Int: the checker must not infer a
+    ;; concrete type for names whose real values live in `toplevel`
+    (match (desugar `(program ,@(for/list ([(k _) (in-hash toplevel)]) `(define ,k (ann 0 _)))
                               ,form))
       [`(program ,forms ...) (last forms)]))
   (define (handle-form form #:echo? [echo? #t])
+    ;; type signatures are checker-only: nothing to evaluate (and
+    ;; desugar drops them, so (last forms) below would misfire on
+    ;; them -- the typed prelude's signatures preload through here)
+    (define signature?
+      (match form [`(,(or ': '#%prelude:) ,_ ,_) #t] [_ #f]))
+    (unless signature?
+      (handle-form* form echo?)))
+  (define (handle-form* form echo?)
     ;; a REPL define that shadows a primitive can't rename its later
     ;; uses consistently (each input desugars separately), so reject
     ;; it here; whole files support shadowing fine

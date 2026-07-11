@@ -713,6 +713,10 @@
       (lambda (f)
         (match f
           [`(: ,n ,t) (check-type-wf t '() adts) (hash-set! top n t)]
+          ;; prelude signatures are TRUSTED: they type calls exactly
+          ;; like (: n t), but desugar inserts no casts for them
+          ;; (docs/TYPES.md §4) -- the manifest-prim trust class
+          [`(#%prelude: ,n ,t) (check-type-wf t '() adts) (hash-set! top n t)]
           [`(define-type ,_ ,cs ...)
            (for-each
             (lambda (c)
@@ -765,6 +769,7 @@
         (match f
           [`(define-type ,_ ,_ ...) (void)]
           [`(: ,_ ,_) (void)]
+          [`(#%prelude: ,_ ,_) (void)]
           [`(define (,g ,formals ...) ,body0 ...) #:when (valid-formals? formals)
            (let* ([rb (match body0
                         [`(: ,t ,rest ...) (check-type-wf t '() adts) (cons t rest)]

@@ -399,10 +399,10 @@
       (filter (λ (n) (and (hash-has-key? by-name n) (not (set-member? included n))))
               (set->list needed)))
     (if (null? new-names)
-        ;; a (: name t) declaration travels with its included function
+        ;; a (#%prelude: name t) signature travels with its function
         (filter (λ (f)
                   (match f
-                    [`(: ,n ,_) (set-member? included n)]
+                    [`(,(or ': '#%prelude:) ,n ,_) (set-member? included n)]
                     [_ (set-member? included (defn-name f))]))
                 candidates)
         (grow (foldl (λ (n acc) (set-union acc (mentions (hash-ref by-name n))))
