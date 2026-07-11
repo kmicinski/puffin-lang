@@ -70,7 +70,11 @@ pre.err code { color: var(--lose); }
 .kw { color: var(--accent); }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0 4px; }
 @media (max-width: 880px) { .pair { grid-template-columns: 1fr; } }
-.pair pre { margin: 6px 0 0; height: calc(100% - 26px); }
+.pair pre { margin: 6px 0 0; }
+/* equal-height columns ONLY when a cell holds a single pre: cells
+   that stack a code box + an error box would each get ~100% of the
+   row height and overflow the grid over the following text */
+.pair > div > pre:only-of-type { height: calc(100% - 26px); }
 .side-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.7px; text-transform: uppercase; }
 .side-label.rkt { color: var(--racket); }
 .side-label.puf { color: var(--accent); }
