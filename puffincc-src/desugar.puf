@@ -105,6 +105,16 @@
   ;; site's own failure is the net). (Mut t) shares heap kinds with
   ;; t: same check. (#%prelude: ...) signatures are TRUSTED: typed by
   ;; the checker, never casted.
+  ;; blame labels and the adt desc's display element carry SOURCE
+  ;; spellings (system.puf module-demangle): a runtime cast error must
+  ;; say Shape, never Shape_shapes_826109a6. The desc's constructor
+  ;; TAG list stays mangled -- those are the runtime identities the
+  ;; check compares against.
+  (define (nm-str s) (symbol->string (module-demangle s)))
+  (define (demangle-type t)
+    (cond [(symbol? t) (module-demangle t)]
+          [(pair? t) (cons (demangle-type (car t)) (demangle-type (cdr t)))]
+          [else t]))
   (define (cast-desc t)
     (match t
       ['Int t] ['Bool t] ['Sym t] ['Str t] ['Void t]
@@ -116,9 +126,9 @@
       [`(Mut ,t0) (cast-desc t0)]
       [_ (cond
            [(and (symbol? t) (hash-has-key? type-ctors t))
-            `(adt ,t ,@(hash-ref type-ctors t))]
+            `(adt ,(module-demangle t) ,@(hash-ref type-ctors t))]
            [(and (pair? t) (symbol? (car t)) (hash-has-key? type-ctors (car t)))
-            `(adt ,t ,@(hash-ref type-ctors (car t)))]
+            `(adt ,(demangle-type t) ,@(hash-ref type-ctors (car t)))]
            [else #f])]))
   ;; surface rewrite: e checked against t, or e untouched if t has no
   ;; first-order check (h then compiles cast-check like any prim)
@@ -128,7 +138,7 @@
   (define (cast-binding b)
     (match b
       [`(,x : ,t ,e)
-       `(,x ,(cast-expr e t (string-append "let " (symbol->string x))))]
+       `(,x ,(cast-expr e t (string-append "let " (nm-str x))))]
       [b b]))
   ;; the shared body rewrite for annotated/declared functions: entry
   ;; checks on the annotated formals, a result check wrapping the
@@ -144,7 +154,7 @@
            (if d
                `(cast-check ,x (quote ,d)
                             ,(string-append owner (string-append "'s argument "
-                                                                 (symbol->string x))))
+                                                                 (nm-str x))))
                #f)))
        (map2 cons formal-names arg-ts)))
     (define rd (cast-desc rt))
@@ -176,7 +186,7 @@
                   (loop (cdr fos) (+ i 1))))))
     (define rt* (if rt rt (if da (cdr da) '_)))
     `(define (,f ,@(strip-formals formals))
-       ,@(body-with-casts (symbol->string f) (strip-formals formals)
+       ,@(body-with-casts (nm-str f) (strip-formals formals)
                           arg-ts rt* body)))
 
   ;; `bound` maps every lexically bound name to the name to use for
@@ -754,7 +764,7 @@
                                   (loop (cdr fos) (+ i 1)))))]
               [rt* (if rt rt (if ds (cdr ds) '_))])
          (list `(define (,f ,@(strip-formals fixed) . ,rest-name)
-                  ,@(body-with-casts (symbol->string f) (strip-formals fixed)
+                  ,@(body-with-casts (nm-str f) (strip-formals fixed)
                                      arg-ts rt* body))))]
       ;; value defines with a declared type: a concrete non-arrow
       ;; type checks the initializer; a declared arrow over a literal
@@ -772,10 +782,10 @@
                             (andmap symbol? xs)
                             (eq? (length as) (length xs)))
                 `(define ,x (lambda ,xs
-                              ,@(body-with-casts (symbol->string x) xs as r body)))]
+                              ,@(body-with-casts (nm-str x) xs as r body)))]
                [_ form])]
             [`(->* ,_ ...) form]
-            [_ `(define ,x ,(cast-expr e t (string-append "define " (symbol->string x))))])))]
+            [_ `(define ,x ,(cast-expr e t (string-append "define " (nm-str x))))])))]
       [form (list form)]))
 
   ;; Top-level definitions shadow stdlib primitives; colliding names

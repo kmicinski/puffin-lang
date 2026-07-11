@@ -83,4 +83,138 @@
  (λ () (resolve-modules
         (write-mod "ok.puf" "(require \"s3.puf\")" "(println (f zero))"))))
 
+;; ---------------------------------------------------------------------
+;; types across modules (docs/MODULES.md "Types are module citizens"):
+;; provide/require carry TYPE names; diagnostics are demangled. These
+;; run the full front ends -- bin/puffin -i and build/puffincc -- and
+;; demand BYTE-IDENTICAL messages from both compilers.
+;; Needs: build/puffincc (bin/build-puffincc), bin/puffin-vm
+;; (make -C src/vm).
+;; ---------------------------------------------------------------------
+
+(require racket/runtime-path)
+(define-runtime-path here ".")
+(define repo (simplify-path (build-path here 'up)))
+(define puffin-cli (path->string (build-path repo "bin" "puffin")))
+(define puffin-vm  (path->string (build-path repo "bin" "puffin-vm")))
+(define puffincc   (path->string (build-path repo "build" "puffincc")))
+
+(define (run! cmd . args)
+  (define-values (proc out in err) (apply subprocess #f #f #f cmd args))
+  (close-output-port in)
+  (define so (port->string out))
+  (define se (port->string err))
+  (subprocess-wait proc)
+  (values (subprocess-status proc) so se))
+
+;; the exporter for the cross-module checks: provides the TYPE
+(void (write-mod "shapes.puf"
+                 "(provide Shape Point Circle Rect area)"
+                 "(define-type Shape (Point) (Circle Int) (Rect Int Int))"
+                 "(define (area [s : Shape]) : Int"
+                 "  (match s [Point 0] [(Circle r) (* 3 (* r r))] [(Rect w h) (* w h)]))"))
+;; ...and one that does NOT provide it
+(void (write-mod "shapes-np.puf"
+                 "(provide Point Circle Rect area)"
+                 "(define-type Shape (Point) (Circle Int) (Rect Int Int))"
+                 "(define (area [s : Shape]) : Int"
+                 "  (match s [Point 0] [(Circle r) (* 3 (* r r))] [(Rect w h) (* w h)]))"))
+
+;; both compilers on the same entry file -> (exit stdout stderr) each.
+;; NOTE the stream split: the reference CLI reports compile errors on
+;; STDERR; puffincc reports them via the (error ...) prim, which
+;; prints on STDOUT by design (core.c pf_error: golden tests see
+;; identical output from binaries and interpreters). The MESSAGE
+;; bytes are what must agree.
+(define (front-ends entry)
+  (define-values (ec1 so1 se1) (run! puffin-cli "-i" (path->string entry)))
+  (define-values (ec2 so2 se2)
+    ;; -t bytecode: no clang link, so stderr is exactly the front
+    ;; end's output (byte-comparable against the reference's)
+    (run! puffincc (path->string entry) "-t" "bytecode"
+          "-o" (path->string (build-path dir "xm-out.pbc"))))
+  (values (list ec1 so1 se1) (list ec2 so2 se2)))
+
+;; an imported type name resolves in every annotation position
+(let ([entry (write-mod "xm-ok.puf"
+                        "(require \"shapes.puf\")"
+                        "(define (describe [s : Shape]) : Sym"
+                        "  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))"
+                        "(println (describe (Circle 7)))")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (first r) 0)
+  (check-equal? (second r) "round\n")
+  (check-equal? (first p) 0))
+
+;; importing a type that was NOT provided fails as an unknown type,
+;; never as a mangled mismatch -- byte-identical across compilers
+(let ([entry (write-mod "xm-np.puf"
+                        "(require \"shapes-np.puf\")"
+                        "(define (describe [s : Shape]) : Sym"
+                        "  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))"
+                        "(println (describe (Circle 7)))")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "error: typecheck: unknown type Shape\n")
+  (check-equal? (second p) (third r))
+  (check-equal? (first p) 1))
+
+;; a cross-module type mismatch renders SOURCE spellings on both sides
+(let ([entry (write-mod "xm-mismatch.puf"
+                        "(require \"shapes.puf\")"
+                        "(define (f [s : Shape]) : Int (area s))"
+                        "(println (f 5))")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "error: typecheck: f: argument has type Int, expected Shape\n")
+  (check-equal? (second p) (third r)))
+
+;; define-type + define of one name is a (byte-identical) error
+(let ([entry (write-mod "xm-collide.puf"
+                        "(define-type Shape (Point))"
+                        "(define Shape 5)"
+                        "(println Shape)")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "error: typecheck: Shape is defined as both a type and a value\n")
+  (check-equal? (second p) (third r)))
+
+;; ...as is define-type of a builtin
+(let ([entry (write-mod "xm-int.puf"
+                        "(define-type Int (MkInt))"
+                        "(println 1)")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "error: typecheck: define-type cannot redefine built-in type Int\n")
+  (check-equal? (second p) (third r)))
+
+;; a cross-module exhaustiveness warning names Shape and Rect, not
+;; their mangled spellings (compilation still succeeds)
+(let ([entry (write-mod "xm-exh.puf"
+                        "(require \"shapes.puf\")"
+                        "(define (g [s : Shape]) : Int"
+                        "  (match s [Point 0] [(Circle r) r]))"
+                        "(println (g (Circle 5)))")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "typecheck warning: match on Shape is not exhaustive: missing Rect\n")
+  (check-equal? (first r) 0)
+  (check-equal? (third p) (third r)))
+
+;; a cross-module cast failure blames with SOURCE spellings: the adt
+;; desc displays Shape, the blame label names area -- on the reference
+;; interpreter AND on a puffincc-compiled binary, byte-identically
+(let ([entry (write-mod "xm-blame.puf"
+                        "(require \"shapes.puf\")"
+                        "(define (h s) (area s))"
+                        "(println (h 99))")])
+  (define expected "puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s)\n")
+  (let-values ([(ec so se) (run! puffin-cli "-i" (path->string entry))])
+    (check-equal? se expected)
+    (check-equal? ec 255))
+  (define pbc (build-path dir "xm-blame.pbc"))
+  (let-values ([(ec so se)
+                (parameterize ([current-directory repo])
+                  (run! puffincc (path->string entry) "-t" "bytecode"
+                        "-o" (path->string pbc)))])
+    (check-equal? ec 0))
+  (let-values ([(ec so se) (run! puffin-vm (path->string pbc))])
+    (check-equal? se expected)
+    (check-equal? ec 255)))
+
 (displayln "module error tests: all passed")

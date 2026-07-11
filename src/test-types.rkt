@@ -233,4 +233,29 @@
 (no-warn "(define-type (Option a) (None) (Some a))
           (define (f [o : (Option Int)]) : Int (match o [(? procedure? p) 1]))")
 
+;; ---------------------------------------------------------------------
+;; type-name resolution (docs/MODULES.md "Types are module citizens"):
+;; an annotation naming an unresolved type is an error, not an opaque
+;; type; define-type cannot shadow builtins or share a name with a
+;; value. Cross-module demangled-rendering checks live in
+;; test-modules.rkt (they need the resolver).
+;; ---------------------------------------------------------------------
+
+(rejects #rx"unknown type Wibble"
+         "(define (f [x : Wibble]) x)")
+(rejects #rx"unknown type Wibble"
+         "(: g (-> Wibble Int)) (define (g x) 1)")
+(rejects #rx"unknown type Wibble"
+         "(define (f x) (let ([y : Wibble x]) y))")
+;; ...but type VARIABLES (lowercase) and `_` still pass anywhere
+(admits "(: f (-> a a)) (define (f x) x)")
+(rejects #rx"define-type cannot redefine built-in type Int"
+         "(define-type Int (MkInt))")
+(rejects #rx"define-type cannot redefine built-in type List"
+         "(define-type List (Cons2 Int))")
+(rejects #rx"Shape is defined as both a type and a value"
+         "(define-type Shape (Point)) (define Shape 5)")
+(rejects #rx"Shape is defined as both a type and a value"
+         "(define-type Shape (Point)) (define (Shape x) x)")
+
 (displayln "type tests: all passed")

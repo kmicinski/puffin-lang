@@ -61,6 +61,19 @@
 ;; it on (mirrors src/system.rkt strict-exhaustiveness?).
 (define strict-exhaustiveness #f)
 
+;; ---- module-name demangling (mirrors src/system.rkt) ----------------
+;; The module resolver (modules.puf) registers every mangled top-level
+;; spelling -> its source spelling; the typechecker (types.puf) and
+;; desugar (desugar.puf) consult the table ONLY when rendering a name
+;; or type into an error/warning message or a cast blame -- never when
+;; comparing types (the mangled spellings ARE the identities).
+
+(define module-demangle-table (make-hash))
+(define (module-demangle-register! mangled source)
+  (hash-set! module-demangle-table mangled source))
+;; a symbol's source spelling (identity for anything unregistered)
+(define (module-demangle s) (hash-ref/default module-demangle-table s s))
+
 ;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
 
 (: tag-fixnum (-> Int Int))

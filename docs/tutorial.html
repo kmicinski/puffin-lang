@@ -707,19 +707,18 @@ changed.</p>
 <h2>Types across modules</h2>
 <aside class="qa">
 <div class="q">What if a type is defined in another module — can you still use it?</div>
-<p><strong>Yes for values and matching; partially for annotations.</strong> The
-honest split, both halves verified:</p>
-<p><strong>The part that just works:</strong> constructors are ordinary top-level
-names, so they provide, require, qualify, and rename like functions do. You can
-build foreign ADT values, pass them around, return them, and pattern-match them
-freely — bare or as <code>T.Ctor</code>, in expressions and in patterns:</p>
+<p><strong>Yes — a type is a first-class module citizen.</strong> Put the type's
+name in the <code>provide</code> list next to its constructors and importers can
+write it in any annotation position, exactly as they call the module's
+functions. Every output below is verbatim from the real toolchain
+(<code>build/puffincc</code> natively and the wasm engine agree byte-for-byte):</p>
 <pre><code>;; ---- shapes.puf --------------------------------------------
-(provide Point Circle Rect area)
+(provide Shape Point Circle Rect area)   ;; the TYPE provides too
 (define-type Shape
   (Point)
   (Circle Int)
   (Rect Int Int))
-(define (area [s : Shape]) : Int      ;; annotated HERE: fine
+(define (area [s : Shape]) : Int
   (match s
     [Point 0]
     [(Circle r) (* 3 (* r r))]
@@ -727,45 +726,63 @@ freely — bare or as <code>T.Ctor</code>, in expressions and in patterns:</p>
 
 ;; ---- main.puf ----------------------------------------------
 (require "shapes.puf")
-(define shapes (list Point (Circle 5) (Rect 3 4)))
-(println (map area shapes))           ;; (0 75 12)
-(define (describe s)                  ;; s : _ at the boundary
+(define (describe [s : Shape]) : Sym     ;; the imported type, by name
   (match s
     [Point 'dot]
     [(Circle _) 'round]
     [(Rect w h) #:when (eq? w h) 'square]
     [(Rect _ _) 'box]))
-(println (map describe shapes))       ;; (dot round box)
+(define shapes (list Point (Circle 5) (Rect 3 4)))
+(println (map area shapes))
+(println (map describe shapes))
+(println (describe (Rect 2 2)))
 </code></pre>
-<p>Qualified imports work the same way, constructors included:</p>
+<pre><code>(0 75 12)
+(dot round box)
+square
+</code></pre>
+<p>Note what that <code>describe</code> buys you: because its scrutinee is
+concretely <code>Shape</code>, the exhaustiveness checker watches the imported
+constructors — drop the <code>Rect</code> clauses and you get
+<code>typecheck warning: match on Shape is not exhaustive: missing Rect</code>.</p>
+<p>Qualified imports treat the type name uniformly — <code>S.Shape</code> in a
+type position works like <code>S.area</code> in an expression (and
+<code>#:only</code>/<code>#:rename</code> apply to type names like any other
+name):</p>
 <pre><code>(require "shapes.puf" #:as S)
-(define (describe s)
-  (match s
-    [S.Point 'dot]
-    [(S.Circle r) (list 'round r)]
-    [(S.Rect w h) (list 'box w h)]))
-(println (describe (S.Circle 7)))     ;; (round 7)
-(println (describe S.Point))          ;; dot
+(define (biggest [a : S.Shape] [b : S.Shape]) : S.Shape
+  (if (&lt; (S.area a) (S.area b)) b a))
+(println (S.area (biggest (S.Circle 4) (S.Rect 5 5))))   ;; 48
 </code></pre>
-<p><strong>The current boundary:</strong> writing the imported type's
-<em>name</em> in an annotation does not yet resolve across modules. Module
-resolution mangles the defining module's names, so the checker sees the mangled
-type on one side and your spelling on the other:</p>
+<p>Diagnostics speak your spelling. Internally the resolver renames each
+module's top-level names (type names included) so files never capture each
+other, but no message will ever show you a renamed spelling — a cross-module
+type error, an exhaustiveness warning, and a runtime cast blame all say
+<code>Shape</code>:</p>
 <pre><code>;; main.puf
 (require "shapes.puf")
-(define (describe [s : Shape]) : Sym   ;; the type NAME crosses — not yet
-  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))
-(println (describe (Circle 7)))
+(define (f [s : Shape]) : Int (area s))
+(println (f 5))
 </code></pre>
-<pre class="err"><code>error: typecheck: describe: argument has type Shape_shapes_826109a6, expected Shape</code></pre>
-<p>So today the idiom is: annotate <em>inside the defining module</em> (as
-<code>area</code> does above) and let <code>_</code> flow at module boundaries —
-gradual typing makes that seam painless rather than illegal, and constructor
-patterns still give you compile-time typo checking on the consuming side. The
-roadmap fix is for <code>provide</code> to carry type names with their
-constructors (and for <code>.pufs</code> signatures to grow typed entries like
-<code>(fun area (-&gt; Shape Int))</code>), at which point the annotation above
-starts meaning what it says.</p>
+<pre class="err"><code>error: typecheck: f: argument has type Int, expected Shape</code></pre>
+<pre><code>;; main.puf — an untyped function lies to a typed one at runtime
+(require "shapes.puf")
+(define (h s) (area s))
+(println (h 99))
+</code></pre>
+<pre class="err"><code>puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s)</code></pre>
+<p>If the exporting module <em>doesn't</em> provide the type, an importer's
+annotation fails honestly — <code>error: typecheck: unknown type Shape</code> —
+rather than checking against something you can't name. Two guardrails come with
+this: a module can't <code>define-type</code> a name it also
+<code>define</code>s (provides would be ambiguous — that's now an error), and
+<code>define-type Int</code> (or any built-in type or former) is rejected
+outright.</p>
+<p>What remains on the roadmap is <em>separate-compilation</em> interfaces:
+<code>.pufs</code> signatures don't yet carry types (entries like
+<code>(fun area (-&gt; Shape Int))</code>), so under <code>--separate</code> a
+dependency's exports still type as <code>_</code> at the boundary. Whole-program
+compilation — every route above, playground included — needs no such caveat.</p>
 </aside>
 </section>
 

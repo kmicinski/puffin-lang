@@ -284,9 +284,17 @@ read + resolve-modules
 ```
 
 `typecheck` sees the module-flattened surface program, so imported
-types/constructors are ordinary (mangled) top-level names — the
-module system needs no changes. `.pufs` signatures grow typed entries
-(`(val zero Int)`, `(fun add (-> Int Int Int))`) in a later phase.
+types/constructors are ordinary (mangled) top-level names — and since
+2026-07-11 type names are first-class exports: `provide Shape` lets
+importers annotate with `Shape` (or `S.Shape` under `#:as`), the
+checker rejects annotations naming unresolved types (`unknown type
+X`), and every diagnostic renders the SOURCE spelling via the
+resolver-registered demangling table in `system.rkt`/`system.puf`
+(rendering only — comparisons use the mangled identities; see
+docs/MODULES.md §1.1). `.pufs` signatures grow typed entries
+(`(val zero Int)`, `(fun add (-> Int Int Int))`) in a later phase —
+until then, separate compilation keeps its `_`-typed `module-ext`
+escape at dependency boundaries.
 
 ## 7. Adoption ("update all code under our purview")
 

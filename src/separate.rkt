@@ -75,7 +75,11 @@
 
 (define (mid->init mid)    (string->symbol (format "pfm_init_~a" mid)))
 (define (mid->globals mid) (string->symbol (format "pfm_globals_~a" mid)))
-(define (mangle name mid)  (string->symbol (format "~a_~a" name mid)))
+(define (mangle name mid)
+  (define mn (string->symbol (format "~a_~a" name mid)))
+  ;; diagnostics never show the mangled spelling (system.rkt)
+  (module-demangle-register! mn name)
+  mn)
 
 (define (cache-dir-for abs) (build-path (build-cache-root) (path-hash abs)))
 

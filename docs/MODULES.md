@@ -33,6 +33,16 @@
 > a reserved word (`match`, `else`, …) unqualified is an error; use
 > `#:as`/`#:rename`. `set!` to an imported name is currently allowed
 > and mutates the exporting module's cell.
+>
+> **Types are module citizens (2026-07-11; §1.1 below):** `provide`
+> may name a `define-type` head; importers then use the type in any
+> annotation position, unqualified or as `M.Type`. Diagnostics are
+> demangled (§1.1). Both resolvers (`src/modules.rkt`,
+> `puffincc-src/modules.puf`) now also compute IDENTICAL module ids
+> (fnv1a-32 over the entry-relative path), so
+> `racket src/diff-ir.rkt desugar <module-program>` is a meaningful
+> cross-compiler oracle (puffincc grew a `--dump-after <pass>` CLI
+> flag for file mode, since a require DAG cannot arrive on stdin).
 
 Design goals, in order: (1) modularity you can trust (explicit exports,
 no accidental capture between files); (2) genuine **separate
@@ -74,6 +84,71 @@ A **file is a module** (Racket's discipline). Its name is its path.
 - Requires must form a DAG (cycles are a compile-time error naming the
   cycle). Order of top-level effects: depth-first postorder of the
   require DAG, each module once — SML/Racket agreement.
+
+### 1.1 Type names are first-class exports
+
+A `define-type` binds its head AND its constructors as ordinary
+top-level names, and all of them provide/require/qualify/rename
+uniformly. One rename map serves both namespaces:
+
+```scheme
+;; shapes.puf
+(provide Shape Point Circle Rect area)   ; the TYPE provides too
+(define-type Shape (Point) (Circle Int) (Rect Int Int))
+
+;; main.puf
+(require "shapes.puf")
+(define (describe [s : Shape]) : Sym ...)     ; imported type, by name
+
+;; or qualified — M.Type in type positions, like M.name in expressions
+(require "shapes.puf" #:as S)
+(define (biggest [a : S.Shape] [b : S.Shape]) : S.Shape ...)
+```
+
+This needs no dedicated machinery in the resolver: the renamer is
+uniform over the module (data positions excepted), and a type
+annotation is not a data position, so `[s : Shape]` rewrites through
+the import map exactly like a reference to `area` does. Structural
+heads (`Int Bool Sym Str Void _ -> ->* List Vec Hash Set Pairof
+Mut`) are never in any rename map, so they pass through untouched.
+What the type-name story adds around that:
+
+- **Demangled diagnostics.** Resolution gives each non-entry module's
+  top-level names a mangled spelling (`Shape` →
+  `Shape_shapes_826109a6`); the resolver registers every mangled →
+  source pair in a table (`src/system.rkt` /
+  `puffincc-src/system.puf`), and both checkers consult it ONLY when
+  RENDERING a name or type into an error/warning message — never when
+  comparing (the mangled spellings ARE the type identities). The same
+  table demangles exhaustiveness warnings (`match on Shape is not
+  exhaustive: missing Rect`), cast blame labels (`area's argument
+  s`), and the display element of ADT cast descs (`cast: expected
+  Shape, ...` — the desc's constructor TAG list stays mangled, since
+  those are the runtime identities the check compares). Byte-identical
+  across the two compilers; `src/test-modules.rkt` pins that. Known
+  edge: two modules exporting same-named types demangle to the same
+  spelling, so confusing one for the other reads `argument has type
+  Shape, expected Shape` — correct (they ARE different types) but
+  unqualified; qualifying colliding spellings by module stem is a
+  possible refinement.
+- **Unknown types are errors.** Annotating with a type name that does
+  not resolve — e.g. importing from a module that did NOT provide it —
+  is `typecheck: unknown type Shape`, not a silently opaque type that
+  fails later with a baffling mismatch.
+- **One name, one namespace entry.** `define-type X` + `define X` in
+  one module is an error (`X is defined as both a type and a value`) —
+  a provide of `X` would otherwise be ambiguous. `define-type` of a
+  built-in type or former (`Int`, `List`, ...) is likewise rejected.
+- **Corpus**: `src/test-programs/modules-typed/` exercises all of the
+  above positively on every route (interp, bytecode VM, native arm64,
+  puffincc-on-wasm).
+
+Separate compilation (§3) does not yet carry types across `.pufi`
+interfaces: under `--separate`, a dependency's exports still type as
+`_` at the boundary (the deliberate `module-ext-*` escape). The
+roadmap item is typed `.pufs`/`.pufi` entries — `(fun area (-> Shape
+Int))` — at which point the sep-comp checker sees what whole-program
+resolution already sees.
 
 ## 2. Signatures (the SML mix-in, optional)
 

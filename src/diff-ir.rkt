@@ -15,6 +15,7 @@
 (require "system.rkt")
 (require "compile.rkt")
 (require "main.rkt")
+(require "modules.rkt")
 
 (define (normalize tree)
   (define seen (make-hash))
@@ -73,9 +74,15 @@
           [`((,pass ,name ,_ ,_ ,_) . ,more)
            (define out (pass ir))
            (if (equal? name pass-name) out (loop more out))]))))
-  ;; puffincc side
-  (define cmd (format "{ echo '(target ~a)'; echo '(dump-after ~a)'; cat ~a; } | build/puffincc -O ~a"
-                      tgt pass-name prog olvl))
+  ;; puffincc side: module programs need file mode (a require DAG
+  ;; cannot come in on stdin), so they use the --dump-after CLI flag;
+  ;; plain files keep the classic piped directives
+  (define cmd
+    (if (module-forms? (read-module-forms prog))
+        (format "build/puffincc --dump-after ~a -t ~a -O ~a ~a"
+                pass-name tgt olvl prog)
+        (format "{ echo '(target ~a)'; echo '(dump-after ~a)'; cat ~a; } | build/puffincc -O ~a"
+                tgt pass-name prog olvl)))
   (define pcc-out (with-output-to-string (λ () (system cmd))))
   (define pcc (with-input-from-string pcc-out read))
   (define n-ref (normalize ref))

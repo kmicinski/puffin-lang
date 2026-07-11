@@ -1,0 +1,22 @@
+;; Imported type names in every annotation position: formals, the
+;; result, an annotated let -- plus exhaustive matching on imported
+;; constructors (no exhaustiveness warning may appear) and a
+;; constructor of an imported type flowing through a second module.
+(require "shapes.puf")
+(require "pretty.puf")
+
+(define (scale [s : Shape] [k : Int]) : Shape
+  (match s
+    [Point Point]
+    [(Circle r) (Circle (* k r))]
+    [(Rect w h) (Rect (* k w) (* k h))]))
+
+(define shapes (list Point (Circle 5) (Rect 3 4)))
+(println (map area shapes))
+(println (map describe shapes))
+
+(define k (read))
+(let ([big : Shape (scale (Circle 2) k)])
+  (println (area big)))
+
+(println (label (Tag 'unit (Rect 1 1))))

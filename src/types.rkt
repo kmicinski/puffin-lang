@@ -57,6 +57,24 @@
 
 (define base-types (seteq 'Int 'Bool 'Sym 'Str 'Void '_))
 
+;; structural type formers: never user-definable (define-type of one
+;; is rejected in collect-adts), never renamed by the module system
+(define type-former-names (seteq '-> '->* 'List 'Vec 'Hash 'Set 'Pairof 'Mut))
+
+;; ---------------------------------------------------------------------
+;; diagnostic rendering: names and types in error/warning messages go
+;; through the module demangling table (system.rkt), so a message
+;; shows the SOURCE spelling (Shape), never the module-mangled one
+;; (Shape_shapes_826109a6). Rendering only -- every comparison in this
+;; file uses the mangled spellings, which ARE the type identities.
+;; ---------------------------------------------------------------------
+
+(define (nm x) (if (symbol? x) (module-demangle x) x))
+(define (ty t)
+  (cond [(symbol? t) (module-demangle t)]
+        [(pair? t) (cons (ty (car t)) (ty (cdr t)))]
+        [else t]))
+
 ;; ---------------------------------------------------------------------
 ;; the ADT registry: collected from define-type forms (pass 1 heads,
 ;; pass 2 bodies -- all of a module's types are mutually recursive)
@@ -77,8 +95,10 @@
          (match head
            [`(,n ,ps ...) (values n ps)]
            [n (values n '())]))
+       (when (or (set-member? base-types n) (set-member? type-former-names n))
+         (type-error "define-type cannot redefine built-in type ~a" n))
        (when (hash-has-key? adts n)
-         (type-error "type ~a defined twice" n))
+         (type-error "type ~a defined twice" (nm n)))
        (hash-set! adts n (adt n ps (make-hasheq)))]
       [_ (void)]))
   ;; pass 2: constructor signatures (any type in the program may be
@@ -93,7 +113,7 @@
          (match c
            [`(,cn ,fts ...)
             (when (hash-has-key? ctors cn)
-              (type-error "constructor ~a defined twice" cn))
+              (type-error "constructor ~a defined twice" (nm cn)))
             (for ([ft fts]) (check-type-wf ft (adt-params a) adts))
             (hash-set! (adt-ctors a) cn fts)
             (hash-set! ctors cn (ctor-info n (adt-params a) fts))]))]
@@ -104,34 +124,38 @@
 (define (check-type-wf t params adts)
   (match t
     [(? symbol? s)
-     (unless (or (set-member? base-types s) (memq s params) (tyvar? s)
-                 (and (hash-has-key? adts s)
-                      (null? (adt-params (hash-ref adts s)))))
-       (when (and (hash-has-key? adts s)
-                  (pair? (adt-params (hash-ref adts s))))
-         (type-error "type ~a expects ~a parameters"
-                     s (length (adt-params (hash-ref adts s))))))]
+     (cond
+       [(or (set-member? base-types s) (memq s params) (tyvar? s)) (void)]
+       [(hash-has-key? adts s)
+        (unless (null? (adt-params (hash-ref adts s)))
+          (type-error "type ~a expects ~a parameters"
+                      (nm s) (length (adt-params (hash-ref adts s)))))]
+       ;; an unresolved type name is an error: it would otherwise
+       ;; check as an opaque type and fail every consistency test
+       ;; downstream with a baffling message (the cross-module case:
+       ;; annotating with a type the exporting module never provided)
+       [else (type-error "unknown type ~a" (nm s))])]
     [`(,(or 'Pairof 'Hash) ,a ,b)
      (check-type-wf a params adts) (check-type-wf b params adts)]
     [`(,(or 'List 'Vec 'Set) ,a) (check-type-wf a params adts)]
     [`(Mut ,t0)
      (match t0
        [`(,(or 'Hash 'Vec 'Set) ,_ ...) (check-type-wf t0 params adts)]
-       [_ (type-error "(Mut ...) wraps a Hash, Vec, or Set type, got ~a" t0)])]
+       [_ (type-error "(Mut ...) wraps a Hash, Vec, or Set type, got ~a" (ty t0))])]
     [`(->* (,ts ...) ,tr ,tres)
      (for ([s ts]) (check-type-wf s params adts))
      (check-type-wf tr params adts)
      (check-type-wf tres params adts)]
-    [`(,(or 'Mut '->*) ,_ ...) (type-error "malformed type: ~a" t)]
+    [`(,(or 'Mut '->*) ,_ ...) (type-error "malformed type: ~a" (ty t))]
     [`(-> ,ts ...) (for ([s ts]) (check-type-wf s params adts))]
     [`(,(? symbol? n) ,args ...)
      (cond [(hash-has-key? adts n)
             (unless (= (length args) (length (adt-params (hash-ref adts n))))
               (type-error "type ~a expects ~a parameters, got ~a"
-                          n (length (adt-params (hash-ref adts n))) (length args)))
+                          (nm n) (length (adt-params (hash-ref adts n))) (length args)))
             (for ([s args]) (check-type-wf s params adts))]
-           [else (type-error "unknown type constructor ~a in ~a" n t)])]
-    [_ (type-error "malformed type: ~a" t)]))
+           [else (type-error "unknown type constructor ~a in ~a" (nm n) (ty t))])]
+    [_ (type-error "malformed type: ~a" (ty t))]))
 
 ;; ---------------------------------------------------------------------
 ;; substitution & consistency
@@ -253,6 +277,19 @@
     [`(program ,forms ...)
      (define-values (adts ctors ctor-orders) (collect-adts forms))
 
+     ;; a name cannot be both a type and a value: `provide` resolves a
+     ;; name against both namespaces (docs/MODULES.md), so a collision
+     ;; would make an export ambiguous -- and locally, references and
+     ;; annotations would silently mean different things
+     (for ([f forms])
+       (define n
+         (match f
+           [`(define (,g . ,_) ,_ ...) (and (symbol? g) g)]
+           [`(define ,(? symbol? x) ,_) x]
+           [_ #f]))
+       (when (and n (hash-has-key? adts n))
+         (type-error "~a is defined as both a type and a value" (nm n))))
+
      ;; the top-level environment: declared types, annotated defines,
      ;; constructors; everything else _
      (define top (make-hasheq))
@@ -347,7 +384,7 @@
              ;; happily dispatched as function index 0 = the program
              ;; entry -- calling a typo'd name re-entered main until
              ;; the stack died. Scope errors are compile-time errors.
-             [else (type-error "unbound variable ~a" x)]))
+             [else (type-error "unbound variable ~a" (nm x))]))
 
      ;; check an application of `ft` to synthesized arg types.
      ;; Discipline (the gradual guarantee): a formal's CONCRETE
@@ -379,7 +416,7 @@
            (if (consistent? a (blank-tyvars f))
                ;; only the inferred binding conflicts: weaken it
                (for ([v (in-set (tyvars-of f))]) (set-add! conflicted v))
-               (type-error "~a: argument has type ~a, expected ~a" where a f*))))
+               (type-error "~a: argument has type ~a, expected ~a" (nm where) (ty a) (ty f*)))))
        (for ([v (in-set conflicted)]) (hash-set! tenv v '_))
        (subst res tenv))
      (define (check-app ft arg-ts where)
@@ -388,16 +425,16 @@
          [(? tyvar?) '_]
          [`(-> ,formals ... ,res)
           (unless (= (length formals) (length arg-ts))
-            (type-error "~a expects ~a arguments, got ~a" where (length formals) (length arg-ts)))
+            (type-error "~a expects ~a arguments, got ~a" (nm where) (length formals) (length arg-ts)))
           (check-args formals arg-ts res where)]
          [`(->* (,fixed ...) ,trest ,res)
           (when (< (length arg-ts) (length fixed))
             (type-error "~a expects at least ~a arguments, got ~a"
-                        where (length fixed) (length arg-ts)))
+                        (nm where) (length fixed) (length arg-ts)))
           ;; every extra argument checks against the rest-element type
           (define extras (for/list ([_ (in-range (- (length arg-ts) (length fixed)))]) trest))
           (check-args (append fixed extras) arg-ts res where)]
-         [_ (type-error "~a: applying a non-function of type ~a" where ft)]))
+         [_ (type-error "~a: applying a non-function of type ~a" (nm where) (ty ft))]))
 
      ;; collect the binders a quasiquote pattern introduces. Every
      ;; quasiquote datum is dynamic, so each binder is typed _ -- the
@@ -429,7 +466,7 @@
              => (λ (info)
                   (unless (null? (ctor-info-fields info))
                     (type-error "constructor ~a used bare but has ~a fields"
-                                s (length (ctor-info-fields info))))
+                                (nm s) (length (ctor-info-fields info))))
                   '())]
             [else (list (cons s (if (eq? scrut-t '_) '_ scrut-t)))])]
          [`(quote ,_) '()]
@@ -453,7 +490,7 @@
           (define info (hash-ref ctors cn))
           (unless (= (length ps) (length (ctor-info-fields info)))
             (type-error "constructor ~a expects ~a fields, got ~a in pattern"
-                        cn (length (ctor-info-fields info)) (length ps)))
+                        (nm cn) (length (ctor-info-fields info)) (length ps)))
           ;; field types instantiated from the scrutinee's type args
           (define tenv (make-hasheq))
           (match scrut-t
@@ -500,7 +537,8 @@
          (define missing (filter (λ (c) (not (set-member? covered c))) all))
          (when (pair? missing)
            (define msg (format "match on ~a is not exhaustive: missing ~a"
-                               name (string-join (map symbol->string missing) ", ")))
+                               (nm name)
+                               (string-join (map (λ (c) (symbol->string (nm c))) missing) ", ")))
            (if (strict-exhaustiveness?)
                (type-error "~a" msg)
                (eprintf "typecheck warning: ~a\n" msg)))))
@@ -521,7 +559,7 @@
           (check-type-wf t '() adts)
           (define et (synth e0 env))
           (unless (consistent? et t)
-            (type-error "(ann ...) claims ~a but expression has type ~a" t et))
+            (type-error "(ann ...) claims ~a but expression has type ~a" (ty t) (ty et)))
           t]
          [`(if ,g ,then ,els)
           (synth g env)
@@ -579,7 +617,7 @@
           (define env+ (append (map cons (map formal-name* formals) fts) env))
           (define bt (synth-body body* env+))
           (when (and (not (eq? rt '_)) (not (consistent? bt rt)))
-            (type-error "lambda body has type ~a, declared ~a" bt rt))
+            (type-error "lambda body has type ~a, declared ~a" (ty bt) (ty rt)))
           `(-> ,@fts ,(if (eq? rt '_) bt rt))]
          ;; variadic lambda -- (lambda (a . rest) ...) or (lambda args
          ;; ...): fixed formals may be annotated, the rest binder is
@@ -596,7 +634,7 @@
                              (append (map cons (map formal-name* fixed) fts) env)))
           (define bt (synth-body body* env+))
           (when (and (not (eq? rt '_)) (not (consistent? bt rt)))
-            (type-error "lambda body has type ~a, declared ~a" bt rt))
+            (type-error "lambda body has type ~a, declared ~a" (ty bt) (ty rt)))
           `(->* ,fts _ ,(if (eq? rt '_) bt rt))]
          [`(,(or 'lambda 'λ) ,_ ,_ ...) '_]  ;; malformed formals: dynamic
          [`(begin ,es ... ,last)
@@ -618,7 +656,7 @@
           (define xt (lookup env x))
           (define et (synth e0 env))
           (unless (consistent? et xt)
-            (type-error "(set! ~a ...): value has type ~a, variable is ~a" x et xt))
+            (type-error "(set! ~a ...): value has type ~a, variable is ~a" (nm x) (ty et) (ty xt)))
           'Void]
          [`(and ,es ...) (for ([s es]) (synth s env)) '_]
          [`(or ,es ...) (for ([s es]) (synth s env)) '_]
@@ -644,7 +682,7 @@
           (for ([s es])
             (define t (synth s env))
             (unless (consistent? t 'Int)
-              (type-error "~a: argument has type ~a, expected Int" op t)))
+              (type-error "~a: argument has type ~a, expected Int" op (ty t))))
           'Int]
          [`(,rator ,rands ...)
           (define ft (synth rator env))
@@ -676,7 +714,7 @@
        (match-define (list x t e) parts)
        (define et (synth e env))
        (unless (consistent? et t)
-         (type-error "~a is declared ~a but its value has type ~a" x t et)))
+         (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty t) (ty et))))
      (define (formal-type* f)
        (match f [`(,_ : ,t) (check-type-wf t '() adts) t] [_ '_]))
      (define (formal-name* f) (match f [`(,x : ,_) x] [x x]))
@@ -700,7 +738,7 @@
           (for ([fm formals]) (formal-type* fm))  ;; well-formedness
           (define bt (synth-body body env))
           (unless (or (eq? rt '_) (consistent? bt rt))
-            (type-error "~a: body has type ~a, declared ~a" g bt rt))]
+            (type-error "~a: body has type ~a, declared ~a" (nm g) (ty bt) (ty rt)))]
          ;; variadic define: fixed formals get their (declared or
          ;; annotated) types, the rest binder is (List trest) in the
          ;; body (docs/TYPES.md §1: ->*)
@@ -721,13 +759,13 @@
                             (map cons (map formal-name* fixed) fts)))
           (define bt (synth-body body env))
           (unless (or (eq? rt '_) (consistent? bt rt))
-            (type-error "~a: body has type ~a, declared ~a" g bt rt))]
+            (type-error "~a: body has type ~a, declared ~a" (nm g) (ty bt) (ty rt)))]
          [`(define (,_ . ,_) ,_ ...) (void)]  ;; malformed formals: dynamic
          [`(define ,(? symbol? x) ,e)
           (define et (synth e '()))
           (define dt (hash-ref top x '_))
           (unless (consistent? et dt)
-            (type-error "~a is declared ~a but its value has type ~a" x dt et))
+            (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
           (when (eq? dt '_) (hash-set! top x et))]
          [e (synth e '())]))
      p]))
