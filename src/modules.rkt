@@ -25,6 +25,7 @@
 ;; quasiquoted datums), and case-clause datums are left untouched.
 
 (require "system.rkt")  ;; module-demangle-* (diagnostic rendering)
+(require "types.rkt")   ;; consistent? -- typed signature entries
 
 (provide resolve-modules
          module-forms?
@@ -39,7 +40,9 @@
          check-signature
          keyword-names
          defn-name
+         defn-names
          defn-arity
+         consistent?   ;; re-export (types.rkt): typed signature entries
          fnv1a-32
          module-error)
 
@@ -110,6 +113,23 @@
      (if (list? formals) `(fixed ,(length formals)) (formals-arity formals))]
     [`(define ,_ ,_) 'val]
     [_ 'val]))
+
+;; a constructor's "definition form" for arity checking: a synthetic
+;; define whose formals mirror its fields (defn-arity then reports
+;; (fixed <field count>)); 'val for a nullary constructor (a value)
+(define (ctor-arity-form n forms)
+  (or (for/or ([f forms])
+        (match f
+          [`(define-type ,_ ,cs ...)
+           (for/or ([c cs])
+             (match c
+               [`(,cn ,fts ...) #:when (eq? cn n)
+                (if (null? fts)
+                    `(define ,n 0)
+                    `(define (,n ,@(map (λ (_) '_) fts)) 0))]
+               [_ #f]))]
+          [_ #f]))
+      `(define ,n 0)))
 
 ;; names that would change meaning if spliced in unqualified: special
 ;; form keywords and pattern/clause syntax. Importing one of these
@@ -195,7 +215,17 @@
          [_ (module-error "malformed provide in ~a: ~a" path pf)]))]))
 
 ;; signature ascription: every sig name defined, fun arities match,
-;; and the export set narrows to exactly the signature
+;; and the export set narrows to exactly the signature.
+;;
+;; TYPED entries (docs/MODULES.md §2): (val n τ), (fun n (-> ...)),
+;; (fun n (->* ...)), and (type n). A typed fun entry's arrow supplies
+;; the arity check; when the module DECLARES a type for the name
+;; ((: n τ') or a define-type head), the stated type must additionally
+;; be consistent with the declared one -- an undeclared (inferred or
+;; dynamic) name satisfies any stated type, gradually. The deep
+;; check across compilation units lives on the separate-compilation
+;; path (separate.rkt check-signature-iface, against the .pufi's
+;; recorded types, synthesized ones included).
 (define (check-signature sig-path forms top-names mod-path)
   (unless (file-exists? sig-path)
     (module-error "~a: signature file not found: ~a" mod-path sig-path))
@@ -206,26 +236,65 @@
   (define by-name
     (for/hasheq ([f forms] #:when (defn-name f))
       (values (defn-name f) f)))
+  (define type-heads
+    (for/seteq ([f forms]
+                #:when (match f [`(define-type ,_ ,_ ...) #t] [_ #f]))
+      (match f
+        [`(define-type (,n ,_ ...) ,_ ...) n]
+        [`(define-type ,n ,_ ...) n])))
+  (define declared   ;; (: n τ) declarations, for typed-entry checks
+    (for/hasheq ([f forms]
+                 #:when (match f [`(: ,(? symbol?) ,_) #t] [_ #f]))
+      (match f [`(: ,n ,t) (values n t)])))
+  (define (check-declared! kind n stated)
+    (define dt (hash-ref declared n '_))
+    (unless (consistent? dt stated)
+      (module-error "~a: signature ~a ~a states type ~a, module declares ~a"
+                    mod-path kind n stated dt)))
+  (define (check-fun-arity! n arity)
+    (match (defn-arity (hash-ref by-name n
+                                 ;; a constructor (bound by define-type,
+                                 ;; not a define): its field count is
+                                 ;; its arity
+                                 (λ () (ctor-arity-form n forms))))
+      [`(fixed ,k)
+       (unless (= k arity)
+         (module-error "~a: signature fun ~a expects arity ~a, definition has arity ~a"
+                       mod-path n arity k))]
+      [`(variadic ,k)
+       (unless (>= arity k)
+         (module-error "~a: signature fun ~a expects arity ~a, variadic definition needs >= ~a"
+                       mod-path n arity k))]
+      ['val
+       (module-error "~a: signature fun ~a is not syntactically a function" mod-path n)]))
+  (define (require-defined! kind n)
+    (unless (set-member? top-names n)
+      (module-error "~a: signature requires ~a ~a, not defined" mod-path kind n)))
   (for/fold ([acc (seteq)]) ([entry sig])
     (match entry
       [`(val ,(? symbol? n))
-       (unless (set-member? top-names n)
-         (module-error "~a: signature requires val ~a, not defined" mod-path n))
+       (require-defined! 'val n)
+       (set-add acc n)]
+      [`(val ,(? symbol? n) ,t)
+       (require-defined! 'val n)
+       (check-declared! 'val n t)
        (set-add acc n)]
       [`(fun ,(? symbol? n) ,(? exact-nonnegative-integer? arity))
-       (unless (set-member? top-names n)
-         (module-error "~a: signature requires fun ~a, not defined" mod-path n))
-       (match (defn-arity (hash-ref by-name n))
-         [`(fixed ,k)
-          (unless (= k arity)
-            (module-error "~a: signature fun ~a expects arity ~a, definition has arity ~a"
-                          mod-path n arity k))]
-         [`(variadic ,k)
-          (unless (>= arity k)
-            (module-error "~a: signature fun ~a expects arity ~a, variadic definition needs >= ~a"
-                          mod-path n arity k))]
-         ['val
-          (module-error "~a: signature fun ~a is not syntactically a function" mod-path n)])
+       (require-defined! 'fun n)
+       (check-fun-arity! n arity)
+       (set-add acc n)]
+      [`(fun ,(? symbol? n) (-> ,ts ... ,_))
+       (require-defined! 'fun n)
+       (check-fun-arity! n (length ts))
+       (check-declared! 'fun n (last entry))
+       (set-add acc n)]
+      [`(fun ,(? symbol? n) (->* ,_ ,_ ,_))
+       (require-defined! 'fun n)
+       (check-declared! 'fun n (last entry))
+       (set-add acc n)]
+      [`(type ,(? symbol? n))
+       (unless (set-member? type-heads n)
+         (module-error "~a: signature requires type ~a, not defined" mod-path n))
        (set-add acc n)]
       [_ (module-error "~a: malformed signature entry: ~a" sig-path entry)])))
 

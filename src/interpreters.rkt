@@ -78,7 +78,15 @@
 ;; Source-level interpreter (desugar .. anf-convert)
 ;; ────────────────────────────────────────────────────────────────────
 
-(struct clo (xs body env) #:transparent)
+;; the closure record `clo` lives in stdlib.rkt with the rest of the
+;; reference value representation (procedure? must recognize it);
+;; re-provided here for the callers that always imported it from us
+(provide (struct-out clo))
+
+;; unsafe-vector ops address closure records (post-closure-convert
+;; IRs) and real vectors alike; the reference closure is a WRAPPED
+;; vector (stdlib.rkt closure-record), unwrapped here
+(define (unsafe-vec v) (if (closure-record? v) (closure-record-vec v) v))
 
 ;; globals are one mutable vector; symbols/strings/immediates are
 ;; ordinary Racket values (see stdlib.rkt)
@@ -96,10 +104,10 @@
       [`(fun-ref ,f) (ev f env)]
       [`(global-ref ,i) (unbox (vector-ref globals i))]
       [`(global-set! ,i ,e+) (set-box! (vector-ref globals i) (ev e+ env)) (void)]
-      [`(unsafe-vector-ref ,e0 ,i) (vector-ref (ev e0 env) i)]
+      [`(unsafe-vector-ref ,e0 ,i) (vector-ref (unsafe-vec (ev e0 env)) i)]
       [`(unsafe-vector-set! ,e0 ,i ,e1)
-       (vector-set! (ev e0 env) i (ev e1 env)) (void)]
-      [`(make-closure ,e0) (make-vector (ev e0 env) 0)]
+       (vector-set! (unsafe-vec (ev e0 env)) i (ev e1 env)) (void)]
+      [`(make-closure ,e0) (closure-record (make-vector (ev e0 env) 0))]
       ;; variables / binding
       [(? symbol? x)
        (unbox (hash-ref env x
@@ -284,7 +292,7 @@
       [`(string-lit ,s) s]
       [`(fun-ref ,f) `(fun-ref ,f)]
       [`(global-ref ,i) (vector-ref globals i)]
-      [`(unsafe-vector-ref ,a ,i) (vector-ref (atom-val a env) i)]
+      [`(unsafe-vector-ref ,a ,i) (vector-ref (unsafe-vec (atom-val a env)) i)]
       [`(- ,a) (- (atom-val a env))]
       [`(+ ,a0 ,a1) (+ (atom-val a0 env) (atom-val a1 env))]
       [`(* ,a0 ,a1) (* (atom-val a0 env) (atom-val a1 env))]
@@ -364,7 +372,7 @@
        (vector-set! globals i (atom-val a env))
        (go rst env stack)]
       [`(seq (unsafe-vector-set! ,a0 ,i ,a1) ,rst)
-       (vector-set! (atom-val a0 env) i (atom-val a1 env))
+       (vector-set! (unsafe-vec (atom-val a0 env)) i (atom-val a1 env))
        (go rst env stack)]
       [`(if (,cmp ,a0 ,a1) (goto ,l-t) (goto ,l-f))
        (define v0 (atom-val a0 env))

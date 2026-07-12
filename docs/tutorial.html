@@ -788,11 +788,16 @@ this: a module can't <code>define-type</code> a name it also
 <code>define</code>s (provides would be ambiguous — that's now an error), and
 <code>define-type Int</code> (or any built-in type or former) is rejected
 outright.</p>
-<p>What remains on the roadmap is <em>separate-compilation</em> interfaces:
-<code>.pufs</code> signatures don't yet carry types (entries like
-<code>(fun area (-&gt; Shape Int))</code>), so under <code>--separate</code> a
-dependency's exports still type as <code>_</code> at the boundary. Whole-program
-compilation — every route above, playground included — needs no such caveat.</p>
+<p>Separate compilation carries types too: under <code>--separate</code> (the
+Racket-side <code>bin/puffin</code> path; puffincc compiles whole programs only), a
+module's <code>.pufi</code> interface records every export's type — and full ADT
+definitions, constructor tags included — so an importer typechecks against
+<code>(fun area (-&gt; Shape Int))</code> without ever reading the exporting
+module's source. The same misuse, exhaustiveness warning, and cast blame above
+reproduce across independently compiled units, demangled the same way; a
+signature-level edit recompiles dependents while a body-only edit rebuilds just
+the one module. Typed <code>.pufs</code> entries like
+<code>(fun area (-&gt; Shape Int))</code> are accepted in signature files as well.</p>
 </aside>
 </section>
 

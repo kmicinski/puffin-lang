@@ -330,11 +330,10 @@
    ;; control & misc
    'error (make-ex "(error 'boom)" "error: boom\n")
    'gensym (make-ex "(define t (gensym 'tmp))\n(println (symbol? t))" "#t\n" #:note "a fresh name every call")
-   ;; NB: deliberately not (procedure? (lambda ...)) — the compiled
-   ;; routes answer #t but the reference interpreter's closure records
-   ;; answer #f (a known reference/runtime seam); the docs only show
-   ;; what every route agrees on.
-   'procedure? (make-ex "(println (procedure? 42))\n(println (procedure? 'car))" "#f\n#f\n")
+   ;; every route agrees on the closure case too (the reference
+   ;; interpreter's closure records count as procedures, matching the
+   ;; native/VM CLOSURE heap kind; pinned by test-programs/puffin-procedure)
+   'procedure? (make-ex "(println (procedure? (lambda (x) x)))\n(println (procedure? 'car))" "#t\n#f\n")
    'void? (make-ex "(println (void? (display \"\")))" "#t\n")))
 
 ;; assert: every entry has an example

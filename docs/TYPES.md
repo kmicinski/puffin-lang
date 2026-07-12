@@ -16,9 +16,10 @@
 > constraint that exists only because greedy instantiation bound a
 > type variable from a sibling argument is an inference hint —
 > conflicts there demote the variable to `_`. Casts with blame (§4)
-> and the dedicated ADT heap kind (§2) are shipped as well; the one
-> remaining boundary is typed `.pufs` signatures for separate
-> compilation (§6).
+> and the dedicated ADT heap kind (§2) are shipped as well, and so
+> (2026-07-12) are typed `.pufs`/`.pufi` interfaces for separate
+> compilation (§6; docs/MODULES.md §3.2) — the boundary list is
+> empty.
 
 Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
@@ -293,10 +294,14 @@ checker rejects annotations naming unresolved types (`unknown type
 X`), and every diagnostic renders the SOURCE spelling via the
 resolver-registered demangling table in `system.rkt`/`system.puf`
 (rendering only — comparisons use the mangled identities; see
-docs/MODULES.md §1.1). `.pufs` signatures grow typed entries
-(`(val zero Int)`, `(fun add (-> Int Int Int))`) in a later phase —
-until then, separate compilation keeps its `_`-typed `module-ext`
-escape at dependency boundaries.
+docs/MODULES.md §1.1). Interfaces are typed too: `.pufs` signatures
+take typed entries (`(val zero Int)`, `(fun add (-> Int Int Int))`,
+`(type Shape)`), and under separate compilation the `.pufi` records
+every export's type — declared, derived, or synthesized — plus full
+ADT definitions with constructor tags, which the importing checker
+registers before `typecheck-program` runs (docs/MODULES.md §3.2).
+The `_`-typed `module-ext` escape survives only for exports whose
+type genuinely is dynamic.
 
 ## 7. Adoption ("update all code under our purview")
 
@@ -326,5 +331,7 @@ escape at dependency boundaries.
 3. Variadic `->*`, `(Mut ...)` containers, exhaustiveness (warning +
    `--strict-types` error option), prim types in the manifest. DONE.
 4. Casts + blame (DONE — see §4 "Cast semantics"); the dedicated ADT
-   heap kind (DONE). Remaining: typed `.pufs` signatures.
+   heap kind (DONE); typed `.pufs`/`.pufi` interfaces for separate
+   compilation (DONE 2026-07-12 — docs/MODULES.md §3.2). Nothing
+   remains on this roadmap.
 ```
