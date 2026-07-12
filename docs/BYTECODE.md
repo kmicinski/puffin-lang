@@ -303,16 +303,19 @@ One C file (~550 lines) linking libpuffin.a:
 
 - No re-encoding assembler: `puffin-vm -d` is a decoder/printer.
   The corpus (294 checks x 3 optimization levels) is the gate.
-- GC stress mode (`PUFFIN_VM_GC_STRESS`) arrives with the M4
-  collector; under Boehm there is no safepoint to stress, and the
-  wasm build's scaffold allocator never collects (long REPL
-  sessions grow monotonically until the collector lands).
 - Units are never unloaded: a very long session accumulates code
   and function-table rows per eval (small; bounded by eval count).
+  (Unit *heap data* is collected normally by the §3.3 GC; this gap
+  is about code + loader metadata only.)
 - REPL evals may not define `main` (the entry name is synthesized
   per unit); the compile error returns to the session without
   killing it.
 
 (Resolved since M2: the argv seam — `pf_set_args` lets the VM hand
 the hosted program its own argv; the globals name table and version
-bump landed as v2, above.)
+bump landed as v2, above. Resolved with the §3.3 collector: the wasm
+build's allocator now collects — mark-sweep at dispatch-loop
+safepoints, src/vm/wasm/wasm-gc.c — and `PUFFIN_VM_GC_STRESS=1`
+collects at every safepoint with freed-block poisoning; the full
+corpus runs under stress as the third leg of tools/gctest-corpus.sh.
+Under Boehm the safepoint macro compiles away, as before.)
