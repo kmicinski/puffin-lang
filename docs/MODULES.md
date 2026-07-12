@@ -20,10 +20,15 @@
 > `bin/puffin -c --separate main.puf -o prog` compiles every DAG
 > module separately (cached) and links. The default no-flag route is
 > untouched (verified byte-identical). Tests:
-> `racket src/test-separate.rkt` (modules-1..6 goldens through
-> --separate, incremental-rebuild behavior, double-diamond
-> init-once). Implementation notes that postdate this design are in
-> §3.1 below.
+> `racket src/test-separate.rkt` (modules-1..6 + modules-typed
+> goldens through --separate, incremental-rebuild behavior,
+> double-diamond init-once, the typed-boundary matrix).
+> Implementation notes that postdate this design are in §3.1 below;
+> **interfaces are TYPED since 2026-07-12** (§3.2): dependency
+> exports typecheck at their `.pufi` types, imported ADTs
+> match/warn/cast like whole-program ones, and the interface digest
+> covers types (signature edits rebuild dependents, body edits
+> don't).
 >
 > Implementation notes that postdate the design: renaming is UNIFORM
 > through a module (binders and references alike), which preserves
@@ -143,12 +148,12 @@ What the type-name story adds around that:
   above positively on every route (interp, bytecode VM, native arm64,
   puffincc-on-wasm).
 
-Separate compilation (§3) does not yet carry types across `.pufi`
-interfaces: under `--separate`, a dependency's exports still type as
-`_` at the boundary (the deliberate `module-ext-*` escape). The
-roadmap item is typed `.pufs`/`.pufi` entries — `(fun area (-> Shape
-Int))` — at which point the sep-comp checker sees what whole-program
-resolution already sees.
+Separate compilation carries all of this across `.pufi` interfaces
+(§3.2, 2026-07-12): a dependency's exports typecheck at their
+interface types, imported ADTs register from the interface (the
+`module-ext-*` `_`-escape remains only for names whose type really is
+dynamic), and the sep-comp checker sees what whole-program resolution
+sees. Racket-side only: puffincc has no separate compilation.
 
 ## 2. Signatures (the SML mix-in, optional)
 
@@ -171,9 +176,17 @@ resolution already sees.
 - Ascription checks: every sig name is defined; `fun` arities match
   the definition (variadics satisfy any arity ≥ their fixed count);
   and it **narrows** — names outside the sig are private even if
-  defined. This is SML's opaque-ish ascription for namespace purposes
-  (no type components yet; when gradual types land, `val`/`fun` grow
-  type annotations and this is where they get checked).
+  defined. This is SML's opaque-ish ascription for namespace purposes.
+- **Typed entries** (2026-07-12): `(val zero Int)`,
+  `(fun add (-> Int Int Int))` (the arrow supplies the arity check),
+  `(fun fmt (->* (Str) _ Str))`, and `(type Shape)` are accepted
+  alongside the untyped forms. The stated type must be CONSISTENT
+  (gradually — `_` matches anything, so an untyped module satisfies
+  any typed signature) with what is known about the name: on the
+  whole-program path that is the module's `(: n τ)` declaration if
+  any; on the separate-compilation path it is the `.pufi`'s recorded
+  type — declared, derived, or checker-synthesized (§3.2), which is
+  where a signature bites hardest.
 - A signature file can also be required by CLIENTS as documentation
   (`(require "int-ring.puf" #:sig "ring.pufs")` re-checks the
   interface at the use site — belt and braces for published
@@ -186,14 +199,15 @@ resolution already sees.
 - `build-cache/geometry.o` — native code, all module-level names
   **mangled** with a short hash of the module path
   (`area` → `pf_m3f9a_area`), so `.o`s never collide;
-- `build-cache/geometry.pufi` — the interface, an s-expression:
+- `build-cache/geometry.pufi` — the interface, an s-expression
+  (typed since 2026-07-12; see §3.2):
 
 ```scheme
 (interface "geometry.puf"
   (hash "…sha1 of source…")
   (requires "vec.puf" "matrix.puf")
-  (provides (area fun 1 pf_m3f9a_area)
-            (perimeter fun 1 pf_m3f9a_perimeter))
+  (provides (area fun 1 pf_m3f9a_area (-> Shape_shapes_9ab Int))
+            (perimeter fun 1 pf_m3f9a_perimeter (-> Int Int)))
   (init pf_m3f9a__init))
 ```
 
@@ -234,12 +248,12 @@ sketch above:
   Same for the cache key `build-cache/<fnv1a32 of abs path>/`.
 - **`.pufi` extensions**: a `(flags ...)` row (target / -O level /
   safe-mode; mismatches rebuild), `requires` entries carry the dep's
-  *interface digest* — a sha1 over (module-id, provides, globals
-  label+count, init) only, so editing a dep's bodies rebuilds just
-  the dep — `val` provides carry their globals-array slot, and `fun`
-  arities are `(fixed n)`/`(variadic n)`. Require-site `#:sig`
+  *interface digest* — a sha1 over (module-id, provides, types,
+  globals label+count, init) only, so editing a dep's bodies rebuilds
+  just the dep — `val` provides carry their globals-array slot, and
+  `fun` arities are `(fixed n)`/`(variadic n)`. Require-site `#:sig`
   ascription re-checks against the `.pufi` (the whole point: no dep
-  bodies are read).
+  bodies are read), typed entries included (§2).
 - **Per-module state**: globals array `pfm_globals_<mid>` (.globl,
   collect-globals numbering within the module — imported value
   defines compile to `(ext <label> <slot>)` descriptors that flow
@@ -263,6 +277,52 @@ sketch above:
   locally-unused function). Cross-module inlining stays out, per §4.
 - **arm64 only** for now; the x86-64 backend has not grown the
   sep-mode literal machinery (`--separate -t x86-64` errors).
+
+### 3.2 Typed interfaces (2026-07-12)
+
+The `.pufi` carries the types the whole-program checker would have
+seen, so `--separate` typechecks module boundaries exactly like
+whole-program compilation — Racket-side only (puffincc has no
+separate compilation). Concretely:
+
+- **Every provide row carries the export's gradual type** — from a
+  `(: n τ)` declaration, inline annotations, or the checker's
+  SYNTHESIZED type for an unannotated value define (`_` only when the
+  type really is dynamic; an unannotated function still exports its
+  arity-shaped `(-> _ ... _)`, so cross-unit arity misuse is a
+  compile-time error). The prelude's trusted `(#%prelude: ...)`
+  signatures ride along the same way, so `(length 5)` fails in a
+  separately compiled module exactly as it does whole-program.
+- **A provided `define-type` head is a `type` row**, backed by a
+  `(types ...)` section carrying the full ADT: mangled + source
+  spellings for the head and every constructor, the type parameters,
+  and the constructors' field types. The mangled constructor names
+  ARE the runtime tags (the exporting unit's `adt-alloc` quotes
+  them), so an importer's match compilation, exhaustiveness warnings,
+  and cast descs agree with the dependency's `.o` byte-for-byte. The
+  section is transitively CLOSED: any ADT a provided signature or an
+  embedded row's fields mention (own-private or from a transitive
+  dep) is embedded too — the importing checker reads nothing but the
+  one `.pufi`.
+- **The importer consumes interfaces, not sources**: resolution
+  splices one `#%extern-type` form per interface ADT (the checker and
+  desugar register it exactly like a `define-type` that defines
+  nothing) and threads provide types through `module-ext-types`
+  (`system.rkt`), the typed refinement of the `module-ext-*` escape.
+  Nullary constructors import as values (a globals-array slot),
+  n-ary ones as functions (a mangled label) — both typed. Demangled
+  spellings from the rows feed the diagnostics table, so a cross-unit
+  error, exhaustiveness warning, or cast blame reads `Shape`, never
+  `Shape_shapes_9ab`.
+- **Staleness is type-aware**: the interface digest covers the
+  provides' types and the types section, so a signature-level change
+  (a type tightened, a constructor added) rebuilds dependents, while
+  a body-only edit — including changing a value's initializer to
+  another of the same synthesized type — still rebuilds only the
+  module itself.
+- Tests: `src/test-separate.rkt` (`modules-typed` through
+  `--separate` against the shared goldens; the misuse /
+  exhaustiveness / cross-unit-blame matrix; typed staleness).
 
 ## 4. What stays out (v1)
 
