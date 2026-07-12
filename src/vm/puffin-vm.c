@@ -72,6 +72,23 @@ extern void *pf_alloc_raw(int64_t);
 // scanned. The metadata around them stays plain malloc memory.
 extern void GC_add_roots(void *low, void *high_plus_1);
 
+// The §3.3 safepoint seam (wasm/gctest builds only, -DPVM_WASM_GC;
+// docs/WASM-VM.md §3.3). The collector never runs inside GC_MALLOC:
+// it raises pf_gc_wants_collect and the dispatch loop settles the
+// debt here, BETWEEN instructions, where no pf lives in a C local.
+// Safepoints sit on every jump, branch, and call opcode -- every
+// loop the bytecode can express passes through one -- so the heap
+// can only overshoot the budget by one basic block's allocations
+// (or one prim's; a single huge allocation grows, as documented).
+// Under Boehm the macro is empty: Boehm collects inside GC_MALLOC.
+#ifdef PVM_WASM_GC
+extern int pf_gc_wants_collect;
+extern void pf_gc_collect(void);
+#define PVM_SAFEPOINT() do { if (pf_gc_wants_collect) pf_gc_collect(); } while (0)
+#else
+#define PVM_SAFEPOINT() ((void)0)
+#endif
+
 // The compiler's whole-program literal tables are weak externs in
 // core.c; the VM interns literals itself (per unit, at load time),
 // so it supplies empty definitions to keep the linker happy.
@@ -341,9 +358,29 @@ static VChunk *chunk_new(size_t min_slots) {
   c->cap = cap;
   c->top = 0;
   memset(c->slots, 0, cap * sizeof(pf));
+#ifndef PVM_WASM_GC
+  // Boehm scans the whole chunk (dead slots included -- Boehm has no
+  // notion of our tops). The §3.3 collector instead walks the LIVE
+  // extent via pvm_gc_frame_roots below, which is what keeps stress
+  // mode (collect at every safepoint) tractable.
   GC_add_roots(c->slots, c->slots + cap);
+#endif
   return c;
 }
+
+#ifdef PVM_WASM_GC
+// Precise frame roots for the §3.3 collector: every slot below each
+// chunk's top, in chunks up to chunk_cur (later chunks are kept only
+// for reuse; nothing in them is live). Slots between a reused frame's
+// live locals and its cap can hold stale values from a deeper call --
+// scanned anyway, bounded over-retention, the conservative choice.
+void pvm_gc_frame_roots(void (*visit)(void *lo, void *hi)) {
+  for (VChunk *c = chunk_head; c; c = c->next) {
+    visit(c->slots, c->slots + c->top);
+    if (c == chunk_cur) break;
+  }
+}
+#endif
 
 // allocate n slots; records where they came from so frame_free can
 // unwind exactly
@@ -459,6 +496,8 @@ static pf vm_run(u32 entry_gidx) {
   u32 ip = 0;
   pf areg = PF_FIX(0); // the arity register (native r10/x12)
 
+  PVM_SAFEPOINT(); // settle any debt run up since the last vm_run
+
 #define RD8()  (code[ip++])
 #define RD16() (ip += 2, (u16)(code[ip-2] | ((u16)code[ip-1] << 8)))
 #define RD32() (ip += 4, (u32)code[ip-4] | ((u32)code[ip-3] << 8) | ((u32)code[ip-2] << 16) | ((u32)code[ip-1] << 24))
@@ -492,13 +531,22 @@ static pf vm_run(u32 entry_gidx) {
     case OP_MUL: { u16 d = RD16(), a = RD16(), b = RD16(); ARITH_CHECK2("*", cf->slots[a], cf->slots[b]); cf->slots[d] = (pf)((u64)(cf->slots[a] >> 3) * (u64)cf->slots[b]); break; }
     case OP_LT:  { u16 d = RD16(), a = RD16(), b = RD16(); ARITH_CHECK2("<", cf->slots[a], cf->slots[b]); cf->slots[d] = PF_BOOL(cf->slots[a] < cf->slots[b]); break; }
     case OP_EQ:  { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = PF_BOOL(cf->slots[a] == cf->slots[b]); break; }
-    case OP_JMP: { u32 off = RD32(); ip = off; break; }
-    case OP_BREQ: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] == cf->slots[b]) ip = off; break; }
-    case OP_BRLT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<", cf->slots[a], cf->slots[b]); if (cf->slots[a] <  cf->slots[b]) ip = off; break; }
-    case OP_BRLE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<=", cf->slots[a], cf->slots[b]); if (cf->slots[a] <= cf->slots[b]) ip = off; break; }
-    case OP_BRGT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">", cf->slots[a], cf->slots[b]); if (cf->slots[a] >  cf->slots[b]) ip = off; break; }
-    case OP_BRGE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">=", cf->slots[a], cf->slots[b]); if (cf->slots[a] >= cf->slots[b]) ip = off; break; }
+    // Safepoints (§3.3) sit on every control transfer: JMP, the
+    // conditional branches, and all four call forms. Any loop the
+    // bytecode can express passes through one of these, so the GC
+    // debt a basic block can run up is bounded by its length. The
+    // check is one global load; collection itself only happens here,
+    // between instructions -- never inside a prim. The comparison
+    // branches ALSO tag-check their operands (ARITH_CHECK2 above);
+    // BREQ is eq? -- any word, no check.
+    case OP_JMP: { PVM_SAFEPOINT(); u32 off = RD32(); ip = off; break; }
+    case OP_BREQ: { PVM_SAFEPOINT(); u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] == cf->slots[b]) ip = off; break; }
+    case OP_BRLT: { PVM_SAFEPOINT(); u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<", cf->slots[a], cf->slots[b]); if (cf->slots[a] <  cf->slots[b]) ip = off; break; }
+    case OP_BRLE: { PVM_SAFEPOINT(); u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<=", cf->slots[a], cf->slots[b]); if (cf->slots[a] <= cf->slots[b]) ip = off; break; }
+    case OP_BRGT: { PVM_SAFEPOINT(); u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">", cf->slots[a], cf->slots[b]); if (cf->slots[a] >  cf->slots[b]) ip = off; break; }
+    case OP_BRGE: { PVM_SAFEPOINT(); u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">=", cf->slots[a], cf->slots[b]); if (cf->slots[a] >= cf->slots[b]) ip = off; break; }
     case OP_CALL: case OP_CALLI: {
+      PVM_SAFEPOINT();
       u16 d = RD16();
       u32 fi;
       if (op == OP_CALL) {
@@ -530,6 +578,7 @@ static pf vm_run(u32 entry_gidx) {
       break;
     }
     case OP_TCALL: case OP_TCALLI: {
+      PVM_SAFEPOINT();
       u32 fi;
       if (op == OP_TCALL) {
         fi = un->func_base + RD16();

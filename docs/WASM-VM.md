@@ -47,14 +47,24 @@
 >   the `puffin.repl_result` import (one stdout line natively).
 >   There is also no HALT opcode: `main` ends in RET and the host
 >   prints via `pf_print_result`. Details: docs/BYTECODE.md.
-> - **The §3.3 collector is the one deferred piece.** The wasm build
->   ships a **scaffold non-collecting allocator**
->   (src/vm/wasm/wasm-gc.c: wasi-libc dlmalloc behind the
->   GC_MALLOC ABI, never frees — the §3.3 "grow, don't collect"
->   failure mode made total). Correct but monotonic: long REPL
->   sessions grow until the real mark-sweep + safepoint collector
->   lands behind the same seam. GC stress mode waits with it.
->   The native VM uses Boehm, as designed.
+> - **The §3.3 collector: SHIPPED (2026-07-12).** src/vm/wasm/wasm-gc.c
+>   is the designed linear-memory, non-moving mark-sweep over
+>   segregated size classes, behind the same GC_MALLOC ABI the
+>   scaffold satisfied — precise registered roots + a live-extent
+>   frame-stack callback, conservative tracing within the heap
+>   (tagged refs AND raw base pointers; on wasm32 the scan stride is
+>   the *pointer* size, 4 bytes, so packed C-pointer arrays like
+>   symbol_names decode), collection ONLY at dispatch-loop safepoints
+>   (jumps/branches/calls — prims never collect), budget =
+>   max(4 MB, live-at-last-GC). `PUFFIN_VM_GC_STRESS=1` collects at
+>   every safepoint and poisons freed blocks; the full corpus passes
+>   under stress (tools/gctest-corpus.sh, the CI gate). Measured: a
+>   40-eval allocation-heavy REPL session holds **flat at 16 MB**
+>   where the scaffold grew 16 → 252 MB; the wasm corpus run *sped
+>   up* 33.7 s → 14.3 s and an alloc-heavy benchmark halved (783 →
+>   ~390 ms) — freelist reuse beats never-freeing dlmalloc. The
+>   native VM uses Boehm, as designed; `make -C src/vm gctest` builds
+>   the native VM through the collector seam for fast iteration.
 > - **Migration was compressed.** §7's two-engines-behind-a-toggle
 >   phase was skipped: the corpus + REPL-parity gates ran, the JS
 >   Session's observable behavior was frozen into
@@ -535,6 +545,23 @@ gate at every stage.
 
 ### 3.3 GC: the Boehm question, answered with safepoints
 
+> **SHIPPED (2026-07-12), as designed, stress-gated.** The collector
+> below is implemented in src/vm/wasm/wasm-gc.c (its header comment
+> is the as-built reference). Deltas from this section's sketch:
+> (a) roots are *fully registered* — the runtime's pf-holding statics
+> (core.c's symbol_names/string_const_cache/pf_arg_spill, hamt.c's
+> empty-singleton cells) register themselves via GC_add_roots, so the
+> native gctest build needs no data-segment scan; the wasm build
+> scans [__global_base, __data_end) *as well*, as belt-and-suspenders;
+> (b) the VM exposes the frame stack's LIVE extent through a
+> pvm_gc_frame_roots callback instead of whole-chunk regions, which
+> is what makes stress mode tractable; (c) in-heap tracing recognizes
+> raw base pointers (tag 000) in addition to tagged refs — hamt nodes
+> and table slot arrays are reachable only through such words — and
+> on wasm32 scans at 4-byte (pointer-size) granularity; (d) freed
+> blocks are poisoned (0xAB) under stress. The stress corpus gate is
+> the third leg of tools/gctest-corpus.sh.
+
 The strategies considered:
 
 **Host JS GC via externref / wasm-GC** — represent Puffin values as
@@ -876,10 +903,13 @@ code** — inside the 15–40× envelope, well clear of a ×40 kill
 (§11.7). Two notes the estimates missed: (a) prim-dominated work
 (HAMT) is nearly native speed on the native VM because the time is
 in the C runtime, not the dispatch loop; (b) the same workload is
-~10× worse on the *wasm* build — allocation-heavy code pays for the
-scaffold allocator (calloc + never-free + memory.grow) until the
-real collector lands. (fib35 native measured 40 ms here vs the 0.25 s
-(m) above — that older number predates `-O1` and this machine.)
+~10× worse on the *wasm* build — allocation-heavy code paid for the
+scaffold allocator (calloc + never-free + memory.grow); the §3.3
+collector roughly halved alloc-heavy wasm times (a 4M-pair
+build/consume benchmark: 783 → ~390 ms) and cut the full wasm corpus
+run from 33.7 s to 14.3 s. (fib35 native measured 40 ms here vs the
+0.25 s (m) above — that older number predates `-O1` and this
+machine.)
 
 In-browser-equivalent Run latency (puffincc-on-the-wasm-VM, `_start`
 timed, compile to /out.pbc): hello-world **2 ms**, small typed

@@ -70,9 +70,12 @@ RUNTIME_SRCS := \
 # The wasm build: VM + allocator + error boundary + the runtime.
 WASM_SRCS := puffin-vm.c wasm/wasm-gc.c wasm/wasm-host.c $(RUNTIME_SRCS)
 
+# -DPVM_WASM_GC: puffin-vm.c enables the §3.3 safepoint seam
+# (PVM_SAFEPOINT + pvm_gc_frame_roots) and skips Boehm-style whole-
+# chunk root registration; wasm-gc.c provides the collector behind it.
 WASM_CFLAGS := -Wall -Wextra -O2 \
 	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
-	-mexec-model=$(WASM_EXEC_MODEL) \
+	-mexec-model=$(WASM_EXEC_MODEL) -DPVM_WASM_GC \
 	-I wasm/include -I ../runtime
 
 # --wrap=exit routes the runtime's exit() to __wrap_exit -> host_abort
@@ -106,7 +109,7 @@ WASM_REPL_BIN := ../../bin/puffin-vm-repl.wasm
 
 WASM_REPL_CFLAGS := -Wall -Wextra -O2 \
 	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
-	-mexec-model=reactor -DPVM_REACTOR \
+	-mexec-model=reactor -DPVM_REACTOR -DPVM_WASM_GC \
 	-I wasm/include -I ../runtime
 
 wasm-repl: vm-prims.inc $(WASM_CC)-check
@@ -149,7 +152,7 @@ $(WASM_CC)-check:
 #   tools/gctest-corpus.sh   (diffs puffin-vm-gctest vs puffin-vm)
 GCTEST_BIN  := ../../bin/puffin-vm-gctest
 GCTEST_SRCS := puffin-vm.c wasm/wasm-gc.c $(RUNTIME_SRCS)
-GCTEST_CFLAGS := -Wall -Wextra -O2 -I wasm/include -I ../runtime
+GCTEST_CFLAGS := -Wall -Wextra -O2 -DPVM_WASM_GC -I wasm/include -I ../runtime
 
 gctest: $(GCTEST_BIN)
 $(GCTEST_BIN): $(GCTEST_SRCS) vm-prims.inc ../runtime/puffin.h wasm/wasm-gc.c wasm/include/gc.h

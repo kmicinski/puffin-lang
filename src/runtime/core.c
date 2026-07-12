@@ -125,8 +125,21 @@ pf pf_string_const(pf idx) {
 
 extern void pf_stdlib_init(void); // lib/stdlib_init.c
 
+extern pf pf_arg_spill[8]; // defined below
+
 void pf_init(void) {
   GC_INIT();
+  // Register this file's GC-pointer-holding statics as roots
+  // explicitly. Boehm scans static data anyway (these registrations
+  // are redundant there, and harmless); the wasm/gctest collector
+  // (src/vm/wasm/wasm-gc.c, docs/WASM-VM.md §3.3) scans ONLY
+  // registered regions on the native gctest build -- without these,
+  // the symbol-name table would be collected out from under
+  // pf_symbol_name.
+  GC_add_roots(&symbol_names, (char *)&symbol_names + sizeof symbol_names);
+  GC_add_roots(&string_const_cache,
+               (char *)&string_const_cache + sizeof string_const_cache);
+  GC_add_roots(pf_arg_spill, (char *)pf_arg_spill + sizeof pf_arg_spill);
   pf_stdlib_init();
   if (&puffin_symbol_count && puffin_symbol_names) {
     for (int64_t i = 0; i < puffin_symbol_count; i++)

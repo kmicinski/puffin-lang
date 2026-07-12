@@ -339,4 +339,14 @@ void pf_lib_hamt_init(void) {
   static const pf_kind_desc sdesc = { "set", display_iset, equal_iset };
   pf_register_kind(PF_KIND_IHASH, &hdesc);
   pf_register_kind(PF_KIND_ISET, &sdesc);
+  // The empty-singleton cache cells above are GC-pointer-holding
+  // statics: register them as roots explicitly. Redundant (and
+  // harmless) under Boehm, which scans static data on its own;
+  // required by the wasm/gctest collector (docs/WASM-VM.md §3.3),
+  // whose native build scans only registered regions. Declared here
+  // rather than via <gc.h> to keep the module's include surface at
+  // puffin.h, matching how puffin-vm.c declares it.
+  extern void GC_add_roots(void *, void *);
+  GC_add_roots(&empty_hash, (char *)&empty_hash + sizeof empty_hash);
+  GC_add_roots(&empty_set, (char *)&empty_set + sizeof empty_set);
 }
