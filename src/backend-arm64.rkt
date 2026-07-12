@@ -45,6 +45,31 @@
 (provide (all-defined-out))
 (provide arm64-backend-passes)
 
+;; ---------------------------------------------------------------------
+;; Tag-checked arithmetic (the typed-error contract; src/runtime/lib/
+;; arith.c). The open-coded + - * (and unary neg) and the < compare
+;; lowerings check both operands' low 3 tag bits are 0 before
+;; operating; on failure a shared per-function cold trap block loads
+;; the operands and an operator-name cstring and calls
+;; pf_die_arith_typed(op, a, b) -- the same helper the interpreter
+;; and the bytecode VM route through, so the message is byte-identical
+;; on every route ("<op>: expected Int, got <value>"). eq? is
+;; polymorphic: no check. The op-name cstrings below are emitted in
+;; every unit's data segment (-arm suffix: backend-x86.rkt also
+;; provides all-defined-out).
+;; ---------------------------------------------------------------------
+
+(define (arith-op-mangle-arm op)
+  (match op ['+ "add"] ['- "neg"] ['* "mul"]
+            ['< "lt"] ['<= "le"] ['> "gt"] ['>= "ge"]))
+(define (arith-op-label-arm op)
+  (string->symbol (format "Lpfop_~a" (arith-op-mangle-arm op))))
+(define arith-op-list-arm '(+ - * < <= > >=))
+(define (arith-op-cstrings-arm)
+  (apply string-append
+         (for/list ([op arith-op-list-arm])
+           (format "~a: .asciz \"~a\"\n" (arith-op-label-arm op) op))))
+
 ;; the same literal-table scan as x86 (kept here so each backend is
 ;; self-contained; the tables are deterministic--sorted--so both
 ;; backends assign identical ids)
@@ -133,6 +158,38 @@
                             `((callq ,(stdlib-rt-sym op) ,nargs)
                               (jmp ,(conclusion-block-name))))
                  l)))
+  ;; ---- tag-checked arithmetic (+ - * <; NOT eq?) ---------------------
+  ;; Operands stage in x0/x1 (argument registers: never allocated,
+  ;; never used by patch-instructions' x10/x11 staging), so the fast
+  ;; path is one orr + tst + b.ne and the trap block needs no
+  ;; register shuffling beyond the argument moves for
+  ;; pf_die_arith_typed(op, a, b). Emitted at every -O level: the
+  ;; arithmetic intrinsics are always open-coded. Future work (-O2):
+  ;; AAM-based check elision when both operands are proven Int.
+  (define (arith-trap-label! op)
+    (hash-ref! trap-labels (cons 'arith op)
+               (λ ()
+                 (define l (gensym (format "trap_arith_~a_" (arith-op-mangle-arm op))))
+                 (hash-set! extra-blocks l
+                            `(,@(if (equal? op '-)
+                                    ;; unary: the VM passes (a, a)
+                                    `((mov (reg x0) (reg x2))
+                                      (mov (reg x0) (reg x1)))
+                                    `((mov (reg x1) (reg x2))
+                                      (mov (reg x0) (reg x1))))
+                              (lea-label ,(arith-op-label-arm op) (reg x0))
+                              (callq pf_die_arith_typed 3)
+                              (jmp ,(conclusion-block-name))))
+                 l)))
+  ;; tagged fixnums have low bits 000, so or-ing the operands
+  ;; preserves any nonzero tag; x9 scratch
+  (define (arith-checks2 op)
+    `((orr3 (reg x0) (reg x1) (reg x9))
+      (tst (imm 7) (reg x9))
+      (jmp-if ne ,(arith-trap-label! op))))
+  (define (arith-checks1 op)
+    `((tst (imm 7) (reg x0))
+      (jmp-if ne ,(arith-trap-label! op))))
   ;; check that the value in `r` is a heap object (low bits 001) of
   ;; header kind `k`; branches to the trap otherwise (x9 scratch)
   (define (heap-kind-checks r k trap)
@@ -163,21 +220,37 @@
     (match rhs
       [`(+ ,a0 ,a1)
        `((mov ,(h-atom a0) (reg x0))
-         (add ,(h-atom a1) (reg x0))
+         (mov ,(h-atom a1) (reg x1))
+         ,@(arith-checks2 '+)
+         (add (reg x1) (reg x0))
          ,@sink)]
       [`(- ,a)
        `((mov ,(h-atom a) (reg x0))
+         ,@(arith-checks1 '-)
          (neg (reg x0))
          ,@sink)]
       [`(* ,a0 ,a1)
        `((mov ,(h-atom a0) (reg x0))
+         (mov ,(h-atom a1) (reg x1))
+         ,@(arith-checks2 '*)
          (asr (imm 3) (reg x0))
-         (mul ,(h-atom a1) (reg x0))
+         (mul (reg x1) (reg x0))
          ,@sink)]
-      [`(,(? shrunk-cmp? cmp) ,a0 ,a1)
-       (define cc (match cmp ['eq? 'e] ['< 'l]))
+      ;; eq? is polymorphic: raw word compare, no tag check
+      [`(eq? ,a0 ,a1)
        `((cmp ,(h-atom a0) ,(h-atom a1))
-         (cset ,cc (reg x0))
+         (cset e (reg x0))
+         (lsl (imm 3) (reg x0))
+         (orr (imm ,false-value) (reg x0))
+         ,@sink)]
+      ;; < in value position: tag-checked; on two proper fixnums a
+      ;; raw compare of tagged words IS the value compare
+      [`(< ,a0 ,a1)
+       `((mov ,(h-atom a0) (reg x0))
+         (mov ,(h-atom a1) (reg x1))
+         ,@(arith-checks2 '<)
+         (cmp (reg x0) (reg x1))
+         (cset l (reg x0))
          (lsl (imm 3) (reg x0))
          (orr (imm ,false-value) (reg x0))
          ,@sink)]
@@ -338,9 +411,21 @@
          (mov ,(h-atom a-v) (reg x10))
          (str (reg x10) (deref (reg x9) ,(* 8 (+ i 1))))
          ,@(h rst))]
-      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
-       (define cc (match cmp ['eq? 'e] ['< 'l] ['<= 'le] ['> 'g] ['>= 'ge]))
+      ;; fused compare-branch on eq?: polymorphic, no tag check
+      [`(if (eq? ,a0 ,a1) (goto ,l0) (goto ,l1))
        `((cmp ,(h-atom a0) ,(h-atom a1))
+         (jmp-if e ,l0)
+         (jmp ,l1))]
+      ;; fused compare-branch on < (and defensively <= > >=, though
+      ;; shrink rewrites those to <): tag-checked, so the trap's op
+      ;; name matches what the VM's BR opcodes print for the same
+      ;; source (a source-level (> x 1) is (< 1 x) on every route)
+      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
+       (define cc (match cmp ['< 'l] ['<= 'le] ['> 'g] ['>= 'ge]))
+       `((mov ,(h-atom a0) (reg x0))
+         (mov ,(h-atom a1) (reg x1))
+         ,@(arith-checks2 cmp)
+         (cmp (reg x0) (reg x1))
          (jmp-if ,cc ,l0)
          (jmp ,l1))]
       [`(goto ,l)
@@ -812,6 +897,9 @@
       [`(lsl (imm ,k) ,dst) (format "lsl ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(orr (imm ,k) ,dst) (format "orr ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
       [`(and (imm ,k) ,dst) (format "and ~a, ~a, #~a" (reg-name dst) (reg-name dst) k)]
+      ;; the tag-check pair: 3-operand or, then test-under-mask
+      [`(orr3 ,a ,b ,dst) (format "orr ~a, ~a, ~a" (reg-name dst) (reg-name a) (reg-name b))]
+      [`(tst (imm ,k) ,r) (format "tst ~a, #~a" (reg-name r) k)]
       [`(cmp ,a ,b) (format "cmp ~a, ~a" (reg-name a) (render-op-arm b))]
       [`(cset ,cc ,dst) (format "cset ~a, ~a" (reg-name dst) (render-cc-arm cc))]
       [`(jmp-if ,cc ,lab) (format "b.~a ~a" (render-cc-arm cc) lab)]
@@ -889,6 +977,7 @@
     (define gsym (rt-sym (module-globals-label)))
     (string-append
      ".section __TEXT,__cstring,cstring_literals\n"
+     (arith-op-cstrings-arm)
      (apply string-append
             (for/list ([s symbols] [i (in-naturals)])
               (format "Lpfsym~a: .asciz \"~a\"\n" i (escape-c (symbol->string s)))))
@@ -924,6 +1013,7 @@
     (define n-globals (hash-ref info 'globals 0))
     (string-append
      ".section __TEXT,__cstring,cstring_literals\n"
+     (arith-op-cstrings-arm)
      (apply string-append
             (for/list ([s symbols] [i (in-naturals)])
               (format "Lpfsym~a: .asciz \"~a\"\n" i (escape-c (symbol->string s)))))
