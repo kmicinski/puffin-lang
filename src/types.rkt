@@ -35,7 +35,10 @@
 ;; type error when the types are concrete. `_` papers over the
 ;; difference as usual (the gradual guarantee).
 
-(provide typecheck-program type-error?)
+;; consistent? is exported for the typed-signature checks in
+;; separate.rkt/modules.rkt (docs/MODULES.md §2): a .pufs entry's type
+;; is verified consistent with the module's recorded/declared type.
+(provide typecheck-program type-error? consistent?)
 
 (require "stdlib.rkt" "irs.rkt" "system.rkt")
 
@@ -77,7 +80,16 @@
 
 ;; ---------------------------------------------------------------------
 ;; the ADT registry: collected from define-type forms (pass 1 heads,
-;; pass 2 bodies -- all of a module's types are mutually recursive)
+;; pass 2 bodies -- all of a module's types are mutually recursive).
+;;
+;; (#%extern-type head (ctor ft ...) ...) registers EXACTLY like
+;; define-type but defines nothing: separate compilation splices one
+;; per imported ADT (spellings already mangled, straight from the
+;; dependency's .pufi), so annotations resolve, constructor
+;; applications/patterns type, and exhaustiveness sees the closed
+;; constructor set without the exporting module's source. Desugar
+;; drops the form (the constructors' defines live in the exporting
+;; unit's .o). Never produced by whole-program resolution.
 ;; ---------------------------------------------------------------------
 
 (struct adt (name params ctors) #:transparent)         ;; ctors: name -> field types
@@ -90,7 +102,7 @@
   ;; pass 1: heads
   (for ([f forms])
     (match f
-      [`(define-type ,head ,_ ...)
+      [`(,(or 'define-type '#%extern-type) ,head ,_ ...)
        (define-values (n ps)
          (match head
            [`(,n ,ps ...) (values n ps)]
@@ -105,7 +117,7 @@
   ;; referenced -- the implicit recursive loop)
   (for ([f forms])
     (match f
-      [`(define-type ,head ,cs ...)
+      [`(,(or 'define-type '#%extern-type) ,head ,cs ...)
        (define n (match head [`(,n ,_ ...) n] [n n]))
        (define a (hash-ref adts n))
        (hash-set! ctor-orders n (map car cs))
@@ -318,7 +330,7 @@
          [`(#%prelude: ,n ,t)
           (check-type-wf t '() adts)
           (hash-set! top n t)]
-         [`(define-type ,_ ,cs ...)
+         [`(,(or 'define-type '#%extern-type) ,_ ,cs ...)
           (for ([c cs])
             (match c
               [`(,cn ,fts ...)
@@ -371,7 +383,10 @@
              ;; manifest doesn't know (<=, >, >= rewrite to < in shrink)
              [(hash-ref non-manifest-prim-types x #f)]
              ;; separate compilation: imported names live in other
-             ;; units, typed dynamically here
+             ;; units. When the dependency's .pufi carried a type for
+             ;; the name it applies here (typed interfaces,
+             ;; docs/MODULES.md §3.2); otherwise dynamic, as before
+             [(hash-ref (module-ext-types) x #f)]
              [(hash-ref (module-ext-funs) x #f) '_]
              [(hash-ref (module-ext-globals) x #f) '_]
              ;; REPL units late-bind by name (a still-unbound cell
@@ -723,6 +738,7 @@
      (for ([f forms])
        (match f
          [`(define-type ,_ ,_ ...) (void)]
+         [`(#%extern-type ,_ ,_ ...) (void)]
          [`(: ,_ ,_) (void)]
          [`(#%prelude: ,_ ,_) (void)]
          [`(define (,g ,formals ...) ,body0 ...)
@@ -768,4 +784,10 @@
             (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
           (when (eq? dt '_) (hash-set! top x et))]
          [e (synth e '())]))
+     ;; typed interfaces (separate compilation): deposit the final
+     ;; top-level environment -- declared, derived, and synthesized
+     ;; types alike -- for the .pufi writer. Inert when unset.
+     (when (typecheck-top-sink)
+       (set-box! (typecheck-top-sink)
+                 (for/hash ([(k v) (in-hash top)]) (values k v))))
      p]))

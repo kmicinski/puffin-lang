@@ -81,7 +81,12 @@
     [`(program ,forms ...)
      (for ([f forms])
        (match f
-         [`(define-type ,head ,ctors ...)
+         ;; #%extern-type: an imported ADT under separate compilation
+         ;; (spliced from the dependency's .pufi; see types.rkt) --
+         ;; registers constructors for patterns and cast descs exactly
+         ;; like define-type, but lower-type-form emits NO defines
+         ;; (the constructors live in the exporting unit's .o)
+         [`(,(or 'define-type '#%extern-type) ,head ,ctors ...)
           (hash-set! type-ctors
                      (match head [`(,n ,_ ...) n] [n n])
                      (map car ctors))
@@ -710,6 +715,8 @@
                             `(adt-set! ,v ,i ,x))
                         ,v)))]))]
       [`(: ,(? symbol?) ,_) '()]
+      ;; an imported ADT's registration form: nothing to define here
+      [`(#%extern-type ,_ ,_ ...) '()]
       ;; prelude signatures: trusted -- typed by the checker, but no
       ;; casts (the same trust class as the manifest's prim types)
       [`(#%prelude: ,(? symbol?) ,_) '()]
@@ -1151,6 +1158,8 @@
   ;; collect-globals records the global count; select-instructions
   ;; later adds the symbol and string-literal tables it uncovered
   ;; (the renderer emits them as data).
+  (when (globals-count-sink)   ;; separate.rkt's .pufi slot assertion
+    (set-box! (globals-count-sink) (length global-names)))
   `(program ,(hash 'globals (length global-names))
             (define (,(entry-symbol)) ,main-body)
             ,@fun-defns))

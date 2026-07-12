@@ -138,6 +138,33 @@
 ;; the label of THIS compilation unit's globals array
 (define module-globals-label (make-parameter 'puffin_globals))
 
+;; typed interfaces (docs/MODULES.md §3.2): the types of imported
+;; names, threaded from dependency .pufi files by separate.rkt.
+;;   key:   the name as the checker sees it -- the marker label for a
+;;          dep import (resolution already renamed the reference), the
+;;          SOURCE spelling for a prelude import (those are late-bound
+;;          by name)
+;;   value: the exported gradual type (docs/TYPES.md syntax, in the
+;;          exporting unit's mangled spellings -- mangled names ARE
+;;          the type identities, and they agree across units because
+;;          sep-mode mangling hashes the absolute path)
+;; Empty (the default) under whole-program compilation: the checker
+;; falls back to `_` for module-ext names exactly as before.
+(define module-ext-types (make-parameter (hash)))
+
+;; when set to a box, typecheck-program deposits a snapshot of its
+;; final top-level type environment (name -> type, names as checked,
+;; i.e. mangled for a non-entry module). separate.rkt uses it to give
+;; .pufi provides their types -- including the SYNTHESIZED types of
+;; unannotated value defines. #f (the default) costs nothing.
+(define typecheck-top-sink (make-parameter #f))
+
+;; when set to a box, collect-globals deposits the unit's global
+;; count. separate.rkt compiles with retain-trace? off (one pass's
+;; output at a time), so it cannot read the count out of the trace;
+;; the .pufi's slot numbering is asserted against this instead.
+(define globals-count-sink (make-parameter #f))
+
 ;; ---------------------------------------------------------------------
 ;; Tagged value representation (shared contract between the compiler,
 ;; the interpreters, and runtime.c -- keep all three in sync!)
