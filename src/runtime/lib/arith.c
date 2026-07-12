@@ -6,7 +6,26 @@
 // lives here so a zero divisor dies with a clean Puffin error
 // instead of a SIGFPE.)
 
+#include <stdio.h>
 #include "../puffin.h"
+
+// The typed arithmetic error: the open-coded intrinsics (+ - * and
+// the comparisons) tag-check their operands and route failures here,
+// so applying arithmetic to a non-integer is a clean runtime error
+// naming the operator and the offending VALUE -- instead of silently
+// computing a garbage tagged word ("#<unknown:N>", or worse). The
+// message shape matches pf_cast_check's.
+void pf_die_arith_typed(const char *op, pf a, pf b) {
+  pf bad = ((a & PF_TAG_MASK) != PF_TAG_FIXNUM) ? a : b;
+  char *buf = NULL;
+  size_t len = 0;
+  FILE *mem = open_memstream(&buf, &len);
+  if (!mem) pf_fatal("arithmetic: out of memory");
+  fprintf(mem, "%s: expected Int, got ", op);
+  pf_display_value_to(bad, mem);
+  fclose(mem);
+  pf_fatal(buf);
+}
 
 pf pf_quotient(pf a, pf b) {
   if (((a | b) & PF_TAG_MASK) != PF_TAG_FIXNUM) pf_die_arith();

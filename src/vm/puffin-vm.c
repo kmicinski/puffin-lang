@@ -480,17 +480,24 @@ static pf vm_run(u32 entry_gidx) {
       break;
     }
     case OP_FUNREF: { u16 d = RD16(), f = RD16(); cf->slots[d] = PF_FIX(un->func_base + f); break; }
-    case OP_NEG: { u16 d = RD16(), a = RD16(); cf->slots[d] = (pf)(0 - (u64)cf->slots[a]); break; }
-    case OP_ADD: { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = (pf)((u64)cf->slots[a] + (u64)cf->slots[b]); break; }
-    case OP_MUL: { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = (pf)((u64)(cf->slots[a] >> 3) * (u64)cf->slots[b]); break; }
-    case OP_LT:  { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = PF_BOOL(cf->slots[a] < cf->slots[b]); break; }
+    // Arithmetic/comparison intrinsics TAG-CHECK their operands: a
+    // non-fixnum dies with "<op>: expected Int, got <value>" instead of
+    // computing a garbage tagged word. (OP_EQ/BREQ are eq? -- any word.)
+#define ARITH_CHECK1(opname, va) \
+    do { if (((va) & 7) != 0) pf_die_arith_typed(opname, (va), (va)); } while (0)
+#define ARITH_CHECK2(opname, va, vb) \
+    do { if ((((va) | (vb)) & 7) != 0) pf_die_arith_typed(opname, (va), (vb)); } while (0)
+    case OP_NEG: { u16 d = RD16(), a = RD16(); ARITH_CHECK1("-", cf->slots[a]); cf->slots[d] = (pf)(0 - (u64)cf->slots[a]); break; }
+    case OP_ADD: { u16 d = RD16(), a = RD16(), b = RD16(); ARITH_CHECK2("+", cf->slots[a], cf->slots[b]); cf->slots[d] = (pf)((u64)cf->slots[a] + (u64)cf->slots[b]); break; }
+    case OP_MUL: { u16 d = RD16(), a = RD16(), b = RD16(); ARITH_CHECK2("*", cf->slots[a], cf->slots[b]); cf->slots[d] = (pf)((u64)(cf->slots[a] >> 3) * (u64)cf->slots[b]); break; }
+    case OP_LT:  { u16 d = RD16(), a = RD16(), b = RD16(); ARITH_CHECK2("<", cf->slots[a], cf->slots[b]); cf->slots[d] = PF_BOOL(cf->slots[a] < cf->slots[b]); break; }
     case OP_EQ:  { u16 d = RD16(), a = RD16(), b = RD16(); cf->slots[d] = PF_BOOL(cf->slots[a] == cf->slots[b]); break; }
     case OP_JMP: { u32 off = RD32(); ip = off; break; }
     case OP_BREQ: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] == cf->slots[b]) ip = off; break; }
-    case OP_BRLT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] <  cf->slots[b]) ip = off; break; }
-    case OP_BRLE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] <= cf->slots[b]) ip = off; break; }
-    case OP_BRGT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] >  cf->slots[b]) ip = off; break; }
-    case OP_BRGE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); if (cf->slots[a] >= cf->slots[b]) ip = off; break; }
+    case OP_BRLT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<", cf->slots[a], cf->slots[b]); if (cf->slots[a] <  cf->slots[b]) ip = off; break; }
+    case OP_BRLE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2("<=", cf->slots[a], cf->slots[b]); if (cf->slots[a] <= cf->slots[b]) ip = off; break; }
+    case OP_BRGT: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">", cf->slots[a], cf->slots[b]); if (cf->slots[a] >  cf->slots[b]) ip = off; break; }
+    case OP_BRGE: { u16 a = RD16(), b = RD16(); u32 off = RD32(); ARITH_CHECK2(">=", cf->slots[a], cf->slots[b]); if (cf->slots[a] >= cf->slots[b]) ip = off; break; }
     case OP_CALL: case OP_CALLI: {
       u16 d = RD16();
       u32 fi;

@@ -34,6 +34,25 @@
   (unless (void? v) (displayln (render-value v)))
   v)
 
+;; Checked arithmetic intrinsics: the compiled routes (native + the
+;; bytecode VM) tag-check + - * and the comparisons and die via
+;; pf_die_arith_typed; the interpreter enforces the SAME contract with
+;; the same message and exit status (mirroring cast-check's ref-impl),
+;; so every route agrees byte-for-byte on arithmetic type errors.
+(define (die-arith op a b)
+  (define bad (if (exact-integer? a) b a))
+  (flush-output)
+  (fprintf (current-error-port)
+           "puffin runtime error: ~a: expected Int, got ~a\n"
+           op (render-value bad))
+  (exit 255))
+(define (arith2 op a b f)
+  (unless (and (exact-integer? a) (exact-integer? b)) (die-arith op a b))
+  (f a b))
+(define (arith1 op a f)
+  (unless (exact-integer? a) (die-arith op a a))
+  (f a))
+
 (define (next-input! inbox)
   (match (unbox inbox)
     ;; the REPL reads live from the terminal
@@ -116,15 +135,18 @@
       [`(begin ,es ... ,e-ret)
        (for ([e es]) (ev e env))
        (ev e-ret env)]
-      ;; intrinsics
-      [`(- ,e0 ,e1) (- (ev e0 env) (ev e1 env))]
-      [`(- ,e0) (- (ev e0 env))]
-      [`(+ ,e0 ,e1) (+ (ev e0 env) (ev e1 env))]
-      [`(* ,e0 ,e1) (* (ev e0 env) (ev e1 env))]
-      [`(< ,e0 ,e1) (< (ev e0 env) (ev e1 env))]
-      [`(<= ,e0 ,e1) (<= (ev e0 env) (ev e1 env))]
-      [`(> ,e0 ,e1) (> (ev e0 env) (ev e1 env))]
-      [`(>= ,e0 ,e1) (>= (ev e0 env) (ev e1 env))]
+      ;; intrinsics -- TAG-CHECKED like the compiled routes: applying
+      ;; arithmetic to a non-integer dies with the same
+      ;; "<op>: expected Int, got <value>" contract the VM and native
+      ;; code enforce (message + exit 255, mirroring cast-check)
+      [`(- ,e0 ,e1) (arith2 '- (ev e0 env) (ev e1 env) -)]
+      [`(- ,e0) (arith1 '- (ev e0 env) -)]
+      [`(+ ,e0 ,e1) (arith2 '+ (ev e0 env) (ev e1 env) +)]
+      [`(* ,e0 ,e1) (arith2 '* (ev e0 env) (ev e1 env) *)]
+      [`(< ,e0 ,e1) (arith2 '< (ev e0 env) (ev e1 env) <)]
+      [`(<= ,e0 ,e1) (arith2 '<= (ev e0 env) (ev e1 env) <=)]
+      [`(> ,e0 ,e1) (arith2 '> (ev e0 env) (ev e1 env) >)]
+      [`(>= ,e0 ,e1) (arith2 '>= (ev e0 env) (ev e1 env) >=)]
       [`(eq? ,e0 ,e1) (eqv? (ev e0 env) (ev e1 env))]
       [`(not ,e0) (equal? (ev e0 env) #f)]
       [`(and ,e0 ,e1) (if (equal? (ev e0 env) #f) #f (ev e1 env))]

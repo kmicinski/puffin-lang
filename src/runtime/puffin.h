@@ -114,6 +114,9 @@ void pf_fatal(const char *msg) __attribute__((noreturn));
 void pf_die_kind(void) __attribute__((noreturn));
 void pf_die_oob(void) __attribute__((noreturn));
 void pf_die_arith(void) __attribute__((noreturn));
+// typed arithmetic error (lib/arith.c): names the operator and the
+// offending value; a/b are the operands, the first non-fixnum is shown
+void pf_die_arith_typed(const char *op, pf a, pf b) __attribute__((noreturn));
 
 // Type-check helper: die unless v is a heap object of `kind`.
 static inline void pf_expect_kind(pf v, int kind) {
