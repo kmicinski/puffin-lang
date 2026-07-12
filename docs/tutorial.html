@@ -236,8 +236,10 @@ and data-structure work — the language's home turf — it is the honest trade.
 compiled routes — native code and the bytecode VM the playground runs on — share
 one 61-bit tagged representation; the Racket-hosted reference interpreter uses
 arbitrary precision, so if you overflow 2^60 its answer can disagree with the
-compiled one. The sharp edge is documented, and the type system's roadmap
-(checked casts) is aimed at exactly this class of seam.</p>
+compiled one. This is a representation seam, documented honestly: the type
+system's casts check a value's <em>shape</em> (an overflowed fixnum is still an
+<code>Int</code>), so they do not close it — course-scale arithmetic never gets
+near 2^60.</p>
 </section>
 
 <section id="matching">
@@ -376,12 +378,20 @@ misusing them is a compile-time error:</p>
 
 <aside class="qa">
 <div class="q">Does Puffin check exhaustiveness?</div>
-<p>Not yet — it is explicitly on the roadmap (as a warning first, per
-<code>docs/TYPES.md</code>). What is already true today: because requires form a
-DAG and all of a module's <code>define-type</code>s are closed once the file ends,
-the full constructor set of every ADT is statically known — the property that
-makes exhaustiveness <em>checkable</em>. A fall-through today raises
-<code>error: match-failure</code> at runtime, as in Racket.</p>
+<p>Yes. Because requires form a DAG and all of a module's
+<code>define-type</code>s are closed once the file ends, the full constructor set
+of every ADT is statically known — so a <code>match</code> whose scrutinee has a
+concrete ADT type is checked against it. Missing constructors are a
+<strong>warning</strong> (the program still runs), reported in declaration order:</p>
+<pre><code>(define (radius [s : Shape]) : Int
+  (match s [(Circle r) r]))          ;; Shape also has Point, Rect
+</code></pre>
+<pre class="err"><code>typecheck warning: match on Shape is not exhaustive: missing Point, Rect</code></pre>
+<p><code>--strict-types</code> (on both <code>bin/puffin</code> and
+<code>puffincc</code>) promotes the warning to an error with the same text. An
+unannotated (<code>_</code>-typed) scrutinee is exempt — untyped code never warns,
+per the gradual guarantee — and a genuine fall-through at runtime still raises
+<code>error: match-failure</code>, as in Racket.</p>
 </aside>
 </section>
 

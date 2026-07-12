@@ -15,8 +15,10 @@
 > CONCRETE structure is a contract (violations error) but a
 > constraint that exists only because greedy instantiation bound a
 > type variable from a sibling argument is an inference hint —
-> conflicts there demote the variable to `_`. Still ahead:
-> casts/blame, the dedicated ADT heap kind, typed `.pufs` signatures.
+> conflicts there demote the variable to `_`. Casts with blame (§4)
+> and the dedicated ADT heap kind (§2) are shipped as well; the one
+> remaining boundary is typed `.pufs` signatures for separate
+> compilation (§6).
 
 Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
