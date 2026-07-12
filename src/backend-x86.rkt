@@ -25,6 +25,30 @@
 (provide (all-defined-out))
 
 ;; ---------------------------------------------------------------------
+;; Tag-checked arithmetic (the typed-error contract; src/runtime/lib/
+;; arith.c). The open-coded + - * (and unary neg) and the < compare
+;; lowerings check both operands' low 3 tag bits are 0 before
+;; operating; on failure a shared per-function cold trap block loads
+;; the operands and an operator-name cstring and calls
+;; pf_die_arith_typed(op, a, b) -- the same helper the interpreter
+;; and the bytecode VM route through, so the message is byte-identical
+;; on every route ("<op>: expected Int, got <value>"). eq? is
+;; polymorphic: no check. The op-name cstrings below are emitted in
+;; every unit's data segment.
+;; ---------------------------------------------------------------------
+
+(define (arith-op-mangle op)
+  (match op ['+ "add"] ['- "neg"] ['* "mul"]
+            ['< "lt"] ['<= "le"] ['> "gt"] ['>= "ge"]))
+(define (arith-op-label op)
+  (string->symbol (format "Lpfop_~a" (arith-op-mangle op))))
+(define arith-op-list '(+ - * < <= > >=))
+(define (arith-op-cstrings)
+  (apply string-append
+         (for/list ([op arith-op-list])
+           (format "~a: .asciz \"~a\"\n" (arith-op-label op) op))))
+
+;; ---------------------------------------------------------------------
 ;; Literal tables: symbols and strings are collected from the blocks
 ;; IR in sorted order, so every pass that needs an id assigns the
 ;; same one deterministically.
@@ -113,6 +137,39 @@
                             `((callq ,(stdlib-rt-sym op) ,nargs)
                               (jmp ,(conclusion-block-name))))
                  l)))
+  ;; ---- tag-checked arithmetic (+ - * <; NOT eq?) ---------------------
+  ;; Operands stage in rdi/rsi (argument registers: never allocated,
+  ;; never touched by patch-instructions' %r11/%rax staging), so the
+  ;; fast path is mov+or+test+jnz and the trap block needs no
+  ;; register shuffling beyond the argument moves for
+  ;; pf_die_arith_typed(op, a, b). Emitted at every -O level: the
+  ;; arithmetic intrinsics are always open-coded. Future work (-O2):
+  ;; AAM-based check elision when both operands are proven Int.
+  (define (arith-trap-label! op)
+    (hash-ref! trap-labels (cons 'arith op)
+               (λ ()
+                 (define l (gensym (format "trap_arith_~a_" (arith-op-mangle op))))
+                 (hash-set! extra-blocks l
+                            `(,@(if (equal? op '-)
+                                    ;; unary: the VM passes (a, a)
+                                    `((movq (reg rdi) (reg rsi))
+                                      (movq (reg rdi) (reg rdx)))
+                                    `((movq (reg rsi) (reg rdx))
+                                      (movq (reg rdi) (reg rsi))))
+                              (lea-label ,(arith-op-label op) (reg rdi))
+                              (callq pf_die_arith_typed 3)
+                              (jmp ,(conclusion-block-name))))
+                 l)))
+  ;; tagged fixnums have low bits 000, so or-ing the operands
+  ;; preserves any nonzero tag; %rax scratch
+  (define (arith-checks2 op)
+    `((movq (reg rdi) (reg rax))
+      (orq (reg rsi) (reg rax))
+      (testq (imm 7) (reg rax))
+      (jmp-if ne ,(arith-trap-label! op))))
+  (define (arith-checks1 op)
+    `((testq (imm 7) (reg rdi))
+      (jmp-if ne ,(arith-trap-label! op))))
   ;; check that the value in `r` is a heap object (low bits 001) of
   ;; header kind `k`; branches to the trap otherwise (%rax scratch)
   (define (heap-kind-checks r k trap)
@@ -143,24 +200,44 @@
     (match rhs
       ;; intrinsics
       [`(+ ,a0 ,a1)
-       `((movq ,(h-atom a0) (reg rax))
-         (addq ,(h-atom a1) (reg rax))
+       `((movq ,(h-atom a0) (reg rdi))
+         (movq ,(h-atom a1) (reg rsi))
+         ,@(arith-checks2 '+)
+         (movq (reg rdi) (reg rax))
+         (addq (reg rsi) (reg rax))
          ,@sink)]
       [`(- ,a)
-       `((movq ,(h-atom a) (reg rax))
+       `((movq ,(h-atom a) (reg rdi))
+         ,@(arith-checks1 '-)
+         (movq (reg rdi) (reg rax))
          (negq (reg rax))
          ,@sink)]
       [`(* ,a0 ,a1)
        ;; (a>>3) * b == (a*b)<<3 for tagged fixnums
-       `((movq ,(h-atom a0) (reg rax))
+       `((movq ,(h-atom a0) (reg rdi))
+         (movq ,(h-atom a1) (reg rsi))
+         ,@(arith-checks2 '*)
+         (movq (reg rdi) (reg rax))
          (sarq (imm 3) (reg rax))
-         (imulq ,(h-atom a1) (reg rax))
+         (imulq (reg rsi) (reg rax))
          ,@sink)]
-      [`(,(? shrunk-cmp? cmp) ,a0 ,a1)
+      ;; eq? is polymorphic: raw word compare, no tag check
+      [`(eq? ,a0 ,a1)
        ;; compare, set, then tag the boolean: (0|1)<<3 | 2
-       (define cc (match cmp ['eq? 'e] ['< 'l]))
        `((cmpq ,(h-atom a1) ,(h-atom a0))
-         (set ,cc (byte-reg al))
+         (set e (byte-reg al))
+         (movzbq (byte-reg al) (reg rax))
+         (shlq (imm 3) (reg rax))
+         (orq (imm ,false-value) (reg rax))
+         ,@sink)]
+      ;; < in value position: tag-checked; on two proper fixnums a
+      ;; raw compare of tagged words IS the value compare
+      [`(< ,a0 ,a1)
+       `((movq ,(h-atom a0) (reg rdi))
+         (movq ,(h-atom a1) (reg rsi))
+         ,@(arith-checks2 '<)
+         (cmpq (reg rsi) (reg rdi))
+         (set l (byte-reg al))
          (movzbq (byte-reg al) (reg rax))
          (shlq (imm 3) (reg rax))
          (orq (imm ,false-value) (reg rax))
@@ -322,9 +399,21 @@
        `((movq ,(h-atom a0) (reg rax))
          (movq ,(h-atom a-v) (deref (reg rax) ,(+ 7 (* 8 i))))
          ,@(h rst))]
-      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
-       (define cc (match cmp ['eq? 'e] ['< 'l] ['<= 'le] ['> 'g] ['>= 'ge]))
+      ;; fused compare-branch on eq?: polymorphic, no tag check
+      [`(if (eq? ,a0 ,a1) (goto ,l0) (goto ,l1))
        `((cmpq ,(h-atom a1) ,(h-atom a0))
+         (jmp-if e ,l0)
+         (jmp ,l1))]
+      ;; fused compare-branch on < (and defensively <= > >=, though
+      ;; shrink rewrites those to <): tag-checked, so the trap's op
+      ;; name matches what the VM's BR opcodes print for the same
+      ;; source (a source-level (> x 1) is (< 1 x) on every route)
+      [`(if (,cmp ,a0 ,a1) (goto ,l0) (goto ,l1))
+       (define cc (match cmp ['< 'l] ['<= 'le] ['> 'g] ['>= 'ge]))
+       `((movq ,(h-atom a0) (reg rdi))
+         (movq ,(h-atom a1) (reg rsi))
+         ,@(arith-checks2 cmp)
+         (cmpq (reg rsi) (reg rdi))
          (jmp-if ,cc ,l0)
          (jmp ,l1))]
       [`(goto ,l)
@@ -600,6 +689,9 @@
       [`(pushq ,src) (format "pushq ~a" (render-op-x86 src))]
       [`(popq ,dst) (format "popq ~a" (render-op-x86 dst))]
       [`(cmpq ,op0 ,op1) (format "cmpq ~a, ~a" (render-op-x86 op0) (render-op-x86 op1))]
+      [`(testq ,op0 ,op1) (format "testq ~a, ~a" (render-op-x86 op0) (render-op-x86 op1))]
+      ;; the address of an assembler-local data label (op-name cstrings)
+      [`(lea-label ,l ,dst) (format "leaq ~a(%rip), ~a" l (render-op-x86 dst))]
       [`(jmp-if ,cc ,lab) (format "j~a ~a" (render-cc-x86 cc) lab)]
       [`(jmp ,lab) (format "jmp ~a" lab)]
       [`(set ,cc ,byte-reg) (format "set~a ~a" (render-cc-x86 cc) (render-op-x86 byte-reg))]
@@ -648,6 +740,7 @@
     (define mac? (equal? (host-os) 'macosx))
     (string-append
      (if mac? ".section __TEXT,__cstring,cstring_literals\n" ".section .rodata\n")
+     (arith-op-cstrings)
      (apply string-append
             (for/list ([s symbols] [i (in-naturals)])
               (format "Lpfsym~a: .asciz \"~a\"\n" i (escape-c (symbol->string s)))))
