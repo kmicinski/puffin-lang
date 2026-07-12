@@ -178,7 +178,11 @@
 ;; rows carrying their globals slot; function defines and n-ary
 ;; constructors are `fun` rows carrying arity + mangled label; a
 ;; define-type head is a `type` row pointing at its (types ...) entry.
-(define (compute-provides body provides-set mid #:mangle? mangle?)
+;; (mangle? is positional, not #:mangle? -- a keyword-accepting
+;; function costs one gensym at instantiation, and the load-time
+;; gensym budget is pinned by whole-program byte-identity; the
+;; reference closure structs in stdlib.rkt spent this file's slack.)
+(define (compute-provides body provides-set mid mangle?)
   (define (mangled n) (if mangle? (mangle n mid) n))
   (define val-slot
     (for/hash ([x (value-define-names body)] [i (in-naturals)]) (values x i)))
@@ -658,7 +662,7 @@
   (define body (read-module-forms abs))
   (define provides-set
     (for/seteq ([f body] #:when (defn-name f)) (defn-name f)))
-  (define skeleton (compute-provides body provides-set mid #:mangle? #t))
+  (define skeleton (compute-provides body provides-set mid #t))
   (define dir (cache-dir-for abs))
   (define o-path (build-path dir (string-append (file-stem abs) ".o")))
   (define pufi-path (build-path dir (string-append (file-stem abs) ".pufi")))
@@ -708,7 +712,7 @@
   (define o-path (build-path dir (string-append (file-stem abs) ".o")))
   (define pufi-path (build-path dir (string-append (file-stem abs) ".pufi")))
   (define (dep-info-of p) (hash-ref infos p (λ () (error 'separate "dependency not built: ~a" p))))
-  (define skeleton (compute-provides (mod-body m) (mod-provides m) mid #:mangle? #t))
+  (define skeleton (compute-provides (mod-body m) (mod-provides m) mid #t))
   (define requires (requires-rows m dep-info-of prelude-info))
   (define n-vals (length (value-define-names (mod-body m))))
   (cond
