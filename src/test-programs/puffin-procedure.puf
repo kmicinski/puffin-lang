@@ -1,0 +1,25 @@
+;; procedure? agrees on every route (interp, chain, native, VM):
+;; #t for closures however they arise -- a lambda, a top-level
+;; function as a value, a lambda-valued define, a prim used as a
+;; value (eta-expanded), an ADT constructor builder -- and #f for
+;; everything else, including a nullary constructor INSTANCE (an ADT
+;; value, not a function), plain data, and symbols naming functions.
+(define-type Wrap (Mk Int) (Empty))
+
+(define (f x) x)
+(define g (lambda (x) x))
+
+(println (procedure? (lambda (x) x)))   ; closure               => #t
+(println (procedure? f))                ; top-level fun value   => #t
+(println (procedure? g))                ; lambda-valued define  => #t
+(println (procedure? car))              ; prim as a value       => #t
+(println (procedure? Mk))               ; constructor builder   => #t
+(println (procedure? Empty))            ; nullary INSTANCE      => #f
+(println (procedure? (Mk 1)))           ; constructed value     => #f
+(println (procedure? 42))               ; fixnum                => #f
+(println (procedure? 'car))             ; symbol                => #f
+(println (procedure? (vector 1)))       ; vector                => #f
+;; and a closure survives being stored and fetched
+(define box2 (vector g))
+(println (procedure? (vector-ref box2 0)))                      ; => #t
+(println (map procedure? (list f 1 'f (lambda () 0))))

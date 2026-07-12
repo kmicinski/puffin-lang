@@ -893,10 +893,10 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <div class="entry" id="e-procedure_63">
 <div class="sighead"><code class="nm">procedure?</code> <code class="ty">(-> a Bool)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
 <p class="doc">Is this value a procedure (closure)?</p>
-<pre><code>(println (procedure? 42))
+<pre><code>(println (procedure? (lambda (x) x)))
 (println (procedure? 'car))
 ;; prints:
-;;   #f
+;;   #t
 ;;   #f</code></pre></div>
 <div class="entry" id="e-void_63">
 <div class="sighead"><code class="nm">void?</code> <code class="ty">(-> a Bool)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>

@@ -76,6 +76,39 @@
 (struct adt-value (tag fields))
 
 ;; ---------------------------------------------------------------------
+;; Closures, reference-side (the procedure? contract). The C runtime
+;; and the bytecode VM answer (procedure? v) with "is v's heap kind
+;; CLOSURE" -- #t for lambdas, top-level functions used as values,
+;; eta-expanded prims, and ADT constructor builders; #f for
+;; everything else (a nullary constructor INSTANCE included: it is an
+;; ADT value, not a function). The reference interpreters must agree,
+;; so their closure representations live here, next to adt-value:
+;;
+;;   clo            the source-level interpreter's closure record
+;;                  (interpreters.rkt eval-puffin-exp; repl.rkt)
+;;   closure-record post-closure-convert IRs: (make-closure n)
+;;                  allocates one -- a WRAPPED vector, so that
+;;                  (vector? <closure>) and (procedure? <closure>)
+;;                  answer like the runtime's dedicated kind, not
+;;                  like the vector the class compiler used to leak.
+;;                  unsafe-vector-ref/set! unwrap it (interpreters).
+;;
+;; The blocks-level interpreter represents a top-level function value
+;; as its (fun-ref label) rhs; procedure? recognizes that spelling
+;; too. (A user datum '(fun-ref x) would be indistinguishable at that
+;; one IR level -- the source-level routes are unaffected.)
+;; ---------------------------------------------------------------------
+
+(struct clo (xs body env) #:transparent)
+(struct closure-record (vec))
+
+(define (procedure-value? v)
+  (or (procedure? v)
+      (clo? v)
+      (closure-record? v)
+      (match v [`(fun-ref ,(? symbol?)) #t] [_ #f])))
+
+;; ---------------------------------------------------------------------
 ;; Reference display / equality -- must render *exactly* like the C
 ;; runtime's pf_display_value / pf_equal (core.c dispatching through
 ;; the kind registry). Golden tests compare these byte-for-byte.
@@ -340,7 +373,10 @@
    (prim-spec 'void?    1 'pf_void_huh #t void?
               "Is this value void?"
               #:type '(-> a Bool))
-   (prim-spec 'procedure? 1 'pf_procedure_huh #t (λ (v) (procedure? v))
+   ;; the ref-impl recognizes the interpreters' closure
+   ;; representations (see procedure-value? above), so every route --
+   ;; interp, native, VM -- answers (procedure? (lambda (x) x)) => #t
+   (prim-spec 'procedure? 1 'pf_procedure_huh #t procedure-value?
               "Is this value a procedure (closure)?"
               #:type '(-> a Bool))
 
@@ -417,8 +453,11 @@
    ;; ---- compiler-internal ----------------------------------------------
    ;; make-closure allocates a closure record (kind 4): slot 0 holds
    ;; the code pointer, the rest capture the environment. Only
-   ;; lift-lambdas emits it; user code cannot name it.
-   (prim-spec 'make-closure 1 'pf_make_closure #f (λ (n) (make-vector n 0))
+   ;; lift-lambdas emits it; user code cannot name it. The reference
+   ;; representation is a WRAPPED vector (closure-record above), so
+   ;; procedure?/vector? answer like the runtime's dedicated kind.
+   (prim-spec 'make-closure 1 'pf_make_closure #f
+              (λ (n) (closure-record (make-vector n 0)))
               "INTERNAL: allocate a closure record with n slots.")
    ;; string-const materializes the i-th string literal; only the
    ;; desugared form (string-lit s) lowers to it.
