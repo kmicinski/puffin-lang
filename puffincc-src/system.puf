@@ -74,6 +74,52 @@
 ;; a symbol's source spelling (identity for anything unregistered)
 (define (module-demangle s) (hash-ref/default module-demangle-table s s))
 
+;; ---- source positions for diagnostics (mirrors src/system.rkt) ------
+;; Granularity is the TOP-LEVEL FORM: the reader records each form's
+;; line, the module resolver threads (basename . line) origins through
+;; the flatten + rename (the renamer is 1:1 per form), and the driver
+;; leaves ONE origins list aligned with the surface program's forms.
+;; Prelude forms, class-style (program ...) wrappers, REPL evals, and
+;; stdin programs carry #f (no position). The file component is the
+;; module's BASENAME: the two compilers spell full paths differently,
+;; basenames agree byte-for-byte.
+
+;; #f, or a list aligned 1:1 with the surface program's top-level
+;; forms; entries are (cons basename line) or #f. Set by the driver.
+(define form-origins (ann #f _))
+;; stash for resolve-modules -> the driver
+(define resolved-origins (ann #f _))
+;; the origin of the top-level form being checked/desugared right now
+(define current-form-origin (ann #f _))
+
+;; " [file.puf:12]" when the current form's origin is known, else ""
+(: origin-suffix (-> Str))
+(define (origin-suffix)
+  (match current-form-origin
+    [`(,file . ,line)
+     (string-append
+      " ["
+      (string-append
+       file
+       (string-append ":" (string-append (number->string line) "]"))))]
+    [_ ""]))
+
+;; iterate top-level forms with current-form-origin set per form; the
+;; origins list is consulted only when it aligns with `forms` (REPL
+;; and synthesized programs never align -- they carry no positions)
+(define (for-each-form proc forms)
+  (define os
+    (if (and form-origins (eq? (length form-origins) (length forms)))
+        form-origins
+        #f))
+  (let loop ([fs forms] [oss os])
+    (if (null? fs)
+        (begin (set! current-form-origin #f) (void))
+        (begin
+          (set! current-form-origin (if oss (car oss) #f))
+          (proc (car fs))
+          (loop (cdr fs) (if oss (cdr oss) #f))))))
+
 ;; ---- tagged-value constants (in sync with runtime/puffin.h) --------
 
 (: tag-fixnum (-> Int Int))

@@ -184,7 +184,10 @@
 
 ;; (require "path" [#:as M] [#:only (n ...)] [#:rename ((old new) ...)]
 ;;          [#:sig "path.pufs"])
-(define (parse-require f base-dir [line #f])
+;; `line` is the require form's source line or #f (positional, not an
+;; optional argument: optional/keyword arguments cost module-load
+;; gensyms -- see system.rkt's GENSYM-BUDGET note)
+(define (parse-require f base-dir line)
   (define (bad) (module-error "malformed require: ~a" f))
   (match f
     [`(require ,(? string? path) ,opts ...)
@@ -207,10 +210,12 @@
 
 ;; (provide n ...) or (provide #:sig "path.pufs"); a module's provide
 ;; forms are unioned, sig ascription must be the only provide
-(define (parse-provides forms base-dir top-names path [lines #f])
+(define (parse-provides forms base-dir top-names path lines)
   (define ls (if (and lines (= (length lines) (length forms))) lines (map (λ (_) #f) forms)))
+  ;; boxed so #f lines survive the filter-map (gensym budget: no
+  ;; parallel-clause for forms here)
   (define provide-lines
-    (for/list ([f forms] [l ls] #:when (provide-form? f)) l))
+    (map unbox (filter-map (λ (f l) (and (provide-form? f) (box l))) forms ls)))
   (define provide-forms (filter provide-form? forms))
   (define sig-forms
     (filter (λ (f) (match f [`(provide #:sig ,_) #t] [_ #f])) provide-forms))
@@ -225,7 +230,11 @@
      ;; no provide form at all: everything top-level is provided
      top-names]
     [else
-     (for/fold ([acc (seteq)]) ([pf provide-forms] [pl provide-lines])
+     ;; single-clause for/fold over zipped pairs (gensym budget; see
+     ;; the note in load-modules)
+     (for/fold ([acc (seteq)]) ([pp (map cons provide-forms provide-lines)])
+       (define pf (car pp))
+       (define pl (cdr pp))
        (match pf
          [`(provide ,(? symbol? ns) ...)
           (for ([n ns])
@@ -340,7 +349,7 @@
       (module-error "module id collision between ~a and ~a" (hash-ref ids id) abs))
     (hash-set! ids id abs)
     id)
-  (define (visit abs stack [from-line #f])
+  (define (visit abs stack from-line)
     (define key (path->string abs))
     (cond
       [(member key (map path->string stack))
@@ -361,16 +370,22 @@
            ;; class-style wrapper: inner forms carry no positions
            [`((program ,inner ...)) (values inner (map (λ (_) #f) inner))]
            [fs (values fs raw-lines)]))
+       ;; GENSYM-BUDGET NOTE: this file's loop-form census is
+       ;; deliberately unchanged from before position tracking (one
+       ;; for/list here, one for/fold in parse-provides; zipping via
+       ;; map cons instead of adding parallel clauses) -- for/list
+       ;; costs 2 module-load gensyms and for/fold 1, and the budget
+       ;; must stay put for whole-program byte-identity (system.rkt).
        (define reqs
-         (for/list ([f forms] [l form-lines]
-                    #:when (require-form? f))
-           (parse-require f (path-only abs) l)))
+         (for/list ([p (map cons forms form-lines)]
+                    #:when (require-form? (car p)))
+           (parse-require (car p) (path-only abs) (cdr p))))
        ;; load dependencies first (postorder)
        (for ([r reqs]) (visit (req-path r) (cons abs stack) (req-line r)))
        (define body+lines
-         (for/list ([f forms] [l form-lines]
-                    #:unless (or (require-form? f) (provide-form? f)))
-           (cons f l)))
+         (filter-map (λ (f l) (and (not (or (require-form? f) (provide-form? f)))
+                                   (cons f l)))
+                     forms form-lines))
        (define body (map car body+lines))
        (define body-lines (map cdr body+lines))
        (define top-names
@@ -383,7 +398,7 @@
        (hash-set! loaded key m)
        (set! postorder (cons m postorder))
        m]))
-  (visit entry-abs '())
+  (visit entry-abs '() #f)
   (values (reverse postorder) loaded))
 
 ;; ---------------------------------------------------------------------
@@ -538,10 +553,9 @@
   ;; the renamer is 1:1 per form, so each module's body-lines map
   ;; straight onto its renamed forms; stash the flattened origins for
   ;; read-program-file (see system.rkt: resolved-origins)
-  (resolved-origins
-   (append*
-    (for/list ([m mods])
-      (define base (path-basename (mod-path m)))
-      (for/list ([l (mod-lines m)])
-        (and l (cons base l))))))
+  (resolved-origins-set!
+   (append-map (λ (m)
+                 (define base (path-basename (mod-path m)))
+                 (map (λ (l) (and l (cons base l))) (mod-lines m)))
+               mods))
   (apply append flat))

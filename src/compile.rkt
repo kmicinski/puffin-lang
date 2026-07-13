@@ -791,12 +791,16 @@
        (define os (surface-origins))
        (define aligned?
          (and (list? os) (= (length os) (length forms))))
+       ;; multi-list map, not a parallel-clause for/list (module-load
+       ;; gensym budget; see system.rkt)
        (define pieces
-         (for/list ([form forms]
-                    [o (if aligned? os (map (λ (_) #f) forms))])
-           (parameterize ([current-form-origin o])
-             (define ls (lower-type-form form))
-             (cons ls (map (λ (_) o) ls)))))
+         (map (λ (form o)
+                (current-form-origin-set! o)
+                (define ls (lower-type-form form))
+                (cons ls (map (λ (_) o) ls)))
+              forms
+              (if aligned? os (map (λ (_) #f) forms))))
+       (current-form-origin-set! #f)
        (define lowered (append-map car pieces))
        (define lorigins (append-map cdr pieces))
        (define-values (b _)
@@ -827,9 +831,13 @@
       [`(define ,(? symbol? x) ,e)
        `(define ,(hash-ref top-bound x x) ,(h e top-bound))]
       [e (h e top-bound)]))
-  `(program ,@(for/list ([form top-forms] [o top-origins])
-                (parameterize ([current-form-origin o])
-                  (per-form form)))))
+  (define out-forms
+    (map (λ (form o)
+           (current-form-origin-set! o)
+           (per-form form))
+         top-forms top-origins))
+  (current-form-origin-set! #f)
+  `(program ,@out-forms))
 
 ;; ---------------------------------------------------------------------
 ;; Pass: shrink

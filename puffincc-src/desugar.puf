@@ -131,10 +131,13 @@
             `(adt ,(demangle-type t) ,@(hash-ref type-ctors (car t)))]
            [else #f])]))
   ;; surface rewrite: e checked against t, or e untouched if t has no
-  ;; first-order check (h then compiles cast-check like any prim)
+  ;; first-order check (h then compiles cast-check like any prim).
+  ;; The blame label carries the declared boundary's source position
+  ;; (system.puf origin-suffix) -- resolved HERE, at desugar time:
+  ;; compile-time strings, no runtime cost change.
   (define (cast-expr e t blame)
     (let ([d (cast-desc t)])
-      (if d `(cast-check ,e (quote ,d) ,blame) e)))
+      (if d `(cast-check ,e (quote ,d) ,(string-append blame (origin-suffix))) e)))
   (define (cast-binding b)
     (match b
       [`(,x : ,t ,e)
@@ -154,14 +157,17 @@
            (if d
                `(cast-check ,x (quote ,d)
                             ,(string-append owner (string-append "'s argument "
-                                                                 (nm-str x))))
+                                                                 (string-append
+                                                                  (nm-str x)
+                                                                  (origin-suffix)))))
                #f)))
        (map2 cons formal-names arg-ts)))
     (define rd (cast-desc rt))
     (define body+
       (if rd
           (list `(cast-check (let () ,@body) (quote ,rd)
-                             ,(string-append owner "'s result")))
+                             ,(string-append owner (string-append "'s result"
+                                                                  (origin-suffix)))))
           body))
     (append entry body+))
   ;; a (: f ...) declaration supplies the formal/result types a
@@ -790,9 +796,27 @@
 
   ;; Top-level definitions shadow stdlib primitives; colliding names
   ;; are renamed here, once, for the whole program.
-  (define top-forms
+  ;;
+  ;; Source origins ride along: each surface form's origin (see
+  ;; system.puf) is set while it lowers (formal/result blame labels
+  ;; are built there) and replicated onto every form the lowering
+  ;; yields, so the per-form walk below (ann/let/define blame labels)
+  ;; sees the right position too.
+  (define lowered-pieces
     (match p
-      [`(program ,forms ...) (append-map lower-type-form forms)]))
+      [`(program ,forms ...)
+       (let ([os (if (and form-origins (eq? (length form-origins) (length forms)))
+                     form-origins
+                     (map (lambda (f) #f) forms))])
+         (map2 (lambda (form o)
+                 (begin
+                   (set! current-form-origin o)
+                   (let ([ls (lower-type-form form)])
+                     (begin (set! current-form-origin #f)
+                            (cons ls (map (lambda (l) o) ls))))))
+               forms os))]))
+  (define top-forms (append-map (lambda (pr) (car pr)) lowered-pieces))
+  (define top-origins (append-map (lambda (pr) (cdr pr)) lowered-pieces))
   (define top-bound
     (car (bind* (hash)
                 (filter-map (lambda (form)
@@ -820,4 +844,9 @@
       [`(define ,(? symbol? x) ,e)
        `(define ,(hash-ref/default top-bound x x) ,(h e top-bound))]
       [e (h e top-bound)]))
-  `(program ,@(map per-form top-forms)))
+  `(program ,@(map2 (lambda (form o)
+                      (begin
+                        (set! current-form-origin o)
+                        (let ([out (per-form form)])
+                          (begin (set! current-form-origin #f) out))))
+                    top-forms top-origins)))

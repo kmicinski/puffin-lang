@@ -74,20 +74,32 @@
 ;; Mirrored by puffincc-src/system.puf.
 ;; ---------------------------------------------------------------------
 
+;; NOTE: boxes + set-box!, NOT parameters/parameterize -- whole-program
+;; byte-identity depends on the module-load gensym budget (see the
+;; GENSYM-BUDGET INVARIANT note), and parameterize costs gensyms at
+;; instantiation where boxes cost none. The compiler is single-threaded.
+
 ;; #f, or a list aligned 1:1 with the surface program's top-level
 ;; forms; entries are (cons basename line) or #f
-(define surface-origins (make-parameter #f))
+(define surface-origins-box (box #f))
+(define (surface-origins) (unbox surface-origins-box))
+(define (surface-origins-set! v) (set-box! surface-origins-box v))
 ;; stash for resolve-modules -> read-program-file (single-value return
 ;; preserved for existing callers)
-(define resolved-origins (make-parameter #f))
+(define resolved-origins-box (box #f))
+(define (resolved-origins) (unbox resolved-origins-box))
+(define (resolved-origins-set! v) (set-box! resolved-origins-box v))
 ;; the origin of the top-level form currently being checked/desugared
-(define current-form-origin (make-parameter #f))
+(define current-form-origin-box (box #f))
+(define (current-form-origin) (unbox current-form-origin-box))
+(define (current-form-origin-set! v) (set-box! current-form-origin-box v))
 
 ;; " [file.puf:12]" when the current form's origin is known, else ""
+;; (pair test, not match: a cons match pattern costs module-load
+;; gensyms at expansion)
 (define (origin-suffix)
-  (match (current-form-origin)
-    [(cons file line) (format " [~a:~a]" file line)]
-    [_ ""]))
+  (define o (current-form-origin))
+  (if (pair? o) (format " [~a:~a]" (car o) (cdr o)) ""))
 
 ;; iterate top-level forms with current-form-origin set per form; the
 ;; origins list is consulted only when it aligns with `forms` (REPL
@@ -95,10 +107,14 @@
 (define (for-each-form forms proc)
   (define os (surface-origins))
   (define aligned? (and (list? os) (= (length os) (length forms))))
-  (for ([f (in-list forms)]
-        [o (in-list (if aligned? os (map (λ (_) #f) forms)))])
-    (parameterize ([current-form-origin o])
-      (proc f))))
+  ;; multi-list for-each, not a parallel-clause `for`: multi-sequence
+  ;; for forms consume module-load gensyms at expansion
+  (for-each (λ (f o)
+              (current-form-origin-set! o)
+              (proc f))
+            forms
+            (if aligned? os (map (λ (_) #f) forms)))
+  (current-form-origin-set! #f))
 
 (define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 

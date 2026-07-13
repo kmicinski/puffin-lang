@@ -445,13 +445,13 @@
   ;; for file programs only).
   (cond
     [(repl-mode?)
-     (surface-origins #f)
+     (surface-origins-set! #f)
      `(program ,@forms)]
     [else
      (define pre (prelude-forms forms))
      ;; the prelude's forms carry no positions (puffincc's prelude is
      ;; embedded pre-parsed data -- neither compiler positions it)
-     (surface-origins (append (map (λ (_) #f) pre) origins))
+     (surface-origins-set! (append (map (λ (_) #f) pre) origins))
      `(program ,@pre ,@forms)]))
 
 ;;
