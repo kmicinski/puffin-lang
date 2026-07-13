@@ -1,0 +1,1 @@
+(define-type Int (MkInt))

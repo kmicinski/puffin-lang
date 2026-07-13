@@ -1,0 +1,1 @@
+puffin runtime error: cast: expected Int, got s (blame: f's argument a [rt-cast-variadic.puf:1])

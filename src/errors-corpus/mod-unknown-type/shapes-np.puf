@@ -1,0 +1,4 @@
+(provide Point Circle Rect area)
+(define-type Shape (Point) (Circle Int) (Rect Int Int))
+(define (area [s : Shape]) : Int
+  (match s [Point 0] [(Circle r) (* 3 (* r r))] [(Rect w h) (* w h)]))

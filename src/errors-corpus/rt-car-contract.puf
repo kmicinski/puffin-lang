@@ -1,0 +1,2 @@
+(define (f x) (car x))
+(println (f 5))

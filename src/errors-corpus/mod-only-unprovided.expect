@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-only-unprovided/main.puf: #:only name hidden is not provided by src/errors-corpus/mod-only-unprovided/lib.puf

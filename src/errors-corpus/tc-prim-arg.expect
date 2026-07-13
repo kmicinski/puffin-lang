@@ -1,0 +1,1 @@
+error: typecheck: +: argument has type Str, expected Int [tc-prim-arg.puf:1]

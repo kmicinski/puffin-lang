@@ -1,0 +1,3 @@
+(: dbl (-> Int Int))
+(define (dbl n) (+ n n))
+((ann dbl _) 'seven)

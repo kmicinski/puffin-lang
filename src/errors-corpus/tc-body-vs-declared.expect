@@ -1,0 +1,1 @@
+error: typecheck: f: body has type Str, declared Int [tc-body-vs-declared.puf:1]

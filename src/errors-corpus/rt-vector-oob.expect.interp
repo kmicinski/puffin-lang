@@ -1,0 +1,4 @@
+error: vector-ref: index is out of range
+  index: 9
+  valid range: [0, 1]
+  vector: '#(1 2)

@@ -1,0 +1,1 @@
+error: typecheck: hash-set!: argument has type (Hash _ _), expected (Mut (Hash Sym Int)) [tc-mut-hash.puf:1]

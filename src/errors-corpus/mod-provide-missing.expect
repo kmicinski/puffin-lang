@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-provide-missing/main.puf provides missing, which it does not define [main.puf:1]

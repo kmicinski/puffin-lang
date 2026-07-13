@@ -1,0 +1,3 @@
+(: total Int)
+(define total (ann "x" _))
+(println total)

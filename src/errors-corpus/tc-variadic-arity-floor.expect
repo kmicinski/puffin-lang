@@ -1,0 +1,1 @@
+error: typecheck: weigh expects at least 2 arguments, got 1 [tc-variadic-arity-floor.puf:2]

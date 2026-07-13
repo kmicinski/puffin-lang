@@ -1,0 +1,2 @@
+(define (weigh a b . extras) (list a b extras))
+(weigh 1)

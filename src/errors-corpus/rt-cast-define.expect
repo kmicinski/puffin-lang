@@ -1,0 +1,1 @@
+puffin runtime error: cast: expected Int, got x (blame: define total [rt-cast-define.puf:2])

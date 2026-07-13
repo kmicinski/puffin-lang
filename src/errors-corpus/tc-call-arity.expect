@@ -1,0 +1,1 @@
+error: typecheck: f expects 2 arguments, got 1 [tc-call-arity.puf:2]

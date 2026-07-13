@@ -1,0 +1,2 @@
+(define v (ann "str" _))
+(let ([x : Int (ann v _)]) (println x))

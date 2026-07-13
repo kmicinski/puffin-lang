@@ -1,0 +1,2 @@
+(require "no-such.puf")
+(println 1)

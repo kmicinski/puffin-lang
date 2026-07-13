@@ -1,0 +1,1 @@
+puffin runtime error: cast: expected Int, got nope (blame: f's result [rt-cast-result.puf:2])

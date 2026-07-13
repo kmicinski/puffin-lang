@@ -1,0 +1,1 @@
+error: typecheck: type Option expects 1 parameters, got 2 [tc-type-ctor-arity.puf:2]

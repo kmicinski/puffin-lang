@@ -1,0 +1,2 @@
+(define (foo a [b : Int] c) (+ a b c))
+(println (foo 1 5 "Hello"))

@@ -1,0 +1,1 @@
+error: typecheck: define-type cannot redefine built-in type Int [tc-builtin-redefine.puf:1]

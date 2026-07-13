@@ -1,0 +1,3 @@
+(define (f [x : Int]) : Int (* x 2))
+(define g (ann f _))
+(g #t)

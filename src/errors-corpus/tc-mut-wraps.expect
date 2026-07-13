@@ -1,0 +1,1 @@
+error: typecheck: (Mut ...) wraps a Hash, Vec, or Set type, got Int [tc-mut-wraps.puf:1]

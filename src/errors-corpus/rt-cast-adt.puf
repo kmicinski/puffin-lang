@@ -1,0 +1,5 @@
+(define-type (Option a) (None) (Some a))
+(define-type Shape (Circle Int) (Square Int))
+(define (get [o : (Option Int)]) : Int (match o [(Some x) x] [None 0]))
+(define sneak (ann Circle _))
+((ann get _) (sneak 3))

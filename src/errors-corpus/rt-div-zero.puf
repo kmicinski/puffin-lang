@@ -1,0 +1,2 @@
+(define (f x) (quotient 10 x))
+(println (f 0))

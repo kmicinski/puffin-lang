@@ -1,0 +1,2 @@
+(define (f x) (* 2 x))
+(println (f 'oops))

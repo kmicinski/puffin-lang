@@ -1,0 +1,3 @@
+(provide f)
+(define (f x) x)
+(define hidden 1)

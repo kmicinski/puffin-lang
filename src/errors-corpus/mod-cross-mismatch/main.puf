@@ -1,0 +1,3 @@
+(require "shapes.puf")
+(define (f [s : Shape]) : Int (area s))
+(println (f 5))

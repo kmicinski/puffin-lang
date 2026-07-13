@@ -1,0 +1,3 @@
+(define-type E (A) (B Int) (C))
+(define (f [e : E]) (match e [(B x) x]))
+(println (f (B 1)))

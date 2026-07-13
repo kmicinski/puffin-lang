@@ -1,0 +1,1 @@
+error: typecheck: g: argument has type Int, expected (Option Int) [tc-adt-arg-mismatch.puf:3]

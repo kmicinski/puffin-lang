@@ -1,0 +1,4 @@
+(require "shapes-np.puf")
+(define (describe [s : Shape]) : Sym
+  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))
+(println (describe (Circle 7)))

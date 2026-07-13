@@ -1,0 +1,2 @@
+(provide f)
+(define (f x) (cons x x))

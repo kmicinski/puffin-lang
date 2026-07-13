@@ -1,0 +1,3 @@
+(: sum+ (->* (Int) Int Int))
+(define (sum+ a . rest) a)
+(sum+ "one")

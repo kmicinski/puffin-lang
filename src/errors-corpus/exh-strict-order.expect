@@ -1,0 +1,1 @@
+error: typecheck: match on E is not exhaustive: missing A, C [exh-strict-order.puf:2]

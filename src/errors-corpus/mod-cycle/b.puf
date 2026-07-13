@@ -1,0 +1,2 @@
+(require "main.puf")
+(define (b) 2)

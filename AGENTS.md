@@ -10,6 +10,15 @@ for working on it:
   implementation in `src/` is the consistency oracle: keep the two in
   lockstep and verify with `racket src/diff-ir.rkt <pass> <prog>` and
   the oracle legs of the corpus (`racket src/test.rkt -m all`).
+- The golden corpus contains only PASSING programs; **rejection
+  behavior is corpus-tested too**: `tools/test-errors.sh` drives every
+  must-fail program in `src/errors-corpus/` down every route (interp,
+  Racket->VM, puffincc->VM, both native backends) and demands
+  byte-identical diagnostics (its `gen` mode captures `.expect` files
+  from agreed route output and REFUSES on disagreement). After
+  touching a checker, resolver, reader, or runtime error message, run
+  it — and `node web/test-errors.mjs` for the same corpus through the
+  wasm VM.
 - If `puffincc-src` outgrows the committed seed (a new language
   feature the seed can't compile), refresh the seed first
   (`bin/refresh-boot` from a commit that can compile the tree; see

@@ -1,0 +1,2 @@
+(define-type Shape (Point))
+(define Shape 5)

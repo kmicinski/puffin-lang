@@ -1,0 +1,2 @@
+(require "lib.puf" #:only (hidden))
+(println 1)

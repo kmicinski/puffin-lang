@@ -1,0 +1,2 @@
+(define u (ann #t _))
+(println (ann u Sym))

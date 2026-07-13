@@ -1,0 +1,1 @@
+error: typecheck: sum+: argument has type Str, expected Int [tc-variadic-declared.puf:3]

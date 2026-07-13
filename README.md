@@ -46,6 +46,11 @@ build/puffincc -t bytecode prog.puf -o prog.pbc   # ... or to bytecode
 bin/puffin-vm prog.pbc              # run bytecode on the native VM
 tools/test-corpus.sh                # the golden corpus, Racket-free
                                     # (`gen` mode WRITES the goldens)
+tools/test-errors.sh                # the differential ERROR corpus
+                                    # (src/errors-corpus): must-fail
+                                    # programs x every route, diagnostics
+                                    # byte-identical (rejection behavior
+                                    # is corpus-tested, like success)
 tools/gen-web-vm.sh                 # browser engine artifacts (self-hosted)
 (cd web && npm run dev)             # the playground: puffincc in wasm
 bin/refresh-boot                    # refresh the seed at release points
@@ -56,6 +61,7 @@ bin/puffin                          # the Racket-hosted CLI/REPL
 racket src/test.rkt -m all          # the corpus through the oracle routes
 racket src/diff-ir.rkt <pass> <prog>  # per-pass puffincc/Racket diff
 (cd web && npm test)                # corpus + REPL through the wasm VM
+node web/test-errors.mjs            # the error corpus through the wasm VM
 ```
 
 Multi-file programs use the module system ((require "lib.puf") /

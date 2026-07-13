@@ -1,0 +1,2 @@
+(: total Int)
+(define total "nope")

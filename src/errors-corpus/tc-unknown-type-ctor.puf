@@ -1,0 +1,2 @@
+(: f (->* ((Nope Int)) Int Int))
+(define (f a . r) a)

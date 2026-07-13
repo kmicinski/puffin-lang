@@ -1,0 +1,4 @@
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (ev [e : Expr]) : Int
+  (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))
+(ev (Plus 20 20))

@@ -1,0 +1,1 @@
+error: typecheck: total is declared Int but its value has type Str [tc-declared-vs-value.puf:2]

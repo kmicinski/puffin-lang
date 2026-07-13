@@ -1,0 +1,2 @@
+(define (f x) (quotient x 2))
+(println (f 'a))

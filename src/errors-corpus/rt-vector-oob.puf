@@ -1,0 +1,2 @@
+(define (f v) (vector-ref v 9))
+(println (f (vector 1 2)))

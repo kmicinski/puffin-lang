@@ -1,0 +1,3 @@
+(require "b.puf")
+(define (a) 1)
+(println 1)

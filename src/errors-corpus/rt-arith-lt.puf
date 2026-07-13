@@ -1,0 +1,2 @@
+(define (g x) (if (< x 10) 'small 'big))
+(println (g "nine"))

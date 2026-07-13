@@ -1,0 +1,2 @@
+(define (f [a : Int] . r) : Int (+ a (length r)))
+((ann f _) "s" 1 2)

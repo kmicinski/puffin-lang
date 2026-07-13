@@ -1,0 +1,1 @@
+error: modules: require cycle: src/errors-corpus/mod-cycle/main.puf -> src/errors-corpus/mod-cycle/b.puf -> src/errors-corpus/mod-cycle/main.puf

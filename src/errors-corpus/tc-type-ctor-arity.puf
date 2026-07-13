@@ -1,0 +1,2 @@
+(define-type (Option a) (None) (Some a))
+(define (f [x : (Option Int Int)]) x)

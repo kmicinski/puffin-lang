@@ -1,0 +1,2 @@
+(define (f [x : Int] [y : Int]) : Int (+ x y))
+(f 1)

@@ -1,0 +1,3 @@
+(define lies (ann (lambda () "nope") _))
+(define (f) : Int (lies))
+(println (f))

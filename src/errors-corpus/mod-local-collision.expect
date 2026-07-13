@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-local-collision/main.puf: import f from src/errors-corpus/mod-local-collision/lib.puf collides with a local top-level definition

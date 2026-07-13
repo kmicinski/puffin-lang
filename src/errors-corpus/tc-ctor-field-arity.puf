@@ -1,0 +1,2 @@
+(define-type T (Wrap Int))
+(match (Wrap 1) [(Wrap a b) a])

@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-reserved/main.puf: cannot import match unqualified (reserved word); use #:as or #:rename
