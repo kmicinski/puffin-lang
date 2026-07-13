@@ -9,12 +9,24 @@ runs *puffincc itself*, compiled to bytecode, on a WebAssembly build
 of the bytecode VM (`src/vm/`) — same compiler, same typechecker,
 same semantics everywhere.
 
-The Racket implementation in `src/` is the **consistency oracle**:
-it generates the golden corpus, cross-checks puffincc per-pass
-(`src/diff-ir.rkt`), and hosts the stage-1 bootstrap. It is not the
-primary compiler; extend puffincc first and verify against `src/`.
-(Its remaining unique role — golden generation via the reference
-interpreter — is the last step of a future full retirement.)
+**Building and testing Puffin requires no Racket**: `bin/bootstrap`
+builds `build/puffincc` from the committed bytecode seed
+(`boot/puffincc.pbc`) with nothing but a C toolchain, and
+`tools/test-corpus.sh` runs the golden corpus through puffincc + the
+VM — which are the **golden authority** (its `gen` mode is what
+writes `src/goldens`).
+
+The Racket implementation in `src/` is the optional **consistency
+oracle**: it cross-checks puffincc per-pass (`src/diff-ir.rkt`), and
+its reference interpreter re-derives the goldens as a differential
+test (`racket src/test.rkt -m gen` + diff — the two implementations
+must agree byte-for-byte; they do, 309/309). It also hosts the
+alternative stage-1 bootstrap (`bin/build-puffincc`) and the
+**generators**: after changing the stdlib manifest (`src/stdlib.rkt`)
+or prelude, regenerating the derived tables (`src/vm/vm-prims.inc`,
+`puffincc-src/tables.puf`, docs/STDLIB.md) still uses Racket — that
+is the one remaining Racket-needed activity. It is not the primary
+compiler; extend puffincc first and verify against `src/`.
 
 Start with [docs/DELTA.md](docs/DELTA.md) — "what's the delta from
 p5?" — then [docs/LANGUAGE.md](docs/LANGUAGE.md),
@@ -26,15 +38,22 @@ architecture — [docs/WASM-VM.md](docs/WASM-VM.md) +
 imports; not yet implemented) is [docs/FFI.md](docs/FFI.md).
 
 ```
-bin/build-puffincc                  # stage-1 bootstrap, then:
+bin/bootstrap                       # Racket-free bootstrap: cc-only, from
+                                    # the committed seed boot/puffincc.pbc,
+                                    # with a stage-2/3 fixpoint proof
 build/puffincc prog.puf -o prog     # puffincc compiles + links natively
 build/puffincc -t bytecode prog.puf -o prog.pbc   # ... or to bytecode
 bin/puffin-vm prog.pbc              # run bytecode on the native VM
-tools/gen-web-vm.sh                 # build the browser engine artifacts
+tools/test-corpus.sh                # the golden corpus, Racket-free
+                                    # (`gen` mode WRITES the goldens)
+tools/gen-web-vm.sh                 # browser engine artifacts (self-hosted)
 (cd web && npm run dev)             # the playground: puffincc in wasm
+bin/refresh-boot                    # refresh the seed at release points
 
-bin/puffin                          # the Racket-hosted CLI/REPL (oracle)
-racket src/test.rkt -m all          # the whole corpus, all routes
+# the Racket oracle + generators (optional):
+bin/build-puffincc                  # hosted stage-1 bootstrap (alternative)
+bin/puffin                          # the Racket-hosted CLI/REPL
+racket src/test.rkt -m all          # the corpus through the oracle routes
 racket src/diff-ir.rkt <pass> <prog>  # per-pass puffincc/Racket diff
 (cd web && npm test)                # corpus + REPL through the wasm VM
 ```

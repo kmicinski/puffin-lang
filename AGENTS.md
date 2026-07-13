@@ -2,10 +2,18 @@ This repository is the Puffin language (see README.md). Ground rules
 for working on it:
 
 - **puffincc (`puffincc-src/`, written in Puffin) is the primary
-  compiler and the source of truth.** Extend it first. The Racket
+  compiler and the source of truth.** Extend it first. Build it
+  Racket-free with `bin/bootstrap` (committed seed `boot/puffincc.pbc`
+  + the bytecode VM; docs/BOOTSTRAP.md §7) and run the golden corpus
+  with `tools/test-corpus.sh` (its `gen` mode writes `src/goldens` —
+  puffincc + the VM are the golden authority). The Racket
   implementation in `src/` is the consistency oracle: keep the two in
   lockstep and verify with `racket src/diff-ir.rkt <pass> <prog>` and
-  the golden corpus (`racket src/test.rkt -m all`).
+  the oracle legs of the corpus (`racket src/test.rkt -m all`).
+- If `puffincc-src` outgrows the committed seed (a new language
+  feature the seed can't compile), refresh the seed first
+  (`bin/refresh-boot` from a commit that can compile the tree; see
+  docs/BOOTSTRAP.md "Seed freshness").
 - The browser playground (`web/`) runs puffincc compiled to bytecode
   on the wasm VM — there is no JS implementation of the language.
   After touching the compiler, runtime, or VM: `tools/gen-web-vm.sh`

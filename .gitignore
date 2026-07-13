@@ -24,3 +24,8 @@ bin/puffin-vm
 bin/puffin-vm.wasm
 bin/puffin-vm-repl.wasm
 bin/puffin-vm-gctest
+
+# the bootstrap seed (bin/bootstrap) is the ONE tracked .pbc:
+# puffincc compiled to bytecode. The web/public copies above stay
+# ignored; refresh the seed at release points with bin/refresh-boot.
+!boot/puffincc.pbc

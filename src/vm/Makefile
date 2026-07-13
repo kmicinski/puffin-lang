@@ -33,9 +33,25 @@ all: $(BIN)
 $(BIN): puffin-vm.c vm-prims.inc ../runtime/puffin.h $(RUNTIME)
 	$(CC) $(CFLAGS) puffin-vm.c $(RUNTIME) -o $(BIN)
 
-# the prim table derives from the stdlib manifest
+# The prim table derives from the stdlib manifest. The generated file
+# is COMMITTED so the cc-only bootstrap (bin/bootstrap) never needs
+# Racket: when racket is absent the committed table is used as-is
+# (touched so make stops re-firing the rule -- after a fresh clone the
+# checkout mtimes are arbitrary, so "stale" here does not mean the
+# content is stale). When racket is present the table regenerates
+# through a temp file so a generator failure cannot truncate it.
+# After editing ../stdlib.rkt on a Racket machine, this keeps working
+# exactly as before; on a Racket-less machine you get the loud warning.
 vm-prims.inc: ../stdlib.rkt ../gen-vm-prims.rkt
-	racket ../gen-vm-prims.rkt > vm-prims.inc
+	@if command -v racket >/dev/null 2>&1; then \
+	  racket ../gen-vm-prims.rkt > vm-prims.inc.tmp && mv vm-prims.inc.tmp vm-prims.inc; \
+	  echo "regenerated vm-prims.inc from the stdlib manifest"; \
+	else \
+	  echo "vm-prims.inc: racket not found; using the COMMITTED prim table."; \
+	  echo "  (if ../stdlib.rkt actually changed, regenerate on a Racket machine:"; \
+	  echo "   racket src/gen-vm-prims.rkt > src/vm/vm-prims.inc)"; \
+	  touch vm-prims.inc; \
+	fi
 
 # ---------------------------------------------------------------
 # WASM build (docs/WASM-VM.md §3, milestone M4). Gated on wasi-sdk.

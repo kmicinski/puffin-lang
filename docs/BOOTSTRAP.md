@@ -232,3 +232,79 @@ pluggable runtime, web-interpreter implementation, corpus test, and
 a full `-m all` + chain + `test-corpus.mjs` run. Final state:
 **549 + 183 checks, zero failures**, `docs/STDLIB.md` regenerated
 from the manifest.
+
+## 7. The Racket-free seed bootstrap (2026-07-13)
+
+Self-hosting (§5) still left Racket in the build loop: stage 1 was
+compiled by the Racket-hosted compiler. That loop is now closed the
+classic way — with a **committed binary seed**:
+
+- **`boot/puffincc.pbc`** — puffincc compiled to bytecode — is
+  committed (the one tracked `.pbc` in the tree). Bytecode was chosen
+  over a native seed because it is portable across both native
+  targets, deterministic, and runs on the VM we build from C anyway.
+- **`bin/bootstrap`** builds everything with a C toolchain only:
+
+  1. `make -C src/runtime` — libpuffin.a from `cc` + the *committed*
+     vendored Boehm archive;
+  2. `make -C src/vm` — `bin/puffin-vm` from `cc` + the *committed*
+     `src/vm/vm-prims.inc` (the Makefile regenerates that table only
+     when `racket` is actually on the PATH; a Racket-less machine
+     uses the committed copy with a loud note);
+  3. **stage 1**: the seed runs *on the VM* and compiles
+     `puffincc-src/main.puf` → `build/stage1.pbc`;
+  4. **native**: `stage1.pbc` runs on the VM and compiles the same
+     source to `build/puffincc` — puffincc shells out to
+     `/usr/bin/clang` through the VM's `system` primitive (native VM
+     only; the wasm build stubs it);
+  5. **stage 2**: `build/puffincc` self-compiles → `build/stage2.pbc`;
+  6. **stage 3**: `stage2.pbc` runs on the VM and self-compiles →
+     `build/stage3.pbc`; the script fails unless stage 2 and stage 3
+     are **byte-identical** (the fixpoint proof — same compiler
+     source, compiled by itself hosted natively and hosted on the VM).
+
+  Verified end-to-end with Racket stripped from `PATH`, and from a
+  fresh clone. ~6 minutes on an M-series mac (each self-compile is
+  ~85 s; the VM-hosted compiler and the `-O0` native one run at
+  about the same speed).
+
+### Seed freshness
+
+Classic self-hosting seed rules apply:
+
+- The seed does **not** need to match current `puffincc-src`
+  byte-for-byte; it only needs to be *able to compile* it. A stale
+  but compatible seed shifts `stage1.pbc` (bin/bootstrap notes this),
+  never the stage-2/stage-3 fixpoint.
+- Refresh at release points with **`bin/refresh-boot`**, which
+  rebuilds the seed from the current `build/puffincc` and refuses to
+  install a candidate that does not reach a self-compile fixpoint on
+  the VM. Commit the refreshed seed.
+- If `puffincc-src` starts using a language feature the committed
+  seed cannot compile, **refresh the seed first** from a commit that
+  can compile the tree (check out that commit, `bin/bootstrap`,
+  `bin/refresh-boot`, carry `boot/puffincc.pbc` forward) — or use the
+  hosted `bin/build-puffincc` as the escape hatch while Racket is
+  still around.
+
+### Role inversion: puffincc + the VM are the golden authority
+
+`tools/test-corpus.sh` is the Racket-free corpus harness: every
+program in `src/test-programs` × every `src/input-files/*.in`,
+compiled with `build/puffincc -t bytecode` and run on
+`bin/puffin-vm`, compared (trimmed) against `src/goldens` — 309
+checks. Its `gen` mode **writes** the goldens; regenerating and
+diffing against the previous reference-interpreter goldens produced
+an **empty diff** (309/309 byte-identical), so the inversion changed
+no golden. `racket src/test.rkt -m interp` (and `-m gen` + diff) is
+now the *oracle* leg: the differential test between the two
+implementations, no longer the author of record.
+
+### What still needs Racket (honestly)
+
+Only the **generators**: after a stdlib-manifest (`src/stdlib.rkt`)
+or prelude change, `src/gen-puffincc-tables.rkt`,
+`src/gen-vm-prims.rkt`, `tools/gen-prim-names.rkt`, and the
+STDLIB-doc generator re-derive the committed tables. Building,
+testing, and shipping Puffin — `bin/bootstrap`,
+`tools/test-corpus.sh`, `tools/gen-web-vm.sh` — need no Racket.

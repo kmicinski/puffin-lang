@@ -1,0 +1,39 @@
+#!/bin/sh
+# Refresh the committed bootstrap seed boot/puffincc.pbc from the
+# CURRENT toolchain (classic self-hosting seed discipline; see
+# docs/BOOTSTRAP.md "Seed freshness"). Run this at release points, or
+# whenever puffincc-src starts using a language feature the old seed
+# cannot compile (in that case build build/puffincc FIRST from a
+# commit whose seed still compiles the tree, or via the hosted
+# bin/build-puffincc, then run this).
+#
+#   bin/refresh-boot
+#
+# Uses build/puffincc (from bin/bootstrap or bin/build-puffincc), and
+# refuses to install a seed that does not reach a self-compile
+# fixpoint on the VM.
+set -e
+cd "$(dirname "$0")/.."
+
+test -x build/puffincc || {
+  echo "bin/refresh-boot: build/puffincc not found." >&2
+  echo "  build it first: bin/bootstrap (Racket-free) or bin/build-puffincc (hosted)" >&2
+  exit 1
+}
+test -x bin/puffin-vm || make -C src/vm
+mkdir -p boot
+
+echo "== compiling puffincc-src -> candidate seed =="
+build/puffincc -t bytecode -o boot/puffincc.pbc.new puffincc-src/main.puf
+
+echo "== fixpoint check: the candidate must self-compile to itself on the VM =="
+bin/puffin-vm boot/puffincc.pbc.new puffincc-src/main.puf -t bytecode -o build/seed-check.pbc
+if cmp boot/puffincc.pbc.new build/seed-check.pbc; then
+  mv boot/puffincc.pbc.new boot/puffincc.pbc
+  rm -f build/seed-check.pbc
+  echo "refreshed boot/puffincc.pbc ($(wc -c < boot/puffincc.pbc | tr -d ' ') bytes) -- commit it"
+else
+  rm -f boot/puffincc.pbc.new
+  echo "bin/refresh-boot: candidate seed did NOT reach a fixpoint; seed left unchanged" >&2
+  exit 1
+fi
