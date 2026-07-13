@@ -77,7 +77,7 @@ const cases = [
   // dispatched as function index 0 = the entry, so the program
   // re-entered main until the control stack died (the browser printed
   // its own output over and over)
-  { name: 'unbound', src: '(define-type Expr (Num Int) (Add Expr Expr))\n(define (ev [e : Expr]) : Int (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))\n(println (ev (Add (Num 1) (Num 2))))\n(ev (Plus 20 20))\n', expectError: 'unbound variable Plus' },
+  { name: 'unbound', src: '(define-type Expr (Num Int) (Add Expr Expr))\n(define (ev [e : Expr]) : Int (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))\n(println (ev (Add (Num 1) (Num 2))))\n(ev (Plus 20 20))\n', expectError: 'unbound variable Plus [main.puf:4]' },
 ];
 
 let pass = 0, fail = 0;

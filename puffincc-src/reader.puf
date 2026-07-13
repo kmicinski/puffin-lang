@@ -35,6 +35,41 @@
 (: reader-len Int)
 (define reader-len 0)
 
+;; source positions for diagnostics (mirrors the Racket reader's
+;; read-syntax lines): after read-forms-from-string returns,
+;; reader-form-lines holds each top-level form's 1-based line, in
+;; order. reader-file (a basename, set by callers before reading)
+;; names the file in the reader's own error messages.
+(define reader-form-lines (ann '() _))
+(define reader-file (ann #f _))
+
+;; count newlines in src[from, to), advancing `line`
+(: reader-advance-line (-> Int Int Int Int))
+(define (reader-advance-line from to line)
+  (let loop ([j from] [line line])
+    (if (>= j to)
+        line
+        (loop (+ j 1) (if (eq? (rd-peek j) B-nl) (+ line 1) line)))))
+
+;; the 1-based line of byte offset i (error paths only: O(i))
+(: reader-line-at (-> Int Int))
+(define (reader-line-at i) (reader-advance-line 0 i 1))
+
+;; a reader error names where it happened: "... [main.puf:7]"
+(: reader-error (-> Str Int _))
+(define (reader-error name i)
+  (error (string-append
+          name
+          (if reader-file
+              (string-append
+               " ["
+               (string-append
+                reader-file
+                (string-append ":"
+                               (string-append (number->string (reader-line-at i))
+                                              "]"))))
+              ""))))
+
 (: rd-peek (-> Int Int))
 (define (rd-peek i) (if (< i reader-len) (string-byte reader-src i) -1))
 
@@ -74,7 +109,7 @@
   (let loop ([j (+ i 1)] [acc ""])
     (define b (rd-peek j))
     (cond
-      [(< b 0) (error 'reader-unterminated-string)]
+      [(< b 0) (reader-error "reader-unterminated-string" i)]
       [(eq? b B-dquote) (cons (+ j 1) acc)]
       [(eq? b B-backslash)
        (define e (rd-peek (+ j 1)))
@@ -83,7 +118,7 @@
                [(eq? e 116) "\t"]
                [(eq? e B-backslash) "\\"]
                [(eq? e B-dquote) "\""]
-               [else (error 'reader-bad-escape)]))
+               [else (reader-error "reader-bad-escape" j)]))
        (loop (+ j 2) (string-append acc ch))]
       [else (loop (+ j 1) (string-append acc (substring reader-src j (+ j 1))))])))
 
@@ -93,13 +128,13 @@
   (let loop ([i (rd-skip i)] [acc '()])
     (define b (rd-peek i))
     (cond
-      [(< b 0) (error 'reader-unterminated-list)]
+      [(< b 0) (reader-error "reader-unterminated-list" i)]
       [(eq? b closer) (cons (+ i 1) (reverse acc))]
       ;; dotted tail: `.` followed by a delimiter
       [(and (eq? b B-dot) (delim-byte? (rd-peek (+ i 1))))
        (define tail (rd-form (rd-skip (+ i 1))))
        (define after (rd-skip (car tail)))
-       (unless (eq? (rd-peek after) closer) (error 'reader-bad-dotted-tail))
+       (unless (eq? (rd-peek after) closer) (reader-error "reader-bad-dotted-tail" after))
        (cons (+ after 1)
              (foldl (lambda (x acc) (cons x acc)) (cdr tail) acc))]
       [else
@@ -111,10 +146,10 @@
 (define (rd-form i)
   (define b (rd-peek i))
   (cond
-    [(< b 0) (error 'reader-unexpected-eof)]
+    [(< b 0) (reader-error "reader-unexpected-eof" i)]
     [(eq? b B-lparen) (rd-list (+ i 1) B-rparen)]
     [(eq? b B-lbrack) (rd-list (+ i 1) B-rbrack)]
-    [(or (eq? b B-rparen) (eq? b B-rbrack)) (error 'reader-unexpected-closer)]
+    [(or (eq? b B-rparen) (eq? b B-rbrack)) (reader-error "reader-unexpected-closer" i)]
     [(eq? b B-dquote) (rd-string i)]
     [(eq? b B-quote)
      (let ([f (rd-form (rd-skip (+ i 1)))])
@@ -142,8 +177,14 @@
 (define (read-forms-from-string s)
   (set! reader-src s)
   (set! reader-len (string-length s))
-  (let loop ([i (rd-skip 0)] [acc '()])
+  ;; track each top-level form's line as we go: `pos`/`line` are the
+  ;; last counted offset and its line, advanced form start to form
+  ;; start (O(n) total; see reader-form-lines above)
+  (let loop ([i (rd-skip 0)] [pos 0] [line 1] [acc '()] [lines '()])
     (if (>= i reader-len)
-        (reverse acc)
-        (let ([f (rd-form i)])
-          (loop (rd-skip (car f)) (cons (cdr f) acc))))))
+        (begin (set! reader-form-lines (reverse lines))
+               (reverse acc))
+        (let ([line (reader-advance-line pos i line)])
+          (let ([f (rd-form i)])
+            (loop (rd-skip (car f)) i line
+                  (cons (cdr f) acc) (cons line lines)))))))

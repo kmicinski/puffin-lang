@@ -238,18 +238,33 @@
          (set! current-target 'bytecode)
          (set! optimize-level 0)))
 
-(: compile-forms (-> (List _) _))
-(define (compile-forms raw-forms)
+(: compile-forms (-> (List _) _ _))
+(define (compile-forms raw-forms user-origins)
   ;; class-style files wrap everything in one (program ...) form
   (define user-forms
     (match raw-forms
       [`((program ,inner ...)) inner]
       [_ raw-forms]))
+  ;; source origins align only when nothing was unwrapped (a wrapper's
+  ;; inner forms carry no positions -- mirrors src/main.rkt)
+  (define origins
+    (if (and user-origins (eq? (length user-origins) (length user-forms)))
+        user-origins
+        #f))
   ;; REPL units get no prelude: the session loads the prelude once as
-  ;; its own REPL unit, and every prelude name late-binds by cell
+  ;; its own REPL unit, and every prelude name late-binds by cell.
+  ;; REPL evals also carry no positions.
   (if repl-mode
-      (run-chain `(program ,@user-forms))
-      (run-chain `(program ,@(prelude-inject user-forms) ,@user-forms))))
+      (begin
+        (set! form-origins #f)
+        (run-chain `(program ,@user-forms)))
+      (let ([pre (prelude-inject user-forms)])
+        (begin
+          ;; the prelude's forms carry no positions (embedded
+          ;; pre-parsed data)
+          (set! form-origins
+                (if origins (append (map (lambda (f) #f) pre) origins) #f))
+          (run-chain `(program ,@pre ,@user-forms))))))
 
 (: ends-with? (-> Str Str Bool))
 (define (ends-with? s suffix)
@@ -274,19 +289,32 @@
   ;; --repl-prelude: compile the embedded prelude as a REPL unit (the
   ;; session's first unit; docs/WASM-VM.md §5.2). No input file.
   [opt-repl-prelude
-   (let ([result (compile-forms prelude-forms-data)])
+   (let ([result (compile-forms prelude-forms-data #f)])
      (if opt-output (write-file opt-output result) (display result)))]
   ;; file mode: the entry of a module DAG (or a plain single file)
   [opt-input
-   (let* ([raw (read-forms-from-string (read-file opt-input))]
+   (let* ([base (path-basename opt-input)]
+          ;; name the entry file for the reader's error messages
+          [_rf (set! reader-file base)]
+          [raw (read-forms-from-string (read-file opt-input))]
+          [raw-lines reader-form-lines]
           ;; module programs take their options from the CLI, not
-          ;; directives; plain files keep the classic directives
-          [forms (if (module-forms? raw)
-                     (resolve-modules opt-input)
-                     (strip-directives raw))])
+          ;; directives; plain files keep the classic directives.
+          ;; Each top-level form's (basename . line) origin rides
+          ;; along: the resolver stashes the flattened DAG's origins;
+          ;; a plain file's origins drop the leading directives the
+          ;; way strip-directives does.
+          [fo (if (module-forms? raw)
+                  (let ([fs (resolve-modules opt-input)])
+                    (list fs resolved-origins))
+                  (let* ([fs (strip-directives raw)]
+                         [lines (drop raw-lines (- (length raw) (length fs)))])
+                    (list fs (map (lambda (l) (cons base l)) lines))))]
+          [forms (first fo)]
+          [origins (second fo)])
      (begin
        (when opt-target-flag (set! current-target opt-target-flag))
-       (let ([result (compile-forms forms)])
+       (let ([result (compile-forms forms origins)])
          (cond
            [(eq? result 'dumped) (void)]
            ;; bytecode: result is the .pbc byte string. write-file
@@ -303,6 +331,6 @@
        (when (module-forms? raw-forms)
          (error "puffincc: module programs need file mode (puffincc <file.puf>): stdin has no directory to resolve requires against"))
        (when opt-target-flag (set! current-target opt-target-flag))
-       (let ([result (compile-forms raw-forms)])
+       (let ([result (compile-forms raw-forms #f)])
          (unless (eq? result 'dumped)
            (display result)))))])

@@ -354,6 +354,19 @@
         (define f (read))
         (if (eof-object? f) (reverse acc) (loop (cons f acc)))))))
 
+;; forms plus each top-level form's line (for diagnostics; the module
+;; path reads its own files via modules.rkt read-module-forms+lines)
+(define (read-forms+lines file-name)
+  (with-input-from-file file-name
+    (λ ()
+      (port-count-lines! (current-input-port))
+      (let loop ([forms '()] [lines '()])
+        (define stx (read-syntax file-name (current-input-port)))
+        (if (eof-object? stx)
+            (values (reverse forms) (reverse lines))
+            (loop (cons (syntax->datum stx) forms)
+                  (cons (syntax-line stx) lines)))))))
+
 ;; The Puffin-written stdlib layer (map/filter/append/...): injected
 ;; into every program, minus any definition the program supplies
 ;; itself (class programs with their own `length` are untouched),
@@ -410,22 +423,36 @@
               (foldl (λ (n acc) (set-add acc n)) included new-names)))))
 
 (define (read-program-file file-name)
-  (define raw (read-forms file-name))
-  (define forms
+  (define-values (raw raw-lines) (read-forms+lines file-name))
+  (define base (path->string (file-name-from-path (path->complete-path file-name))))
+  (define-values (forms origins)
     (cond
       ;; module system (docs/MODULES.md): any require/provide form
       ;; makes this file the entry module of a require DAG, resolved
-      ;; to a flat form list before the pipeline sees it
-      [(module-forms? raw) (resolve-modules file-name)]
+      ;; to a flat form list before the pipeline sees it; the resolver
+      ;; stashes the flattened (basename . line) origins on the side
+      [(module-forms? raw)
+       (define fs (resolve-modules file-name))
+       (values fs (resolved-origins))]
       [else (match raw
-              [`((program ,inner ...)) inner]
-              [fs fs])]))
+              ;; class-style wrapper: no positions
+              [`((program ,inner ...)) (values inner (map (λ (_) #f) inner))]
+              [fs (values fs (map (λ (l) (and l (cons base l))) raw-lines))])]))
   ;; REPL units get no prelude: the session loads the prelude once as
   ;; its own REPL unit, and every prelude name late-binds by cell
-  ;; (docs/WASM-VM.md §5.2), so user redefinition shadows it.
-  (if (repl-mode?)
-      `(program ,@forms)
-      `(program ,@(prelude-forms forms) ,@forms)))
+  ;; (docs/WASM-VM.md §5.2), so user redefinition shadows it. REPL
+  ;; evals also carry no positions (docs: diagnostics say [file:line]
+  ;; for file programs only).
+  (cond
+    [(repl-mode?)
+     (surface-origins-set! #f)
+     `(program ,@forms)]
+    [else
+     (define pre (prelude-forms forms))
+     ;; the prelude's forms carry no positions (puffincc's prelude is
+     ;; embedded pre-parsed data -- neither compiler positions it)
+     (surface-origins-set! (append (map (λ (_) #f) pre) origins))
+     `(program ,@pre ,@forms)]))
 
 ;;
 ;; Main entrypoint

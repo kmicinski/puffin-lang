@@ -60,6 +60,62 @@
 ;; a symbol's source spelling (identity for anything unregistered)
 (define (module-demangle s) (hash-ref module-demangle-table s s))
 
+;; ---------------------------------------------------------------------
+;; Source positions for compile-time diagnostics (typechecker errors,
+;; exhaustiveness warnings, cast blame labels). Granularity is the
+;; TOP-LEVEL FORM: the reader records each top-level form's line, the
+;; module resolver threads (file . line) origins through the flatten +
+;; rename (the renamer is 1:1 per form), and read-program-file leaves
+;; one origins list aligned with the surface program's forms. Prelude
+;; forms, class-style (program ...) wrappers, REPL evals, and stdin
+;; programs carry #f (no position). The file component is the module's
+;; BASENAME: the two compilers spell full paths differently (absolute
+;; vs entry-joined), basenames agree byte-for-byte -- and read better.
+;; Mirrored by puffincc-src/system.puf.
+;; ---------------------------------------------------------------------
+
+;; NOTE: boxes + set-box!, NOT parameters/parameterize -- whole-program
+;; byte-identity depends on the module-load gensym budget (see the
+;; GENSYM-BUDGET INVARIANT note), and parameterize costs gensyms at
+;; instantiation where boxes cost none. The compiler is single-threaded.
+
+;; #f, or a list aligned 1:1 with the surface program's top-level
+;; forms; entries are (cons basename line) or #f
+(define surface-origins-box (box #f))
+(define (surface-origins) (unbox surface-origins-box))
+(define (surface-origins-set! v) (set-box! surface-origins-box v))
+;; stash for resolve-modules -> read-program-file (single-value return
+;; preserved for existing callers)
+(define resolved-origins-box (box #f))
+(define (resolved-origins) (unbox resolved-origins-box))
+(define (resolved-origins-set! v) (set-box! resolved-origins-box v))
+;; the origin of the top-level form currently being checked/desugared
+(define current-form-origin-box (box #f))
+(define (current-form-origin) (unbox current-form-origin-box))
+(define (current-form-origin-set! v) (set-box! current-form-origin-box v))
+
+;; " [file.puf:12]" when the current form's origin is known, else ""
+;; (pair test, not match: a cons match pattern costs module-load
+;; gensyms at expansion)
+(define (origin-suffix)
+  (define o (current-form-origin))
+  (if (pair? o) (format " [~a:~a]" (car o) (cdr o)) ""))
+
+;; iterate top-level forms with current-form-origin set per form; the
+;; origins list is consulted only when it aligns with `forms` (REPL
+;; and synthesized programs never align -- they carry no positions)
+(define (for-each-form forms proc)
+  (define os (surface-origins))
+  (define aligned? (and (list? os) (= (length os) (length forms))))
+  ;; multi-list for-each, not a parallel-clause `for`: multi-sequence
+  ;; for forms consume module-load gensyms at expansion
+  (for-each (λ (f o)
+              (current-form-origin-set! o)
+              (proc f))
+            forms
+            (if aligned? os (map (λ (_) #f) forms)))
+  (current-form-origin-set! #f))
+
 (define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)

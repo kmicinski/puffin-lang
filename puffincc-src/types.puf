@@ -34,7 +34,10 @@
   (if (null? xs) (void) (begin (f (car xs)) (for-each f (cdr xs)))))
 
 ;; ---- type errors ----------------------------------------------------
-(define (type-error msg) (error (string-append "typecheck: " msg)))
+;; every type error carries the nearest enclosing top-level form's
+;; source position when known (system.puf origin-suffix)
+(define (type-error msg)
+  (error (string-append "typecheck: " (string-append msg (origin-suffix)))))
 
 ;; ---- type syntax helpers --------------------------------------------
 
@@ -82,7 +85,7 @@
   (define ctors (make-hash))
   (define ctor-orders (make-hash))
   ;; pass 1: heads
-  (for-each
+  (for-each-form
    (lambda (f)
      (match f
        [`(define-type ,head ,_ ...)
@@ -98,7 +101,7 @@
        [_ (void)]))
    forms)
   ;; pass 2: constructor signatures
-  (for-each
+  (for-each-form
    (lambda (f)
      (match f
        [`(define-type ,head ,cs ...)
@@ -382,7 +385,7 @@
      ;; name against both namespaces (docs/MODULES.md), so a collision
      ;; would make an export ambiguous -- and locally, references and
      ;; annotations would silently mean different things
-     (for-each
+     (for-each-form
       (lambda (f)
         (let ([n (match f
                    [`(define (,g . ,_) ,_ ...) (if (symbol? g) g #f)]
@@ -568,9 +571,13 @@
                (let ([msg (format "match on ~a is not exhaustive: missing ~a"
                                   (nm name)
                                   (string-join (map (lambda (c) (symbol->string (nm c))) missing) ", "))])
+                 ;; the warning renders the position itself; the
+                 ;; strict error gets it from type-error -- same
+                 ;; bytes either way
                  (if strict-exhaustiveness
                      (type-error msg)
-                     (eprintln (string-append "typecheck warning: " msg)))))))))
+                     (eprintln (string-append "typecheck warning: "
+                                              (string-append msg (origin-suffix)))))))))))
 
      (define (synth-match scrut clauses env)
        (let ([st (synth scrut env)])
@@ -750,7 +757,7 @@
 
      ;; --- populate `top`: declared types, ctors, annotated defines ---
 
-     (for-each
+     (for-each-form
       (lambda (f)
         (match f
           [`(: ,n ,t) (check-type-wf t '() adts) (hash-set! top n t)]
@@ -773,7 +780,7 @@
           [_ (void)]))
       forms)
 
-     (for-each
+     (for-each-form
       (lambda (f)
         (match f
           [`(define (,g ,formals ...) : ,rt ,_ ...) #:when (valid-formals? formals)
@@ -805,7 +812,7 @@
 
      ;; --- check every top-level form under `top` ---
 
-     (for-each
+     (for-each-form
       (lambda (f)
         (match f
           [`(define-type ,_ ,_ ...) (void)]

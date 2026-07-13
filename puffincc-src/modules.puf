@@ -144,6 +144,12 @@
       (str-cat "/" joined)
       joined))
 
+;; a path's basename, as rendered in diagnostics ("main.puf")
+(: path-basename (-> Str Str))
+(define (path-basename p)
+  (define parts (path-split p))
+  (if (null? parts) p (last parts)))
+
 (: path-stem (-> Str Str))
 (define (path-stem p)
   (define parts (path-split p))
@@ -182,7 +188,7 @@
 
 ;; (require "path" [#:as M] [#:only (n ...)] [#:rename ((old new) ...)]
 ;;          [#:sig "path.pufs"]) -> req hash
-(define (parse-require f [base-dir : Str] [path : Str])
+(define (parse-require f [base-dir : Str] [path : Str] line)
   (define (bad) (module-error (str-cat "malformed require in " path)))
   (match f
     [`(require ,p . ,opts)
@@ -196,7 +202,8 @@
                 (module-error (str-cat "require " p ": #:as cannot be combined with #:only/#:rename")))
               (hash 'target (path-join base-dir p)
                     'alias alias 'only only 'renames renames
-                    'sig (if sig (path-join base-dir sig) #f)))]
+                    'sig (if sig (path-join base-dir sig) #f)
+                    'line line))]
            [`(,kw ,v . ,rest)
             (cond
               [(eq? kw kw-as)
@@ -213,15 +220,21 @@
            [_ (bad)])))]
     [_ (bad)]))
 
-(define (read-module-file [path : Str] from)
+(define (read-module-file [path : Str] from from-line)
   (unless (file-exists? path)
     (module-error (str-cat "required module not found: " path
-                                 (if (string? from) (str-cat " (from " from ")") ""))))
+                                 (if (string? from) (str-cat " (from " from ")") "")
+                                 (if (and from-line (string? from))
+                                     (str-cat " [" (path-basename from) ":"
+                                              (number->string from-line) "]")
+                                     ""))))
+  ;; name the file for the reader's own error messages (basename)
+  (set! reader-file (path-basename path))
   (read-forms-from-string (read-file path)))
 
 ;; signature ascription: returns the narrowed export set
 (define (check-signature [sig-path : Str] body top-names [mod-path : Str])
-  (define sig-forms (read-module-file sig-path mod-path))
+  (define sig-forms (read-module-file sig-path mod-path #f))
   (define entries
     (match sig-forms
       [`((signature ,name . ,entries))
@@ -266,7 +279,15 @@
    (set)
    entries))
 
-(define (parse-provides forms body top-names [path : Str])
+(define (parse-provides forms body top-names [path : Str] lines)
+  (define ls
+    (if (and lines (eq? (length lines) (length forms)))
+        lines
+        (map (lambda (f) #f) forms)))
+  ;; each provide form's line, parallel to provide-forms
+  (define provide-lines
+    (foldr2 (lambda (f l acc) (if (provide-form? f) (cons l acc) acc))
+            '() forms ls))
   (define provide-forms (filter provide-form? forms))
   (define sig-forms
     (filter (lambda (f)
@@ -286,7 +307,7 @@
               (module-error (str-cat "malformed provide in " path)))]))]
     [(null? provide-forms) top-names]
     [else
-     (foldl (lambda (pf provides)
+     (foldl2 (lambda (pf pl provides)
               (match pf
                 [`(provide . ,ns)
                  (foldl (lambda (n acc)
@@ -295,11 +316,15 @@
                               (module-error (str-cat "malformed provide in " path)))
                             (unless (set-member? top-names n)
                               (module-error (str-cat path " provides " (symbol->string n)
-                                                           ", which it does not define")))
+                                                           ", which it does not define"
+                                                           (if pl
+                                                               (str-cat " [" (path-basename path) ":"
+                                                                        (number->string pl) "]")
+                                                               ""))))
                             (set-add acc n)))
                         provides ns)]))
             (set)
-            provide-forms)]))
+            provide-forms provide-lines)]))
 
 ;; ---- loading the DAG -----------------------------------------------------
 ;; visit returns (loaded postorder ids); a module is
@@ -333,7 +358,7 @@
 
 (define (load-modules [entry-path : Str])
   (define entry-dir (path-dirname entry-path))
-  (define (visit path stack from state)
+  (define (visit path stack from from-line state)
     (match state
       [`(,loaded ,postorder ,ids)
        (cond
@@ -342,32 +367,50 @@
                                        (string-join (reverse (cons path stack)) " -> ")))]
          [(hash-has-key? loaded (path-key path)) state]
          [else
-          (let* ([raw (read-module-file path from)]
-                 [forms (match raw
-                          [`((program . ,inner)) inner]
-                          [_ raw])]
-                 [reqs (map (lambda (f) (parse-require f (path-dirname path) path))
-                            (filter require-form? forms))]
+          (let* ([raw (read-module-file path from from-line)]
+                 ;; each top-level form's line rides along (the reader
+                 ;; records them; a class-style wrapper's inner forms
+                 ;; carry no positions)
+                 [raw-lines reader-form-lines]
+                 [fl (match raw
+                       [`((program . ,inner))
+                        (list inner (map (lambda (f) #f) inner))]
+                       [_ (list raw raw-lines)])]
+                 [forms (first fl)]
+                 [lines (second fl)]
+                 [reqs (foldr2 (lambda (f l acc)
+                                 (if (require-form? f)
+                                     (cons (parse-require f (path-dirname path) path l) acc)
+                                     acc))
+                               '() forms lines)]
                  [state2 (foldl (lambda (r st)
-                                  (visit (hash-ref r 'target) (cons path stack) path st))
+                                  (visit (hash-ref r 'target) (cons path stack) path
+                                         (hash-ref r 'line) st))
                                 state reqs)]
-                 [body (filter (lambda (f) (not (or (require-form? f) (provide-form? f)))) forms)]
+                 [body-pairs (foldr2 (lambda (f l acc)
+                                       (if (or (require-form? f) (provide-form? f))
+                                           acc
+                                           (cons (cons f l) acc)))
+                                     '() forms lines)]
+                 [body (map (lambda (pr) (car pr)) body-pairs)]
+                 [body-lines (map (lambda (pr) (cdr pr)) body-pairs)]
                  [top-names (foldl (lambda (f acc)
                                      (foldl (lambda (n a) (set-add a n))
                                             acc (module-defn-names f)))
                                    (set) body)]
-                 [provides (parse-provides forms body top-names path)])
+                 [provides (parse-provides forms body top-names path lines)])
             (match state2
               [`(,loaded2 ,postorder2 ,ids2)
                (let* ([id (if (string=? path entry-path)
                               #f
                               (module-id path entry-dir ids2))]
                       [m (hash 'path path 'id id 'body body
-                               'top-names top-names 'provides provides 'reqs reqs)])
+                               'top-names top-names 'provides provides 'reqs reqs
+                               'lines body-lines)])
                  (list (hash-set loaded2 (path-key path) m)
                        (cons m postorder2)
                        (if id (hash-set ids2 (path-key id) path) ids2)))]))])]))
-  (match (visit entry-path '() #f (list (hash) '() (hash)))
+  (match (visit entry-path '() #f #f (list (hash) '() (hash)))
     [`(,loaded ,postorder ,_) (list loaded (reverse postorder))]))
 
 (: module-mangled (-> _ Sym Sym))
@@ -455,6 +498,16 @@
                               [(pair? v) (walk (cdr v) (walk (car v) acc))]
                               [else acc])))
                     (set) mods)])
+       ;; the renamer is 1:1 per form, so each module's body lines map
+       ;; straight onto its renamed forms; stash the flattened
+       ;; (basename . line) origins for the driver
+       (set! resolved-origins
+             (append-map
+              (lambda (m)
+                (let ([base (path-basename (hash-ref m 'path))])
+                  (map (lambda (l) (if l (cons base l) #f))
+                       (hash-ref m 'lines))))
+              mods))
        (append-map
         (lambda (m)
           (define m-path (hash-ref m 'path))
