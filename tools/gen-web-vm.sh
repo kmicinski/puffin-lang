@@ -18,7 +18,14 @@ make -C src/vm wasm-repl
 mkdir -p web/public
 cp bin/puffin-vm.wasm web/public/puffin-vm.wasm
 cp bin/puffin-vm-repl.wasm web/public/puffin-vm-repl.wasm
-bin/puffin -c -t bytecode -o web/public/puffincc.pbc puffincc-src/main.puf
+# puffincc.pbc comes from the SELF-HOSTED compiler (bin/bootstrap /
+# bin/build-puffincc), not from the Racket-hosted bin/puffin -- the
+# web artifacts are Racket-free end to end.
+test -x build/puffincc || {
+  echo "gen-web-vm.sh: build/puffincc not found -- run bin/bootstrap first" >&2
+  exit 1
+}
+build/puffincc -t bytecode -o web/public/puffincc.pbc puffincc-src/main.puf
 echo "wrote web/public/puffin-vm.wasm ($(wc -c < web/public/puffin-vm.wasm) bytes)"
 echo "wrote web/public/puffin-vm-repl.wasm ($(wc -c < web/public/puffin-vm-repl.wasm) bytes)"
 echo "wrote web/public/puffincc.pbc ($(wc -c < web/public/puffincc.pbc) bytes)"

@@ -1,0 +1,77 @@
+#!/bin/sh
+# Racket-free bootstrap: build puffincc from the COMMITTED seed
+# boot/puffincc.pbc (puffincc compiled to bytecode). The only tools
+# required are a C toolchain (cc/clang, make, ar/libtool/lipo) -- no
+# Racket anywhere on the machine. docs/BOOTSTRAP.md "The Racket-free
+# seed bootstrap" documents the chain and the seed-freshness rules.
+#
+#   bin/bootstrap
+#
+# The chain (~6 minutes on an M-series mac; each puffincc self-compile
+# is ~85 s):
+#
+#   make -C src/runtime          libpuffin.a (cc + the committed
+#                                vendored Boehm archive)
+#   make -C src/vm               bin/puffin-vm (cc; uses the COMMITTED
+#                                src/vm/vm-prims.inc -- the Makefile
+#                                only regenerates it when racket exists)
+#   stage 1   the seed runs ON the VM and compiles puffincc-src ->
+#             build/stage1.pbc          (bytecode)
+#   native    stage1.pbc runs ON the VM and compiles puffincc-src ->
+#             build/puffincc            (native; puffincc shells out to
+#             /usr/bin/clang via the VM's `system` prim; -O0 for the
+#             same assembler-size reason as bin/build-puffincc)
+#   stage 2   build/puffincc (native) self-compiles ->
+#             build/stage2.pbc          (bytecode)
+#   stage 3   stage2.pbc runs ON the VM and self-compiles ->
+#             build/stage3.pbc          (bytecode)
+#   fixpoint  stage2.pbc and stage3.pbc must be BYTE-IDENTICAL: the
+#             compiler compiled the same source twice, once hosted
+#             natively and once hosted on the VM, and agreed with
+#             itself. (stage1 == the seed additionally means the seed
+#             is fresh; a stale-but-compatible seed only shifts stage1,
+#             never the stage2/stage3 fixpoint.)
+#
+# After this, everything is self-hosted: tools/test-corpus.sh runs the
+# golden corpus through build/puffincc + bin/puffin-vm, and
+# tools/gen-web-vm.sh builds the browser artifacts from build/puffincc.
+set -e
+cd "$(dirname "$0")/.."
+
+test -f boot/puffincc.pbc || {
+  echo "bin/bootstrap: boot/puffincc.pbc missing (the committed seed)" >&2
+  exit 1
+}
+
+echo "== runtime (cc + committed vendored Boehm) =="
+make -C src/runtime
+echo "== bytecode VM (cc, committed vm-prims.inc) =="
+make -C src/vm
+mkdir -p build
+
+echo "== stage 1: seed (on the VM) compiles puffincc-src -> bytecode =="
+bin/puffin-vm boot/puffincc.pbc puffincc-src/main.puf -t bytecode -o build/stage1.pbc
+if cmp -s boot/puffincc.pbc build/stage1.pbc; then
+  echo "   stage1.pbc == boot/puffincc.pbc (seed is fresh)"
+else
+  echo "   note: stage1.pbc != the seed -- the seed predates current"
+  echo "   puffincc-src (fine as long as it can still compile it;"
+  echo "   refresh at the next release point: bin/refresh-boot)"
+fi
+
+echo "== native: stage1.pbc (on the VM) compiles puffincc-src -> build/puffincc =="
+bin/puffin-vm build/stage1.pbc puffincc-src/main.puf -O 0 -o build/puffincc
+
+echo "== stage 2: build/puffincc self-compiles -> bytecode =="
+build/puffincc -t bytecode -o build/stage2.pbc puffincc-src/main.puf
+
+echo "== stage 3: stage2.pbc (on the VM) self-compiles -> bytecode =="
+bin/puffin-vm build/stage2.pbc puffincc-src/main.puf -t bytecode -o build/stage3.pbc
+
+if cmp build/stage2.pbc build/stage3.pbc; then
+  echo "== FIXPOINT: stage3.pbc is byte-identical to stage2.pbc =="
+else
+  echo "bin/bootstrap: FIXPOINT FAILED: stage2.pbc != stage3.pbc" >&2
+  exit 1
+fi
+echo "bootstrap complete: build/puffincc (native, self-hosted, no Racket)"
