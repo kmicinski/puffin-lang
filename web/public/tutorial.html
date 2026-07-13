@@ -115,6 +115,7 @@ thead th { color: var(--text-secondary); font-weight: 600; }
     <a href="#types">Gradual types</a>
     <a href="#modules">Modules</a>
     <a href="#xmodules">Types across modules</a>
+    <a href="#ffi">Calling C (the FFI)</a>
     <a href="#running">Run it yourself</a>
   </details>
 </nav>
@@ -799,6 +800,94 @@ signature-level edit recompiles dependents while a body-only edit rebuilds just
 the one module. Typed <code>.pufs</code> entries like
 <code>(fun area (-&gt; Shape Int))</code> are accepted in signature files as well.</p>
 </aside>
+</section>
+
+<section id="ffi">
+<h2>Calling C (the FFI)</h2>
+<p>A foreign import is a <em>typed declaration</em>: the <code>foreign</code>
+form names a shared library and declares each function with the same
+<code>(: name τ)</code> syntax the type system already owns. The declared type
+does all the work — the checker types your call sites with it, and the runtime
+derives the marshaling from it (there is no way to write an unmarshaled call).
+Every output below is verbatim from real runs (native and the bytecode VM agree
+byte-for-byte):</p>
+<pre><code>(foreign "libSystem.B.dylib"
+  (: c-abs (-> Int Int) #:c-name "labs")
+  (: c-strlen (-> Str Int) #:c-name "strlen")
+  (: c-getenv (-> Str (Nullable Str)) #:c-name "getenv"))
+(println (c-abs -42))
+(println (c-strlen "a puffin appears"))
+(println (if (c-getenv "NO_SUCH_VARIABLE_SET") 'set 'unset))
+</code></pre>
+<pre><code>42
+16
+unset
+</code></pre>
+<p>The pieces, briefly. The library loads (<code>dlopen</code>) when the module's
+top level runs — a missing library or symbol is a <em>load-time</em> error.
+<code>#:c-name</code> picks the linker symbol (default: the Puffin name with
+<code>-</code> → <code>_</code>). Marshallable types are <code>Int</code> (with
+width spellings <code>I8</code>…<code>U64</code> for narrow C types),
+<code>Bool</code>, <code>Str</code> (borrowed out, copied in), <code>Void</code>
+results, opaque handle types, and <code>(Nullable τ)</code> results, which map
+C's <code>NULL</code> to <code>#f</code> — C's billion-dollar mistake stays
+quarantined in the marshaler. A foreign name is an ordinary binding:
+<code>procedure?</code> says <code>#t</code>, it <code>provide</code>s, and
+<code>(map c-abs xs)</code> works.</p>
+<aside class="qa">
+<div class="q">What happens when the C side gets — or returns — the wrong thing?</div>
+<p><strong>The same transient casts that guard annotations guard the boundary
+— and here they never erase.</strong> Every argument is checked against its
+declared type and every result is range-checked and reconstructed (a C
+function returning <code>INT64_MAX</code> is a loud 61-bit error, never a
+silently wrapped number). Failures blame the import:</p>
+<pre><code>(foreign "libSystem.B.dylib" (: c-abs (-> Int Int) #:c-name "labs"))
+(define (f x) (c-abs x))
+(println (f 'oops))
+</code></pre>
+<pre><code>puffin runtime error: cast: expected Int, got oops (blame: foreign c-abs's argument 1 [tut2.puf:1])
+</code></pre>
+</aside>
+<p>Opaque C pointers cross as <em>foreign handles</em>: declare the type with
+<code>define-foreign-type</code> and it becomes a branded, unforgeable heap
+kind — no user code can mint one from an <code>Int</code>, passing a
+<code>Regex</code> where a <code>Sqlite</code> is declared is a blamed cast
+error, and <code>#:consumes</code> marks the close function so use-after-close
+and double-close are loud errors instead of double frees. Here is the Puffin
+face over a Rust regex crate (<code>tests/ffi-demo/pfregex</code> in the repo —
+a <code>cdylib</code> with <code>extern "C"</code> exports is
+indistinguishable from a C library):</p>
+<pre><code>(define-foreign-type Regex)
+(foreign "../target/release/libpfregex.dylib"
+  (: regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
+  (: regex-match?  (-> Regex Str Bool)       #:c-name "pfregex_is_match")
+  (: regex-find    (-> Regex Str (Nullable Str)) #:c-name "pfregex_find"
+                                                 #:gift "pfregex_str_free")
+  (: regex-close   (-> Regex Void)           #:c-name "pfregex_free"
+                                             #:consumes))
+(define re (regex-compile "pu[f]+in"))
+(println (regex-match? re "a puffin appears"))
+(println (regex-find re "one pufffin, two puffins"))
+(regex-close re)
+(println re)
+</code></pre>
+<pre><code>#t
+pufffin
+#&lt;Regex closed&gt;
+</code></pre>
+<p><code>#:gift</code> names the deallocator for a malloc'd string result: the
+runtime copies the string and immediately frees the original through the
+<em>library's own</em> free function, so the two allocators never touch each
+other's memory. Forget to close a handle and the leak detector tells you at
+exit (<code>puffin ffi warning: 1 foreign handle left open at exit:
+#&lt;Regex&gt;</code>) — closing is still your job. And one honest limit: the
+browser has no <code>dlopen</code>, so the playground <em>compiles</em> FFI
+programs fine but refuses to run them at load, with exactly:</p>
+<pre><code>error: foreign library libpfregex.dylib is not available in the browser
+</code></pre>
+<p>The full design — the marshaling table, the blame discipline, C++ and Rust
+guest rules, and what stays out (floats, callbacks, struct marshaling) — is
+<code>docs/FFI.md</code>.</p>
 </section>
 
 <section id="running">

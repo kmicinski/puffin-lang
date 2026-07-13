@@ -1,0 +1,13 @@
+;; the #:include cross-check (docs/FFI.md §9.3): every declaration
+;; verified against the library's own header at compile time
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib" #:include "./cdemo.h"
+  (: cdemo-add (-> Int Int Int))
+  (: cdemo-even (-> Int Bool))
+  (: cdemo-greet (-> Str Str) #:gift "cdemo_free_str")
+  (: cdemo-inc32 (-> I32 I32))
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes))
+(define b (box-new 5))
+(println (cdemo-add 40 2))
+(box-close b)
