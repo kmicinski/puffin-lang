@@ -1,0 +1,21 @@
+;; the Puffin face for the Rust pfregex crate (docs/FFI.md §9.4):
+;; foreign imports wrapped and re-exported TYPED -- clients cannot
+;; tell (and must not be able to tell) that Rust is behind it
+(provide Regex regex-compile regex-match? regex-find regex-count regex-close
+         count-all)
+(define-foreign-type Regex)
+(foreign "../target/release/libpfregex.dylib"
+  (: regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
+  (: regex-match?  (-> Regex Str Bool)       #:c-name "pfregex_is_match")
+  (: regex-find    (-> Regex Str (Nullable Str)) #:c-name "pfregex_find"
+                                                 #:gift "pfregex_str_free")
+  (: regex-count   (-> Regex Str Int)        #:c-name "pfregex_count")
+  (: regex-close   (-> Regex Void)           #:c-name "pfregex_free"
+                                             #:consumes))
+;; a typed Puffin wrapper over the imports: compile, count, close
+(define (count-all [pat : Str] [texts : (List Str)]) : Int
+  (define re (regex-compile pat))
+  (if re
+      (let ([n (foldl (lambda (t acc) (+ acc (regex-count re t))) 0 texts)])
+        (begin (regex-close re) n))
+      (- 0 1)))

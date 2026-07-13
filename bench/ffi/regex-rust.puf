@@ -1,0 +1,16 @@
+;; the Rust regex crate through the FFI: count matches over a
+;; synthesized corpus (compare regex-puffin.puf)
+(define-foreign-type Regex)
+(foreign "../../tests/ffi-demo/pfregex/target/release/libpfregex.dylib"
+  (: regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
+  (: regex-count (-> Regex Str Int) #:c-name "pfregex_count")
+  (: regex-close (-> Regex Void) #:c-name "pfregex_free" #:consumes))
+(define (make-line i)
+  (string-append "the puffin count is "
+                 (string-append (number->string i)
+                                (if (eq? (remainder i 3) 0) " puffins!" " birds"))))
+(define re (regex-compile "pu[f]+in[s]?"))
+(define (loop i acc)
+  (if (eq? i 0) acc (loop (- i 1) (+ acc (regex-count re (make-line i))))))
+(println (loop 20000 0))
+(regex-close re)

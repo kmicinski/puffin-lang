@@ -1,0 +1,5 @@
+;; the baseline: the same 10,000,000-iteration loop over one manifest
+;; prim call (quotient = a direct C call, no marshaling loop)
+(define (loop i acc)
+  (if (eq? i 0) acc (loop (- i 1) (quotient acc 1))))
+(println (loop 10000000 7))

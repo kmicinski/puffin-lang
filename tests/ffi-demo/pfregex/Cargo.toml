@@ -1,0 +1,16 @@
+[package]
+name = "pfregex"
+version = "0.1.0"
+edition = "2021"
+
+# cdylib: dlopen wants the dylib (docs/FFI.md §9.2)
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+regex = "1"
+
+# panics must not cross the boundary: abort is the honest default
+# (docs/FFI.md §9.2), matching the runtime's pf_fatal philosophy
+[profile.release]
+panic = "abort"

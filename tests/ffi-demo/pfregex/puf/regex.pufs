@@ -1,0 +1,11 @@
+;; a typed signature over the FFI face (docs/MODULES.md §2 + FFI.md):
+;; foreign imports ascribe like any function -- their declared arrows
+;; are the module's types
+(signature regex
+  (type Regex)
+  (fun regex-compile (-> Str _))
+  (fun regex-match? (-> Regex Str Bool))
+  (fun regex-find 2)
+  (fun regex-count (-> Regex Str Int))
+  (fun regex-close 1)
+  (fun count-all (-> Str (List Str) Int)))
