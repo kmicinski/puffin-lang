@@ -45,7 +45,10 @@
 (struct exn:type-error exn:fail ())
 (define (type-error? e) (exn:type-error? e))
 (define (type-error fmt . args)
-  (raise (exn:type-error (string-append "typecheck: " (apply format fmt args))
+  ;; every type error carries the nearest enclosing top-level form's
+  ;; source position when known (system.rkt origin-suffix)
+  (raise (exn:type-error (string-append "typecheck: " (apply format fmt args)
+                                        (origin-suffix))
                          (current-continuation-marks))))
 
 ;; ---------------------------------------------------------------------
@@ -100,7 +103,8 @@
   (define ctors (make-hasheq))  ;; ctor name -> ctor-info
   (define ctor-orders (make-hasheq))  ;; type name -> (ctor ...) in declaration order
   ;; pass 1: heads
-  (for ([f forms])
+  (for-each-form forms
+   (λ (f)
     (match f
       [`(,(or 'define-type '#%extern-type) ,head ,_ ...)
        (define-values (n ps)
@@ -112,10 +116,11 @@
        (when (hash-has-key? adts n)
          (type-error "type ~a defined twice" (nm n)))
        (hash-set! adts n (adt n ps (make-hasheq)))]
-      [_ (void)]))
+      [_ (void)])))
   ;; pass 2: constructor signatures (any type in the program may be
   ;; referenced -- the implicit recursive loop)
-  (for ([f forms])
+  (for-each-form forms
+   (λ (f)
     (match f
       [`(,(or 'define-type '#%extern-type) ,head ,cs ...)
        (define n (match head [`(,n ,_ ...) n] [n n]))
@@ -129,7 +134,7 @@
             (for ([ft fts]) (check-type-wf ft (adt-params a) adts))
             (hash-set! (adt-ctors a) cn fts)
             (hash-set! ctors cn (ctor-info n (adt-params a) fts))]))]
-      [_ (void)]))
+      [_ (void)])))
   (values adts ctors ctor-orders))
 
 ;; well-formedness: names resolve, arities match
@@ -293,14 +298,15 @@
      ;; name against both namespaces (docs/MODULES.md), so a collision
      ;; would make an export ambiguous -- and locally, references and
      ;; annotations would silently mean different things
-     (for ([f forms])
+     (for-each-form forms
+      (λ (f)
        (define n
          (match f
            [`(define (,g . ,_) ,_ ...) (and (symbol? g) g)]
            [`(define ,(? symbol? x) ,_) x]
            [_ #f]))
        (when (and n (hash-has-key? adts n))
-         (type-error "~a is defined as both a type and a value" (nm n))))
+         (type-error "~a is defined as both a type and a value" (nm n)))))
 
      ;; the top-level environment: declared types, annotated defines,
      ;; constructors; everything else _
@@ -318,7 +324,8 @@
              [else
               (define-values (fixed rest) (split-dotted (cdr formals)))
               (values (cons (car formals) fixed) rest)]))
-     (for ([f forms])
+     (for-each-form forms
+      (λ (f)
        (match f
          [`(: ,n ,t)
           (check-type-wf t '() adts)
@@ -339,8 +346,9 @@
                (define res* (if (null? (ctor-info-params info)) (ctor-info-owner info) res))
                (hash-set! top cn
                           (if (null? fts) res* `(-> ,@fts ,res*)))]))]
-         [_ (void)]))
-     (for ([f forms])
+         [_ (void)])))
+     (for-each-form forms
+      (λ (f)
        (match f
          [`(define (,g ,formals ...) : ,rt ,_ ...)
           #:when (andmap (λ (x) (or (symbol? x) (and (list? x) (= 3 (length x))))) formals)
@@ -368,7 +376,7 @@
          [`(define (,g . ,_) ,_ ...)
           #:when (symbol? g)
           (unless (hash-has-key? top g) (hash-set! top g '_))]
-         [_ (void)]))
+         [_ (void)])))
 
      ;; instantiate a possibly-polymorphic type at a use site
      (define (instantiate-fresh t)
@@ -554,9 +562,11 @@
            (define msg (format "match on ~a is not exhaustive: missing ~a"
                                (nm name)
                                (string-join (map (λ (c) (symbol->string (nm c))) missing) ", ")))
+           ;; the warning renders the position itself; the strict
+           ;; error gets it from type-error -- same bytes either way
            (if (strict-exhaustiveness?)
                (type-error "~a" msg)
-               (eprintf "typecheck warning: ~a\n" msg)))))
+               (eprintf "typecheck warning: ~a~a\n" msg (origin-suffix))))))
 
      ;; bidirectional core: synth returns the expression's type
      (define (synth e env)
@@ -735,7 +745,8 @@
      (define (formal-name* f) (match f [`(,x : ,_) x] [x x]))
 
      ;; check every top-level form under `top`
-     (for ([f forms])
+     (for-each-form forms
+      (λ (f)
        (match f
          [`(define-type ,_ ,_ ...) (void)]
          [`(#%extern-type ,_ ,_ ...) (void)]
@@ -783,7 +794,7 @@
           (unless (consistent? et dt)
             (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
           (when (eq? dt '_) (hash-set! top x et))]
-         [e (synth e '())]))
+         [e (synth e '())])))
      ;; typed interfaces (separate compilation): deposit the final
      ;; top-level environment -- declared, derived, and synthesized
      ;; types alike -- for the .pufi writer. Inert when unset.

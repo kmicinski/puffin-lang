@@ -60,6 +60,46 @@
 ;; a symbol's source spelling (identity for anything unregistered)
 (define (module-demangle s) (hash-ref module-demangle-table s s))
 
+;; ---------------------------------------------------------------------
+;; Source positions for compile-time diagnostics (typechecker errors,
+;; exhaustiveness warnings, cast blame labels). Granularity is the
+;; TOP-LEVEL FORM: the reader records each top-level form's line, the
+;; module resolver threads (file . line) origins through the flatten +
+;; rename (the renamer is 1:1 per form), and read-program-file leaves
+;; one origins list aligned with the surface program's forms. Prelude
+;; forms, class-style (program ...) wrappers, REPL evals, and stdin
+;; programs carry #f (no position). The file component is the module's
+;; BASENAME: the two compilers spell full paths differently (absolute
+;; vs entry-joined), basenames agree byte-for-byte -- and read better.
+;; Mirrored by puffincc-src/system.puf.
+;; ---------------------------------------------------------------------
+
+;; #f, or a list aligned 1:1 with the surface program's top-level
+;; forms; entries are (cons basename line) or #f
+(define surface-origins (make-parameter #f))
+;; stash for resolve-modules -> read-program-file (single-value return
+;; preserved for existing callers)
+(define resolved-origins (make-parameter #f))
+;; the origin of the top-level form currently being checked/desugared
+(define current-form-origin (make-parameter #f))
+
+;; " [file.puf:12]" when the current form's origin is known, else ""
+(define (origin-suffix)
+  (match (current-form-origin)
+    [(cons file line) (format " [~a:~a]" file line)]
+    [_ ""]))
+
+;; iterate top-level forms with current-form-origin set per form; the
+;; origins list is consulted only when it aligns with `forms` (REPL
+;; and synthesized programs never align -- they carry no positions)
+(define (for-each-form forms proc)
+  (define os (surface-origins))
+  (define aligned? (and (list? os) (= (length os) (length forms))))
+  (for ([f (in-list forms)]
+        [o (in-list (if aligned? os (map (λ (_) #f) forms)))])
+    (parameterize ([current-form-origin o])
+      (proc f))))
+
 (define (yesno b?) (if b? "YES" "NO")) ;; pretty terminal output
 
 (define (host-os)      (system-type 'os))       ; 'macosx or 'unix (Linux/BSD)

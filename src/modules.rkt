@@ -50,12 +50,27 @@
 ;; reading
 ;; ---------------------------------------------------------------------
 
-(define (read-module-forms file-name)
+;; read a file's top-level forms plus each form's (1-based) line --
+;; read-syntax instead of read, so the reader itself records where
+;; every top-level form starts (same datums; positions on the side)
+(define (read-module-forms+lines file-name)
   (with-input-from-file file-name
     (λ ()
-      (let loop ([acc '()])
-        (define f (read))
-        (if (eof-object? f) (reverse acc) (loop (cons f acc)))))))
+      (port-count-lines! (current-input-port))
+      (let loop ([forms '()] [lines '()])
+        (define stx (read-syntax file-name (current-input-port)))
+        (if (eof-object? stx)
+            (values (reverse forms) (reverse lines))
+            (loop (cons (syntax->datum stx) forms)
+                  (cons (syntax-line stx) lines)))))))
+
+(define (read-module-forms file-name)
+  (define-values (forms _lines) (read-module-forms+lines file-name))
+  forms)
+
+;; a path's basename, as rendered in diagnostics ("main.puf")
+(define (path-basename p)
+  (path->string (file-name-from-path p)))
 
 (define (require-form? f) (match f [`(require ,_ ...) #t] [_ #f]))
 (define (provide-form? f) (match f [`(provide ,_ ...) #t] [_ #f]))
@@ -151,10 +166,11 @@
              body      ; top-level forms minus require/provide
              top-names ; seteq of top-level defined names
              provides  ; seteq of exported (source) names
-             reqs)     ; list of req, in source order
+             reqs      ; list of req, in source order
+             lines)    ; per-body-form source line (or #f), parallel to body
   #:transparent)
 
-(struct req (path alias only renames sig-path) #:transparent)
+(struct req (path alias only renames sig-path line) #:transparent)
 
 ;; the spelling other modules see for `name` exported by `m`
 (define (mangled m name)
@@ -168,7 +184,7 @@
 
 ;; (require "path" [#:as M] [#:only (n ...)] [#:rename ((old new) ...)]
 ;;          [#:sig "path.pufs"])
-(define (parse-require f base-dir)
+(define (parse-require f base-dir [line #f])
   (define (bad) (module-error "malformed require: ~a" f))
   (match f
     [`(require ,(? string? path) ,opts ...)
@@ -179,7 +195,8 @@
             (module-error "require ~a: #:as cannot be combined with #:only/#:rename" path))
           (req (simplify-path (path->complete-path path base-dir) #f)
                alias only renames
-               (and sig (simplify-path (path->complete-path sig base-dir) #f)))]
+               (and sig (simplify-path (path->complete-path sig base-dir) #f))
+               line)]
          [`(#:as ,(? symbol? m) . ,rest) (loop rest m only renames sig)]
          [`(#:only (,(? symbol? ns) ...) . ,rest) (loop rest alias ns renames sig)]
          [`(#:rename ([,(? symbol? olds) ,(? symbol? news)] ...) . ,rest)
@@ -190,7 +207,10 @@
 
 ;; (provide n ...) or (provide #:sig "path.pufs"); a module's provide
 ;; forms are unioned, sig ascription must be the only provide
-(define (parse-provides forms base-dir top-names path)
+(define (parse-provides forms base-dir top-names path [lines #f])
+  (define ls (if (and lines (= (length lines) (length forms))) lines (map (λ (_) #f) forms)))
+  (define provide-lines
+    (for/list ([f forms] [l ls] #:when (provide-form? f)) l))
   (define provide-forms (filter provide-form? forms))
   (define sig-forms
     (filter (λ (f) (match f [`(provide #:sig ,_) #t] [_ #f])) provide-forms))
@@ -205,12 +225,13 @@
      ;; no provide form at all: everything top-level is provided
      top-names]
     [else
-     (for/fold ([acc (seteq)]) ([pf provide-forms])
+     (for/fold ([acc (seteq)]) ([pf provide-forms] [pl provide-lines])
        (match pf
          [`(provide ,(? symbol? ns) ...)
           (for ([n ns])
             (unless (set-member? top-names n)
-              (module-error "~a provides ~a, which it does not define" path n)))
+              (module-error "~a provides ~a, which it does not define~a" path n
+                            (if pl (format " [~a:~a]" (path-basename path) pl) ""))))
           (for/fold ([a acc]) ([n ns]) (set-add a n))]
          [_ (module-error "malformed provide in ~a: ~a" path pf)]))]))
 
@@ -319,7 +340,7 @@
       (module-error "module id collision between ~a and ~a" (hash-ref ids id) abs))
     (hash-set! ids id abs)
     id)
-  (define (visit abs stack)
+  (define (visit abs stack [from-line #f])
     (define key (path->string abs))
     (cond
       [(member key (map path->string stack))
@@ -328,27 +349,37 @@
       [(hash-ref loaded key #f) => values]
       [else
        (unless (file-exists? abs)
-         (module-error "required module not found: ~a~a"
+         (module-error "required module not found: ~a~a~a"
                        abs
-                       (if (null? stack) "" (format " (from ~a)" (path->string (car stack))))))
-       (define raw (read-module-forms abs))
-       (define forms
+                       (if (null? stack) "" (format " (from ~a)" (path->string (car stack))))
+                       (if (and from-line (pair? stack))
+                           (format " [~a:~a]" (path-basename (car stack)) from-line)
+                           "")))
+       (define-values (raw raw-lines) (read-module-forms+lines abs))
+       (define-values (forms form-lines)
          (match raw
-           [`((program ,inner ...)) inner]  ; tolerate class-style wrapper
-           [fs fs]))
+           ;; class-style wrapper: inner forms carry no positions
+           [`((program ,inner ...)) (values inner (map (λ (_) #f) inner))]
+           [fs (values fs raw-lines)]))
        (define reqs
-         (for/list ([f forms] #:when (require-form? f))
-           (parse-require f (path-only abs))))
+         (for/list ([f forms] [l form-lines]
+                    #:when (require-form? f))
+           (parse-require f (path-only abs) l)))
        ;; load dependencies first (postorder)
-       (for ([r reqs]) (visit (req-path r) (cons abs stack)))
-       (define body (filter (λ (f) (not (or (require-form? f) (provide-form? f)))) forms))
+       (for ([r reqs]) (visit (req-path r) (cons abs stack) (req-line r)))
+       (define body+lines
+         (for/list ([f forms] [l form-lines]
+                    #:unless (or (require-form? f) (provide-form? f)))
+           (cons f l)))
+       (define body (map car body+lines))
+       (define body-lines (map cdr body+lines))
        (define top-names
          (for/fold ([acc (seteq)]) ([f body])
            (for/fold ([a acc]) ([n (defn-names f)]) (set-add a n))))
-       (define provides (parse-provides forms (path-only abs) top-names abs))
+       (define provides (parse-provides forms (path-only abs) top-names abs form-lines))
        (define m (mod abs
                       (if (equal? abs entry-abs) #f (module-id abs))
-                      body top-names provides reqs))
+                      body top-names provides reqs body-lines))
        (hash-set! loaded key m)
        (set! postorder (cons m postorder))
        m]))
@@ -504,4 +535,13 @@
                                       (mod-path m) n (mod-path dep) s))
                       (mangled dep n))))))
       (rename-forms (mod-body m) ren qual)))
+  ;; the renamer is 1:1 per form, so each module's body-lines map
+  ;; straight onto its renamed forms; stash the flattened origins for
+  ;; read-program-file (see system.rkt: resolved-origins)
+  (resolved-origins
+   (append*
+    (for/list ([m mods])
+      (define base (path-basename (mod-path m)))
+      (for/list ([l (mod-lines m)])
+        (and l (cons base l))))))
   (apply append flat))

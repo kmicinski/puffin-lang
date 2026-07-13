@@ -154,10 +154,13 @@
        `(adt ,(demangle-type t) ,@(hash-ref type-ctors n))]
       [_ #f]))
   ;; surface rewrite: e checked against t, or e untouched if t has no
-  ;; first-order check (h then compiles cast-check like any prim)
+  ;; first-order check (h then compiles cast-check like any prim).
+  ;; The blame label carries the declared boundary's source position
+  ;; (system.rkt origin-suffix) -- resolved HERE, at desugar time:
+  ;; compile-time strings, no runtime cost change.
   (define (cast-expr e t blame)
     (define d (cast-desc t))
-    (if d `(cast-check ,e (quote ,d) ,blame) e))
+    (if d `(cast-check ,e (quote ,d) ,(string-append blame (origin-suffix))) e))
   ;; the shared body rewrite for annotated/declared functions: entry
   ;; checks on the annotated formals, a result check wrapping the
   ;; body -- (let () ...) keeps internal-define scoping intact under
@@ -169,13 +172,15 @@
        (λ (x t)
          (define d (cast-desc t))
          (and d `(cast-check ,x (quote ,d)
-                             ,(string-append owner "'s argument " (nm-str x)))))
+                             ,(string-append owner "'s argument " (nm-str x)
+                                             (origin-suffix)))))
        formal-names arg-ts))
     (define body+
       (cond
         [(cast-desc rt)
          => (λ (d) (list `(cast-check (let () ,@body) (quote ,d)
-                                      ,(string-append owner "'s result"))))]
+                                      ,(string-append owner "'s result"
+                                                      (origin-suffix)))))]
         [else body]))
     (append entry body+))
   ;; a (: f ...) declaration supplies the formal/result types a
@@ -774,10 +779,26 @@
 
   ;; Top-level definitions shadow stdlib primitives; colliding names
   ;; are renamed here, once, for the whole program.
-  (define-values (top-bound top-forms)
+  ;;
+  ;; Source origins ride along: each surface form's origin (see
+  ;; system.rkt) is set while it lowers (formal/result blame labels
+  ;; are built there) and replicated onto every form the lowering
+  ;; yields, so the per-form walk below (ann/let/define blame labels)
+  ;; sees the right position too.
+  (define-values (top-bound top-forms top-origins)
     (match p
       [`(program ,forms ...)
-       (define lowered (append-map lower-type-form forms))
+       (define os (surface-origins))
+       (define aligned?
+         (and (list? os) (= (length os) (length forms))))
+       (define pieces
+         (for/list ([form forms]
+                    [o (if aligned? os (map (λ (_) #f) forms))])
+           (parameterize ([current-form-origin o])
+             (define ls (lower-type-form form))
+             (cons ls (map (λ (_) o) ls)))))
+       (define lowered (append-map car pieces))
+       (define lorigins (append-map cdr pieces))
        (define-values (b _)
          (bind* (hash)
                 (filter-map (λ (form)
@@ -787,7 +808,7 @@
                                 [`(define ,(? symbol? x) ,_) x]
                                 [_ #f]))
                             lowered)))
-       (values b lowered)]))
+       (values b lowered lorigins)]))
   (define (per-form form)
     (match form
       [`(define (,f ,xs ...) ,body ...)
@@ -806,7 +827,9 @@
       [`(define ,(? symbol? x) ,e)
        `(define ,(hash-ref top-bound x x) ,(h e top-bound))]
       [e (h e top-bound)]))
-  `(program ,@(map per-form top-forms)))
+  `(program ,@(for/list ([form top-forms] [o top-origins])
+                (parameterize ([current-form-origin o])
+                  (per-form form)))))
 
 ;; ---------------------------------------------------------------------
 ;; Pass: shrink
