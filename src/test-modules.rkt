@@ -154,7 +154,7 @@
                         "  (match s [Point 'dot] [(Circle _) 'round] [(Rect _ _) 'box]))"
                         "(println (describe (Circle 7)))")])
   (define-values (r p) (front-ends entry))
-  (check-equal? (third r) "error: typecheck: unknown type Shape\n")
+  (check-equal? (third r) "error: typecheck: unknown type Shape [xm-np.puf:2]\n")
   (check-equal? (second p) (third r))
   (check-equal? (first p) 1))
 
@@ -164,7 +164,8 @@
                         "(define (f [s : Shape]) : Int (area s))"
                         "(println (f 5))")])
   (define-values (r p) (front-ends entry))
-  (check-equal? (third r) "error: typecheck: f: argument has type Int, expected Shape\n")
+  ;; the position is the CALL's line (the erroring form), not f's
+  (check-equal? (third r) "error: typecheck: f: argument has type Int, expected Shape [xm-mismatch.puf:3]\n")
   (check-equal? (second p) (third r)))
 
 ;; define-type + define of one name is a (byte-identical) error
@@ -173,7 +174,7 @@
                         "(define Shape 5)"
                         "(println Shape)")])
   (define-values (r p) (front-ends entry))
-  (check-equal? (third r) "error: typecheck: Shape is defined as both a type and a value\n")
+  (check-equal? (third r) "error: typecheck: Shape is defined as both a type and a value [xm-collide.puf:2]\n")
   (check-equal? (second p) (third r)))
 
 ;; ...as is define-type of a builtin
@@ -181,7 +182,7 @@
                         "(define-type Int (MkInt))"
                         "(println 1)")])
   (define-values (r p) (front-ends entry))
-  (check-equal? (third r) "error: typecheck: define-type cannot redefine built-in type Int\n")
+  (check-equal? (third r) "error: typecheck: define-type cannot redefine built-in type Int [xm-int.puf:1]\n")
   (check-equal? (second p) (third r)))
 
 ;; a cross-module exhaustiveness warning names Shape and Rect, not
@@ -192,7 +193,7 @@
                         "  (match s [Point 0] [(Circle r) r]))"
                         "(println (g (Circle 5)))")])
   (define-values (r p) (front-ends entry))
-  (check-equal? (third r) "typecheck warning: match on Shape is not exhaustive: missing Rect\n")
+  (check-equal? (third r) "typecheck warning: match on Shape is not exhaustive: missing Rect [xm-exh.puf:2]\n")
   (check-equal? (first r) 0)
   (check-equal? (third p) (third r)))
 
@@ -203,7 +204,9 @@
                         "(require \"shapes.puf\")"
                         "(define (h s) (area s))"
                         "(println (h 99))")])
-  (define expected "puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s)\n")
+  ;; the blame carries the DECLARED boundary's position: area's
+  ;; define in the exporting module (shapes.puf line 3)
+  (define expected "puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s [shapes.puf:3])\n")
   (let-values ([(ec so se) (run! puffin-cli "-i" (path->string entry))])
     (check-equal? se expected)
     (check-equal? ec 255))
@@ -216,5 +219,14 @@
   (let-values ([(ec so se) (run! puffin-vm (path->string pbc))])
     (check-equal? se expected)
     (check-equal? ec 255)))
+
+;; positions (docs: file:line diagnostics): an unbound variable names
+;; the erroring form's file and line, byte-identical across compilers
+(let ([entry (write-mod "xm-unbound.puf"
+                        "(define (ev e) (* e 2))"
+                        "(println (evv 21))")])
+  (define-values (r p) (front-ends entry))
+  (check-equal? (third r) "error: typecheck: unbound variable evv [xm-unbound.puf:2]\n")
+  (check-equal? (second p) (third r)))
 
 (displayln "module error tests: all passed")

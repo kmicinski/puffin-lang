@@ -49,7 +49,10 @@
 (define (case! name source
                #:exit expected-exit #:out expected-out #:err expected-err
                #:native? [native? #f])
-  (define src (make-temporary-file "puffin-cast-~a.puf"))
+  ;; a FIXED filename: blame labels now carry [file:line] positions,
+  ;; so the expected strings need a deterministic basename (the cases
+  ;; run serially; no collision)
+  (define src (build-path (find-system-path 'temp-dir) "puffin-cast.puf"))
   (with-output-to-file src #:exists 'replace (λ () (display source)))
   (define pbc-r (path-replace-extension src ".rkt.pbc"))
   (define pbc-p (path-replace-extension src ".pcc.pbc"))
@@ -84,7 +87,7 @@
         (define g (ann f _))
         (g #t)"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got #t (blame: f's argument x)")
+       #:err (fatal-line "cast: expected Int, got #t (blame: f's argument x [puffin-cast.puf:1])")
        #:native? #t)
 
 ;; ADT cast: (Some 5) passes an (Option Int) boundary...
@@ -102,7 +105,7 @@
         (define sneak (ann Circle _))
         ((ann get _) (sneak 3))"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected (Option Int), got (Circle 3) (blame: get's argument o)"))
+       #:err (fatal-line "cast: expected (Option Int), got (Circle 3) (blame: get's argument o [puffin-cast.puf:3])"))
 
 ;; result-position blame: the body trusts a `_` value that lied
 (case! "result blame"
@@ -110,21 +113,21 @@
         (define (f) : Int (lies))
         (println (f))"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got nope (blame: f's result)"))
+       #:err (fatal-line "cast: expected Int, got nope (blame: f's result [puffin-cast.puf:2])"))
 
 ;; (ann ...) blame
 (case! "ann blame"
        "(define u (ann #t _))
         (println (ann u Sym))"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Sym, got #t (blame: ann)"))
+       #:err (fatal-line "cast: expected Sym, got #t (blame: ann [puffin-cast.puf:2])"))
 
 ;; annotated let binding blame
 (case! "let blame"
        "(define v (ann \"str\" _))
         (let ([x : Int (ann v _)]) (println x))"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got str (blame: let x)"))
+       #:err (fatal-line "cast: expected Int, got str (blame: let x [puffin-cast.puf:2])"))
 
 ;; declared value define blame
 (case! "define blame"
@@ -132,7 +135,7 @@
         (define total (ann \"x\" _))
         (println total)"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got x (blame: define total)"))
+       #:err (fatal-line "cast: expected Int, got x (blame: define total [puffin-cast.puf:2])"))
 
 ;; a (: f (-> ...)) declaration alone inserts the same entry casts
 (case! "declared arrow blame"
@@ -140,14 +143,14 @@
         (define (dbl n) (+ n n))
         ((ann dbl _) 'seven)"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got seven (blame: dbl's argument n)"))
+       #:err (fatal-line "cast: expected Int, got seven (blame: dbl's argument n [puffin-cast.puf:2])"))
 
 ;; variadic: declared ->* fixed formals are checked
 (case! "variadic blame"
        "(define (f [a : Int] . r) : Int (+ a (length r)))
         ((ann f _) \"s\" 1 2)"
        #:exit 255 #:out ""
-       #:err (fatal-line "cast: expected Int, got s (blame: f's argument a)"))
+       #:err (fatal-line "cast: expected Int, got s (blame: f's argument a [puffin-cast.puf:1])"))
 
 ;; casts must NOT fire across `_` chains that stay consistent, and
 ;; container/adt shapes must pass positively

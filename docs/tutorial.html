@@ -373,7 +373,7 @@ misusing them is a compile-time error:</p>
   (match s
     [(Circle r) (string-length r)]))   ;; r : Int
 </code></pre>
-<pre class="err"><code>error: typecheck: string-length: argument has type Int, expected Str</code></pre>
+<pre class="err"><code>error: typecheck: string-length: argument has type Int, expected Str [main.puf:2]</code></pre>
 </aside>
 
 <aside class="qa">
@@ -386,7 +386,7 @@ concrete ADT type is checked against it. Missing constructors are a
 <pre><code>(define (radius [s : Shape]) : Int
   (match s [(Circle r) r]))          ;; Shape also has Point, Rect
 </code></pre>
-<pre class="err"><code>typecheck warning: match on Shape is not exhaustive: missing Point, Rect</code></pre>
+<pre class="err"><code>typecheck warning: match on Shape is not exhaustive: missing Point, Rect [main.puf:2]</code></pre>
 <p><code>--strict-types</code> (on both <code>bin/puffin</code> and
 <code>puffincc</code>) promotes the warning to an error with the same text. An
 unannotated (<code>_</code>-typed) scrutinee is exempt — untyped code never warns,
@@ -498,7 +498,7 @@ Concrete-vs-concrete disagreement is a compile-time error:</p>
 <pre><code>(define (inc [n : Int]) : Int (+ n 1))
 (inc #t)
 </code></pre>
-<pre class="err"><code>error: typecheck: inc: argument has type Bool, expected Int</code></pre>
+<pre class="err"><code>error: typecheck: inc: argument has type Bool, expected Int [main.puf:2]</code></pre>
 <p class="note">These are compile-time errors in the browser too: the playground's
 Run typechecks with the same checker before anything executes, so the red boxes
 in this tutorial reproduce verbatim in its output pane.</p>
@@ -535,7 +535,7 @@ distinction inside applications. A formal's <em>concrete</em> structure is a
 contract — violate it and you get an error:</p>
 <pre><code>(car 5)
 </code></pre>
-<pre class="err"><code>error: typecheck: car: argument has type Int, expected (Pairof a b)</code></pre>
+<pre class="err"><code>error: typecheck: car: argument has type Int, expected (Pairof a b) [main.puf:1]</code></pre>
 <p>But a constraint that exists only because inference greedily bound a type
 variable from a <em>sibling argument</em> is a hint, not a contract — a conflict
 there quietly demotes the variable to <code>_</code> instead of erroring, because
@@ -616,7 +616,7 @@ declared boundary it lands on, at the boundary, with blame:</p>
 (println (sneaky (cons 1 2)))       ;; 1
 (println (sneaky 'oops))            ;; dies at first-of's door, not inside car:
 </code></pre>
-<pre class="err"><code>puffin runtime error: cast: expected Pairof, got oops (blame: first-of's argument p)</code></pre>
+<pre class="err"><code>puffin runtime error: cast: expected Pairof, got oops (blame: first-of's argument p [main.puf:1])</code></pre>
 <p>The check is first-order (transient): it validates the value's outermost shape
 — for an ADT type, that the value's constructor belongs to that type — and trusts
 the checker for the rest. Fully unannotated code has no declared boundaries, so
@@ -774,13 +774,13 @@ type error, an exhaustiveness warning, and a runtime cast blame all say
 (define (f [s : Shape]) : Int (area s))
 (println (f 5))
 </code></pre>
-<pre class="err"><code>error: typecheck: f: argument has type Int, expected Shape</code></pre>
+<pre class="err"><code>error: typecheck: f: argument has type Int, expected Shape [main.puf:4]</code></pre>
 <pre><code>;; main.puf — an untyped function lies to a typed one at runtime
 (require "shapes.puf")
 (define (h s) (area s))
 (println (h 99))
 </code></pre>
-<pre class="err"><code>puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s)</code></pre>
+<pre class="err"><code>puffin runtime error: cast: expected Shape, got 99 (blame: area's argument s [shapes.puf:6])</code></pre>
 <p>If the exporting module <em>doesn't</em> provide the type, an importer's
 annotation fails honestly — <code>error: typecheck: unknown type Shape</code> —
 rather than checking against something you can't name. Two guardrails come with
