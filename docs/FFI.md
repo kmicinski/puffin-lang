@@ -1,788 +1,964 @@
-# The Puffin FFI: typed imports of the C ABI, Rust as a first-class guest
+# The Puffin FFI: foreign imports are typed boundaries
 
-> **Status:** DESIGN (2026-07-07). Nothing here is implemented. The
-> design is written against the current contract (puffin.h tag
-> scheme + kind registry, stdlib.rkt manifest, modules.rkt front
-> pass, gradual types on the `gradual` branch) and is meant to be
-> buildable without touching any compiler pass — which, as §1
-> argues, is the whole point.
+> **Status:** DESIGN, second edition (2026-07-13). This document
+> REPLACES the 2026-07-07 FFI design in full (the old text is in git
+> history at `7337b2e^:docs/FFI.md`). It is rewritten rather than
+> patched because the ground it stood on moved twice: the **gradual
+> type system shipped** (docs/TYPES.md — transient casts with blame,
+> `pf_cast_check`, the dedicated ADT heap kind, manifest `#:type`,
+> typed `.pufs`/`.pufi`), so the FFI no longer needs to invent its
+> own checking machinery — it *reuses* the boundary-cast machinery
+> the language already has; and the **browser consolidation
+> happened** (docs/WASM-VM.md — the JS interpreter is deleted, the
+> playground runs puffincc.pbc on the wasm bytecode VM), so "the web
+> route" now means the VM, and the VM — not just the native backends
+> — must be a first-class FFI citizen. Nothing here is implemented;
+> §12 is the plan.
 
-Design goals, in order: (1) **bug-free over featureful** — every
-boundary crossing is checked, every ownership rule is written down,
-and anything we cannot make safe is *out* rather than half-in;
-(2) **the FFI is the manifest, user-extensible** — Puffin already
-compiles direct calls to foreign C symbols on every route; the FFI
-must be that same machinery opened to users, not a second mechanism;
-(3) **typed at the boundary** — an FFI declaration is a typed import,
-and the gradual type system's cast points land exactly there;
-(4) **Rust is a first-class guest**, not an afterthought: the dream
-of writing performance/ecosystem leaves in Rust and gluing them into
-Puffin programs is feasible today, with caveats this document states
-plainly.
+Design goals, in order: (1) **type-directed by construction** — a
+foreign import is a typed declaration, and the declared type
+*generates* the marshaling; there is no way to write an unmarshaled
+or hand-marshaled call; (2) **gradual soundness at the boundary** —
+values crossing the boundary are checked by the same transient cast
+machinery that guards `_`→concrete boundaries today, with blame
+labels naming the foreign import, byte-identical on every route;
+(3) **the FFI is the manifest, user-extended** — a `foreign`
+declaration behaves like a locally declared prim and rides the
+existing prim-call machinery end to end; the runtime grows one
+`lib/` module and a handful of manifest entries, the backends grow
+nothing; (4) **honest about the browser** — the wasm VM has no
+`dlopen` and we say so at load time rather than emulating.
 
-## 1. The core insight: Puffin already has an FFI
+## 1. What changed since the first design, and what survives
 
-Look at what happens when the compiler sees `(string-append a b)`:
+The 2026-07-07 design predated the type system. Its core insight —
+*Puffin already has an FFI: every prim call is a direct call to a C
+symbol declared in the manifest* — survives and is still the
+foundation (§8). Three of its premises do not survive:
 
-- `stdlib.rkt` says the runtime entry is `pf_string_append`, arity 2;
-- instruction selection emits `movq`s into argument registers and a
-  direct `callq pf_string_append` (or `bl` on arm64);
-- the assembly declares `.extern pf_string_append`;
-- the linker resolves it against `libpuffin.a`.
+1. **It invented its own dynamic checks.** Per-declaration assembly
+   stubs did ad-hoc tag tests with their own error style. Today the
+   language has `pf_cast_check` (lib/cast.c): first-order shape
+   checks, ADT constructor-set membership, blame labels, one message
+   format proven byte-identical across interp / native / VM / wasm.
+   The FFI boundary is now *literally* a set of casts — same descs,
+   same blame grammar, same fatal-error contract (§5).
+2. **It linked statically and only natively.** Archives resolved at
+   link time meant the mechanism existed only on the two native
+   backends; the interpreter needed a parallel `#:shared` story and
+   the web story was "the JS interpreter refuses". The JS
+   interpreter no longer exists. The new mechanism — `dlopen` at
+   load time driven by a registered import table — is ONE semantics
+   shared by the native backends, the native bytecode VM, and the
+   reference interpreter, with the wasm VM refusing cleanly (§8).
+   Static linking is demoted to a v2 optimization seam.
+3. **It needed per-declaration generated assembly.** With the
+   type-directed generic caller of §8.2, the compilers emit *no new
+   instruction shapes at all*: a foreign declaration lowers in
+   desugar to ordinary definitions whose bodies call manifest prims.
+   Both backends, the bytecode backend, and the VM are untouched by
+   construction.
 
-That *is* a foreign function interface — to a C function, following
-the C calling convention, resolved by the system linker against a
-static archive. The only things that make `pf_string_append` special
-are (a) it appears in the manifest, and (b) it speaks tagged `pf`
-words natively.
+What survives beyond the core insight: the GC/ownership discipline
+(§7, condensed from the old §4 — it was correct and remains so), the
+C++ shim rules and the Rust guest story (§9), and most of the old
+open questions, several of which this edition answers (§13).
 
-The FFI, then, is two small generalizations:
+## 2. The design in one paragraph, and the art it stands on
 
-1. **A per-program extension of the manifest.** An `ffi` declaration
-   adds one prim-spec-shaped entry (name, arity, extern symbol,
-   type) to the tables the backends and IR predicates already
-   consume. No new call machinery; the existing one, user-fed.
-2. **Marshalling stubs for functions that speak C types instead of
-   `pf`.** `pf_string_append` takes tagged words; `regcomp` does
-   not. The compiler emits a tiny per-declaration stub that untags
-   arguments, calls the foreign symbol, and retags the result. The
-   stub is generated assembly (or equivalently a generated `.c`
-   shim; see §7) — the runtime grows only three generic helpers.
+A foreign import is written as a *type declaration inside a
+`foreign` form* (§3). The declared type is the whole interface: the
+checker registers it (so call sites typecheck statically, gradually,
+like any `(: name τ)`), and the runtime derives from it — per
+argument and result — the tagged-word ↔ C-ABI conversion, the
+transient shape check with blame, the 61-bit range check on returns,
+and the branded wrap/unwrap for opaque pointers. Values crossing
+*out* of Puffin are checked against the declared argument types with
+the existing `pf_cast_check`; values crossing *in* are constructed
+(retagged, copied, or wrapped) so an ill-shaped C result is a loud
+blamed error, never a corrupt heap word. Foreign pointers live in a
+new unforgeable heap kind so they cannot be minted from `Int`s.
+Failure anywhere names the import: `(blame: foreign regex-match?'s
+argument 2)`.
 
-Everything else in this document is working out what those stubs are
-allowed to do (§3), what the GC promises (§4), and how the other two
-implementations keep their honesty (§8).
+The design is deliberately assembled from known-good parts:
 
-## 2. Surface language
+- **The FFI is a language boundary** in the sense of Matthews &
+  Findler's multi-language semantics (POPL 2007): our marshaling is
+  their *natural embedding* for base types and their *lump
+  embedding* for everything else (opaque handles). That paper is why
+  §4's table has exactly two behaviors — convert or lump — and no
+  third.
+- **Boundary contracts with blame** come from Typed Racket
+  (Tobin-Hochstadt & Felleisen: typed–untyped module boundaries
+  compile to contracts whose blame labels name the boundary) and
+  Wadler & Findler's "well-typed programs can't be blamed". Our
+  labels name the foreign import, which is the only party a user can
+  act on: fix the declaration, or fix the caller.
+- **Transient (first-order) checking** is Vitousek et al.'s
+  semantics from Reticulated Python — check the outermost shape at
+  the boundary, don't traverse — which is what `pf_cast_check`
+  already implements, sitting at the "shallow" point of Greenman &
+  Felleisen's soundness spectrum. Here is the observation that makes
+  the simple thing also the strong thing: **for the v1 marshallable
+  universe, transient checking coincides with full natural-embedding
+  soundness**, because every crossable type is either a base type
+  (the shape *is* the type) or an opaque handle (identity *is* the
+  type). There are no crossable containers or function types whose
+  insides a shallow check would miss. First-order is not the
+  compromise position at this boundary; it is complete. (It stops
+  being complete the day callbacks or `(Vec Int)` borrows cross —
+  §11 prices that in.)
+- **Declared types generating the marshaling** is the wasm
+  component model's canonical ABI (interface types → generated
+  lift/lower), Racket's `ffi/unsafe` ctypes (Barzilay & Orlovsky),
+  and Java Panama's jextract, all of which converged on: the human
+  writes a signature, the machine writes the glue. Nobody hand-writes
+  a conversion in this design because there is no place to put one.
+- **Unforgeability by representation** is the CHERI instinct
+  (capabilities you cannot conjure from integers) scaled to a
+  language runtime: the ADT work proved a dedicated heap kind that
+  only the runtime constructs is cheap and airtight — `(vector?
+  (Some 1))` is `#f` and no user code can forge a constructor
+  instance. Foreign pointers get the same treatment (§6).
 
-FFI declarations are top-level module forms, sitting next to
-`require` and `provide`:
+## 3. Surface language
 
 ```scheme
-;; regex.puf -- a Puffin-face module for a foreign library
-(provide regex-compile regex-match?)
+;; regex.puf — a Puffin-face module for a foreign library
+(provide Regex regex-compile regex-match? regex-find regex-close)
 
-(ffi-lib "vendor/libpfregex.a"
-         #:include "pfregex.h"                 ; documentation + v2 check
-         #:shared  "vendor/libpfregex.dylib")  ; optional: interpreter parity
+(define-foreign-type Regex)
 
-(define-foreign-type Regex #:destructor "pfregex_free")
-
-(ffi regex-compile (-> Str Regex)  #:c-name "pfregex_compile")
-(ffi regex-match?  (-> Regex Str Bool) #:c-name "pfregex_is_match")
+(foreign "vendor/libpfregex.dylib"
+  (: regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
+  (: regex-match?  (-> Regex Str Bool)       #:c-name "pfregex_is_match")
+  (: regex-find    (-> Regex Str (Nullable Str)) #:c-name "pfregex_find"
+                                                 #:gift "pfregex_str_free")
+  (: regex-close   (-> Regex Void)           #:c-name "pfregex_free"
+                                             #:consumes))
 ```
 
-- **`(ffi-lib path clause ...)`** — declares that this module's
-  foreign symbols live in `path` (resolved relative to the module's
-  file, like `require`). Repeatable. `#:include` names the C header
-  the symbols come from: v1 treats it as documentation; v2 uses it
-  for a compile-time signature cross-check (§3.6). `#:shared` names
-  a dynamic-library build of the same code, used *only* by the
-  reference interpreter (§8); native linking always uses the archive.
-  `#:link "flags"` passes extra linker flags (frameworks, `-l`s)
-  verbatim — needed in practice for Rust staticlibs (§6.4).
-- **`(ffi name τ clause ...)`** — declares `name` as a foreign
-  function of arrow type `τ` (which must be a concrete `(-> τ ... τ)`
-  over the marshallable types of §3 — `_` is not marshallable, and
-  an FFI declaration is the one place an annotation is mandatory).
-  `#:c-name` gives the linker symbol when it differs from `name`
-  (it usually does; Puffin names have `-` and `?`). The declared
-  name is an ordinary module-level binding: it provides, requires,
-  renames, and mangles through the module system unchanged — only
-  the *extern symbol* is exempt from mangling, exactly as `pf_*`
-  symbols are today.
-- **`(define-foreign-type Name clause ...)`** — introduces an opaque
-  handle type (§3.4). `#:destructor "c_name"` names the C function
-  the GC finalizer backstop calls (one argument, the raw pointer).
+- **`(foreign lib-path decl ...)`** — a top-level module form, next
+  to `require`/`provide`. `lib-path` containing a `/` resolves
+  relative to the declaring module's file (like `require`); a bare
+  name (`"libm.dylib"`) goes to the system loader's search. The
+  library is loaded (`dlopen`) when the module's top level runs —
+  **a missing library or symbol is a load-time error** (§5.3), on
+  every route, because declaring a foreign library is asserting it
+  is loadable. Repeatable; multiple `foreign` forms may name the
+  same library.
+- **Each `decl` is a `(: name τ)` declaration** — the same form the
+  type system already owns — plus FFI clauses. `τ` must be a
+  concrete `(-> τ ... τ)` over the marshallable types of §4: `_` is
+  not marshallable, type variables are not marshallable, and an FFI
+  declaration is the one place an annotation is mandatory (there is
+  nothing to infer from; the far side is machine code). Arity ≤ 6
+  in v1 (the prim-call convention's unpacked ceiling; §11).
+  Clauses:
+  - `#:c-name "sym"` — the linker symbol. Default: the Puffin name
+    with `-` → `_` (`demo-add` → `demo_add`); names containing any
+    other C-hostile character (`?`, `!`, `>`) have no default and
+    require the clause. No cleverer renaming — magic is where FFI
+    bugs breed.
+  - `#:consumes` — the (single) handle-typed argument is *consumed*:
+    after the call the handle is closed (§6.2).
+  - `#:gift "free_sym"` — the `Str` result is malloc'd by the callee
+    and ownership transfers: the runtime copies it into a Puffin
+    string and immediately calls `free_sym` (resolved in the same
+    library) on the original (§4.3).
+- **`(define-foreign-type Name)`** — introduces an opaque handle
+  type (§6). `Name` is a first-class type name exactly like a
+  `define-type` head: it provides, requires, qualifies (`M.Regex`),
+  mangles, and demangles-in-diagnostics through the module system
+  unchanged (docs/MODULES.md §1.1), and annotations may use it
+  anywhere, not just in `foreign` forms.
 
-**FFI declarations are typed imports.** This is the load-bearing
-connection to TYPES.md: an `ffi` name enters the type environment at
-its declared type — never `_` — so the bidirectional checker checks
-every call site's arguments against real types. In fully-annotated
-code, inconsistencies are compile-time errors as usual. In untyped
-code, arguments flow in at `_`, and `_ ~ Int` is consistent — the
-call checks statically, and the marshalling stub performs the
-dynamic check (tag test, range test) at runtime. That stub *is* the
-cast that TYPES.md phase 3 will insert at `_`→concrete boundaries,
-with one difference in posture: **at the FFI boundary the dynamic
-check is never erased, even from fully typed code**, because the far
-side of the boundary is untrusted machine code and a wrong tag is
-not a wrong answer but a corrupted heap. The FFI is where gradual
-typing's "casts at the boundary" story stops being a metaphor.
+**A foreign name is an ordinary binding.** After desugar it *is* a
+top-level function (§8.1): `procedure?` answers `#t`, it eta-passes
+as a value, it provides and renames, a `.pufs` signature can ascribe
+it, and a typed `.pufi` exports it at its declared type — clients
+cannot tell (and must not be able to tell) whether `regex-compile`
+is Puffin or C behind the interface.
 
-Signature files compose: a `.pufs` signature can ascribe a module
-whose exports happen to be FFI names — clients cannot tell (and must
-not be able to tell) whether `regex-compile` is Puffin or C behind
-the interface.
+**The declared type enters the checker untrusted.** Prelude
+signatures (`#%prelude:`) are trusted and insert no casts; manifest
+prim types are trusted the same way. A `foreign` declaration is the
+opposite trust class — the *only* thing we know about the far side
+is what the declaration claims — so the boundary checks it induces
+are **never erased, even in fully typed code**. A wrong value across
+this boundary is not a wrong answer; it is a corrupted heap. The FFI
+is where gradual typing's "casts at the boundary" stops being a
+metaphor, and the cost (a few compares per call, next to a C call)
+is the cheapest insurance in the language.
 
-## 3. Marshalling, type by type
+## 4. The marshallable universe, type by type
 
-The v1 marshallable types, chosen so that every conversion is a
-handful of instructions and *none* can silently lose information:
+The v1 types, chosen so every conversion is a handful of
+instructions, none can silently lose information, and — a new
+constraint the first design didn't have — **every C-side type is
+integer-class in the calling convention**, which is what lets one
+generic caller serve every route without libffi (§8.2):
 
-| Puffin type | C type | in (Puffin → C) | out (C → Puffin) |
+| Puffin type | C type | out (Puffin → C) | in (C → Puffin) |
 |---|---|---|---|
-| `Int` | `int64_t` | tag check, then `>> 3` | 61-bit range check, then `<< 3` |
-| `(Int #:c "int")` etc. | `int`/`int32_t`/… | as above + checked truncation | sign/zero-extend, then `<< 3` |
-| `Bool` | `bool` / `int` | `v == PF_TRUE ? 1 : 0` (tag-checked) | `r ? PF_TRUE : PF_FALSE` (any nonzero) |
-| `Str` | `const char *` | borrow payload pointer (see 3.3) | copy into a fresh Puffin string |
+| `Int` | `int64_t` | cast-check `Int`, then `>> 3` | 61-bit range check, then `<< 3` |
+| `I8 I16 I32 I64 U8 U16 U32 U64` | the matching C int | as `Int` + checked range for the width | mask/sign-extend per width, then `<< 3` (checked for `U64` > 2^60) |
+| `Bool` | `bool` / `int` | cast-check `Bool`, then 0/1 | nonzero (low 32 bits) → `#t` |
+| `Str` | `const char *` | cast-check `Str`, embedded-NUL check, borrow payload pointer (§4.3) | NULL check, copy into a fresh Puffin string (`#:gift`: then free the original) |
 | `Void` (result only) | `void` | — | `PF_VOID` |
-| foreign type `T` | `T *` (opaque) | brand-checked unwrap (see 3.4) | wrap in a foreign handle |
+| foreign type `T` | `T *` (opaque) | kind+brand+open check, unwrap (§6) | NULL check, wrap in a branded handle |
+| `(Nullable τ)` (result only; τ = `Str` or a foreign type) | as τ | — | NULL → `#f`, else as τ |
 
-### 3.1 Int
+### 4.1 Int and the width spellings
 
-Fixnums are `n << 3`, 61 bits signed. Inbound: `pf_expect` fixnum
-tag, arithmetic shift right by 3. Outbound: the returned `int64_t`
-must survive `<< 3` — the stub checks that the top four bits are
-sign-uniform and calls `pf_die_arith`-style fatal (with the FFI
-name in the message) if not. **No silent wrapping, ever**: a C
-function returning `INT64_MAX` is a runtime error, not a negative
-number. Width-annotated variants (`#:c "int"`, `"int32_t"`,
-`"size_t"`, `"uint32_t"`) exist because real C headers are full of
-`int` — inbound values are range-checked against the declared width
-(error on overflow), outbound values are sign- or zero-extended per
-the width's signedness and always fit 61 bits except `uint64_t`/
-`size_t` above 2^60, which is checked. This is deliberate friction:
-the FFI refuses to be a source of integer-truncation bugs.
+Fixnums are `n << 3`, 61 bits signed. Inbound (C → Puffin): the
+returned `int64_t` must survive `<< 3` — the check is
+`(r >> 60) ∈ {0, -1}` (sign-uniform top four bits), and a violation
+is a fatal cast error naming the import. **No silent wrapping,
+ever**: a C function returning `INT64_MAX` is a loud error, not a
+negative number (the spike in Appendix A demonstrates exactly this
+firing). The width spellings exist because real C headers are full
+of `int`, and the ABI makes ignoring that unsafe in one specific
+direction: a callee *returning* `int32_t` leaves the register's high
+bits unspecified, so reading it as `int64_t` retags garbage. To the
+**type checker** every width spelling *is* `Int` — they are
+FFI-declaration-only aliases, not new types, so they never leak into
+the type grammar of docs/TYPES.md — but to the **marshaler** they
+select the conversion: outbound values range-check against the
+width (error on overflow — the FFI refuses to be a source of
+integer-truncation bugs); inbound values mask and sign-/zero-extend
+per the width before the fixnum check. `U64`/`size_t` returns above
+2^60 are errors, stated here so nobody is surprised in year two.
 
-### 3.2 Bool
+### 4.2 Bool
 
-Inbound `Bool` requires an actual boolean (tag check; Racket
-truthiness stops at this border — passing `0` where C expects a
-flag is almost always a bug, and `(if x #t #f)` is cheap to write).
-Outbound, any nonzero C value is `#t`, matching C idiom.
+Outbound requires an actual boolean (cast-check `Bool` — Racket
+truthiness stops at this border; passing `0` where C expects a flag
+is almost always a bug, and `(if x #t #f)` is cheap). Inbound, any
+nonzero value in the low 32 bits is `#t`, matching both the C `int`
+idiom and the AAPCS64/SysV `_Bool` return convention.
 
-### 3.3 Str: borrow in, copy out
+### 4.3 Str: borrow out, copy in
 
-Two facts make the cheap thing also the safe thing here:
+Two runtime facts make the cheap thing also the safe thing:
+Puffin strings are **NUL-terminated by layout** (io.c's `cstr_of`
+relies on this today), and Boehm is **non-moving** and scans the C
+stack, so a pointer into a live object's payload stays valid while
+the frame holding the tagged reference is live.
 
-- Puffin strings are already **NUL-terminated by layout** (io.c's
-  `cstr_of` relies on this today), and their payloads are
-  `pf_alloc_atomic` bytes;
-- Boehm is a **non-moving** collector that scans the C stack, so a
-  pointer into a live object's payload stays valid for as long as
-  the frame holding the tagged reference is live.
+- **Outbound `Str` is a borrowed `const char *`** — the payload
+  pointer, zero copies, valid *for the duration of the call only*.
+  A callee that stashes it is governed by §7; a callee that mutates
+  it is UB on both sides. One checked hazard: Puffin strings are
+  byte strings and may contain embedded NULs, which would silently
+  truncate meaning on the C side — the marshaler checks
+  `strlen(p) == pf_len_of(v)` and errors otherwise. O(n) and
+  branch-predictable; it converts a silent data bug into a loud one,
+  which is this FFI's personality in one line. (Byte strings also
+  answer "where is the `bytes` type": `Str` *is* Puffin's bytes; a
+  distinct bytes/`uint8_t*`+length crossing is a v2 seam.)
+- **Inbound `Str` is always a copy** (`pf_string_from_bytes` on the
+  NUL-terminated result). Borrowing inbound is unsound (unknown
+  lifetime) and transfer-by-default is a leak factory. When the
+  callee transfers ownership (malloc'd result — `asprintf`, Rust's
+  `CString::into_raw`), declare `#:gift "free_fn"`: copy, then
+  immediately call the named deallocator on the original.
+  Copy-then-free at the boundary means Puffin never holds foreign
+  string memory and the foreign allocator never sees Puffin memory —
+  the allocator-mismatch bug class is structurally impossible.
+- `NULL` inbound: result type `Str` treats NULL as a blamed runtime
+  error; `(Nullable Str)` maps NULL to `#f`, the Puffin idiom for
+  "no answer" (`string->number` already returns it). C's
+  billion-dollar mistake stays quarantined in the marshaler.
 
-So **inbound `Str` is a borrowed `const char *`** — the stub passes
-`pf_heap_ptr(v) + 1` directly, zero copies. The pointer is valid
-*for the duration of the call only*; a callee that stashes it is
-governed by the ownership table (§4.4), and a callee that mutates
-it is undefined behavior on both sides (hence `const` in the
-declared C signature — this is what `#:include` will cross-check in
-v2). One checked hazard: a Puffin string may contain embedded NUL
-bytes (they're byte strings), which would silently truncate meaning
-on the C side. The stub checks `strlen(p) == pf_len_of(v)` and
-errors otherwise — O(n), branch-predictable, and it converts a
-silent data bug into a loud one. That trade is this FFI's
-personality in one line.
+### 4.4 `(Nullable τ)`, precisely
 
-**Outbound `Str` is always a copy** — the stub calls the runtime
-helper `pf_ffi_str_copy(const char *)`, which allocates a fresh
-Puffin string from the NUL-terminated result. Borrowing outbound is
-unsound (we cannot know the C string's lifetime) and ownership-
-transfer-by-default is a leak factory. When the callee transfers
-ownership (it `malloc`ed the string for us — the Rust `CString`
-pattern, `asprintf`, etc.), declare `(Str #:gift "free_fn")`: the
-stub copies, then immediately calls the named free function
-(`"free"`, or the library's paired deallocator) on the original.
-Copy-then-free at the boundary means Puffin never holds foreign
-string memory and the foreign allocator never sees Puffin memory —
-the allocator-mismatch class of bug is structurally impossible.
+`Nullable` is admitted **only as a foreign result type**, for `Str`
+and foreign handle types. It is not in the type grammar: the checker
+treats a `(Nullable τ)` result as `_` (documented, deliberate — the
+honest gradual answer to "τ or `#f`" in a language without unions).
+Untyped-style callers write `(if r ...)` and it just works; typed
+callers who want precision should wrap the import in a two-line
+Puffin function returning a real `(Option τ)` ADT — which costs an
+allocation and reads beautifully, and which v2 may automate (§13
+Q3). What `Nullable` buys over "just declare `_`": the *marshaling*
+is still fully τ-directed (brand-wrapped handle or copied string,
+never a raw word).
 
-`NULL` inbound-to-Puffin: a returned `char *` may be NULL in C
-idiom ("not found"). A declaration of result type `Str` treats NULL
-as a runtime error; declare `(Nullable Str)` to map NULL to `#f`
-(and symmetrically for foreign handles). `#f` is the Puffin idiom
-for "no answer" (`string->number` already returns it) — this keeps
-C's billion-dollar mistake quarantined in the stub.
+### 4.5 Floats: not forced, and why
 
-### 3.4 Everything else: opaque foreign handles
+Puffin has no flonums. The FFI does not smuggle them in: a `Float`
+that exists only at the boundary would need representation,
+printing, `equal?`, and arithmetic decisions that are *language*
+decisions, made once for all four routes — not decisions an FFI doc
+should make as a side effect. There is also a mechanism reason to
+scope them out: floats pass in vector registers, which breaks the
+integer-class generic caller (§8.2) and would demand per-shape call
+thunks or libffi. So v1's rule is: **the marshallable universe is
+exactly the representable universe.** The seam is clean — the week
+the language grows `Float`, the FFI adds a `Float` row to §4's
+table, a float-bearing caller variant, and nothing else changes.
+(Recommended sequencing in §13 Q1.)
 
-v1 does **not** marshal structs, arrays, callstructs-by-value,
-unions, or pointers-to-anything-transparent. Every other C type
-crosses as an **opaque handle**: a new heap kind (the HAMT
-precedent — one runtime module, one `pf_register_kind` call, an
-ext-kind id recorded in the manifest):
+### 4.6 Not marshallable, v1
 
-```c
-// lib/foreign.c -- PF_KIND_FOREIGN = 19 (16/17 are the HAMTs, 18 the ADT kind)
-// payload: | raw pointer | brand (symbol) | destructor fn or 0 |
+`_` and type variables (declare a real type or don't declare the
+import); function types (Puffin closures cross only via the deferred
+callback machinery, §11); containers (`List`/`Vec`/`Hash`/`Set` —
+convert at the Puffin level; a `(Vec Int)` → `int64_t*` borrow is a
+plausible v2 with the same transient caveat flagged in §2); structs,
+unions, arrays by value (write a five-line C shim with accessor
+functions and declare those — shims are not a failure of the FFI,
+they are the FFI working as designed, and §9 makes the same move
+mandatory for C++); variadic C functions (`printf` — shim it).
+
+## 5. Boundary soundness: casts, blame, and the safety posture
+
+### 5.1 What is checked, where
+
+Every crossing is guarded; the guards are the type system's own:
+
+- **Statically**: a foreign name enters the type environment at its
+  declared type, so the bidirectional checker checks every call
+  site's arguments (concrete-vs-concrete inconsistencies are
+  compile-time errors; `_`-typed arguments flow in consistently, as
+  everywhere). Arity is part of the arrow, so wrong-arity calls die
+  at compile time even from untyped code (the derived function has
+  fixed arity).
+- **Dynamically, outbound** (Puffin → C): each argument is checked
+  against its declared type with the existing first-order machinery
+  — the same checks `pf_cast_check` performs for an annotated
+  formal, with an FFI blame label — then converted. This is the
+  transient cast that TYPES.md inserts at declared boundaries,
+  relocated to the one boundary where it may never be erased.
+- **Dynamically, inbound** (C → Puffin): the result is
+  *constructed* per the declared type — range-checked retag,
+  NULL-checked copy, branded wrap. There is no tag to check on a
+  raw C value; construction is the check.
+- **Load time**: library loadable, every symbol (including `#:gift`
+  deallocators) resolvable, declaration well-formed (marshallable
+  types only, arity ≤ 6, `#:consumes` names exactly one
+  handle-typed argument). §12's negative test matrix pins each.
+
+### 5.2 Blame
+
+Failures speak the existing cast grammar with the import as the
+blame party — byte-identical across interp, both native backends,
+native VM, and wasm VM, because they are produced by the same
+`lib/foreign.c` code (or its manifest ref-impl re-implementation,
+which the golden runner holds equal):
+
+```
+puffin runtime error: cast: expected Int, got #t (blame: foreign regex-match?'s argument 2)
+puffin runtime error: cast: expected Int (61-bit), got 9223372036854775807 (blame: foreign demo-big's result)
+puffin runtime error: cast: expected Regex, got 7 (blame: foreign regex-match?'s argument 1)
+puffin runtime error: foreign regex-match?: Regex handle is closed (blame: foreign regex-match?'s argument 1)
 ```
 
-- **Branded.** The brand is the interned symbol of the
-  `define-foreign-type` name. Unwrapping checks kind *and* brand:
-  passing a `Regex` where a `Sqlite` is declared is a runtime error
-  naming both brands, not a segfault three frames later. Handles
-  print as `#<Regex 0x104a3c200>`; `equal?` is identity.
-- **Finalized, with an explicit-close escape hatch.** If the foreign
-  type declares `#:destructor`, `pf_ffi_wrap` registers a Boehm
-  finalizer (`GC_register_finalizer_no_order`) that calls it on the
-  raw pointer. Boehm finalizers are a *backstop*, not a resource
-  discipline — they run at some GC after unreachability, or never
-  (program exit does not run outstanding finalizers). Libraries
-  wrapping scarce resources (fds, connections) should also export an
-  explicit close: declare it with `#:consumes` —
-  `(ffi regex-free (-> Regex Void) #:c-name "pfregex_free" #:consumes)`
-  — and the stub calls the destructor, **nulls the stored pointer,
-  and cancels the finalizer**. Any later use of the handle is a
-  "use of closed Regex handle" error; a double close is a no-op
-  error, not a double free. Use-after-free and double-free are thus
-  both unrepresentable from the Puffin side.
-- **NULL from constructors:** `(Nullable Regex)` as in §3.3 — a NULL
-  return becomes `#f` instead of a dead handle.
+Arguments are blamed by position (C arguments are positional;
+declarations have no formal names). The import name renders in
+SOURCE spelling via the standing demangle table, like every cast
+blame label today. Wadler–Findler discipline, boundary-shaped: if
+blame lands on an *argument*, the caller (or the caller's missing
+annotation) is at fault; if on a *result* or a load, the declaration
+(or the library) is. The foreign side cannot be made to carry blame
+labels — naming the declaration is precisely as actionable as an
+FFI error can be.
 
-**The v2 seam.** Deep marshalling, when it comes, will be a new
-*declaration* form — `(define-c-struct ...)` generating per-field
-accessor stubs against a layout computed from `#:include` by a
-clang-driven tool at build time — not a change to §3's types. The
-stub generator is written per-declaration from day one precisely so
-that new declaration forms mean new stub shapes, never new call
-machinery. Until then the answer to "how do I get at
-`struct stat`'s fields" is: write a five-line C shim with getter
-functions and declare those. Shims are not a failure of the FFI;
-they are the FFI working as designed (§5 makes the same move
-mandatory for C++).
+### 5.3 Load-time errors, exact texts
 
-### 3.5 What is not marshallable at all (v1)
+`dlerror()` strings vary by platform and would poison goldens, so
+they are not included in the message (they go to stderr as a
+follow-on diagnostic line on native, best-effort):
 
-`_` (declare a real type or don't declare the import), function
-types (Puffin closures cross only via the §4.3 callback machinery),
-containers (`List`/`Vec`/`Hash`/`Set` — convert at the Puffin level
-to repeated calls or strings; a `(Vec Int)`→`int64_t*` borrow is
-plausible v2, same seam), floats (**Puffin has no flonums yet** —
-this is the loudest gap when facing real C libraries, and it is a
-language question, not an FFI question; the FFI adds `Float` the
-week the language does), variadic C functions (`printf` — shim it).
-
-### 3.6 The `#:include` cross-check (v2, designed now)
-
-Trust-the-declaration is v1's posture and it is honest but human.
-v2: at compile time, generate a `_Static_assert`-bearing `.c` file
-from every `ffi` declaration —
-
-```c
-#include "pfregex.h"
-static bool (*_pf_check_1)(const pfregex*, const char*) = pfregex_is_match;
+```
+puffin runtime error: foreign library vendor/libpfregex.dylib: cannot load
+puffin runtime error: foreign regex-compile: symbol pfregex_compile not found in vendor/libpfregex.dylib
+error: foreign library vendor/libpfregex.dylib is not available in the browser
 ```
 
-— and run `clang -fsyntax-only` over it. A mismatch between the
-Puffin declaration and the real prototype becomes a compile error
-with clang's own diagnostics. Cheap, uses the toolchain we already
-shell out to, catches the exact class of bug (stale declaration
-after a library upgrade) that FFIs are notorious for.
+The third fires on the wasm VM at registration time — i.e. **a
+program that declares a foreign library fails at load in the
+browser**, before any user code observes a half-initialized module.
+Declaring is asserting loadability; the browser cannot load; the
+refusal is immediate, stable, and a golden (§8.4). puffincc running
+*in* the browser still compiles and typechecks programs containing
+`foreign` forms — compilation registers nothing.
 
-## 4. GC discipline: what Boehm buys, and the rules that remain
+### 5.4 The posture, stated plainly
 
-### 4.1 What conservative scanning buys us
+What the FFI **cannot** protect against — and no FFI can, short of
+CHERI hardware or full sandboxing: **a lying declaration is
+undefined behavior.** Declare `(-> Int Int)` for a function that
+takes a pointer, and the callee will dereference your integer; no
+check on our side of the call instruction survives the far side
+being wrong about itself. Likewise foreign code that writes out of
+bounds, frees Puffin memory, keeps a borrowed pointer past the call,
+or unwinds an exception/panic through the boundary (§9) — the
+runtime shares an address space with the library, full stop.
 
-Boehm scans thread stacks, registers, and the executable's static
-data — and since v1 links foreign code *statically* into the same
-executable, that includes the foreign library's globals. It is also
-non-moving. Consequences, all load-bearing above:
+What **is** guaranteed, given truthful declarations: every value
+crossing out has the declared shape or the program halts with blame;
+every value crossing in becomes a well-formed tagged word or the
+program halts with blame; no integer is silently truncated or
+wrapped in either direction; foreign pointers cannot be forged,
+double-closed, or used after close from the Puffin side (§6); the
+two allocators never free each other's memory when the ownership
+clauses are declared (`#:gift`, `#:consumes`). The design goal in
+one sentence: **the boundary can be wrong only in ways the
+declaration was wrong, and every other failure is loud, immediate,
+and names its import.**
 
-- A `pf` argument sitting in the caller's frame or a callee-saved
-  register keeps its object alive across any foreign call — **no
-  handle tables, no `PROTECT`/`UNPROTECT` ceremony** (the R and
-  historical-Ruby FFI tax) for call-duration references.
-- Borrowed interior pointers (§3.3) stay valid: interior pointers
-  are enabled (puffin.h says so) and objects never move.
-- A `pf` stored in a foreign **global** is found by the static-data
-  scan. (Still declare it via §4.2's pin API for portability and
-  documentation — but it is not the sharp edge.)
+## 6. Foreign handles: the unforgeable kind
 
-### 4.2 The sharp edge: foreign *heap* memory is invisible
+### 6.1 Representation
 
-Boehm does not scan memory from `malloc` — or from **Rust's
-allocator** (§6). A `pf` stored into a malloc'd struct is invisible
-to the collector; the object dies at the next GC and the C side
-holds a dangling tagged pointer. The rules, in order of preference:
+Every non-base C type crosses as an opaque handle: heap kind
+**`PF_KIND_FOREIGN` = 19** (16/17 are the HAMTs, 18 the ADT kind —
+the "one runtime module, one `pf_register_kind` call" precedent,
+third use):
+
+```c
+// lib/foreign.c — handle payload
+// | raw pointer | brand (interned symbol) | flags (bit 0: closed) |
+```
+
+- **Branded.** The brand is the interned symbol of the (mangled)
+  `define-foreign-type` name — mangled because runtime identities
+  are mangled identities (the ADT tag precedent); diagnostics render
+  the source spelling through the demangle table. Unwrap checks kind
+  *and* brand: passing a `Regex` where a `Sqlite` is declared is a
+  blamed cast error naming the expected type, not a segfault three
+  frames later.
+- **Unforgeable.** Only the inbound marshaler constructs kind 19;
+  no surface or internal prim builds one from an `Int`, ever. The
+  ADT work proved this discipline airtight (a vector impostor
+  cannot match a constructor pattern); handles inherit it. This is
+  the CHERI idea at language scale: pointer authority flows only
+  from having been *given* the pointer.
+- Handles print as `#<Regex 0x104a3c200>`; `equal?` is identity
+  (registered via the kind descriptor); `foreign-ptr?` is the
+  disjoint surface predicate (`vector?`, `adt?`, `procedure?` all
+  answer `#f`).
+- **Typed.** `define-foreign-type` registers `Name` with the checker
+  as an opaque nullary type — mechanically the `#%extern-type` path
+  that typed `.pufi` imports already use (a define-type that defines
+  no constructors). `pf_cast_check` grows one desc form
+  (kind 19 + brand) so `(ann v Regex)` and annotated formals of
+  handle type work everywhere, not just at `foreign` call sites.
+
+### 6.2 Lifecycle: explicit close now, finalizers later
+
+A `#:consumes` import is the type-directed close: the marshaler
+unwraps the handle, calls the C function, then **nulls the stored
+pointer and sets the closed bit**. Any later crossing of that handle
+is `Regex handle is closed` with blame; a second close is the same
+error, not a double free. Use-after-free and double-free are thus
+unrepresentable from the Puffin side — and this null-on-close
+discipline is exactly the at-most-once guarantee that makes the
+C side's `free`/`Box::from_raw` sound (§9.2). The two disciplines
+interlock; neither suffices alone.
+
+**Finalizers are deferred, deliberately** (a change from the first
+design, which specced a Boehm-finalizer backstop). Reasons, in
+order: (a) the routes diverge — Boehm has
+`GC_register_finalizer_no_order`, but the wasm VM's mark-sweep
+collector (WASM-VM.md §3.3) has no finalization and growing it some
+is real work for a backstop; a resource behavior that differs by
+route is worse than one that is explicit everywhere; (b) finalizers
+are a debugging comfort, not a resource discipline — scarce
+resources (fds, connections, compiled regexes in a long-lived
+process) want explicit close regardless, and every serious FFI's
+documentation says so after learning it the hard way; (c) v1's
+daily-driver reality is native, single-threaded, short-to-medium
+processes, where "close it or exit" covers the need. The seam is
+designed: the handle payload has room for a destructor slot, and a
+v2 `#:destructor "c_name"` clause on `define-foreign-type` can add
+the native-Boehm backstop (registered at wrap, cancelled at close)
+without touching any v1 contract. §13 Q4 asks whether the backstop
+should warn-to-stderr instead of silently collecting when it does
+come — the Go `SetFinalizer` debugging trick.
+
+## 7. GC discipline: what Boehm buys, and the rules that remain
+
+Condensed from the first design (which got this right); normative.
+
+**What conservative non-moving collection buys.** Boehm scans thread
+stacks, registers, and static data, and objects never move. So: a
+`pf` in the caller's frame keeps its object alive across any foreign
+call — no handle tables, no `PROTECT`/`UNPROTECT` ceremony for
+call-duration references; borrowed interior pointers (§4.3) stay
+valid for the call; a `pf` stored in a foreign *global* is found by
+the static-data scan. (The native VM links the same Boehm runtime,
+so all of this holds on the bytecode route too. The wasm VM never
+reaches foreign code, so its collector needs no story here.)
+
+**The sharp edge: foreign *heap* memory is invisible.** Boehm does
+not scan `malloc`'d memory — nor Rust's allocator. A `pf` stored
+into a malloc'd struct is invisible; the object dies at the next GC
+and the C side holds a dangling tagged word. The rules:
 
 1. **Don't store `pf` values in foreign memory.** Store what they
-   unwrap to (the C string copy, the int). This covers ~all of v1's
-   surface, since v1 only passes unwrapped values anyway.
-2. If foreign code must hold a `pf` (callbacks, §4.3), **pin it**:
-   `pf_gc_pin(v)` / `pf_gc_unpin(v)`, two new runtime entries.
-   Implementation: a GC-visible pin table (an uncollectable array of
-   `pf` slots with a free list — `GC_malloc_uncollectable` so the
-   table itself is a root and is scanned). Pinning is refcounted per
-   value so independent holders compose.
+   unwrap to. This covers *all* of v1's surface — v1 only ever
+   passes unwrapped C values, so the rule is currently
+   unbreakable-by-construction; it is stated for shim authors who
+   take `pf_*` helpers into their own hands.
+2. The pinning API (`pf_gc_pin`/`pf_gc_unpin`, a refcounted
+   GC-visible pin table) ships **with callbacks** (§11), which are
+   the first legitimate need. Until then, C authors who know Boehm
+   have `GC_malloc_uncollectable`/`GC_add_roots`.
 3. Foreign code allocating memory that will *contain* `pf` values
-   should allocate it with `pf_alloc_raw` (already exported: GC-
-   visible, GC-managed) instead of `malloc`.
+   should use `pf_alloc_raw` (already exported, GC-visible).
 
-`GC_malloc_uncollectable` and `GC_add_roots` remain available to C
-authors who know Boehm, but `pf_gc_pin` is the documented interface:
-one call, no Boehm API surface leaking into user shims.
+**The ownership table.** "Puffin/GC" means nobody calls free and
+foreign code must never `free`/`delete`/`drop` it:
 
-### 4.3 Callbacks: C calling Puffin closures
-
-Foreign libraries want callbacks (`qsort`, event loops, Rust
-iterator adapters). Two pieces:
-
-- **`pf pf_call_closure(pf clo, int64_t argc, pf *argv)`** — a
-  per-target assembly shim in the runtime that checks the closure
-  kind, loads the code pointer from slot 0, places the closure in
-  the closure register, `argc` in the arity register (`r10`/`x12` —
-  the variadic protocol already exists), arguments in the argument
-  registers (≤6; the packed-call protocol applies above, same as
-  ordinary calls), and calls. This is the one place the FFI needs
-  target-specific runtime code, and it is a mirror of what the
-  compiler's own calling convention documents already specify.
-- **Trampolines.** C callback signatures are C-typed, so a Puffin
-  closure crosses as a *pair* `(fn, void *env)` in the C idiom: the
-  stub pins the closure (§4.2), passes a generated trampoline as
-  `fn` and the pinned `pf` as `env`; the trampoline marshals C
-  arguments per the declared callback type (`(callback (-> Int Int
-  Bool))` in the `ffi` arrow), calls `pf_call_closure`, and
-  unmarshals the result. Libraries without a `void *user_data`
-  parameter cannot receive Puffin closures — that is their bug, and
-  the workaround (a C-side static) is the shim author's informed
-  choice, not the FFI's default.
-- **Constraints, stated plainly:** callbacks must arrive on a thread
-  the GC knows. v1 Puffin is single-threaded, so: callbacks from
-  the calling thread during a foreign call — fine (Boehm scans the
-  C frames in between; a GC triggered inside the callback is
-  business as usual). Callbacks from foreign-spawned threads —
-  **out in v1** (the stub aborts with a clear message if it can
-  detect it; the rule is documented regardless). When Puffin grows
-  threads, `GC_register_my_thread` is the v2 answer. An `error`
-  (Puffin `exit(1)`) inside a callback unwinds no foreign frames —
-  it exits the process, which is today's semantics everywhere; when
-  Puffin grows exceptions, callbacks become an exception barrier
-  (trap, return a declared error value) exactly like Rust's
-  `catch_unwind` discipline in §6.3.
-
-### 4.4 The ownership table
-
-Who frees what. "Puffin/GC" means: nobody calls free, the collector
-handles it; foreign code must never `free`/`delete`/`drop` it.
-
-| Memory | Allocated by | Owned/freed by | Foreign side may | Puffin side may |
+| Memory | Allocated by | Freed by | Foreign side may | Puffin side may |
 |---|---|---|---|---|
-| Puffin heap values (strings, vectors, handles, closures) | Puffin GC | Puffin GC | read borrowed ptrs during the call; hold across calls **only if pinned** | everything |
-| Borrowed `Str` argument (§3.3) | Puffin GC | Puffin GC | read during the call; never write, never stash unpinned, never free | — |
-| C string returned as `Str` | foreign | foreign — unless `#:gift`, then the **stub** frees via the named fn after copying | — | sees only the copy |
-| Opaque handle *wrapper* | Puffin GC | Puffin GC | nothing (never sees it) | pass it around freely |
-| Opaque handle *pointee* | foreign | foreign code, invoked by Puffin exactly once: `#:consumes` call or finalizer backstop | use per its own API | must not touch the raw pointer |
-| `pf` stored in foreign heap memory | Puffin GC | Puffin GC | hold while pinned; must `pf_gc_unpin` | — |
-| Callback closure held by a library | Puffin GC | Puffin GC (pinned by the registering stub; unpinned by the deregistering `#:consumes` call) | call via trampoline | — |
-| Buffers `malloc`ed by foreign code | foreign | foreign | — | sees only boundary copies |
+| Puffin heap values | Puffin GC | Puffin GC | read borrowed ptrs during the call | everything |
+| Borrowed `Str` argument | Puffin GC | Puffin GC | read during the call; never write/stash/free | — |
+| C string returned as `Str` | foreign | foreign — unless `#:gift`, then the *runtime* frees via the named fn after copying | — | sees only the copy |
+| Handle *wrapper* (kind 19) | Puffin GC | Puffin GC | nothing (never sees it) | pass freely |
+| Handle *pointee* | foreign | foreign code, invoked by Puffin at most once: the `#:consumes` call | per its own API | must not touch the raw pointer |
+| Buffers malloc'd by foreign code | foreign | foreign | — | sees only boundary copies |
 
-One sentence version, which is also the Rust rule in §6: **each side
-frees only what its own allocator allocated, and every
-ownership-transferring call is declared as such (`#:gift`,
-`#:consumes`) so the stub — not the programmer — performs the
-transfer.**
+One sentence, which is also §9's Rust rule: **each side frees only
+what its own allocator allocated, and every ownership-transferring
+call is declared (`#:gift`, `#:consumes`) so the runtime — not the
+programmer — performs the transfer.**
 
-## 5. C++: `extern "C"` shims, exceptions stop at the border
+## 8. Mechanism: a user-level manifest extension
 
-Puffin speaks the C ABI. C++ is admitted the way every C-ABI
-language admits it — through an `extern "C"` shim, written by the
-library's Puffin-face author:
+### 8.1 The lowering — no new call path, no backend changes
 
-```cpp
-// shim.cpp -- the only file that sees C++ types
-#include "widget.hpp"
-extern "C" {
-  void *pfw_new(const char *name) {
-    try { return new Widget(name); }
-    catch (...) { return nullptr; }          // -> (Nullable Widget)
-  }
-  int64_t pfw_weight(void *w) noexcept {
-    return static_cast<Widget *>(w)->weight();
-  }
-  void pfw_free(void *w) { delete static_cast<Widget *>(w); }
-}
+The first design's insight, restated with today's machinery: a prim
+*is* a typed foreign import that happens to live in the manifest.
+The FFI is the manifest opened to programs. Concretely, `lib/foreign.c`
+contributes a handful of **internal manifest prims** (`surface? #f`,
+appended like `cast-check` was):
+
+```
+#%ffi-register : (path cname desc) -> Int      dlopen (cached per path) + dlsym;
+                                               records {fnptr, desc, blame};
+                                               returns the import's index
+#%ffi-call0..6 : (idx a1 ... an) -> result     the generic type-directed caller
+#%ffi-wrap-type : (brand) -> Void              registers a foreign type's brand
+foreign-ptr?   : (v) -> Bool                   surface predicate for kind 19
 ```
 
-Rules, none negotiable:
-
-- **Only `extern "C"` symbols are declarable.** Mangled names,
-  overloads, templates, member functions: shim them. cppyy-style
-  automatic binding is explicitly a non-goal — it is where FFI bug
-  counts go to grow.
-- **No C++ exception may cross into a Puffin frame.** Generated
-  Puffin code has no unwind tables; a `throw` that unwinds through
-  it is undefined behavior of the worst kind (it may even *appear*
-  to work). Every shim export is `noexcept` in spirit: wrap anything
-  that can throw in `try { } catch (...)` and convert to the C-idiom
-  error the declaration expects (NULL → `(Nullable T)`, sentinel
-  int). The v2 `#:include` check (§3.6) can additionally require
-  shim headers to declare `noexcept`, making the rule mechanical.
-- Same for the reverse direction: a Puffin callback invoked from
-  C++ must not have C++ exceptions thrown *around* it (a `throw`
-  above the trampoline unwinding through Puffin frames below is the
-  same UB). Shims that take callbacks catch at the callback layer.
-- RAII, STL, everything C++ lives happily *inside* the shim; the
-  border speaks C. `new`/`delete` pairs stay on the C++ side of the
-  ownership table — a `#:destructor` for a C++ type points at the
-  shim's `pfw_free`, never at `free`.
-
-Linking: C++ shims pull in the C++ runtime; the `ffi-lib` for a C++
-library carries `#:link "-lc++"` (macOS). puffincc keeps driving
-plain `clang` and the flag rides the declaration — the driver stays
-language-agnostic.
-
-## 6. Rust: yes, it is feasible — here is the whole story
-
-The dream is real and the shape is boring, which is the highest
-compliment an FFI design can pay. Rust compiles to ordinary machine
-code with no runtime GC; a `staticlib` crate is a `.a` exactly like
-`libpuffin.a`; `extern "C"` + `#[no_mangle]` gives C-ABI symbols.
-From Puffin's side, **a Rust crate is indistinguishable from a C
-library** — every rule in §§3–4 applies verbatim. What Rust adds is
-a better story *inside* the library: memory safety in the shim
-itself, and crates.io as Puffin's borrowed ecosystem (regex,
-serde_json, reqwest…). The caveats are real but bounded; they are
-listed after the worked example, and none of them is disqualifying.
-
-### 6.1 The export discipline
-
-```rust
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_compile(pat: *const c_char) -> *mut Regex { ... }
-```
-
-- `crate-type = ["staticlib"]`; every export `extern "C"` +
-  `#[no_mangle]` (spelled `#[unsafe(no_mangle)]` since Rust 2024).
-  Only C types cross: raw pointers, fixed-width ints, `bool`.
-  **Never** `String`, `&str`, `Vec`, slices, trait objects, or
-  `Result` — those layouts are not ABI-stable. This is not a
-  Puffin restriction; it is Rust's own FFI law.
-- **cbindgen** generates the C header from the Rust source
-  (`cbindgen --lang c -o pfregex.h`). That header is what `ffi-lib
-  #:include` points at, which means the v2 cross-check (§3.6)
-  closes the loop: Puffin declaration ↔ clang ↔ cbindgen ↔ Rust
-  source, machine-checked end to end. Until v2 it is documentation
-  — still generate it.
-
-### 6.2 Ownership: `Box::into_raw` / `Box::from_raw`, and never touch Puffin memory
-
-The §4.4 table, translated into Rust idiom:
-
-- An opaque handle is born as `Box::into_raw(Box::new(value))` and
-  dies as `drop(Box::from_raw(ptr))` in exactly one export — the
-  destructor named by `#:destructor`/`#:consumes`. The Puffin-side
-  null-on-close + cancel-finalizer discipline (§3.4) guarantees
-  that export runs at most once, which is precisely the safety
-  contract `Box::from_raw` demands. The two disciplines interlock;
-  neither is sufficient alone.
-- Returned strings: `CString::into_raw`, with a paired
-  `pfregex_str_free(s: *mut c_char) { drop(CString::from_raw(s)) }`
-  export, declared as the `#:gift` free function. **Never** declare
-  `#:gift "free"` for a Rust string — Rust's allocator is not
-  libc's `malloc`, and freeing across allocators is heap corruption
-  (the single most common Rust-FFI bug in the wild; the `#:gift`
-  design makes the correct pairing a declaration, not a call-site
-  habit).
-- Borrowed `Str` arguments arrive as `*const c_char`:
-  `CStr::from_ptr(p).to_str()` — and note `.to_str()` performs
-  UTF-8 validation, which Puffin byte strings do not promise.
-  Return an error sentinel on invalid UTF-8 (or use
-  `to_string_lossy`/byte APIs when the crate allows); *copy*
-  (`to_owned`) anything retained past the call, because the borrow
-  dies with the call (§3.3).
-- Rust never frees, reallocates, or writes to Puffin memory —
-  Puffin pointers reaching Rust are `*const`, always. And the §4.2
-  rule bites here specifically: **Rust heap memory is invisible to
-  Boehm.** A `pf` stashed in a Rust struct without `pf_gc_pin` is a
-  latent use-after-free. v1 Rust exports should simply never store
-  `pf` values (they receive unwrapped C types anyway); callback
-  registration goes through the pinning stubs like everyone else.
-
-### 6.3 Panics must not cross, same as C++ exceptions
-
-A panic unwinding across an `extern "C"` boundary was UB for years;
-since Rust 1.81 the `extern "C"` ABI aborts the process instead.
-So the default is *safe* but *blunt* — a stray `.unwrap()` in the
-crate kills the Puffin process with a Rust backtrace. Two sanctioned
-postures, pick per library:
-
-1. **`panic = "abort"` in the release profile.** Honest, tiny,
-   matches Puffin's own `pf_fatal` philosophy (runtime errors exit;
-   there is nothing to unwind into anyway, v1 Puffin has no
-   exceptions). Recommended default.
-2. **`catch_unwind` at every export** for libraries that want
-   graceful degradation: wrap the body, convert a caught panic into
-   the declared error idiom (NULL / sentinel). Costs a few percent
-   and some boilerplate; a 10-line macro (`ffi_export! { ... }`)
-   hides it. Choose this for long-running-process libraries.
-
-Either way the invariant is the §5 invariant: **no foreign unwinding
-through Puffin frames, ever** — Rust merely enforces it for us.
-
-### 6.4 Worked example: the `regex` crate, end to end
-
-```console
-$ cargo new --lib pfregex && cd pfregex
-```
-
-```toml
-# Cargo.toml
-[lib]
-crate-type = ["staticlib"]
-[dependencies]
-regex = "1"
-[profile.release]
-panic = "abort"
-```
-
-```rust
-// src/lib.rs
-use regex::Regex;
-use std::ffi::{c_char, CStr, CString};
-
-fn cstr<'a>(p: *const c_char) -> Option<&'a str> {
-    unsafe { CStr::from_ptr(p) }.to_str().ok()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_compile(pat: *const c_char) -> *mut Regex {
-    match cstr(pat).and_then(|s| Regex::new(s).ok()) {
-        Some(re) => Box::into_raw(Box::new(re)),
-        None => std::ptr::null_mut(),          // -> (Nullable Regex)
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_is_match(re: *const Regex, hay: *const c_char) -> bool {
-    let re = unsafe { &*re };                  // non-null: stub brand-checks
-    cstr(hay).map_or(false, |h| re.is_match(h))
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_find(re: *const Regex, hay: *const c_char) -> *mut c_char {
-    let re = unsafe { &*re };
-    match cstr(hay).and_then(|h| re.find(h)) {
-        Some(m) => CString::new(m.as_str()).unwrap().into_raw(),
-        None => std::ptr::null_mut(),          // -> (Nullable (Str ...))
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_str_free(s: *mut c_char) {
-    if !s.is_null() { drop(unsafe { CString::from_raw(s) }); }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn pfregex_free(re: *mut Regex) {
-    if !re.is_null() { drop(unsafe { Box::from_raw(re) }); }
-}
-```
-
-```console
-$ cargo build --release          # -> target/release/libpfregex.a
-$ cbindgen --lang c -o pfregex.h # the #:include header
-$ cargo rustc --release -- --print native-static-libs
-  note: native-static-libs: -lSystem -lc -lm    # goes in #:link
-```
+Module resolution parses `foreign`/`define-foreign-type` forms
+(mangling the declared names uniformly, as ever); the checker
+registers the declared types; **desugar lowers each import to
+ordinary code**:
 
 ```scheme
-;; grep.puf
-(ffi-lib "pfregex/target/release/libpfregex.a"
-         #:include "pfregex/pfregex.h"
-         #:link "-lSystem -lc -lm")            ; from native-static-libs
-
-(define-foreign-type Regex #:destructor "pfregex_free")
-
-(ffi regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
-(ffi regex-match?  (-> Regex Str Bool)       #:c-name "pfregex_is_match")
-(ffi regex-find    (-> Regex Str (Nullable (Str #:gift "pfregex_str_free")))
-     #:c-name "pfregex_find")
-
-(define re (regex-compile "pu+ffin"))
-(unless re (error "bad pattern"))
-(println (regex-match? re "puuuuffin!"))       ; #t
-(println (regex-find re "a puffin appears"))   ; puffin
+;; (: regex-match? (-> Regex Str Bool) #:c-name "pfregex_is_match")
+(define regex-match?
+  (let ([i (#%ffi-register "vendor/libpfregex.dylib" "pfregex_is_match"
+                           '#(desc (foreign Regex_regex_9ab) str -> bool))])
+    (lambda (h s) (#%ffi-call2 i h s))))
 ```
+
+Everything downstream of desugar is vanilla: the `let` runs at
+module top level in DAG order (= load-time resolution, §5.3, falls
+out of ordinary top-level evaluation semantics — including under
+separate compilation, where it is simply part of the module's init);
+the `lambda` is an ordinary top-level function (`procedure?`,
+provide, eta, `.pufi` export at the declared type — all free); the
+body is an ordinary prim call, so **both native backends, the
+bytecode backend, and the interpreters need zero changes** — the
+prim-call machinery (args in registers, ≤6-arg convention) carries
+it. The desc is quoted data: the marshaling schedule derived from
+the declared type at compile time, interpreted at run time
+(cast-desc vocabulary extended with the width spellings, `str`
+flags, `nullable`, `gift`, `consumes`, and the kind-19 brand form).
+The blame string rides in the desc, built with source spelling at
+desugar exactly as cast blame labels are today.
+
+Two honest costs of this lowering, and why they are right for v1:
+each call pays a desc-interpretation loop (a switch per argument)
+on top of the C call — FFI calls are boundary crossings, not inner
+loops, and the checks dominate the interpretation anyway; and the
+import index is a runtime value threaded through a closure rather
+than a compile-time immediate — which is exactly what makes the
+same lowering correct under whole-program, separate-compilation,
+REPL, and VM-session builds without four registration stories. The
+rejected alternative — per-declaration open-coded assembly stubs
+(the first design) — is faster per call and is the designated **-O1
+seam**: a backend that recognizes `#%ffi-call` with a constant desc
+may inline the marshaling like it fuses compares today. Not v1.
+
+### 8.2 The generic caller, and why ≤6 integer-class args need no libffi
+
+`#%ffi-calln` does: check+convert each argument per the desc (into
+an `int64_t[6]`), make the call, construct the result per the desc.
+The call itself is the classic trick the ABI makes sound: on both
+SysV x86-64 and AAPCS64/Apple arm64, **any function whose parameters
+and result are all integer-class and ≤ 6 passes everything in
+integer registers**, so calling through
+`int64_t (*)(int64_t, int64_t, int64_t, int64_t, int64_t, int64_t)`
+with trailing arguments ignored is correct for every v1-declarable
+signature (a callee of smaller width reads its register's low bits;
+width-directed masking on our side handles returns, §4.1). One
+switch on argc, seven function-pointer casts, no libffi, no
+generated thunks, no dependency. This is the load-bearing reason §4
+scopes v1 to integer-class types — the restriction is not a
+limitation that happens to be convenient; it is the mechanism.
+Appendix A's spike is this caller in miniature, run against a real
+dylib and the real tag scheme, including the range check firing.
+
+### 8.3 Route by route
+
+- **Native backends (hosted src/ and puffincc):** as above —
+  nothing to do beyond the front-end lowering, `lib/foreign.c`, and
+  the manifest entries (regenerate `gen-puffincc-tables.rkt` output;
+  the standing lockstep chore). Both compilers emit the same
+  lowering from the same declaration; `diff-ir` stays the oracle.
+- **Native bytecode VM (`bin/puffin-vm`):** the .pbc format is
+  untouched — registration and calls are ordinary compiled
+  top-level code invoking manifest prims, and `vm-prims.inc`
+  regenerates from the manifest as always. The VM links
+  libpuffin.a, so `dlopen` in `pf_ffi_register` just works. One
+  dispatch completion: `OP_PRIM`'s arity switch currently handles
+  0–3 arguments and must extend to 7 (`#%ffi-call6` is arity 7) —
+  add cases, no format change.
+- **Reference interpreter (Racket):** the manifest entries carry
+  ref-impls built on `ffi/unsafe` — `(ffi-lib path)`,
+  `(get-ffi-obj cname lib (_cprocedure (list _int64 ...) _int64))`
+  — with every §4/§5 check re-implemented in the ref-impl layer,
+  because the checks are *semantics* and the interpreter must stay
+  golden-equal. Feasibility is not in doubt (`ffi/unsafe` is two
+  decades mature and its `_int64`/`_bytes`/`_pointer` ctypes cover
+  the v1 universe exactly); the cost is the usual
+  two-implementations-one-message discipline, and it is confined to
+  one ref-impl closure per prim, not per import. Racket's own
+  load-failure exceptions are caught and re-raised in §5.3's exact
+  texts.
+- **Wasm VM:** `pf_ffi_register`'s dlopen seam is `#ifdef __wasm__`
+  guarded — precisely io.c's existing `system()` precedent
+  ("WASI-absent → documented refusal") — and fails at registration
+  with §5.3's browser message. So: **declared foreign libraries
+  fail at load in the browser, loudly and testably.** No wasm
+  heroics in any planned version. The honest future seam, named but
+  not designed: the wasm component model's typed imports are the
+  *same shape* as a `foreign` form (declared signatures, generated
+  lift/lower), so a browser-side registry mapping declared imports
+  to component instances is a coherent v3 — it changes `pf_ffi_register`'s
+  wasm branch and nothing above it. Until someone needs it, a clean
+  refusal teaches the boundary better than an emulation would.
+- **REPL:** native VM sessions register imports like any top-level
+  code (dlopen'd libraries persist for the session); the browser
+  REPL refuses per the above. A firing FFI cast aborts the eval and
+  the session survives, like every cast today.
+
+### 8.4 Testing (the house gates)
+
+- **Corpus untouched**: 309/309 on every route, byte-identical —
+  the FFI adds manifest entries only (appended; prim ids stable),
+  and the gensym-budget invariant is respected (any new
+  keyword-accepting Racket definitions are counted; the
+  byte-identity baseline regenerates with the same .zo state).
+- **`tests/ffi-demo/`** (directory corpus entries, the module
+  runner's existing shape): `cdemo/` — a ~60-line C library
+  exercising every §4 row *and every error path* (embedded NUL,
+  out-of-range return, NULL constructor, brand mismatch,
+  use-after-close, double close); `pfregex/` — §9.4's Rust crate; a
+  Makefile building the `.dylib`s. Golden `.puf` programs per
+  feature run on interp + both native backends + native VM; the
+  wasm leg asserts the load-refusal text — **the refusals are
+  goldens too**.
+- **`src/test-ffi.rkt`** mirrors test-modules.rkt: every §5.1
+  load-time rejection and §5.2 blame message, exact-text, on every
+  route that can produce it (the test-arith.rkt precedent for
+  4-route exact-text assertions).
+- **Lockstep**: puffincc compiles the same corpus through its own
+  lowering; `diff-ir desugar` matches on FFI programs; stage-2
+  self-compile stays green (puffincc itself declares no imports,
+  so this is the null case, asserted anyway).
+- **A `bench/` entry** pitting `regex-find` against the pl-regex
+  Puffin engine keeps us honest about boundary overhead, including
+  the desc-interpretation cost of §8.1.
+
+## 9. Guests: C++, and Rust as the first-class one
+
+Unchanged in substance from the first design; condensed and updated
+to the new surface. From Puffin's side a guest language is
+invisible — only the C ABI crosses — so this section is discipline
+for the *library's* author, not new mechanism.
+
+### 9.1 C++: `extern "C"` shims, exceptions stop at the border
+
+Only `extern "C"` symbols are declarable; mangled names, overloads,
+templates, member functions get a shim (`extern "C"` functions over
+an opaque `Widget*`). **No C++ exception may cross into a Puffin
+frame** — generated Puffin code has no unwind tables, so a `throw`
+unwinding through it is UB of the worst kind; every shim export
+wraps its body in `try { } catch (...)` and converts to the C-idiom
+error the declaration expects (NULL → `(Nullable T)`, sentinel
+int). RAII and the STL live happily *inside* the shim; `new`/`delete`
+stay on the C++ side of §7's table (`#:consumes` points at the
+shim's `pfw_free`, never at `free`). A C++ shim dylib carries its
+own `-lc++` linkage — a dylib's dependencies are its own business,
+which is one more quiet advantage of the dlopen design: no `#:link`
+flag passthrough in Puffin source at all (the first design's open
+question 7 dissolves).
+
+### 9.2 Rust: the ownership disciplines interlock
+
+A `cdylib` crate (`crate-type = ["cdylib"]` — note: the first
+design said `staticlib`; dlopen wants the dylib) with
+`#[unsafe(no_mangle)] pub extern "C"` exports is indistinguishable
+from a C library, and every rule in §§4–7 applies verbatim. Rust
+adds memory safety *inside* the library and crates.io as Puffin's
+borrowed ecosystem. The discipline:
+
+- Only C types cross: raw pointers, fixed-width ints, `bool` —
+  never `String`, `&str`, `Vec`, slices, trait objects, `Result`
+  (not ABI-stable; Rust's own FFI law, not ours).
+- Handles: born `Box::into_raw(Box::new(v))`, die
+  `drop(Box::from_raw(p))` in exactly one export — the `#:consumes`
+  target. Puffin's null-on-close guarantees that export runs at
+  most once, which is precisely the contract `Box::from_raw`
+  demands (§6.2).
+- Strings out: `CString::into_raw` paired with an exported
+  `..._str_free`, declared as the `#:gift` function. **Never**
+  `#:gift "free"` for a Rust string — Rust's allocator is not
+  libc's, and freeing across allocators is heap corruption (the
+  single most common Rust-FFI bug in the wild; `#:gift` makes the
+  correct pairing a declaration, not a call-site habit).
+- Strings in arrive as borrowed `*const c_char`:
+  `CStr::from_ptr(p).to_str()` validates UTF-8, which Puffin byte
+  strings do not promise — return the declared error idiom on
+  invalid UTF-8 or use byte APIs; `to_owned` anything retained past
+  the call (the borrow dies with the call).
+- **Panics must not cross**: since Rust 1.81 a panic hitting an
+  `extern "C"` boundary aborts the process — safe but blunt.
+  Recommended default: `panic = "abort"` in the release profile
+  (honest, tiny, matches `pf_fatal` philosophy). Long-running-
+  process libraries: `catch_unwind` at every export, converting to
+  the declared error idiom.
+- **Boehm cannot see Rust's heap** — but v1 Rust exports only ever
+  receive unwrapped C values, so there is nothing taggable to
+  stash. The rule bites when callbacks arrive (§11).
+
+### 9.3 Build orchestration
+
+puffincc will not run cargo or make. `foreign` names a `.dylib`
+path; producing it is the library's Makefile's business (`cargo
+build --release` → `target/release/libpfregex.dylib` with
+`crate-type = ["cdylib"]`; `cbindgen --lang c` generates the header
+that a v2 cross-check can verify declarations against — the
+clang `-fsyntax-only` `_Static_assert` trick from the first design
+carries forward unchanged as the v2 `#:include` seam). Target
+triples must agree (`aarch64-apple-darwin` for the native routes);
+a mismatch is a clean dlopen failure at load, not a runtime
+surprise.
+
+### 9.4 Worked example (carried, updated)
+
+The Rust regex crate example from the first design survives with
+two mechanical edits — `crate-type = ["cdylib"]`, and the Puffin
+face becomes:
+
+```scheme
+(define-foreign-type Regex)
+(foreign "pfregex/target/release/libpfregex.dylib"
+  (: regex-compile (-> Str (Nullable Regex))   #:c-name "pfregex_compile")
+  (: regex-match?  (-> Regex Str Bool)         #:c-name "pfregex_is_match")
+  (: regex-find    (-> Regex Str (Nullable Str)) #:c-name "pfregex_find"
+                                                 #:gift "pfregex_str_free")
+  (: regex-close   (-> Regex Void)             #:c-name "pfregex_free"
+                                               #:consumes))
+```
+
+`build/puffincc grep.puf -o grep && ./grep` — no linker flags, no
+archives; the dylib resolves at load relative to the module.
+
+## 10. What stays out (v1)
+
+Deep struct/union/array marshaling (shim seam, §4.6); floats (§4.5
+— a language project, sequenced in §13 Q1); callbacks and the
+pinning API (§11); finalizer backstops (§6.2); varargs; C++ beyond
+`extern "C"` shims; foreign threads calling anything; static
+linking of foreign code (v2 `#:static` seam for single-binary
+distribution — the mechanism is the first design's archive
+collection, revived behind the same declarations); the `#:include`
+clang cross-check (v2, designed, §9.3); any cargo/cmake
+orchestration; libffi (structurally unnecessary, §8.2); arity > 6
+(the packed-call convention could carry it; wait for a real need);
+wasm component imports (v3 shape named in §8.3). Each exclusion has
+a named seam; none requires revisiting §§3–7's contracts.
+
+## 11. Callbacks: the designed-but-deferred piece
+
+Deferred whole from v1 (the first design specced it; the type
+system changes nothing about it, and it is the one feature whose
+absence keeps §2's "transient is complete" theorem true — worth
+being explicit that shipping callbacks *weakens* the boundary story
+from complete to transient-with-caveats). Sketch retained so the
+seams stay honest: `(callback (-> τ ... τ))` argument types; a
+`pf_call_closure(clo, argc, argv)` runtime entry (per-target shim
+mirroring the documented calling convention — the one place the FFI
+would need target-specific code); trampolines passing the pinned
+closure as `void *user_data`; the `pf_gc_pin` API shipping
+alongside; callbacks legal only on the calling thread during the
+call (v1 Puffin is single-threaded; Boehm scans the interleaved C
+frames fine); foreign-spawned threads out until Puffin has threads
+(`GC_register_my_thread` is the eventual answer); `error` inside a
+callback exits the process (today's semantics everywhere) until
+Puffin grows exceptions, at which point callbacks become an
+exception barrier like Rust's `catch_unwind` discipline. On the
+bytecode routes, `pf_call_closure` must call back *into the VM
+dispatch loop* (closures are tagged function indices there) — a
+re-entrancy seam the VM's frame stack already tolerates but which
+needs its own verification gate when this ships.
+
+## 12. Phases, each with its verification gate
+
+1. **Scalars on every native route** — the shippable minimal slice.
+   `foreign` + `(: ...)` parsing and typing in both compilers
+   (`Int`/`Bool`/`Str`/`Void`/`(Nullable Str)`, `#:c-name`,
+   `#:gift`); the desugar lowering; `lib/foreign.c` with
+   `#%ffi-register`/`#%ffi-call0..6` + manifest entries (+
+   `ffi/unsafe` ref-impls); VM `OP_PRIM` arity cases 4–7; wasm
+   refusal; `tests/ffi-demo/cdemo` + `src/test-ffi.rkt`.
+   **Gate:** corpus 309/309 untouched byte-identical on all routes;
+   cdemo goldens green on interp + arm64 + x86-64 + native VM;
+   every §5 message exact-text on every route incl. the wasm
+   refusal; stage-2 fixpoint; tables regenerated
+   (gen-puffincc-tables, gen-vm-prims, STDLIB/stdlib.html — the
+   docs-as-tests generator will demand doc lines for any new
+   surface prim, i.e. `foreign-ptr?`).
+2. **Widths + handles.** `I8..U64` marshaling; `define-foreign-type`,
+   kind 19 + brands + `foreign-ptr?`, cast-desc form, `#:consumes`
+   null-on-close, `(Nullable T)` for handles.
+   **Gate:** phase-1 gates; the full §5.2 blame matrix incl. brand
+   mismatch / closed / double-close, exact-text everywhere;
+   `(ann v Regex)` casts work; RSS-flat close loop (the leak
+   check); `foreign-ptr?` disjointness pinned like `adt?` was.
+3. **Rust end-to-end + interfaces.** `tests/ffi-demo/pfregex` (§9.4)
+   as a corpus entry; typed `.pufs` ascription over an FFI module;
+   `.pufi` export of foreign names at declared types under
+   `--separate` (expected: falls out of §8.1's lowering — the gate
+   proves it).
+   **Gate:** pfregex goldens on all native routes; separate-
+   compilation matrix (modules-typed style) with a foreign dep incl.
+   staleness on declaration change; bench entry recorded.
+4. **v2 seam items, by need:** `#:include` clang cross-check;
+   `#:destructor` finalizer backstop (native, warn-vs-collect per
+   §13 Q4); `#:static`; `Float` (blocked on flonums); struct
+   declarations / `(Vec Int)` borrows; callbacks (§11, its own
+   gates, incl. the VM re-entrancy one).
+
+Phase 1 is deliberately small enough to build and gate in one
+sitting: one runtime module, one lowering, zero backend edits — and
+it already delivers the headline: typed, blamed, dlopen'd C calls
+on all four native-capable routes with the browser refusing
+honestly.
+
+## 13. Open questions for Kris (each with a recommended default)
+
+1. **The Float story.** The FFI is now the loudest customer for
+   flonums (any numeric C library wants `double`). Options: (a) do
+   flonums as their own language project first — representation
+   (NaN-boxing vs boxed vs a 61-bit scheme), printing, `equal?`,
+   all four routes — then the FFI adds `Float` as one table row;
+   (b) let the FFI force a minimal boxed flonum in early.
+   **Recommended: (a).** The FFI seam is clean either way (§4.5),
+   and a representation chosen under FFI deadline pressure is the
+   kind of decision this project exists to not make.
+2. **Browser posture.** This design: declared `foreign` libraries
+   fail at *load* on the wasm VM (§5.3) — consistent with native
+   (dlopen at load), maximally honest, but it means a module can't
+   carry an "optional native accelerator". Alternative: fail at
+   first *call* (the first design's posture), which lets
+   FFI-declaring modules load for their pure parts.
+   **Recommended: fail at load.** One resolution semantics on every
+   route beats browser-special laziness; if optional accelerators
+   become real, that wants a designed feature (conditional
+   requires), not a quiet divergence.
+3. **`(Nullable τ)`.** Ships as an FFI-result-only form the checker
+   sees as `_` (§4.4). Alternative: bless a stub-level `(Option τ)`
+   wrap (allocates a `Some` per call; fully typed).
+   **Recommended: ship `Nullable`, revisit after phase 3** — if
+   your FFI-facing code ends up wrapping everything in Option by
+   hand anyway, promote it then; the desc format has room.
+4. **Finalizers.** v1 is explicit-close-only (§6.2). When the v2
+   backstop comes: silently-collecting finalizer, or the stricter
+   "finalizer only *warns* to stderr that a handle leaked, close is
+   still mandatory"?
+   **Recommended: the warning mode** — it matches the FFI's
+   loud-over-silent personality and doubles as a leak detector; and
+   note it would be native-Boehm-only until the wasm/VM collector
+   grows finalization, which is exactly why it isn't in v1.
+5. **Default `#:c-name` mapping.** Specced: `-` → `_`, anything
+   else requires the clause (§3). Comfortable, or would you rather
+   *always* require `#:c-name` (maximal explicitness, more noise)?
+   **Recommended: keep the mapping** — it covers the honest
+   majority and can't misfire silently (a wrong guess is a missing
+   symbol at load, named).
+6. **Embedded-NUL check strictness.** The `strlen == len` check on
+   every outbound `Str` is O(n) (§4.3). Keep unconditional (my
+   vote: yes — it is the FFI's personality), or add per-argument
+   `#:unchecked` for hot paths after benchmarks say it matters?
+
+---
+
+## Appendix A: feasibility spike transcript (2026-07-13, macOS arm64, uncommitted, /tmp)
+
+Three spikes, proving the §8 mechanism's load-bearing claims.
+`libdemo.c` exports `demo_add(int64_t,int64_t)`, `demo_big(void)`
+returning `INT64_MAX`, `demo_strlen(const char*)`, and a malloc'ing
+`demo_greet` (the `#:gift` shape).
+
+**Spike 1+2 — dlopen/dlsym + type-directed tagged round-trip**
+(`host.c`: puffin.h's exact tag scheme; marshal derived from
+`(-> Int Int Int)`; the 61-bit retag check as specced in §4.1):
 
 ```console
-$ build/puffincc grep.puf -o grep    # ffi-lib archives + #:link flags
-$ ./grep                             # join the existing clang line
-#t
-puffin
+$ clang -O2 -dynamiclib -o libdemo.dylib libdemo.c
+$ nm -gU libdemo.dylib
+0000000000000408 T _demo_add
+0000000000000410 T _demo_big
+000000000000041c T _demo_greet
+0000000000000418 T _demo_strlen
+$ clang -O2 -o host host.c && ./host
+dlopen/dlsym ok: demo_add=0x102a50408 getpid=0x18aece178 (pid=17232)
+tagged in : a=0xa0 b=0xb0
+round trip: raw=42 tagged=0x150 untagged-back=42
+strlen via FFI: 6
+gifted str  : hello kris (copied, original freed)
+now calling demo_big (returns INT64_MAX; must die loudly):
+puffin runtime error: cast: expected Int (61-bit), got 9223372036854775807 (blame: foreign demo-big's result)
+exit: 255
 ```
 
-### 6.5 The caveats, all of them
+Notes: dlopen resolved both the local dylib and
+`/usr/lib/libSystem.B.dylib` (dyld shared cache) with `dlsym` of
+`getpid` callable — system libraries need no special handling. The
+tagged round trip is exact (`0xa0`=20, `0xb0`=22 → raw 42 →
+`0x150`=42<<3), and the range check on `INT64_MAX` fires with the
+specced message and `exit(255)` (the `pf_fatal` contract).
 
-- **Binary size:** a staticlib carries Rust's `std` (a few hundred
-  KB to ~1MB after dead-stripping). Fine for a compiler author's
-  daily driver; worth knowing before wrapping `left-pad`.
-- **Target triples must agree:** puffincc's `-target
-  arm64-apple-darwin` ↔ cargo's `aarch64-apple-darwin`. Same-host
-  builds agree by default; puffincc's `-t x86-64` Rosetta target
-  needs `cargo build --target x86_64-apple-darwin`. A mismatch is a
-  clean link error, not a runtime surprise.
-- **Link closure:** Rust staticlibs need the flags from `--print
-  native-static-libs` (macOS: usually just `-lSystem -lc -lm`,
-  already implied by clang, so `#:link` is often empty in practice
-  — but check per crate; e.g. anything using the system keychain
-  wants `-framework Security`).
-- **Two Rust staticlibs in one program** can collide (each bundles
-  `std`). The known fix is one umbrella crate re-exporting both.
-  Document it; don't engineer around it in v1.
-- **Build orchestration:** puffincc will not run cargo (§7 — it
-  links what exists and errors helpfully when the `.a` is missing).
-  A `make` target owns the cargo step. v2 may grow `#:build "cargo
-  build --release"` on `ffi-lib`; it is deliberately not in v1.
-- **UTF-8 vs byte strings** (§6.2), **panics abort** (§6.3), and
-  **Boehm can't see Rust's heap** (§6.2) — restated here because
-  these three are the ones that will actually bite.
+**Spike 3 — against the real runtime** (`host2.c` links the actual
+`src/runtime/libpuffin.a`: `pf_init`, a Boehm-allocated Puffin heap
+string via `pf_string_from_bytes`, its NUL-terminated payload
+passed *borrowed* through a dlsym'd foreign function, result
+retagged and printed by `pf_display_value` — §4.3's zero-copy
+outbound claim, end to end; the empty whole-program literal tables
+are defined the way the separate-compilation entry unit defines
+them):
 
-None of these threatens the core claim: **Rust linkage is a
-first-class, v1 capability**, and the ownership disciplines of the
-two systems (affine types there, branded null-on-close handles
-here) genuinely reinforce each other — this pairing is *safer* than
-the plain-C case, not more exotic.
-
-## 7. Build integration: the driver already does this
-
-puffincc's link step today (`puffincc-src/main.puf`,
-`assemble-and-link`) is one clang invocation: assembly + `--runtime`
-archive + stack-size flag. The FFI extends it, not replaces it:
-
-```
-/usr/bin/clang -target <triple> -Wl,-stack_size,0x20000000 \
-    prog.s <runtime.a> <ffi-lib archives, DAG postorder> <#:link flags> -o prog
+```console
+$ clang -O2 -I$REPO/src/runtime -o host2 host2.c $REPO/src/runtime/libpuffin.a
+$ ./host2
+puffin str: kind=3 len=16 payload='a puffin appears'
+borrowed strlen through dlsym: raw=16 tagged->16
+exit: 0
 ```
 
-- **Archives come from declarations, not flags.** Module resolution
-  already walks the require DAG; it now also collects each module's
-  `ffi-lib` paths (resolved relative to the declaring file) and
-  `#:link` flags, deduplicated, in postorder. No new CLI surface —
-  though `--lib extra.a` is a cheap addition for experiments. The
-  same collection happens in `src/main.rkt`'s
-  `run-assembler-linker` for the hosted route.
-- **Externs and calls are the existing machinery.** The backends
-  emit `.extern pf_string_append` and direct calls because the
-  manifest says so; `ffi` declarations feed the same tables
-  program-locally (`stdlib-extern-symbols` grows a per-program
-  component; `irs.rkt` prim predicates likewise — the derived-views
-  discipline in stdlib.rkt was built for exactly this). An FFI call
-  site compiles as: marshal args (open-coded shifts/checks in the
-  stub), `callq c_name`, marshal result. The stub is emitted once
-  per declaration into the program's assembly, named like a
-  lifted lambda (`_ffi_regex_compile`), and calls route through it;
-  at `-O1` the optimizer may inline the Int/Bool marshalling at
-  call sites the way it fuses compares today. Runtime additions are
-  exactly four entries: `pf_ffi_str_copy`, `pf_ffi_wrap` /
-  `pf_ffi_unwrap` (brand-checked), `pf_call_closure`, plus the
-  `pf_gc_pin`/`pf_gc_unpin` pair — a `lib/foreign.c` module with a
-  manifest entry for its kind, per the standing "new features are
-  new lib/ modules" rule. **No compiler-pass changes**; the three
-  implementations change where they always change (§8).
-- **What we do not build:** libffi or any dynamic call
-  construction. Every signature is static at compile time; the
-  stub is ordinary generated code. This keeps FFI calls at
-  direct-call speed (the benchmarks live and die on `pf_*` call
-  overhead already) and keeps a whole dependency out of the tree.
-- **Separate compilation (MODULES.md §3, future):** a module's
-  `.pufi` grows `(ffi-libs ...)` and `(ffi-externs ...)` entries so
-  the final link can gather archives from interface files alone.
-  Designed now, shipped with `.pufi` itself.
-
-## 8. Three implementations, honestly
-
-The lockstep rule (reference, web, puffincc — plus the native
-runtime) applies to *semantics*, and FFI semantics are inherently
-native. The parity story, route by route:
-
-- **Native (both backends, hosted `src/` and self-hosted
-  puffincc):** the real thing, as specified above. Both compilers
-  emit the same stubs from the same declaration tables (regenerate
-  `gen-puffincc-tables.rkt` output when the manifest schema grows
-  the ffi fields — the standing lockstep chore, nothing new).
-- **Reference interpreter (Racket):** *optional* parity via
-  `ffi-lib`'s `#:shared` clause and Racket's `ffi/unsafe` —
-  `(ffi-obj-ref ...)` on the dylib, `_int64`/`_string*`/`_pointer`
-  per the declared type, the same range/NUL checks reimplemented in
-  the ref-impl layer (they are part of the *semantics*, so the
-  interpreter must check them to stay golden-equal). A declaration
-  without `#:shared` makes every call raise
-  `error: regex-compile is native-only (no #:shared library declared)`
-  — a defined, testable behavior, not a gap. This keeps the golden
-  discipline: FFI corpus programs run on interp + chain + both
-  backends when the demo libraries build both `.a` and `.dylib`
-  (they will — one extra linker line in the test Makefile).
-- **Web:** declared-but-unavailable, cleanly. `modules.js` parses
-  the forms (programs that merely declare still load and everything
-  else in them runs); applying an FFI binding raises
-  `error: ffi function regex-compile is not available in the web
-  runtime`. No wasm heroics in any planned version — the web REPL
-  is a teaching surface, and a clean refusal teaches the boundary
-  better than an emulation would.
-
-### Phasing
-
-1. **Manifest + scalars:** declaration forms in all three parsers;
-   stub emission for `Int`/width-ints/`Bool`/`Str`/`Void`/
-   `Nullable`; link collection in both drivers; `lib/foreign.c`
-   with `pf_ffi_str_copy`; web/interp refusal errors.
-   Exit: `tests/ffi-demo` C library green on both backends.
-2. **Handles:** `define-foreign-type`, kind 18, brands, finalizer
-   backstop, `#:consumes` null-on-close, `#:gift`. Exit: the §6.4
-   Rust regex example runs end to end, plus a leak check
-   (`GC_gcollect` in a loop, RSS flat).
-3. **Interpreter parity:** `#:shared` + `ffi/unsafe`; ffi corpus
-   programs join the golden runner on all routes.
-4. **Callbacks:** `pf_call_closure` shims (per target), trampolines,
-   pinning. Exit: `qsort` over a Puffin comparator, both targets.
-5. **v2 seam items,** in whatever order need dictates: `#:include`
-   cross-check (§3.6), struct declarations, `(Vec Int)` borrows,
-   `Float` (blocked on flonums), `#:build`, `.pufi` fields.
-
-### Test strategy: `tests/ffi-demo/`
-
-A directory corpus entry (the module runner already learned
-directory shapes): `cdemo/` — a 60-line C library exercising every
-§3 row including the error paths (embedded NUL, out-of-range
-return, NULL constructor) plus `qsort` callbacks later;
-`pfregex/` — the §6.4 crate verbatim; a Makefile building
-`.a` + `.dylib` for both; golden `.puf` programs per feature, run on
-every route (native = real, interp = dylib parity, web = asserted
-error messages — the refusals are goldens too). Negative tests in
-`src/test-ffi.rkt` mirror `test-modules.rkt`: bad declarations
-(unmarshallable type, `_` in an arrow, missing archive at link,
-brand mismatch, use-after-close, double-close) each produce their
-documented diagnostic. A `bench/` entry pitting `regex-find` against
-the pl-regex Puffin engine keeps us honest about boundary overhead.
-
-## 9. What stays out (v1)
-
-Deep struct/union/array marshalling (§3.4's seam), floats (language
-gap, stated), varargs, C++ beyond `extern "C"` shims, foreign
-threads calling back, dlopen-at-runtime in native code (everything
-is statically linked; the interpreter's dylib use is a test
-convenience, not a language feature), any cargo/cmake orchestration
-inside puffincc, and libffi. Each exclusion has a named seam; none
-requires revisiting §§2–4's contracts.
-
-## 10. Open questions for Kris
-
-1. **Strictness dial on strings:** the `strlen == len` embedded-NUL
-   check is O(n) per inbound string. Keep it unconditional (my
-   vote: yes — it is the FFI's personality), or `#:unchecked` per
-   argument for hot paths?
-2. **`Nullable` as a type constructor** leaks a union-ish type into
-   TYPES.md's grammar for FFI results only. Acceptable as an
-   FFI-boundary-only form, or would you rather bless a proper
-   `(Option a)` ADT crossing (wrap in `Some`/`None` at the stub —
-   costs an allocation, reads beautifully in typed code)?
-3. **Width annotations** `(Int #:c "int")`: in v1 as specced, or
-   ship int64-only first and add widths with the §3.6 checker so
-   they're verified from birth?
-4. **`define-foreign-type` vs ADT unification:** when ADTs get
-   their dedicated heap kind, foreign types could become
-   single-constructor opaque ADTs sharing that machinery. Worth
-   converging, or keep kinds 18 (foreign) and the ADT kind separate?
-5. **Finalizer policy:** is the "backstop + explicit `#:consumes`"
-   posture right for your daily use, or do you want a mode where a
-   foreign type *requires* explicit close (finalizer merely warns
-   to stderr — the Go `runtime.SetFinalizer` debugging trick)?
-6. **Interpreter parity cost:** the ref-impl layer reimplementing
-   marshalling checks is real work per feature. Is native-only +
-   web-refusal acceptable for v1 (phases 1–2), with phase 3 parity
-   gated on how much FFI code you actually write?
-7. **`#:link` passthrough** is a small escape hatch with a big
-   surface (arbitrary linker flags in source files). Comfortable,
-   or should it be allowlisted (`-l`, `-framework`, `-L` only)?
+Everything §8 needs from the platform is demonstrated: dlopen from
+runtime-shaped C, integer-class calls through casted function
+pointers, borrowed string payloads out of the real GC'd heap, and
+the loud 61-bit boundary.
