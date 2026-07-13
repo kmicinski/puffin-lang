@@ -82,6 +82,15 @@ extern pf pf_adt_ref(pf, pf);
 extern pf pf_adt_tag(pf);
 extern pf pf_adt_huh(pf);
 extern pf pf_cast_check(pf, pf, pf);
+extern pf pf_ffi_register(pf, pf, pf, pf);
+extern pf pf_ffi_call0(pf);
+extern pf pf_ffi_call1(pf, pf);
+extern pf pf_ffi_call2(pf, pf, pf);
+extern pf pf_ffi_call3(pf, pf, pf, pf);
+extern pf pf_ffi_call4(pf, pf, pf, pf, pf);
+extern pf pf_ffi_call5(pf, pf, pf, pf, pf, pf);
+extern pf pf_ffi_call6(pf, pf);
+extern pf pf_foreign_ptr_huh(pf);
 
 static const vm_prim vm_prims[] = {
   {"read", 0, (vm_prim_fn)pf_read_int},
@@ -164,6 +173,15 @@ static const vm_prim vm_prims[] = {
   {"adt-tag", 1, (vm_prim_fn)pf_adt_tag},
   {"adt?", 1, (vm_prim_fn)pf_adt_huh},
   {"cast-check", 3, (vm_prim_fn)pf_cast_check},
+  {"#%ffi-register", 4, (vm_prim_fn)pf_ffi_register},
+  {"#%ffi-call0", 1, (vm_prim_fn)pf_ffi_call0},
+  {"#%ffi-call1", 2, (vm_prim_fn)pf_ffi_call1},
+  {"#%ffi-call2", 3, (vm_prim_fn)pf_ffi_call2},
+  {"#%ffi-call3", 4, (vm_prim_fn)pf_ffi_call3},
+  {"#%ffi-call4", 5, (vm_prim_fn)pf_ffi_call4},
+  {"#%ffi-call5", 6, (vm_prim_fn)pf_ffi_call5},
+  {"#%ffi-call6", 2, (vm_prim_fn)pf_ffi_call6},
+  {"foreign-ptr?", 1, (vm_prim_fn)pf_foreign_ptr_huh},
 };
 
-enum { VM_PRIM_COUNT = 80 };
+enum { VM_PRIM_COUNT = 89 };

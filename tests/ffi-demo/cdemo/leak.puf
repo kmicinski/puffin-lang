@@ -1,0 +1,10 @@
+;; the warn-to-stderr leak detector (docs/FFI.md §6.2, §13 Q4):
+;; two closeable handles, one closed -- one warning line at exit
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes))
+(define a (box-new 1))
+(define b (box-new 2))
+(box-close a)
+(println 'done)

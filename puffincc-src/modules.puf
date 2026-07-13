@@ -14,6 +14,7 @@
 
 (require "reader.puf")
 (require "system.puf")   ;; module-demangle-register! (diagnostic rendering)
+(require "types.puf")    ;; consistent? -- typed signature entries
 
 ;; string-append is a binary prim; message building wants n-ary
 (define (str-cat . parts)
@@ -77,13 +78,72 @@
 ;; every top-level name a form binds: defines bind one; define-type
 ;; binds its type name AND each constructor (docs/TYPES.md) -- all of
 ;; them provide/mangle like ordinary top-level names
+;; foreign imports: each (: name τ ...) declaration binds `name`
+;; (docs/FFI.md §3); define-foreign-type binds its type name
+(define (foreign-decl-names f)
+  (filter-map (lambda (d) (if (and (pair? d) (eq? (car d) ':)
+                                   (pair? (cdr d)) (symbol? (car (cdr d))))
+                              (car (cdr d))
+                              #f))
+              (cdr f)))
+
 (: module-defn-names (-> _ (List Sym)))
 (define (module-defn-names f)
-  (match f
-    [`(define-type ,head ,ctors ...)
-     (cons (match head [`(,n ,_ ...) n] [n n])
-           (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
-    [_ (let ([n (module-defn-name f)]) (if n (list n) '()))]))
+  (cond
+    [(and (pair? f) (eq? (car f) 'define-foreign-type)
+          (pair? (cdr f)) (symbol? (car (cdr f))))
+     (list (car (cdr f)))]
+    [(and (pair? f) (eq? (car f) 'foreign))
+     (foreign-decl-names f)]
+    [else
+     (match f
+       [`(define-type ,head ,ctors ...)
+        (cons (match head [`(,n ,_ ...) n] [n n])
+              (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
+       [_ (let ([n (module-defn-name f)]) (if n (list n) '()))])]))
+
+;; ---------------------------------------------------------------------
+;; foreign library paths (docs/FFI.md §3): a lib-path containing a `/`
+;; resolves relative to the declaring module's file; a bare name goes
+;; to the system loader's search. Resolution inserts the resolved
+;; spelling as a second path element: (foreign spath decl ...) ->
+;; (foreign spath rpath decl ...). Module paths here are already
+;; entry-relative, so the joined spelling agrees byte-for-byte with
+;; the Racket resolver's cwd-relative respelling when both compilers
+;; run from the same directory (diff-ir's invocation shape).
+;; ---------------------------------------------------------------------
+
+(: foreign-resolve-path (-> Str Str Str))
+(define (foreign-resolve-path spath base-dir)
+  (define has-slash
+    (let loop ([i 0])
+      (and (< i (string-length spath))
+           (or (eq? (string-byte spath i) 47) (loop (+ i 1))))))
+  (cond
+    [(not has-slash) spath]                                        ;; system loader search
+    [(and (> (string-length spath) 0) (eq? (string-byte spath 0) 47)) spath]  ;; absolute
+    [else (path-join base-dir spath)]))
+
+(define kw-include (string->symbol "#:include"))
+
+(define (resolve-foreign-paths f base-dir)
+  (if (and (pair? f) (eq? (car f) 'foreign)
+           (pair? (cdr f)) (string? (car (cdr f)))
+           ;; not already resolved
+           (not (and (pair? (cdr (cdr f))) (string? (car (cdr (cdr f)))))))
+      (cons 'foreign
+            (cons (car (cdr f))
+                  (cons (foreign-resolve-path (car (cdr f)) base-dir)
+                        ;; the #:include header (docs/FFI.md §9.3)
+                        ;; resolves against the module's dir too
+                        (let resolve-clauses ([rest (cdr (cdr f))])
+                          (if (and (pair? rest) (eq? (car rest) kw-include)
+                                   (pair? (cdr rest)) (string? (car (cdr rest))))
+                              (cons kw-include
+                                    (cons (foreign-resolve-path (car (cdr rest)) base-dir)
+                                          (resolve-clauses (cdr (cdr rest)))))
+                              rest)))))
+      f))
 
 ;; (fixed n) | (variadic n) | val
 (define (module-defn-arity f)
@@ -104,7 +164,8 @@
                define lambda λ let let* letrec begin if cond case
                when unless match set! while quote quasiquote unquote
                unquote-splicing and or else _ ... require provide
-               signature #%rest nil void read)))
+               signature #%rest nil void read
+               foreign define-foreign-type)))
 
 ;; ---- paths (byte-oriented, / separated) --------------------------------
 
@@ -241,39 +302,158 @@
        (if (symbol? name) entries
            (module-error (str-cat sig-path ": expected a single (signature NAME entries...) form")))]
       [_ (module-error (str-cat sig-path ": expected a single (signature NAME entries...) form"))]))
+  ;; foreign declarations (docs/FFI.md §3): to a signature, each
+  ;; (: n (-> t ... r) ...) is a fixed-arity function; a synthetic
+  ;; define carries the arity into module-defn-arity (mirrors
+  ;; src/modules.rkt)
   (define by-name
     (foldl (lambda (f acc)
-             (let ([n (module-defn-name f)])
-               (if n (hash-set acc n f) acc)))
+             (cond
+               [(and (pair? f) (eq? (car f) 'foreign))
+                (foldl (lambda (d acc2)
+                         (if (and (pair? d) (eq? (car d) ':)
+                                  (pair? (cdr d)) (symbol? (car (cdr d)))
+                                  (pair? (cdr (cdr d))))
+                             (let ([t (car (cdr (cdr d)))])
+                               (if (and (pair? t) (eq? (car t) '->))
+                                   (hash-set acc2 (car (cdr d))
+                                             (cons 'define
+                                                   (cons (cons (car (cdr d))
+                                                               (map (lambda (a) '_)
+                                                                    (reverse (cdr (reverse (cdr t))))))
+                                                         (list 0))))
+                                   acc2))
+                             acc2))
+                       acc (cdr f))]
+               [else (let ([n (module-defn-name f)])
+                       (if n (hash-set acc n f) acc))]))
            (hash) body))
+  ;; (: n t) declarations + foreign declared arrows (checker-normalized:
+  ;; widths are Int, a Nullable result is _), for TYPED entries
+  (define declared
+    (foldl (lambda (f acc)
+             (match f
+               [`(: ,n ,t) (if (symbol? n) (hash-set acc n t) acc)]
+               [_ acc]))
+           (hash) body))
+  (define (norm-foreign-type a)
+    (cond [(member a '(I8 I16 I32 I64 U8 U16 U32 U64)) 'Int]
+          [(and (pair? a) (eq? (car a) 'Nullable)) '_]
+          [else a]))
+  (define foreign-declared
+    (foldl (lambda (f acc)
+             (if (and (pair? f) (eq? (car f) 'foreign))
+                 (foldl (lambda (d acc2)
+                          (if (and (pair? d) (eq? (car d) ':)
+                                   (pair? (cdr d)) (symbol? (car (cdr d)))
+                                   (pair? (cdr (cdr d)))
+                                   (pair? (car (cdr (cdr d))))
+                                   (eq? (car (car (cdr (cdr d)))) '->))
+                              (hash-set acc2 (car (cdr d))
+                                        (cons '-> (map norm-foreign-type
+                                                       (cdr (car (cdr (cdr d)))))))
+                              acc2))
+                        acc (cdr f))
+                 acc))
+           (hash) body))
+  ;; define-type and define-foreign-type heads, for (type n) entries
+  (define type-heads
+    (foldl (lambda (f acc)
+             (match f
+               [`(define-type ,head ,_ ...)
+                (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
+               [`(define-foreign-type ,n) (if (symbol? n) (set-add acc n) acc)]
+               [_ acc]))
+           (set) body))
+  ;; a constructor's arity form: a synthetic define over its fields
+  (define (ctor-arity-form n)
+    (let ([hit (foldl (lambda (f acc)
+                        (if acc acc
+                            (match f
+                              [`(define-type ,_ ,cs ...)
+                               (foldl (lambda (c a)
+                                        (if a a
+                                            (match c
+                                              [`(,cn ,fts ...)
+                                               (if (eq? cn n)
+                                                   (if (null? fts)
+                                                       `(define ,n 0)
+                                                       `(define (,n ,@(map (lambda (ft) '_) fts)) 0))
+                                                   #f)])))
+                                      #f cs)]
+                              [_ #f])))
+                      #f body)])
+      (if hit hit `(define ,n 0))))
+  (define (check-declared! kind n stated)
+    (let ([dt (let ([fd (hash-ref/default foreign-declared n #f)])
+                (if fd fd (hash-ref/default declared n '_)))])
+      (unless (consistent? dt stated)
+        (module-error (format "~a: signature ~a ~a states type ~a, module declares ~a"
+                              mod-path kind n stated dt)))))
+  (define (require-defined! kind n)
+    (unless (set-member? top-names n)
+      (module-error (str-cat mod-path (str-cat ": signature requires "
+                                               (str-cat (symbol->string kind)
+                                                        (str-cat " " (str-cat (symbol->string n)
+                                                                              ", not defined"))))))))
+  (define (check-fun-arity! n arity)
+    (match (module-defn-arity (let ([f (hash-ref/default by-name n #f)])
+                                (if f f (ctor-arity-form n))))
+      [`(fixed ,k)
+       (unless (eq? k arity)
+         (module-error (str-cat mod-path (str-cat ": signature fun "
+                        (str-cat (symbol->string n)
+                         (str-cat " expects arity "
+                          (str-cat (number->string arity)
+                           (str-cat ", definition has arity " (number->string k)))))))))]
+      [`(variadic ,k)
+       (unless (>= arity k)
+         (module-error (str-cat mod-path (str-cat ": signature fun "
+                        (str-cat (symbol->string n)
+                         (str-cat " expects arity "
+                          (str-cat (number->string arity)
+                           (str-cat ", variadic definition needs >= " (number->string k)))))))))]
+      ['val
+       (module-error (str-cat mod-path (str-cat ": signature fun "
+                      (str-cat (symbol->string n) " is not syntactically a function"))))]))
+  (define (arrow-formals-count t)   ;; (-> t1 ... tn r) -> n
+    (- (length t) 2))
   (foldl
    (lambda (entry provides)
      (match entry
        [`(val ,n)
         (begin
-          (unless (set-member? top-names n)
-            (module-error (str-cat mod-path ": signature requires val "
-                                         (symbol->string n) ", not defined")))
+          (require-defined! 'val n)
+          (set-add provides n))]
+       [`(val ,n ,t)
+        (begin
+          (require-defined! 'val n)
+          (check-declared! 'val n t)
           (set-add provides n))]
        [`(fun ,n ,arity)
+        #:when (fixnum? arity)
         (begin
-          (unless (set-member? top-names n)
-            (module-error (str-cat mod-path ": signature requires fun "
-                                         (symbol->string n) ", not defined")))
-          (match (module-defn-arity (hash-ref by-name n))
-            [`(fixed ,k)
-             (unless (eq? k arity)
-               (module-error (str-cat mod-path ": signature fun " (symbol->string n)
-                                            " expects arity " (number->string arity)
-                                            ", definition has arity " (number->string k))))]
-            [`(variadic ,k)
-             (unless (>= arity k)
-               (module-error (str-cat mod-path ": signature fun " (symbol->string n)
-                                            " expects arity " (number->string arity)
-                                            ", variadic definition needs >= " (number->string k))))]
-            ['val
-             (module-error (str-cat mod-path ": signature fun " (symbol->string n)
-                                          " is not syntactically a function"))])
+          (require-defined! 'fun n)
+          (check-fun-arity! n arity)
+          (set-add provides n))]
+       [`(fun ,n ,t)
+        #:when (and (pair? t) (eq? (car t) '->))
+        (begin
+          (require-defined! 'fun n)
+          (check-fun-arity! n (arrow-formals-count t))
+          (check-declared! 'fun n t)
+          (set-add provides n))]
+       [`(fun ,n ,t)
+        #:when (and (pair? t) (eq? (car t) '->*))
+        (begin
+          (require-defined! 'fun n)
+          (check-declared! 'fun n t)
+          (set-add provides n))]
+       [`(type ,n)
+        (begin
+          (unless (set-member? type-heads n)
+            (module-error (str-cat mod-path (str-cat ": signature requires type "
+                           (str-cat (symbol->string n) ", not defined")))))
           (set-add provides n))]
        [_ (module-error (str-cat sig-path ": malformed signature entry"))]))
    (set)
@@ -392,7 +572,10 @@
                                            acc
                                            (cons (cons f l) acc)))
                                      '() forms lines)]
-                 [body (map (lambda (pr) (car pr)) body-pairs)]
+                 ;; foreign library paths resolve against THIS
+                 ;; module's dir (docs/FFI.md §3)
+                 [body (map (lambda (pr) (resolve-foreign-paths (car pr) (path-dirname path)))
+                            body-pairs)]
                  [body-lines (map (lambda (pr) (cdr pr)) body-pairs)]
                  [top-names (foldl (lambda (f acc)
                                      (foldl (lambda (n a) (set-add a n))

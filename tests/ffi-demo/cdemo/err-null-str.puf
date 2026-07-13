@@ -1,0 +1,3 @@
+;; NULL without Nullable: a blamed runtime error (docs/FFI.md §4.3)
+(foreign "./libpfcdemo.dylib" (: cdemo-null-str (-> Str)))
+(println (cdemo-null-str))

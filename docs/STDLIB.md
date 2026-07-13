@@ -93,6 +93,7 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `system` | 1 | `(-> Str Int)` | `pf_system` | Run a shell command; its exit code. |
 | `eprintln` | 1 | `(-> a Void)` | `pf_eprintln` | Display a value followed by a newline on standard error; returns void. |
 | `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value a define-type constructor instance? |
+| `foreign-ptr?` | 1 | `(-> a Bool)` | `pf_foreign_ptr_huh` | Is this value a foreign handle (an opaque pointer from a foreign library)? |
 
 ## Compiler-internal primitives
 
@@ -106,6 +107,14 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `adt-ref` | 2 | — | `pf_adt_ref` | INTERNAL: field i of a constructor instance (checked). |
 | `adt-tag` | 1 | — | `pf_adt_tag` | INTERNAL: the constructor symbol of an instance. |
 | `cast-check` | 3 | — | `pf_cast_check` | INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise. |
+| `#%ffi-register` | 4 | — | `pf_ffi_register` | INTERNAL: dlopen+dlsym a foreign import per its desc; returns the import's index. |
+| `#%ffi-call0` | 1 | — | `pf_ffi_call0` | INTERNAL: call foreign import i with no arguments. |
+| `#%ffi-call1` | 2 | — | `pf_ffi_call1` | INTERNAL: call foreign import i with 1 argument. |
+| `#%ffi-call2` | 3 | — | `pf_ffi_call2` | INTERNAL: call foreign import i with 2 arguments. |
+| `#%ffi-call3` | 4 | — | `pf_ffi_call3` | INTERNAL: call foreign import i with 3 arguments. |
+| `#%ffi-call4` | 5 | — | `pf_ffi_call4` | INTERNAL: call foreign import i with 4 arguments. |
+| `#%ffi-call5` | 6 | — | `pf_ffi_call5` | INTERNAL: call foreign import i with 5 arguments. |
+| `#%ffi-call6` | 2 | — | `pf_ffi_call6` | INTERNAL: call foreign import i with 6 arguments, packed in a vector. |
 
 ## Adding a primitive
 

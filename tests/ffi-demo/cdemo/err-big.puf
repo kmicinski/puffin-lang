@@ -1,0 +1,3 @@
+;; INT64_MAX return: the 61-bit boundary fires (docs/FFI.md §4.1)
+(foreign "./libpfcdemo.dylib" (: cdemo-big (-> Int)))
+(println (cdemo-big))

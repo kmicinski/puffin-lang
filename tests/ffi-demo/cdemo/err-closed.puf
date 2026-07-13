@@ -1,0 +1,9 @@
+;; use-after-close (docs/FFI.md §6.2)
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-next (-> CBox Int) #:c-name "cdemo_box_next")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes))
+(define b (box-new 1))
+(box-close b)
+(println (box-next b))

@@ -49,17 +49,19 @@
 #include <stdlib.h>
 #include "../puffin.h"
 
-// ext-kind predicates owned by other lib modules (hamt.c, adt.c);
-// using them keeps the ext kind ids (16/17/18) in one place each.
+// ext-kind predicates owned by other lib modules (hamt.c, adt.c,
+// foreign.c); using them keeps the ext kind ids (16/17/18/19) in one
+// place each.
 extern int pf_ihash_is(pf v);
 extern int pf_iset_is(pf v);
 extern pf pf_adt_huh(pf v);
 extern pf pf_adt_tag(pf v);
+extern int pf_foreign_is_brand(pf v, pf brand);
 
 // desc head symbols, interned once (the intern table is shared with
 // compile-time symbols, so tagged-word equality is exact)
 static pf s_Int, s_Bool, s_Sym, s_Str, s_Void;
-static pf s_Pairof, s_List, s_Vec, s_Hash, s_Set, s_adt;
+static pf s_Pairof, s_List, s_Vec, s_Hash, s_Set, s_adt, s_fptr;
 static int syms_ready = 0;
 
 static pf sym(const char *name) {
@@ -71,6 +73,7 @@ static void init_syms(void) {
   s_Str = sym("Str");   s_Void = sym("Void");
   s_Pairof = sym("Pairof"); s_List = sym("List"); s_Vec = sym("Vec");
   s_Hash = sym("Hash"); s_Set = sym("Set");   s_adt = sym("adt");
+  s_fptr = sym("fptr");
   syms_ready = 1;
 }
 
@@ -100,6 +103,11 @@ static int shape_ok(pf v, pf desc) {
       if (pair_car(rest) == tag) return 1;
     return 0;
   }
+  // (fptr <shown> <brand>): a define-foreign-type annotation -- the
+  // value must be a kind-19 handle carrying the (mangled) brand
+  // (docs/FFI.md §6.1). <shown> is the source spelling, for messages.
+  if (pf_is_kind(desc, PF_KIND_PAIR) && pair_car(desc) == s_fptr)
+    return pf_foreign_is_brand(v, pair_car(pair_cdr(pair_cdr(desc))));
   return 1;                         // malformed desc: permissive
 }
 
@@ -111,7 +119,8 @@ pf pf_cast_check(pf v, pf desc, pf blame) {
   FILE *mem = open_memstream(&buf, &len);
   if (!mem) pf_fatal("cast: out of memory");
   fprintf(mem, "cast: expected ");
-  pf shown = (pf_is_kind(desc, PF_KIND_PAIR) && pair_car(desc) == s_adt)
+  pf shown = (pf_is_kind(desc, PF_KIND_PAIR)
+              && (pair_car(desc) == s_adt || pair_car(desc) == s_fptr))
                  ? pair_car(pair_cdr(desc))
                  : desc;
   pf_display_value_to(shown, mem);

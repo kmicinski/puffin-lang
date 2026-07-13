@@ -1,0 +1,4 @@
+;; outbound width violation: 300 does not fit I8 (docs/FFI.md §4.1)
+(foreign "./libpfcdemo.dylib" (: cdemo-double8 (-> I8 Int)))
+(define (f x) (cdemo-double8 x))
+(println (f 300))

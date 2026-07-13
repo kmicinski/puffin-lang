@@ -18,6 +18,7 @@ export function surfacePrimNames() {
     "error",
     "file-exists?",
     "fixnum?",
+    "foreign-ptr?",
     "gensym",
     "hash",
     "hash-count",

@@ -116,6 +116,12 @@ typedef pf (*fn0)(void);
 typedef pf (*fn1)(pf);
 typedef pf (*fn2)(pf, pf);
 typedef pf (*fn3)(pf, pf, pf);
+// arities 4-6: the FFI's #%ffi-register/#%ffi-call3..5 (docs/FFI.md
+// §8.1). Prim arity caps at 6 -- the prim-call convention's argument
+// registers -- everywhere; #%ffi-call6 packs (arity 2).
+typedef pf (*fn4)(pf, pf, pf, pf);
+typedef pf (*fn5)(pf, pf, pf, pf, pf);
+typedef pf (*fn6)(pf, pf, pf, pf, pf, pf);
 
 // ---------------------------------------------------------------
 // Opcodes (docs/BYTECODE.md; keep in sync with backend-bytecode.rkt)
@@ -623,6 +629,9 @@ static pf vm_run(u32 entry_gidx) {
       case 1: res = ((fn1)pr->fn)(a[0]); break;
       case 2: res = ((fn2)pr->fn)(a[0], a[1]); break;
       case 3: res = ((fn3)pr->fn)(a[0], a[1], a[2]); break;
+      case 4: res = ((fn4)pr->fn)(a[0], a[1], a[2], a[3]); break;
+      case 5: res = ((fn5)pr->fn)(a[0], a[1], a[2], a[3], a[4]); break;
+      case 6: res = ((fn6)pr->fn)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
       default: vm_die("prim arity out of range"); res = PF_VOID;
       }
       cf->slots[d] = res;

@@ -81,7 +81,7 @@ RUNTIME_SRCS := \
 	../runtime/lib/table.c ../runtime/lib/hashes.c ../runtime/lib/sets.c \
 	../runtime/lib/hamt.c ../runtime/lib/adt.c ../runtime/lib/cast.c ../runtime/lib/arith.c \
 	../runtime/lib/predicates.c \
-	../runtime/lib/io.c ../runtime/lib/stdlib_init.c
+	../runtime/lib/io.c ../runtime/lib/foreign.c ../runtime/lib/stdlib_init.c
 
 # The wasm build: VM + allocator + error boundary + the runtime.
 WASM_SRCS := puffin-vm.c wasm/wasm-gc.c wasm/wasm-host.c $(RUNTIME_SRCS)

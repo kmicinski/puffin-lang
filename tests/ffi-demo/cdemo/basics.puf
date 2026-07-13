@@ -1,0 +1,15 @@
+;; scalars over every §4 phase-1 row: Int, Bool, Str (borrow out /
+;; copy in / gift), Void-free calls, (Nullable Str)
+(foreign "./libpfcdemo.dylib"
+  (: cdemo-add (-> Int Int Int))
+  (: cdemo-strlen (-> Str Int))
+  (: cdemo-greet (-> Str Str) #:gift "cdemo_free_str")
+  (: cdemo-even (-> Int Bool))
+  (: cdemo-find (-> Str Str (Nullable Str))))
+(println (cdemo-add 20 22))
+(println (cdemo-strlen "a puffin appears"))
+(println (cdemo-greet "kris"))
+(println (cdemo-even 4))
+(println (cdemo-even 7))
+(println (cdemo-find "needle in a haystack" "in a"))
+(println (if (cdemo-find "haystack" "needle") 'found 'nothing))

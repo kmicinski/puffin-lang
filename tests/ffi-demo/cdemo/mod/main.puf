@@ -1,0 +1,10 @@
+;; foreign imports cross module boundaries like any binding: typed,
+;; branded, and blamed with the declaring module's positions
+(require "face.puf")
+(define b (box-new 100))
+(println (box-next b))
+(println (half-sum 40 44))
+(define (poke [x : CBox]) : Int (box-next x))
+(println (poke b))
+(box-close b)
+(println b)

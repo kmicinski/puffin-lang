@@ -307,7 +307,13 @@
           [fo (if (module-forms? raw)
                   (let ([fs (resolve-modules opt-input)])
                     (list fs resolved-origins))
-                  (let* ([fs (strip-directives raw)]
+                  (let* ([fs0 (strip-directives raw)]
+                         ;; foreign library paths in a plain file
+                         ;; resolve against the file's directory
+                         ;; (docs/FFI.md §3), like the module resolver
+                         [fs (map (lambda (f)
+                                    (resolve-foreign-paths f (path-dirname opt-input)))
+                                  fs0)]
                          [lines (drop raw-lines (- (length raw) (length fs)))])
                     (list fs (map (lambda (l) (cons base l)) lines))))]
           [forms (first fo)]

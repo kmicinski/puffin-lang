@@ -1,0 +1,8 @@
+;; a foreign name is an ordinary binding (docs/FFI.md §3): it
+;; eta-passes as a value, procedure? answers #t, map works
+(foreign "./libpfcdemo.dylib"
+  (: cdemo-even (-> Int Bool))
+  (: cdemo-add (-> Int Int Int)))
+(println (procedure? cdemo-even))
+(println (map cdemo-even (list 1 2 3 4)))
+(println (foldl cdemo-add 0 (list 1 2 3)))
