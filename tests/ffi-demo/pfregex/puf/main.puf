@@ -1,0 +1,13 @@
+;; the §9.4 end-to-end: a Rust regex library exercised through the
+;; typed module face, with a blame trip at the end of the session
+(require "regex.puf")
+(define re (regex-compile "pu[f]+in"))
+(println (if re 'compiled 'no))
+(println (regex-match? re "a puffin appears"))
+(println (regex-match? re "a penguin appears"))
+(println (regex-find re "one pufffin, two puffins"))
+(println (regex-count re "puffin pufffin puffffin"))
+(println (if (regex-compile "(unclosed") 'bad 'rejected))
+(println (count-all "[0-9]+" (list "a1 b22" "c333" "no digits")))
+(regex-close re)
+(println re)

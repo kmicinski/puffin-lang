@@ -84,6 +84,30 @@
   (define adts (make-hash))
   (define ctors (make-hash))
   (define ctor-orders (make-hash))
+  ;; pass 0: define-foreign-type heads (docs/FFI.md §6) -- opaque
+  ;; nullary types. They enter `adts` (annotations resolve; zero
+  ;; constructors, so exhaustiveness never fires) AND the
+  ;; foreign-type set (the FFI's handle-marshaling test).
+  ;; #%extern-foreign-type is the separate-compilation splice.
+  (define ftypes (make-set))
+  (for-each-form
+   (lambda (f)
+     (match f
+       [`(,head ,rest ...)
+        #:when (or (eq? head 'define-foreign-type) (eq? head '#%extern-foreign-type))
+        (begin
+          (unless (and (pair? rest) (symbol? (car rest)) (null? (cdr rest)))
+            (type-error (format "malformed define-foreign-type: ~a" f)))
+          (let ([n (car rest)])
+            (begin
+              (when (or (base-type? n) (type-former-name? n))
+                (type-error (format "define-foreign-type cannot redefine built-in type ~a" n)))
+              (when (hash-has-key? adts n)
+                (type-error (format "type ~a defined twice" (nm n))))
+              (hash-set! adts n '())
+              (set-add! ftypes n))))]
+       [_ (void)]))
+   forms)
   ;; pass 1: heads
   (for-each-form
    (lambda (f)
@@ -119,7 +143,7 @@
              cs)))]
        [_ (void)]))
    forms)
-  (list adts ctors ctor-orders))
+  (list adts ctors ctor-orders ftypes))
 
 ;; well-formedness: names resolve, arities match
 (define (check-type-wf t params adts)
@@ -379,6 +403,7 @@
      (define adts (car ac))
      (define ctors (car (cdr ac)))
      (define ctor-orders (car (cdr (cdr ac))))
+     (define ftypes (car (cdr (cdr (cdr ac)))))
      (define top (make-hash))
 
      ;; a name cannot be both a type and a value: `provide` resolves a
@@ -780,6 +805,144 @@
           [_ (void)]))
       forms)
 
+     ;; ---- foreign declarations (docs/FFI.md §3, §5.1) ----------------
+     ;; mirrors src/types.rkt byte-for-byte: validate each declaration
+     ;; (concrete arrow over the marshallable universe, arity <= 6,
+     ;; clauses well-formed, default #:c-name derivable) and enter the
+     ;; name at its declared type (widths are Int to the checker; a
+     ;; (Nullable τ) result is _).
+     (define kw-cname (string->symbol "#:c-name"))
+     (define kw-gift (string->symbol "#:gift"))
+     (define kw-consumes (string->symbol "#:consumes"))
+     (define ffi-widths '(I8 I16 I32 I64 U8 U16 U32 U64))
+     (define (ffi-ftype? a) (and (symbol? a) (set-member? ftypes a)))
+     (define (ffi-arg-ok? a)
+       (or (if (member a '(Int Bool Str)) #t #f)
+           (if (member a ffi-widths) #t #f)
+           (ffi-ftype? a)))
+     (define (ffi-nullable? r)
+       (and (pair? r) (eq? (car r) 'Nullable)
+            (pair? (cdr r)) (null? (cdr (cdr r)))
+            (or (eq? (car (cdr r)) 'Str) (ffi-ftype? (car (cdr r))))))
+     (define (ffi-ret-ok? r)
+       (or (ffi-arg-ok? r) (eq? r 'Void) (ffi-nullable? r)))
+     ;; every name a define binds (foreign names must not collide)
+     (define ffi-defined-names
+       (let ([s (make-set)])
+         (begin
+           (for-each
+            (lambda (f)
+              (when (and (pair? f) (eq? (car f) 'define) (pair? (cdr f)))
+                (let ([h (car (cdr f))])
+                  (cond [(symbol? h) (set-add! s h)]
+                        [(and (pair? h) (symbol? (car h))) (set-add! s (car h))]
+                        [else (void)]))))
+            forms)
+           s)))
+     ;; #:c-name default: source spelling with `-` -> `_`; any other
+     ;; C-hostile character means the clause is required (§3)
+     (define (c-name-defaultable? s)
+       (let loop ([i 0])
+         (or (>= i (string-length s))
+             (let ([b (string-byte s i)])
+               (and (or (and (>= b 97) (<= b 122))
+                        (and (>= b 65) (<= b 90))
+                        (and (>= b 48) (<= b 57))
+                        (eq? b 95) (eq? b 45))
+                    (loop (+ i 1)))))))
+     ;; clause parse -> (list c-name gift consumes?)
+     (define (parse-foreign-clauses name cs)
+       (let loop ([cs cs] [c-name #f] [gift #f] [consumes #f])
+         (cond
+           [(null? cs) (list c-name gift consumes)]
+           [(and (eq? (car cs) kw-cname) (pair? (cdr cs)) (string? (car (cdr cs))))
+            (loop (cdr (cdr cs)) (car (cdr cs)) gift consumes)]
+           [(and (eq? (car cs) kw-gift) (pair? (cdr cs)) (string? (car (cdr cs))))
+            (loop (cdr (cdr cs)) c-name (car (cdr cs)) consumes)]
+           [(eq? (car cs) kw-consumes)
+            (loop (cdr cs) c-name gift #t)]
+           [else (type-error (format "foreign ~a: malformed clause ~a" (nm name) (car cs)))])))
+     (define (check-foreign-decl d)
+       (begin
+         (unless (and (pair? d) (eq? (car d) ':)
+                      (pair? (cdr d)) (symbol? (car (cdr d)))
+                      (pair? (cdr (cdr d))))
+           (type-error (format "foreign: malformed declaration ~a" d)))
+         (let* ([name (car (cdr d))]
+                [t (car (cdr (cdr d)))]
+                [cv (parse-foreign-clauses name (cdr (cdr (cdr d))))])
+           (begin
+             (when (hash-has-key? adts name)
+               (type-error (format "~a is defined as both a type and a value" (nm name))))
+             (when (or (hash-has-key? top name) (set-member? ffi-defined-names name))
+               (type-error (format "foreign ~a: duplicate declaration" (nm name))))
+             (unless (and (pair? t) (eq? (car t) '->) (pair? (cdr t)))
+               (type-error (format "foreign ~a: declared type must be a concrete (-> ...) arrow, got ~a"
+                                   (nm name) (ty t))))
+             (let* ([tail (cdr t)]
+                    [args (reverse (cdr (reverse tail)))]
+                    [ret (car (reverse tail))])
+               (begin
+                 (when (> (length args) 6)
+                   (type-error (format "foreign ~a: arity ~a exceeds the FFI limit of 6"
+                                       (nm name) (length args))))
+                 (for-each
+                  (lambda (a)
+                    (unless (ffi-arg-ok? a)
+                      (type-error (format "foreign ~a: argument type ~a is not marshallable"
+                                          (nm name) (ty a)))))
+                  args)
+                 (unless (ffi-ret-ok? ret)
+                   (type-error (format "foreign ~a: result type ~a is not marshallable"
+                                       (nm name) (ty ret))))
+                 (when (car (cdr cv))   ;; #:gift
+                   (unless (or (eq? ret 'Str)
+                               (and (ffi-nullable? ret) (eq? (car (cdr ret)) 'Str)))
+                     (type-error (format "foreign ~a: #:gift requires a Str or (Nullable Str) result"
+                                         (nm name)))))
+                 (when (car (cdr (cdr cv)))   ;; #:consumes
+                   (unless (eq? (length (filter ffi-ftype? args)) 1)
+                     (type-error (format "foreign ~a: #:consumes requires exactly one foreign-handle argument"
+                                         (nm name)))))
+                 (unless (car cv)
+                   (unless (c-name-defaultable? (symbol->string (nm name)))
+                     (type-error (format "foreign ~a: needs #:c-name (the name has no default C spelling)"
+                                         (nm name)))))
+                 (hash-set! top name
+                            (append (cons '-> (map (lambda (a) (if (member a ffi-widths) 'Int a)) args))
+                                    (list (cond [(ffi-nullable? ret) '_]
+                                                [(member ret ffi-widths) 'Int]
+                                                [else ret]))))))))))
+     (define kw-include (string->symbol "#:include"))
+     (define kw-static (string->symbol "#:static"))
+     (for-each-form
+      (lambda (f)
+        (when (and (pair? f) (eq? (car f) 'foreign))
+          (begin
+            (unless (and (pair? (cdr f)) (string? (car (cdr f))))
+              (type-error (format "foreign: expected a library path string in ~a" f)))
+            (let* ([ds0 (if (and (pair? (cdr (cdr f))) (string? (car (cdr (cdr f)))))
+                            (cdr (cdr (cdr f)))
+                            (cdr (cdr f)))]
+                   ;; form-level clauses: #:include is the header
+                   ;; cross-check (desugar runs it); #:static is a
+                   ;; designed seam, not v1
+                   [ds (let strip ([r ds0])
+                         (cond
+                           [(and (pair? r) (eq? (car r) kw-include)
+                                 (pair? (cdr r)) (string? (car (cdr r))))
+                            (strip (cdr (cdr r)))]
+                           [(and (pair? r) (eq? (car r) kw-static))
+                            (type-error (format "foreign ~a: #:static linking is a designed seam, not yet implemented (docs/FFI.md §10)"
+                                                (car (cdr f))))]
+                           [else r]))])
+              (begin
+                (when (null? ds)
+                  (type-error (format "foreign ~a: expected at least one (: name type) declaration"
+                                      (car (cdr f)))))
+                (for-each check-foreign-decl ds))))))
+      forms)
+
      (for-each-form
       (lambda (f)
         (match f
@@ -814,6 +977,9 @@
 
      (for-each-form
       (lambda (f)
+        ;; FFI forms were validated above
+        (if (and (pair? f) (member (car f) '(foreign define-foreign-type #%extern-foreign-type)))
+            (void)
         (match f
           [`(define-type ,_ ,_ ...) (void)]
           [`(: ,_ ,_) (void)]
@@ -865,7 +1031,7 @@
              (unless (consistent? et dt)
                (type-error (format "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et))))
              (when (eq? dt '_) (hash-set! top x et)))]
-          [e (synth e '())]))
+          [e (synth e '())])))
       forms)
 
      p]))

@@ -65,7 +65,7 @@ async function compileAndRun(source, stdin = '') {
     return { compileOutput: compile.output, ran: false };
   }
   const run = await runUnit({ files: { '/out.pbc': outPbc }, args: ['/out.pbc'], stdin });
-  return { compileOutput: compile.output, ran: true, output: run.output };
+  return { compileOutput: compile.output, ran: true, output: run.output, aborted: run.aborted };
 }
 
 const cases = [
@@ -78,12 +78,24 @@ const cases = [
   // re-entered main until the control stack died (the browser printed
   // its own output over and over)
   { name: 'unbound', src: '(define-type Expr (Num Int) (Add Expr Expr))\n(define (ev [e : Expr]) : Int (match e [(Num n) n] [(Add a b) (+ (ev a) (ev b))]))\n(println (ev (Add (Num 1) (Num 2))))\n(ev (Plus 20 20))\n', expectError: 'unbound variable Plus [main.puf:4]' },
+  // the FFI's browser posture (docs/FFI.md §5.3/§8.3): puffincc IN
+  // the browser still compiles + typechecks a program declaring a
+  // foreign library (compilation registers nothing), but RUNNING it
+  // fails at load with the stable refusal, before any user code runs
+  { name: 'ffi-refusal',
+    src: '(foreign "libcdemo.dylib" (: cdemo-add (-> Int Int Int)))\n(println (cdemo-add 20 22))\n',
+    expectRunError: 'error: foreign library libcdemo.dylib is not available in the browser' },
 ];
 
 let pass = 0, fail = 0;
 for (const c of cases) {
   const r = await compileAndRun(c.src);
-  if (c.expectError) {
+  if (c.expectRunError) {
+    // compiles, but refuses at LOAD when the unit runs (the FFI's
+    // browser refusal is a golden: exact text, program aborted)
+    if (r.ran && r.aborted && r.output.includes(c.expectRunError)) { pass++; console.log(`ok   ${c.name} (refused: ${r.output.trim()})`); }
+    else { fail++; console.log(`FAIL ${c.name}: expected load refusal containing ${JSON.stringify(c.expectRunError)}; got ran=${r.ran} aborted=${r.aborted} out=${JSON.stringify(r.output)} compileOut=${JSON.stringify(r.compileOutput)}`); }
+  } else if (c.expectError) {
     if (!r.ran && r.compileOutput.includes(c.expectError)) { pass++; console.log(`ok   ${c.name} (rejected: ${r.compileOutput.trim()})`); }
     else { fail++; console.log(`FAIL ${c.name}: expected compile error containing ${JSON.stringify(c.expectError)}; got ran=${r.ran} out=${JSON.stringify(r.compileOutput)}`); }
   } else {

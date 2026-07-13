@@ -150,6 +150,32 @@ For writing compilers (see docs/BOOTSTRAP.md): `value->string`,
 Primitives are first-class-ish: naming one in value position
 eta-expands it, so `(map car xs)` works.
 
+## Foreign functions
+
+The `foreign` form imports typed C functions from a shared library
+(docs/FFI.md has the full design; the tutorial has a worked section):
+
+```scheme
+(define-foreign-type Regex)              ;; an opaque handle type
+(foreign "vendor/libpfregex.dylib"       ;; dlopen'd at module load
+  (: regex-compile (-> Str (Nullable Regex)) #:c-name "pfregex_compile")
+  (: regex-match?  (-> Regex Str Bool)       #:c-name "pfregex_is_match")
+  (: regex-close   (-> Regex Void)           #:c-name "pfregex_free"
+                                             #:consumes))
+```
+
+Each declaration is the ordinary `(: name τ)` form; the declared type
+generates the marshaling, the checker types call sites with it, and
+every crossing is checked at run time with blame naming the import.
+Marshallable types: `Int` (plus the width spellings `I8`..`U64`),
+`Bool`, `Str`, `Void` results, declared handle types, and
+`(Nullable τ)` results (C `NULL` becomes `#f`). A foreign name is an
+ordinary binding — it provides, eta-passes, and `procedure?` answers
+`#t`. Library paths containing `/` resolve relative to the declaring
+module's file. The browser playground compiles FFI programs but
+refuses to run them at load (`error: foreign library ... is not
+available in the browser`).
+
 ## Pattern matching
 
 ```scheme

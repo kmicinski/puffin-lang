@@ -1,0 +1,2 @@
+(require "regex.puf" #:sig "badsig.pufs")
+(println 1)

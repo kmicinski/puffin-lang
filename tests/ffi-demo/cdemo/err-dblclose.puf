@@ -1,0 +1,8 @@
+;; double close is the same loud error, not a double free
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes))
+(define b (box-new 1))
+(box-close b)
+(box-close b)

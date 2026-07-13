@@ -1,0 +1,4 @@
+;; NULL handle without Nullable: a blamed runtime error
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib" (: box-null (-> CBox) #:c-name "cdemo_box_null"))
+(println (box-null))

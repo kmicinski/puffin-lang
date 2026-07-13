@@ -1,0 +1,4 @@
+;; six arguments: the packed #%ffi-call6 route (docs/FFI.md §8.2)
+(foreign "./libpfcdemo.dylib"
+  (: cdemo-sum6 (-> Int Int Int Int Int Int Int)))
+(println (cdemo-sum6 1 2 3 4 5 6))

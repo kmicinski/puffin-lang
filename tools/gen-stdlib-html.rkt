@@ -165,7 +165,10 @@
               read-file write-file file-exists? command-line-args system))
     ("Control &amp; misc"
      "Halting, fresh names, and the remaining predicates."
-     (error gensym procedure? void?))))
+     (error gensym procedure? void?))
+    ("Foreign functions"
+     "The <code>foreign</code> form imports typed C functions from a shared library (see the <a href=\"tutorial.html#ffi\">tutorial's FFI section</a>); opaque C pointers cross as branded, unforgeable <em>foreign handles</em>."
+     (foreign-ptr?))))
 
 ;; assert: perfect 1-1 cover
 (let ([cat-names (append-map third categories)])
@@ -334,7 +337,11 @@
    ;; interpreter's closure records count as procedures, matching the
    ;; native/VM CLOSURE heap kind; pinned by test-programs/puffin-procedure)
    'procedure? (make-ex "(println (procedure? (lambda (x) x)))\n(println (procedure? 'car))" "#t\n#f\n")
-   'void? (make-ex "(println (void? (display \"\")))" "#t\n")))
+   'void? (make-ex "(println (void? (display \"\")))" "#t\n")
+   ;; foreign handles exist only once a `foreign` import returns one
+   ;; (docs/FFI.md §6): the predicate is #f for every ordinary value
+   'foreign-ptr? (make-ex "(println (foreign-ptr? 5))\n(println (foreign-ptr? \"lib\"))" "#f\n#f\n"
+                          #:note "#t only for handles returned by foreign imports")))
 
 ;; assert: every entry has an example
 (for ([e all-entries])

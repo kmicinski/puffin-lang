@@ -1,0 +1,4 @@
+;; a Bool where Int is declared, flowing through _ (the runtime net)
+(foreign "./libpfcdemo.dylib" (: cdemo-add (-> Int Int Int)))
+(define (f x) (cdemo-add 1 x))
+(println (f #t))

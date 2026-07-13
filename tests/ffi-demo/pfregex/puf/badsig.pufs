@@ -1,0 +1,2 @@
+(signature regex
+  (fun regex-match? (-> Int Str Bool)))

@@ -1,0 +1,8 @@
+;; brand mismatch: a CBox where an Other is declared (docs/FFI.md §6.1)
+(define-foreign-type CBox)
+(define-foreign-type Other)
+(foreign "./libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: other-next (-> Other Int) #:c-name "cdemo_box_next"))
+(define (f x) (other-next x))
+(println (f (box-new 1)))

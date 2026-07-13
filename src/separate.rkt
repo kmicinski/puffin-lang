@@ -166,11 +166,19 @@
 (define (value-define-names body)
   (append*
    (for/list ([f body])
-     (match f
-       [`(define-type ,_ ,cs ...)
-        (filter-map (λ (c) (match c [`(,cn) cn] [_ #f])) cs)]
-       [`(define ,(? symbol? x) ,_) (list x)]
-       [_ '()]))))
+     ;; a foreign form expands to one VALUE define per declaration
+     ;; (docs/FFI.md §8.1 -- the let+lambda closure), in declaration
+     ;; order; define-foreign-type contributes nothing. (Plain pair
+     ;; tests: module-load gensym budget.)
+     (cond
+       [(and (pair? f) (eq? (car f) 'foreign)) (foreign-decl-names f)]
+       [(and (pair? f) (eq? (car f) 'define-foreign-type)) '()]
+       [else
+        (match f
+          [`(define-type ,_ ,cs ...)
+           (filter-map (λ (c) (match c [`(,cn) cn] [_ #f])) cs)]
+          [`(define ,(? symbol? x) ,_) (list x)]
+          [_ '()])]))))
 
 ;; the provides table for a module: sorted by name for digest
 ;; stability. Three row shapes (types appended after typechecking by
@@ -192,6 +200,12 @@
     (define form (hash-ref by-name n #f))
     (unless form
       (module-error "~a: provided name ~a has no definition" mid n))
+    (if (and (pair? form) (eq? (car form) 'define-foreign-type))
+        ;; a foreign handle type: a type row, backed by a
+        ;; foreign-marked (types ...) entry (docs/FFI.md §6); its
+        ;; imports themselves are ordinary val rows (the lowering
+        ;; makes them value defines)
+        `(,n type ,(mangled n))
     (match form
       [`(define-type ,head ,cs ...)
        (define type-name (match head [`(,tn ,_ ...) tn] [tn tn]))
@@ -206,7 +220,7 @@
       [_
        (match (defn-arity form)
          ['val `(,n val ,(hash-ref val-slot n))]
-         [arity `(,n fun ,arity ,(mangled n))])])))
+         [arity `(,n fun ,arity ,(mangled n))])]))))
 
 ;; append each provide row's type, from the checker's deposited
 ;; top-level environment (keys are the CHECKED spellings = the
@@ -250,6 +264,12 @@
         [else '()]))
 
 (define (type-row-of form)
+  ;; a foreign handle type: zero params, the marker symbol `foreign`
+  ;; where an ADT row carries its constructor list -- the importer
+  ;; splices #%extern-foreign-type for it (docs/FFI.md §6)
+  (if (and (pair? form) (eq? (car form) 'define-foreign-type)
+           (pair? (cdr form)) (symbol? (cadr form)))
+      (list (cadr form) (module-demangle (cadr form)) '() 'foreign)
   (match form
     [`(define-type ,head ,cs ...)
      (define-values (n ps) (match head [`(,n ,ps ...) (values n ps)] [n (values n '())]))
@@ -257,12 +277,15 @@
        ,(for/list ([c cs])
           (match c
             [`(,cn ,fts ...) `((,cn ,(module-demangle cn)) ,@fts)])))]
-    [_ #f]))
+    [_ #f])))
 
 (define (row-mentions row)
-  (match row
-    [`(,_ ,_ ,ps (,ctor-rows ...))
-     (remove* ps (append-map (λ (c) (append-map type-mentions (cdr c))) ctor-rows))]))
+  ;; foreign-marked rows (opaque handle types) mention nothing
+  (if (eq? (list-ref row 3) 'foreign)
+      '()
+      (match row
+        [`(,_ ,_ ,ps (,ctor-rows ...))
+         (remove* ps (append-map (λ (c) (append-map type-mentions (cdr c))) ctor-rows))])))
 
 ;; the closed types section for a unit: own rows (from the resolved
 ;; body) + foreign rows (from dep infos), restricted to what the
@@ -399,11 +422,25 @@
     (match (read-module-forms sig-path)
       [`((signature ,(? symbol? _) ,entries ...)) entries]
       [_ (module-error "~a: expected a single (signature NAME entries...) form" sig-path)]))
+  ;; signature files are written in SOURCE spellings; recorded
+  ;; interface types carry mangled ones -- demangle for comparison
+  ;; (plain walk: gensym budget)
+  (define (demangle-type t)
+    (cond [(symbol? t) (module-demangle t)]
+          [(pair? t) (cons (demangle-type (car t)) (demangle-type (cdr t)))]
+          [else t]))
   (define (check-type! kind n stated)
-    (define recorded (provide-entry-type info n))
+    (define recorded (demangle-type (provide-entry-type info n)))
     (unless (consistent? recorded stated)
       (module-error "~a: signature ~a ~a states type ~a, interface records ~a"
                     (hash-ref info 'path) kind n stated recorded)))
+  ;; a val row whose recorded type is an arrow holds a function --
+  ;; (define f (lambda ...)) and foreign imports (docs/FFI.md §8.1)
+  ;; both provide that way; its arrow fixes the arity
+  (define (val-arrow-arity entry)
+    (define t (and (pair? entry) (pair? (cddr entry))
+                   (pair? (cdddr entry)) (cadddr entry)))
+    (and (pair? t) (eq? (car t) '->) (- (length t) 2)))
   (define (check-fun-arity! n arity)
     (match (provide-entry info n)
       [`(,_ fun (fixed ,k) ,_ ,_ ...)
@@ -415,8 +452,15 @@
          (module-error "~a: signature fun ~a expects arity ~a, variadic definition needs >= ~a"
                        (hash-ref info 'path) n arity k))]
       [`(,_ val ,_ ,_ ...)
-       (module-error "~a: signature fun ~a is not syntactically a function"
-                     (hash-ref info 'path) n)]
+       (define k (val-arrow-arity (provide-entry info n)))
+       (cond
+         [(not k)
+          (module-error "~a: signature fun ~a is not syntactically a function"
+                        (hash-ref info 'path) n)]
+         [(not (= k arity))
+          (module-error "~a: signature fun ~a expects arity ~a, definition has arity ~a"
+                        (hash-ref info 'path) n arity k)]
+         [else (void)])]
       [`(,_ type ,_ ,_ ...)
        (module-error "~a: signature fun ~a names a type" (hash-ref info 'path) n)]
       [#f (module-error "~a: signature requires fun ~a, not provided"
@@ -482,9 +526,11 @@
         (error 'separate "interface type ~a has two conflicting definitions" mn))
       (hash-set! extern-rows mn row)
       (module-demangle-register! mn src)
-      (for ([c ctor-rows])
-        (match-define `((,cm ,cs) ,_ ...) c)
-        (module-demangle-register! cm cs)))
+      ;; foreign-marked rows carry the marker symbol, not ctor rows
+      (unless (eq? ctor-rows 'foreign)
+        (for ([c ctor-rows])
+          (match-define `((,cm ,cs) ,_ ...) c)
+          (module-demangle-register! cm cs))))
     (for ([entry (hash-ref info 'provides)])
       (define n (car entry))
       (define marker (marker-for info n))
@@ -574,11 +620,15 @@
   ;; defines nothing; the tags/labels live in the exporting .o)
   (define extern-forms
     (for/list ([row (sort (hash-values extern-rows) symbol<? #:key car)])
-      (match-define `(,mn ,_ ,ps ,ctor-rows) row)
-      `(#%extern-type ,(if (null? ps) mn (cons mn ps))
-                      ,@(for/list ([c ctor-rows])
-                          (match-let ([`((,cm ,_) ,fts ...) c])
-                            `(,cm ,@fts))))))
+      (if (eq? (list-ref row 3) 'foreign)
+          ;; an imported foreign handle type (docs/FFI.md §6): the
+          ;; checker registers it opaque, desugar's cast-descs brand it
+          (list '#%extern-foreign-type (car row))
+      (match-let ([`(,mn ,_ ,ps ,ctor-rows) row])
+        `(#%extern-type ,(if (null? ps) mn (cons mn ps))
+                        ,@(for/list ([c ctor-rows])
+                            (match-let ([`((,cm ,_) ,fts ...) c])
+                              `(,cm ,@fts))))))))
   (values (append extern-forms (rename-forms body ren qual))
           (for/hash ([(k v) (in-hash ext-funs)]) (values k v))
           (for/hash ([(k v) (in-hash ext-globals)]) (values k v))

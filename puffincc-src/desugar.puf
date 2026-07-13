@@ -62,6 +62,19 @@
                   [_ acc]))
               (set) forms)]))
   (define (ctor-name? x) (and (symbol? x) (hash-has-key? ctor-arity x)))
+  ;; define-foreign-type heads (docs/FFI.md §6): opaque handle types.
+  ;; cast-desc gives them the (fptr <shown> <brand>) desc form.
+  (define foreign-types
+    (match p
+      [`(program ,forms ...)
+       (foldl (lambda (f acc)
+                (if (and (pair? f)
+                         (or (eq? (car f) 'define-foreign-type)
+                             (eq? (car f) '#%extern-foreign-type))
+                         (pair? (cdr f)) (symbol? (car (cdr f))))
+                    (set-add acc (car (cdr f)))
+                    acc))
+              (set) forms)]))
   ;; ADT name -> (ctor ...), for cast descs
   (define type-ctors
     (match p
@@ -116,6 +129,12 @@
           [(pair? t) (cons (demangle-type (car t)) (demangle-type (cdr t)))]
           [else t]))
   (define (cast-desc t)
+    ;; foreign handle types first: kind 19 + brand (lib/foreign.c,
+    ;; lib/cast.c; docs/FFI.md §6)
+    (if (and (symbol? t) (set-member? foreign-types t))
+        (list 'fptr (module-demangle t) t)
+        (cast-desc-core t)))
+  (define (cast-desc-core t)
     (match t
       ['Int t] ['Bool t] ['Sym t] ['Str t] ['Void t]
       [`(Pairof ,_ ,_) 'Pairof]
@@ -703,12 +722,168 @@
       [`(,e-f ,e-args ...)
        `(,(h e-f bound) ,@(map (lambda (e) (h e bound)) e-args))]))
 
+  ;; ---- the FFI lowering (docs/FFI.md §8.1; mirrors src/compile.rkt) --
+  ;; (foreign spath [rpath] (: name τ clause ...) ...) lowers to one
+  ;; ordinary top-level define per declaration:
+  ;;   (define name
+  ;;     (let ([i (#%ffi-register rpath spath cname 'desc)])
+  ;;       (lambda (a ...) (#%ffi-calln i a ...))))
+  ;; Six-argument imports pack their arguments in a vector. The
+  ;; checker (types.puf) has already validated every declaration.
+  (define kw-cname (string->symbol "#:c-name"))
+  (define kw-gift (string->symbol "#:gift"))
+  (define ffi-scalar-specs
+    '((Int . int) (Bool . bool) (Str . str)
+      (I8 . i8) (I16 . i16) (I32 . i32) (I64 . i64)
+      (U8 . u8) (U16 . u16) (U32 . u32) (U64 . u64)))
+  (define (ffi-scalar-spec a)
+    (let ([hit (assoc a ffi-scalar-specs)])
+      (if hit (cdr hit) #f)))
+  (define (ffi-handle-spec head t)
+    (list head t (symbol->string (module-demangle t))))
+  (define (ffi-arg-spec a consume?)
+    (let ([hit (ffi-scalar-spec a)])
+      (if hit hit (ffi-handle-spec (if consume? 'handle-consume 'handle) a))))
+  (define (ffi-ret-spec r gift)
+    (cond [(eq? r 'Void) 'void]
+          [(eq? r 'Str) (if gift (list 'str-gift gift) 'str)]
+          [(and (pair? r) (eq? (car r) 'Nullable))
+           (if (eq? (car (cdr r)) 'Str)
+               (if gift (list 'nullable-str-gift gift) (list 'nullable 'str))
+               (ffi-handle-spec 'nullable-handle (car (cdr r))))]
+          [(ffi-scalar-spec r) (ffi-scalar-spec r)]
+          [else (ffi-handle-spec 'handle r)]))
+  ;; the default #:c-name: source spelling, `-` -> `_` (types.puf has
+  ;; already rejected names this cannot spell)
+  (define (ffi-default-c-name s)
+    (let loop ([i 0] [acc ""])
+      (if (>= i (string-length s))
+          acc
+          (loop (+ i 1)
+                (string-append acc (if (eq? (string-byte s i) 45)
+                                       "_"
+                                       (substring s i (+ i 1))))))))
+  (define (ffi-parse-clauses cs)   ;; -> (list c-name gift consumes?)
+    (let loop ([cs cs] [c-name #f] [gift #f] [consumes #f])
+      (cond
+        [(null? cs) (list c-name gift consumes)]
+        [(eq? (car cs) kw-cname) (loop (cdr (cdr cs)) (car (cdr cs)) gift consumes)]
+        [(eq? (car cs) kw-gift) (loop (cdr (cdr cs)) c-name (car (cdr cs)) consumes)]
+        [else (loop (cdr cs) c-name gift #t)])))   ;; #:consumes
+  (define (ffi-ftype? a)
+    (and (symbol? a) (not (ffi-scalar-spec a)) (not (eq? a 'Void))))
+  (define (lower-foreign-decl spath rpath d)
+    (let* ([name (car (cdr d))]
+           [t (car (cdr (cdr d)))]
+           [cv (ffi-parse-clauses (cdr (cdr (cdr d))))]
+           [tail (cdr t)]
+           [args (reverse (cdr (reverse tail)))]
+           [ret (car (reverse tail))]
+           [n (length args)]
+           [nmstr (nm-str name)]
+           [cname (if (car cv) (car cv) (ffi-default-c-name nmstr))]
+           [arg-specs
+            (map (lambda (a) (ffi-arg-spec a (and (car (cdr (cdr cv))) (ffi-ftype? a))))
+                 args)]
+           [desc (cons nmstr
+                       (cons (origin-suffix)
+                             (cons (ffi-ret-spec ret (car (cdr cv))) arg-specs)))]
+           [idx (gensym 'ffi)]
+           [formals (map (lambda (a) (gensym 'ffa)) args)]
+           [call (if (eq? n 6)
+                     (list '#%ffi-call6 idx (cons 'vector formals))
+                     (cons (string->symbol (string-append "#%ffi-call" (number->string n)))
+                           (cons idx formals)))])
+      (list 'define name
+            (list 'let (list (list idx (list '#%ffi-register rpath spath cname
+                                             (list 'quote desc))))
+                  (list 'lambda formals call)))))
+  ;; ---- the #:include cross-check (docs/FFI.md §9.3, phase 4) --------
+  ;; mirrors src/compile.rkt: redeclare every import with the
+  ;; prototype the Puffin declaration implies; `clang -fsyntax-only`
+  ;; holds it against the library's own header (conflicting
+  ;; redeclarations are hard errors in C).
+  (define kw-include (string->symbol "#:include"))
+  (define (ffi-c-arg-type a)
+    (cond [(eq? a 'Int) "int64_t"] [(eq? a 'I64) "int64_t"]
+          [(eq? a 'I8) "int8_t"] [(eq? a 'I16) "int16_t"] [(eq? a 'I32) "int32_t"]
+          [(eq? a 'U8) "uint8_t"] [(eq? a 'U16) "uint16_t"] [(eq? a 'U32) "uint32_t"]
+          [(eq? a 'U64) "uint64_t"]
+          [(eq? a 'Bool) "bool"]
+          [(eq? a 'Str) "const char *"]
+          [else (string-append (symbol->string (module-demangle a)) " *")]))
+  (define (ffi-c-ret-type r gift)
+    (cond [(eq? r 'Void) "void"]
+          [(eq? r 'Str) (if gift "char *" "const char *")]
+          [(and (pair? r) (eq? (car r) 'Nullable))
+           (if (eq? (car (cdr r)) 'Str)
+               (if gift "char *" "const char *")
+               (ffi-c-arg-type (car (cdr r))))]
+          [else (ffi-c-arg-type r)]))
+  (define (ffi-header-check! spath hdr decls)
+    (define lines
+      (map (lambda (d)
+             (let* ([name (car (cdr d))]
+                    [t (car (cdr (cdr d)))]
+                    [cv (ffi-parse-clauses (cdr (cdr (cdr d))))]
+                    [tail (cdr t)]
+                    [args (reverse (cdr (reverse tail)))]
+                    [ret (car (reverse tail))]
+                    [cname (if (car cv) (car cv) (ffi-default-c-name (nm-str name)))])
+               (string-append
+                (string-append "extern "
+                               (string-append (ffi-c-ret-type ret (car (cdr cv)))
+                                              (string-append " " cname)))
+                (string-append
+                 (string-append "("
+                                (if (null? args)
+                                    "void"
+                                    (string-join (map ffi-c-arg-type args) ", ")))
+                 ");"))))
+           decls))
+    (define src
+      (string-append
+       "#include <stdint.h>\n#include <stdbool.h>\n"
+       (string-append
+        (string-append "#include \"" (string-append hdr "\"\n"))
+        (string-append (string-join lines "\n") "\n"))))
+    (define tmp "/tmp/pfcc-ffi-check.c")
+    (write-file tmp src)
+    (unless (eq? 0 (system (string-append "clang -fsyntax-only -I. " tmp)))
+      (error (string-append
+              "desugar: foreign: header cross-check failed for "
+              (string-append spath (string-append " against " hdr))))))
+
+  (define (lower-foreign-form form)
+    ;; (foreign spath [rpath] [#:include hdr] decl ...); an unresolved
+    ;; form (pipe mode) uses spath as the load path
+    (let* ([spath (car (cdr form))]
+           [resolved? (and (pair? (cdr (cdr form))) (string? (car (cdr (cdr form)))))]
+           [rpath (if resolved? (car (cdr (cdr form))) spath)]
+           [rest0 (if resolved? (cdr (cdr (cdr form))) (cdr (cdr form)))]
+           [include-hdr (if (and (pair? rest0) (eq? (car rest0) kw-include))
+                            (car (cdr rest0))
+                            #f)]
+           [decls (if include-hdr (cdr (cdr rest0)) rest0)])
+      (begin
+        (when include-hdr (ffi-header-check! spath include-hdr decls))
+        (map (lambda (d) (lower-foreign-decl spath rpath d)) decls))))
+
   ;; gradual types: lower type-level forms before the prim-shadow map
   ;; is computed. A define-type becomes one define per constructor
   ;; (nullary = the singleton instance, n-ary = a builder function);
   ;; (: name t) declarations vanish; annotated defines lose their
   ;; [x : t] formals and `: t` results.
   (define (lower-type-form form)
+    (cond
+      [(and (pair? form)
+            (or (eq? (car form) 'define-foreign-type)
+                (eq? (car form) '#%extern-foreign-type)))
+       '()]
+      [(and (pair? form) (eq? (car form) 'foreign))
+       (lower-foreign-form form)]
+      [else (lower-type-form-core form)]))
+  (define (lower-type-form-core form)
     (match form
       [`(define-type ,_ ,ctors ...)
        ;; builders allocate the dedicated ADT kind and initialize the

@@ -102,6 +102,27 @@
   (define adts (make-hasheq))   ;; type name -> adt
   (define ctors (make-hasheq))  ;; ctor name -> ctor-info
   (define ctor-orders (make-hasheq))  ;; type name -> (ctor ...) in declaration order
+  ;; pass 0: define-foreign-type heads (docs/FFI.md §6) -- opaque
+  ;; nullary types. They enter `adts` (annotations resolve; zero
+  ;; constructors, so exhaustiveness never fires) AND the foreign-type
+  ;; set (the FFI's handle-marshaling test). #%extern-foreign-type is
+  ;; the separate-compilation splice, exactly like #%extern-type.
+  ;; (Plain pair tests, not match clauses: module-load gensym budget.)
+  (define ftypes (mutable-seteq))
+  (for-each-form forms
+   (λ (f)
+    (when (and (pair? f)
+               (or (eq? (car f) 'define-foreign-type)
+                   (eq? (car f) '#%extern-foreign-type)))
+      (unless (and (pair? (cdr f)) (symbol? (cadr f)) (null? (cddr f)))
+        (type-error "malformed define-foreign-type: ~a" f))
+      (define n (cadr f))
+      (when (or (set-member? base-types n) (set-member? type-former-names n))
+        (type-error "define-foreign-type cannot redefine built-in type ~a" n))
+      (when (hash-has-key? adts n)
+        (type-error "type ~a defined twice" (nm n)))
+      (hash-set! adts n (adt n '() (make-hasheq)))
+      (set-add! ftypes n))))
   ;; pass 1: heads
   (for-each-form forms
    (λ (f)
@@ -135,7 +156,7 @@
             (hash-set! (adt-ctors a) cn fts)
             (hash-set! ctors cn (ctor-info n (adt-params a) fts))]))]
       [_ (void)])))
-  (values adts ctors ctor-orders))
+  (values adts ctors ctor-orders ftypes))
 
 ;; well-formedness: names resolve, arities match
 (define (check-type-wf t params adts)
@@ -292,7 +313,7 @@
 (define (typecheck-program p)
   (match p
     [`(program ,forms ...)
-     (define-values (adts ctors ctor-orders) (collect-adts forms))
+     (define-values (adts ctors ctor-orders ftypes) (collect-adts forms))
 
      ;; a name cannot be both a type and a value: `provide` resolves a
      ;; name against both namespaces (docs/MODULES.md), so a collision
@@ -347,6 +368,127 @@
                (hash-set! top cn
                           (if (null? fts) res* `(-> ,@fts ,res*)))]))]
          [_ (void)])))
+
+     ;; ---- foreign declarations (docs/FFI.md §3, §5.1) ----------------
+     ;; (foreign spath [rpath] (: name τ clause ...) ...): validate each
+     ;; declaration -- τ a concrete arrow over the marshallable universe
+     ;; (§4), arity <= 6, clauses well-formed, the default #:c-name
+     ;; derivable -- and enter `name` at its declared type. Width
+     ;; spellings are Int to the checker; a (Nullable τ) result is `_`
+    ;; (§4.4). The declared type is UNTRUSTED: desugar's lowering makes
+     ;; the runtime check every crossing; the checker only types call
+     ;; sites. All plain pair tests (module-load gensym budget).
+     (define ffi-widths '(I8 I16 I32 I64 U8 U16 U32 U64))
+     (define (ftype? a) (and (symbol? a) (set-member? ftypes a)))
+     (define (ffi-arg-ok? a)
+       (or (memq a '(Int Bool Str)) (memq a ffi-widths) (ftype? a) #f))
+     (define (nullable? r)
+       (and (pair? r) (eq? (car r) 'Nullable)
+            (pair? (cdr r)) (null? (cddr r))
+            (or (eq? (cadr r) 'Str) (ftype? (cadr r)))))
+     (define (ffi-ret-ok? r)
+       (or (ffi-arg-ok? r) (eq? r 'Void) (nullable? r)))
+     ;; every name a define binds (foreign names must not collide)
+     (define defined-names (mutable-seteq))
+     (for-each
+      (λ (f)
+        (when (and (pair? f) (eq? (car f) 'define) (pair? (cdr f)))
+          (define h (cadr f))
+          (cond [(symbol? h) (set-add! defined-names h)]
+                [(and (pair? h) (symbol? (car h))) (set-add! defined-names (car h))]
+                [else (void)])))
+      forms)
+     ;; #:c-name default: source spelling with `-` -> `_`; any other
+     ;; C-hostile character means the clause is required (§3)
+     (define (c-name-defaultable? s)
+       (let loop ([i 0])
+         (or (= i (string-length s))
+             (let ([b (char->integer (string-ref s i))])
+               (and (or (and (>= b 97) (<= b 122))    ;; a-z
+                        (and (>= b 65) (<= b 90))     ;; A-Z
+                        (and (>= b 48) (<= b 57))     ;; 0-9
+                        (= b 95) (= b 45))            ;; _ -
+                    (loop (add1 i)))))))
+     ;; clause parse -> (vector c-name gift consumes?)
+     (define (parse-foreign-clauses name cs)
+       (let loop ([cs cs] [c-name #f] [gift #f] [consumes #f])
+         (cond
+           [(null? cs) (vector c-name gift consumes)]
+           [(and (eq? (car cs) '#:c-name) (pair? (cdr cs)) (string? (cadr cs)))
+            (loop (cddr cs) (cadr cs) gift consumes)]
+           [(and (eq? (car cs) '#:gift) (pair? (cdr cs)) (string? (cadr cs)))
+            (loop (cddr cs) c-name (cadr cs) consumes)]
+           [(eq? (car cs) '#:consumes)
+            (loop (cdr cs) c-name gift #t)]
+           [else (type-error "foreign ~a: malformed clause ~a" (nm name) (car cs))])))
+     (define (check-foreign-decl d)
+       (unless (and (pair? d) (eq? (car d) ':)
+                    (pair? (cdr d)) (symbol? (cadr d))
+                    (pair? (cddr d)))
+         (type-error "foreign: malformed declaration ~a" d))
+       (define name (cadr d))
+       (define t (caddr d))
+       (define cv (parse-foreign-clauses name (cdddr d)))
+       (when (hash-has-key? adts name)
+         (type-error "~a is defined as both a type and a value" (nm name)))
+       (when (or (hash-has-key? top name) (set-member? defined-names name))
+         (type-error "foreign ~a: duplicate declaration" (nm name)))
+       (unless (and (pair? t) (eq? (car t) '->) (pair? (cdr t)))
+         (type-error "foreign ~a: declared type must be a concrete (-> ...) arrow, got ~a"
+                     (nm name) (ty t)))
+       (define tail (cdr t))
+       (define args (reverse (cdr (reverse tail))))
+       (define ret (car (reverse tail)))
+       (when (> (length args) 6)
+         (type-error "foreign ~a: arity ~a exceeds the FFI limit of 6" (nm name) (length args)))
+       (for-each (λ (a)
+                   (unless (ffi-arg-ok? a)
+                     (type-error "foreign ~a: argument type ~a is not marshallable"
+                                 (nm name) (ty a))))
+                 args)
+       (unless (ffi-ret-ok? ret)
+         (type-error "foreign ~a: result type ~a is not marshallable" (nm name) (ty ret)))
+       (when (vector-ref cv 1)   ;; #:gift
+         (unless (or (eq? ret 'Str)
+                     (and (nullable? ret) (eq? (cadr ret) 'Str)))
+           (type-error "foreign ~a: #:gift requires a Str or (Nullable Str) result" (nm name))))
+       (when (vector-ref cv 2)   ;; #:consumes
+         (unless (= (length (filter ftype? args)) 1)
+           (type-error "foreign ~a: #:consumes requires exactly one foreign-handle argument"
+                       (nm name))))
+       (unless (vector-ref cv 0)
+         (unless (c-name-defaultable? (symbol->string (nm name)))
+           (type-error "foreign ~a: needs #:c-name (the name has no default C spelling)"
+                       (nm name))))
+       ;; the declared type, as the checker sees it
+       (hash-set! top name
+                  (append (cons '-> (map (λ (a) (if (memq a ffi-widths) 'Int a)) args))
+                          (list (cond [(nullable? ret) '_]
+                                      [(memq ret ffi-widths) 'Int]
+                                      [else ret])))))
+     (for-each-form forms
+      (λ (f)
+       (when (and (pair? f) (eq? (car f) 'foreign))
+         (unless (and (pair? (cdr f)) (string? (cadr f)))
+           (type-error "foreign: expected a library path string in ~a" f))
+         ;; module resolution may have inserted the resolved path
+         (define ds0 (if (and (pair? (cddr f)) (string? (caddr f)))
+                         (cdddr f)
+                         (cddr f)))
+         ;; form-level clauses: #:include is the header cross-check
+         ;; (desugar runs it); #:static is a designed seam, not v1
+         (define ds
+           (let strip ([r ds0])
+             (cond
+               [(and (pair? r) (eq? (car r) '#:include)
+                     (pair? (cdr r)) (string? (cadr r)))
+                (strip (cddr r))]
+               [(and (pair? r) (eq? (car r) '#:static))
+                (type-error "foreign ~a: #:static linking is a designed seam, not yet implemented (docs/FFI.md §10)" (cadr f))]
+               [else r])))
+         (when (null? ds)
+           (type-error "foreign ~a: expected at least one (: name type) declaration" (cadr f)))
+         (for-each check-foreign-decl ds))))
      (for-each-form forms
       (λ (f)
        (match f
@@ -747,6 +889,10 @@
      ;; check every top-level form under `top`
      (for-each-form forms
       (λ (f)
+       ;; FFI forms were validated above (plain test, not a match
+       ;; clause: gensym budget)
+       (if (and (pair? f) (memq (car f) '(foreign define-foreign-type #%extern-foreign-type)))
+           (void)
        (match f
          [`(define-type ,_ ,_ ...) (void)]
          [`(#%extern-type ,_ ,_ ...) (void)]
@@ -794,7 +940,7 @@
           (unless (consistent? et dt)
             (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
           (when (eq? dt '_) (hash-set! top x et))]
-         [e (synth e '())])))
+         [e (synth e '())]))))
      ;; typed interfaces (separate compilation): deposit the final
      ;; top-level environment -- declared, derived, and synthesized
      ;; types alike -- for the .pufi writer. Inert when unset.

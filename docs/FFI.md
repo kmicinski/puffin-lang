@@ -1,6 +1,34 @@
 # The Puffin FFI: foreign imports are typed boundaries
 
-> **Status:** DESIGN, second edition (2026-07-13). This document
+> **STATUS: SHIPPED (2026-07-13)** — phases 1–3 of §12 are implemented
+> in full, plus the compatible phase-4 pieces, in both compilers
+> (src/ + puffincc-src/), the runtime (src/runtime/lib/foreign.c,
+> heap kind 19), the bytecode VM, the reference interpreter
+> (src/ffi-ref.rkt, ffi/unsafe-backed), and the wasm refusal.
+> §13's open questions are all resolved to their recommended
+> defaults: no Float; the browser fails at LOAD; `Nullable` is
+> FFI-result-only and `_` to the checker; the finalizer backstop is
+> the warn-to-stderr leak detector (shipped, native+VM+interp, for
+> `#:consumes`-disciplined brands); the `-`→`_` c-name default
+> stands; the outbound-Str embedded-NUL check is unconditional.
+> Phase-4 pieces shipped: the `#:include` clang cross-check
+> (redeclaration-conflict via `clang -fsyntax-only`; opt-in, error on
+> mismatch) and the leak-detector backstop; `#:static` is a stub that
+> errors with a pointer to §10. EXCLUDED, per §10/§11: Float,
+> callbacks, struct/Vec borrows, varargs, arity > 6.
+> Two implementation notes that refine §8: `#%ffi-call6` takes its
+> six arguments PACKED in a vector (the import index occupies one of
+> the six prim argument registers — x86-64 has exactly six, so the
+> unpacked ceiling for imports rides at 5+index; same semantics), and
+> the resolved library path is threaded as a second string in the
+> resolved form, `(foreign spath rpath decl ...)`, spelled
+> cwd-relative so the two compilers agree byte-for-byte.
+> Tests: src/test-ffi.rkt (the §8.4 matrix), tests/ffi-demo/
+> (cdemo C library + pfregex Rust crate), web/test-vm-compile.mjs
+> (the browser-refusal golden). Tutorial: docs/tutorial.html §"Calling
+> C (the FFI)".
+>
+> Original design status note: DESIGN, second edition (2026-07-13). This document
 > REPLACES the 2026-07-07 FFI design in full (the old text is in git
 > history at `7337b2e^:docs/FFI.md`). It is rewritten rather than
 > patched because the ground it stood on moved twice: the **gradual

@@ -1,0 +1,5 @@
+;; a LYING declaration (Str where the header says int64_t): the
+;; cross-check catches it before any code runs
+(foreign "./libpfcdemo.dylib" #:include "./cdemo.h"
+  (: cdemo-add (-> Str Int Int)))
+(println (cdemo-add "x" 2))

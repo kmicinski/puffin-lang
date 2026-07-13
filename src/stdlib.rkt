@@ -148,6 +148,9 @@
           (display (adt-value-tag v) out)
           (for ([x fs]) (display " " out) (render x))
           (display ")" out)])]
+      ;; foreign handles: #<Regex 0x104a3c200>, #<Regex closed> --
+      ;; exactly like lib/foreign.c's display_handle
+      [(foreign-handle? v) (foreign-handle-render v out)]
       [(hash? v)          (display (format "#<hash:~a>" (hash-count v)) out)]
       [(or (set-mutable? v) (set? v))
                           (display (format "#<set:~a>" (set-count v)) out)]
@@ -185,6 +188,30 @@
           (for/and ([k (in-set a)]) (set-member? b k)))]
     [else #f]))
 
+;; ---------------------------------------------------------------------
+;; Foreign handles, reference-side (docs/FFI.md §6): the C runtime's
+;; kind 19 -- a branded, unforgeable wrapper around a raw C pointer.
+;; ptr is an integer (the address), brand the (module-mangled)
+;; define-foreign-type symbol, shown its source spelling (display),
+;; closed? flips on #:consumes (null-on-close: use-after-close and
+;; double-close are loud blamed errors). Only the FFI ref-impls below
+;; construct one; equal? is identity (eqv? on the struct).
+;; ---------------------------------------------------------------------
+
+;; The struct itself lives in src/ffi-ref.rkt (the lazily-loaded FFI
+;; module -- see the FFI section below), which installs its operations
+;; here when it loads. Until then no handle can exist, so the
+;; predicate answers #f without loading anything. Plain defines + a
+;; box: zero module-load gensyms (the GENSYM-BUDGET note, system.rkt).
+;;   ops vector: 0 predicate | 1 render(v out) | 2 brand | 3 closed?
+
+(define ffi-handle-ops (box #f))
+(define (foreign-handle? v)
+  (define ops (unbox ffi-handle-ops))
+  (if ops ((vector-ref ops 0) v) #f))
+(define (foreign-handle-render v out) ((vector-ref (unbox ffi-handle-ops) 1) v out))
+(define (foreign-handle-brand v) ((vector-ref (unbox ffi-handle-ops) 2) v))
+
 ;; The interpreters catch this to stop the program the way the
 ;; native runtime's exit(1) does.
 (struct puffin-error-stop ())
@@ -192,6 +219,36 @@
 (define (puffin-error-impl v)
   (display (format "error: ~a\n" (render-value v)))
   (raise (puffin-error-stop)))
+
+;; ---------------------------------------------------------------------
+;; FFI reference implementations (docs/FFI.md §8.3): the manifest
+;; entries #%ffi-register / #%ffi-call0..6 carry ffi/unsafe-backed
+;; ref-impls, so the reference interpreter is a REAL route -- every
+;; §4/§5 check re-implemented byte-identically to lib/foreign.c. The
+;; machinery lives in src/ffi-ref.rkt and is loaded LAZILY (a
+;; dynamic-require on the first registration): a program that never
+;; declares a foreign library never loads it, so the module-load
+;; gensym budget -- and with it whole-program byte-identity -- is
+;; untouched (see the GENSYM-BUDGET note in system.rkt).
+;; ---------------------------------------------------------------------
+
+(define (ffi-ref-path)
+  ;; resolved lazily, at the first foreign registration (a
+  ;; define-runtime-path here would cost a module-load gensym)
+  (build-path (path-only (resolved-module-path-name
+                          (variable-reference->resolved-module-path
+                           (#%variable-reference))))
+              "ffi-ref.rkt"))
+(define ffi-ref-cache (make-hasheq))
+(define (ffi-ref name)
+  (or (hash-ref ffi-ref-cache name #f)
+      (let ([v (dynamic-require (ffi-ref-path) name)])
+        (hash-set! ffi-ref-cache name v)
+        v)))
+(define (ffi-register-impl rpath spath cname desc)
+  ((ffi-ref 'ffi-register-impl) rpath spath cname desc))
+(define (ffi-call-impl idx argv)
+  ((ffi-ref 'ffi-call-impl) idx argv))
 
 ;; ---------------------------------------------------------------------
 ;; The manifest
@@ -545,18 +602,62 @@
                     [(and (pair? desc) (eq? (car desc) 'adt))
                      (and (adt-value? v)
                           (memq (adt-value-tag v) (cddr desc)) #t)]
+                    ;; (fptr <shown> <brand>): a define-foreign-type
+                    ;; annotation -- kind 19 + brand (docs/FFI.md §6.1)
+                    [(and (pair? desc) (eq? (car desc) 'fptr))
+                     (and (foreign-handle? v)
+                          (eq? (foreign-handle-brand v) (caddr desc)))]
                     [else #t]))
                 (cond
                   [ok? v]
                   [else
                    (define shown
-                     (if (and (pair? desc) (eq? (car desc) 'adt)) (cadr desc) desc))
+                     (if (and (pair? desc) (memq (car desc) '(adt fptr))) (cadr desc) desc))
                    (flush-output)
                    (fprintf (current-error-port)
                             "puffin runtime error: cast: expected ~a, got ~a (blame: ~a)\n"
                             (render-value shown) (render-value v) (render-value blame))
                    (exit 255)]))
-              "INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise.")))
+              "INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise.")
+
+   ;; ---- the FFI (lib/foreign.c; docs/FFI.md) ----------------------------
+   ;; A `foreign` declaration lowers in desugar to ordinary code over
+   ;; these internal prims: one #%ffi-register at module load (dlopen
+   ;; + dlsym; a missing library/symbol is a load-time error), one
+   ;; #%ffi-calln per call (the type-directed generic caller: check +
+   ;; convert each argument per the desc, call, construct the result).
+   ;; #%ffi-call6 takes its six arguments PACKED in a vector (the
+   ;; import index occupies one of the six prim argument registers).
+   ;; foreign-ptr? is the disjoint surface predicate for heap kind 19.
+   ;; Appended to the manifest: every existing prim id is unchanged.
+   (prim-spec '#%ffi-register 4 'pf_ffi_register #f
+              ffi-register-impl
+              "INTERNAL: dlopen+dlsym a foreign import per its desc; returns the import's index.")
+   (prim-spec '#%ffi-call0 1 'pf_ffi_call0 #f
+              (λ (i) (ffi-call-impl i '()))
+              "INTERNAL: call foreign import i with no arguments.")
+   (prim-spec '#%ffi-call1 2 'pf_ffi_call1 #f
+              (λ (i a) (ffi-call-impl i (list a)))
+              "INTERNAL: call foreign import i with 1 argument.")
+   (prim-spec '#%ffi-call2 3 'pf_ffi_call2 #f
+              (λ (i a b) (ffi-call-impl i (list a b)))
+              "INTERNAL: call foreign import i with 2 arguments.")
+   (prim-spec '#%ffi-call3 4 'pf_ffi_call3 #f
+              (λ (i a b c) (ffi-call-impl i (list a b c)))
+              "INTERNAL: call foreign import i with 3 arguments.")
+   (prim-spec '#%ffi-call4 5 'pf_ffi_call4 #f
+              (λ (i a b c d) (ffi-call-impl i (list a b c d)))
+              "INTERNAL: call foreign import i with 4 arguments.")
+   (prim-spec '#%ffi-call5 6 'pf_ffi_call5 #f
+              (λ (i a b c d e) (ffi-call-impl i (list a b c d e)))
+              "INTERNAL: call foreign import i with 5 arguments.")
+   (prim-spec '#%ffi-call6 2 'pf_ffi_call6 #f
+              (λ (i argv) (ffi-call-impl i (vector->list argv)))
+              "INTERNAL: call foreign import i with 6 arguments, packed in a vector.")
+   (prim-spec 'foreign-ptr? 1 'pf_foreign_ptr_huh #t
+              foreign-handle?
+              "Is this value a foreign handle (an opaque pointer from a foreign library)?"
+              #:type '(-> a Bool))))
 
 ;; manifest self-agreement: a typed prim's arrow arity must equal its
 ;; declared arity (the type field cannot drift from the manifest it

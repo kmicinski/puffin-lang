@@ -1,0 +1,23 @@
+;; foreign handles (docs/FFI.md §6): branded kind 19, #:consumes
+;; close, (Nullable T), foreign-ptr? disjointness
+(define-foreign-type CBox)
+(foreign "./libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-next (-> CBox Int) #:c-name "cdemo_box_next")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes)
+  (: box-maybe (-> Int (Nullable CBox)) #:c-name "cdemo_box_maybe"))
+(define b (box-new 10))
+(println (box-next b))
+(println (box-next b))
+(println (foreign-ptr? b))
+(println (foreign-ptr? 5))
+(println (foreign-ptr? "s"))
+(println (vector? b))
+(println (adt? b))
+(define m (box-maybe 1))
+(println (if m (box-next m) -1))
+(if m (box-close m) (void))
+(println (if (box-maybe 0) 'yes 'no))
+(box-close b)
+(println b)
+(println ((lambda (h) (ann h CBox)) b))

@@ -434,10 +434,15 @@
       [(module-forms? raw)
        (define fs (resolve-modules file-name))
        (values fs (resolved-origins))]
-      [else (match raw
-              ;; class-style wrapper: no positions
-              [`((program ,inner ...)) (values inner (map (λ (_) #f) inner))]
-              [fs (values fs (map (λ (l) (and l (cons base l))) raw-lines))])]))
+      [else
+       (define dir (path-only (path->complete-path file-name)))
+       ;; foreign library paths in a plain file resolve against the
+       ;; file's directory (docs/FFI.md §3), like the module resolver
+       (define (rf fs) (map (λ (f) (resolve-foreign-paths f dir)) fs))
+       (match raw
+         ;; class-style wrapper: no positions
+         [`((program ,inner ...)) (values (rf inner) (map (λ (_) #f) inner))]
+         [fs (values (rf fs) (map (λ (l) (and l (cons base l))) raw-lines))])]))
   ;; REPL units get no prelude: the session loads the prelude once as
   ;; its own REPL unit, and every prelude name late-binds by cell
   ;; (docs/WASM-VM.md §5.2), so user redefinition shadows it. REPL

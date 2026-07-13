@@ -1,0 +1,4 @@
+(require "regex.puf" #:sig "regex.pufs")
+(define re (regex-compile "a+b"))
+(println (if re (regex-match? re "xxaaabyy") #f))
+(if re (regex-close re) (void))

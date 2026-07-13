@@ -29,3 +29,14 @@ bin/puffin-vm-gctest
 # puffincc compiled to bytecode. The web/public copies above stay
 # ignored; refresh the seed at release points with bin/refresh-boot.
 !boot/puffincc.pbc
+
+# FFI demo artifacts (src/test-ffi.rkt builds them; docs/FFI.md §8.4)
+tests/ffi-demo/cdemo/libpfcdemo.dylib
+tests/ffi-demo/pfregex/target/
+tests/ffi-demo/pfregex/Cargo.lock
+bench/ffi/intrinsic
+bench/ffi/prim-call
+bench/ffi/ffi-call
+bench/ffi/regex-rust
+bench/ffi/regex-puffin
+build-cache/

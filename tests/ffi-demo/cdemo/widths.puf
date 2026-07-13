@@ -1,0 +1,9 @@
+;; width spellings (docs/FFI.md §4.1): Int to the checker,
+;; conversion-selecting to the marshaler
+(foreign "./libpfcdemo.dylib"
+  (: cdemo-inc32 (-> I32 I32))
+  (: cdemo-low8 (-> Int U8))
+  (: cdemo-double8 (-> I8 Int)))
+(println (cdemo-inc32 41))
+(println (cdemo-low8 300))
+(println (cdemo-double8 -5))

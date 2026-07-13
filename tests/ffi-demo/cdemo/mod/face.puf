@@ -1,0 +1,11 @@
+;; a Puffin-face module wrapping foreign imports (docs/FFI.md §3):
+;; the library path resolves relative to THIS module's file
+(provide CBox box-new box-next box-close half-sum)
+(define-foreign-type CBox)
+(foreign "../libpfcdemo.dylib"
+  (: box-new (-> Int CBox) #:c-name "cdemo_box_new")
+  (: box-next (-> CBox Int) #:c-name "cdemo_box_next")
+  (: box-close (-> CBox Void) #:c-name "cdemo_box_free" #:consumes)
+  (: cdemo-add (-> Int Int Int)))
+(define (half-sum [a : Int] [b : Int]) : Int
+  (quotient (cdemo-add a b) 2))

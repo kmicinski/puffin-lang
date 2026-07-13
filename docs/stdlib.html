@@ -124,6 +124,7 @@ pre code { background: none; border: 0; padding: 0; font-size: 12.5px; tab-size:
     <a href="#cat-8">ADTs &amp; matching</a>
     <a href="#cat-9">I/O &amp; the REPL</a>
     <a href="#cat-10">Control &amp; misc</a>
+    <a href="#cat-11">Foreign functions</a>
     <div class="toc-title" style="margin-top:14px">Elsewhere</div>
     <a href="tutorial.html">The tutorial</a>
   </details>
@@ -134,15 +135,15 @@ pre code { background: none; border: 0; padding: 0; font-size: 12.5px; tab-size:
 <h1>The Puffin Standard Library</h1>
 <p class="lede">Small but mighty: everything you need for lists, recursion,
 higher-order functions, pattern matching over ADTs, assoc-list environments,
-graphs, and interpreters — and deliberately nothing more. 129 functions in
+graphs, and interpreters — and deliberately nothing more. 130 functions in
 three layers: compiler <em>intrinsics</em>, runtime <em>primitives</em> (one C
 implementation, one reference implementation, one VM implementation, kept in
 lockstep by the manifest), and a <em>prelude written in Puffin itself</em>,
 injected only when mentioned. New to the language? Start with the
 <a href="tutorial.html">tutorial</a>.</p>
 <p>
-<span class="badge">129 functions</span>
-<span class="badge">135 examples, all machine-verified</span>
+<span class="badge">130 functions</span>
+<span class="badge">136 examples, all machine-verified</span>
 <span class="badge">types as the checker sees them</span>
 </p>
 <p class="note">This page is <strong>generated</strong> — edit
@@ -902,6 +903,19 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <div class="sighead"><code class="nm">void?</code> <code class="ty">(-> a Bool)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
 <p class="doc">Is this value void?</p>
 <pre><code>(println (void? (display "")))   ;; #t</code></pre></div>
+
+<section id="cat-11">
+<h2>Foreign functions</h2>
+<p class="catlede">The <code>foreign</code> form imports typed C functions from a shared library (see the <a href="tutorial.html#ffi">tutorial's FFI section</a>); opaque C pointers cross as branded, unforgeable <em>foreign handles</em>.</p>
+<div class="entry" id="e-foreign_45ptr_63">
+<div class="sighead"><code class="nm">foreign-ptr?</code> <code class="ty">(-> a Bool)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
+<p class="doc">Is this value a foreign handle (an opaque pointer from a foreign library)?</p>
+<pre><code>;; #t only for handles returned by foreign imports
+(println (foreign-ptr? 5))
+(println (foreign-ptr? "lib"))
+;; prints:
+;;   #f
+;;   #f</code></pre></div>
 
 </main>
 </div>

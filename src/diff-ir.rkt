@@ -57,6 +57,16 @@
                  (sort (map walk (set->list v)) (λ (a b) (string<? (format "~a" a) (format "~a" b)))))]
           [else v])))
 
+;; classic pipe-mode directive files: (target ...) / (dump-after ...)
+;; as leading forms
+(define (has-directives? path)
+  (define fs (read-module-forms path))
+  (and (pair? fs)
+       (match (car fs)
+         [`(target ,_) #t]
+         [`(dump-after ,_) #t]
+         [_ #f])))
+
 (module+ main
   (match-define (vector pass-name prog rest ...) (current-command-line-arguments))
   ;; `rest` is a LIST of the remaining argv (optional [target] [olvl]);
@@ -74,15 +84,19 @@
           [`((,pass ,name ,_ ,_ ,_) . ,more)
            (define out (pass ir))
            (if (equal? name pass-name) out (loop more out))]))))
-  ;; puffincc side: module programs need file mode (a require DAG
-  ;; cannot come in on stdin), so they use the --dump-after CLI flag;
-  ;; plain files keep the classic piped directives
+  ;; puffincc side: file mode via the --dump-after CLI flag for
+  ;; everything (module programs NEED it -- a require DAG cannot come
+  ;; in on stdin -- and plain files need it too, or their diagnostics
+  ;; and cast/FFI blame strings would carry no [file:line] position on
+  ;; the pcc side while the reference, which reads the file, has them).
+  ;; Files that still carry classic (target ...)/(dump-after ...)
+  ;; directives fall back to the pipe.
   (define cmd
-    (if (module-forms? (read-module-forms prog))
-        (format "build/puffincc --dump-after ~a -t ~a -O ~a ~a"
-                pass-name tgt olvl prog)
+    (if (has-directives? prog)
         (format "{ echo '(target ~a)'; echo '(dump-after ~a)'; cat ~a; } | build/puffincc -O ~a"
-                tgt pass-name prog olvl)))
+                tgt pass-name prog olvl)
+        (format "build/puffincc --dump-after ~a -t ~a -O ~a ~a"
+                pass-name tgt olvl prog)))
   (define pcc-out (with-output-to-string (λ () (system cmd))))
   (define pcc (with-input-from-string pcc-out read))
   (define n-ref (normalize ref))

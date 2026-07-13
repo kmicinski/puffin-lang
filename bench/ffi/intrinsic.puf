@@ -1,0 +1,4 @@
+;; the floor: the same loop over the open-coded + intrinsic
+(define (loop i acc)
+  (if (eq? i 0) acc (loop (- i 1) (+ acc 0))))
+(println (loop 10000000 7))

@@ -1,0 +1,3 @@
+;; embedded NUL in an outbound Str: the unconditional check (§4.3)
+(foreign "./libpfcdemo.dylib" (: cdemo-strlen (-> Str Int)))
+(println (cdemo-strlen (bytes->string (list 104 105 0 33))))

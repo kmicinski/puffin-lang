@@ -1,0 +1,9 @@
+;; FFI call overhead: 10,000,000 calls to a 2-arg C function through
+;; the full type-directed marshaler (check two Ints, the generic
+;; 6-register call, 61-bit retag on return). Compare prim-call.puf
+;; (a direct prim call) and intrinsic.puf (open-coded +).
+(foreign "../../tests/ffi-demo/cdemo/libpfcdemo.dylib"
+  (: cdemo-add (-> Int Int Int)))
+(define (loop i acc)
+  (if (eq? i 0) acc (loop (- i 1) (cdemo-add acc 0))))
+(println (loop 10000000 7))
