@@ -1,0 +1,1 @@
+error: typecheck: foreign f: arity 7 exceeds the FFI limit of 6 [tc-ffi-arity.puf:2]

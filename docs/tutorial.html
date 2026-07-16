@@ -885,6 +885,65 @@ browser has no <code>dlopen</code>, so the playground <em>compiles</em> FFI
 programs fine but refuses to run them at load, with exactly:</p>
 <pre><code>error: foreign library libpfregex.dylib is not available in the browser
 </code></pre>
+
+<h3>A real guest: Z3 as a Puffin API</h3>
+<p><code>examples/z3/z3.puf</code> binds the Z3 SMT solver (<code>brew
+install z3</code>) in two handle types and six imports — and the whole
+binding fits on one screen because the workhorse is
+<code>Z3_eval_smtlib2_string</code>: queries go out as SMT-LIB text, answers
+come back as text, and <em>SMT-LIB is s-expressions</em>. So queries are
+quasiquoted Puffin data (<code>value-&gt;string</code> renders them verbatim)
+and replies parse back into Puffin data with the ~30-line reader in the same
+file. There is no binding layer to learn; the boundary speaks your data:</p>
+<pre><code>(define-foreign-type Z3Config)
+(define-foreign-type Z3Context)
+(foreign "/opt/homebrew/lib/libz3.dylib"
+  (: z3-mk-config   (-> Z3Config)           #:c-name "Z3_mk_config")
+  (: z3-mk-context  (-> Z3Config Z3Context) #:c-name "Z3_mk_context")
+  (: z3-del-config  (-> Z3Config Void)      #:c-name "Z3_del_config"  #:consumes)
+  (: z3-del-context (-> Z3Context Void)     #:c-name "Z3_del_context" #:consumes)
+  (: z3-eval        (-> Z3Context Str Str)  #:c-name "Z3_eval_smtlib2_string"))
+</code></pre>
+<pre><code>(require "z3.puf")
+(define ctx (z3-new))
+(z3-send* ctx '((declare-const x Int)
+                (assert (> x 41))
+                (assert (< x 43))))
+(println (z3-check-sat ctx))
+(println (z3-get-values ctx '(x)))
+(z3-close ctx)
+</code></pre>
+<pre><code>sat
+((x 42))
+</code></pre>
+<p>The elaborate version is <code>examples/z3/sudoku.puf</code>: it generates
+a Sudoku's whole constraint system as data — 81 <code>declare-const</code>s,
+27 <code>distinct</code>s over rows/columns/boxes built with ordinary
+<code>map</code> and <code>append-map</code>, the givens — hands it to Z3,
+reads the model back, and prints the solved board. Then it asserts the
+negation of the model and asks again: <code>unsat</code>, so the solution is
+provably unique. The tail of a real run (native and the bytecode VM agree):</p>
+<pre><code>$ build/puffincc examples/z3/sudoku.puf -o sudoku && ./sudoku
+...
+solution:
+5 3 4 | 6 7 8 | 9 1 2
+6 7 2 | 1 9 5 | 3 4 8
+1 9 8 | 3 4 2 | 5 6 7
+------+-------+------
+8 5 9 | 7 6 1 | 4 2 3
+4 2 6 | 8 5 3 | 7 9 1
+7 1 3 | 9 2 4 | 8 5 6
+------+-------+------
+9 6 1 | 5 3 7 | 2 8 4
+2 8 7 | 4 1 9 | 6 3 5
+3 4 5 | 2 8 6 | 1 7 9
+unsat
+unsat above = the solution is unique
+</code></pre>
+<p>All the examples live in <code>examples/</code> with golden outputs;
+<code>tools/test-examples.sh</code> runs them on both self-hosted routes
+(z3 ones skip, not fail, when libz3 is absent).</p>
+
 <p>The full design — the marshaling table, the blame discipline, C++ and Rust
 guest rules, and what stays out (floats, callbacks, struct marshaling) — is
 <code>docs/FFI.md</code>.</p>

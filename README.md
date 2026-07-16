@@ -34,8 +34,12 @@ p5?" — then [docs/LANGUAGE.md](docs/LANGUAGE.md),
 [docs/OPTIMIZER.md](docs/OPTIMIZER.md),
 [docs/STDLIB.md](docs/STDLIB.md), and — for the browser/VM
 architecture — [docs/WASM-VM.md](docs/WASM-VM.md) +
-[docs/BYTECODE.md](docs/BYTECODE.md). The FFI design (typed foreign
-imports; not yet implemented) is [docs/FFI.md](docs/FFI.md).
+[docs/BYTECODE.md](docs/BYTECODE.md). The FFI — typed `dlopen`'d
+foreign imports with blame on every route — is
+[docs/FFI.md](docs/FFI.md), with runnable examples (including a Z3
+SMT-solver binding used as a Puffin API) in
+[examples/](examples/README.md) and a walkthrough in the tutorial
+([docs/tutorial.html](docs/tutorial.html)).
 
 ```
 bin/bootstrap                       # Racket-free bootstrap: cc-only, from
@@ -51,6 +55,9 @@ tools/test-errors.sh                # the differential ERROR corpus
                                     # programs x every route, diagnostics
                                     # byte-identical (rejection behavior
                                     # is corpus-tested, like success)
+tools/test-examples.sh              # the examples/ programs vs their
+                                    # goldens, native + VM (z3 examples
+                                    # skip when libz3 is absent)
 tools/gen-web-vm.sh                 # browser engine artifacts (self-hosted)
 (cd web && npm run dev)             # the playground: puffincc in wasm
 bin/refresh-boot                    # refresh the seed at release points

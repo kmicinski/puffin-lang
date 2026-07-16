@@ -1,0 +1,5 @@
+;; FFI: an outbound cast failure blames the import, by position
+(foreign "libSystem.B.dylib"
+  (: c-abs (-> Int Int) #:c-name "labs"))
+(define (f x) (c-abs x))
+(println (f 'oops))

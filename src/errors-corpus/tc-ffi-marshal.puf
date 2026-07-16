@@ -1,0 +1,4 @@
+;; FFI: a non-marshallable declared type is a compile-time error
+(foreign "libSystem.B.dylib"
+  (: f (-> (List Int) Int) #:c-name "labs"))
+(println (f '(1)))

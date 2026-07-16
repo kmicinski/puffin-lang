@@ -1,0 +1,4 @@
+;; FFI: #:consumes must name exactly one foreign-handle argument
+(foreign "libSystem.B.dylib"
+  (: f (-> Int Void) #:c-name "labs" #:consumes))
+(println 1)

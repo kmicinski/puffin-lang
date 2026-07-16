@@ -176,6 +176,11 @@ module's file. The browser playground compiles FFI programs but
 refuses to run them at load (`error: foreign library ... is not
 available in the browser`).
 
+Runnable examples live in `examples/` — `ffi/hello-libc.puf` (the
+system C library, no build step) and `z3/` (the Z3 SMT solver bound
+as a Puffin API, with a solve-and-prove-unique Sudoku showcase);
+`tools/test-examples.sh` holds them to their goldens.
+
 ## Pattern matching
 
 ```scheme

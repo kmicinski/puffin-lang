@@ -1,0 +1,90 @@
+;; sudoku.puf -- the elaborate FFI example: solve a Sudoku with the
+;; Z3 SMT solver, then prove the solution UNIQUE, all driven from
+;; Puffin. The interesting part is that there is no "Z3 layer" to
+;; learn: constraints are quasiquoted Puffin data, the model comes
+;; back as Puffin data (z3.puf), and everything between is ordinary
+;; list processing.
+(require "z3.puf")
+
+;; the puzzle, row-major, 0 = blank
+(define puzzle
+  '(5 3 0  0 7 0  0 0 0
+    6 0 0  1 9 5  0 0 0
+    0 9 8  0 0 0  0 6 0
+    8 0 0  0 6 0  0 0 3
+    4 0 0  8 0 3  0 0 1
+    7 0 0  0 2 0  0 0 6
+    0 6 0  0 0 0  2 8 0
+    0 0 0  4 1 9  0 0 5
+    0 0 0  0 8 0  0 7 9))
+
+;; one SMT constant per cell: c00 .. c88
+(define (cell r c)
+  (string->symbol (string-append "c" (string-append (number->string r)
+                                                    (number->string c)))))
+(define rows (range 0 9))
+(define (row-cells r) (map (lambda (c) (cell r c)) rows))
+(define (col-cells c) (map (lambda (r) (cell r c)) rows))
+(define (box-cells b)
+  (let ([br (* 3 (quotient b 3))] [bc (* 3 (modulo b 3))])
+    (append-map (lambda (dr) (map (lambda (dc) (cell (+ br dr) (+ bc dc)))
+                                  (range 0 3)))
+                (range 0 3))))
+(define all-cells (append-map row-cells rows))
+
+;; the constraint system, as data
+(define decls
+  (append-map (lambda (x) `((declare-const ,x Int)
+                            (assert (and (>= ,x 1) (<= ,x 9)))))
+              all-cells))
+(define distincts
+  (append-map (lambda (group) (map (lambda (g) `(assert (distinct ,@g))) group))
+              (list (map row-cells rows)
+                    (map col-cells rows)
+                    (map box-cells rows))))
+(define givens
+  (filter-map (lambda (i)
+                (let ([v (list-ref puzzle i)])
+                  (and (> v 0)
+                       `(assert (= ,(cell (quotient i 9) (modulo i 9)) ,v)))))
+              (range 0 81)))
+
+;; board printing: a lookup from an assoc list ((c00 5) (c01 3) ...)
+(define (show-board lookup)
+  (map (lambda (r)
+         (begin
+           (println
+            (string-join
+             (map (lambda (c)
+                    (let ([v (lookup r c)])
+                      (string-append (if (eq? v 0) "." (number->string v))
+                                     (if (eq? (modulo c 9) 8)
+                                         "" (if (eq? (modulo c 3) 2) " |" "")))))
+                  rows)
+             " "))
+           (if (and (eq? (modulo r 3) 2) (< r 8))
+               (println "------+-------+------")
+               (void))))
+       rows)
+  (void))
+
+(println "puzzle:")
+(show-board (lambda (r c) (list-ref puzzle (+ (* 9 r) c))))
+
+;; hand the whole system to Z3
+(define ctx (z3-new))
+(z3-send* ctx (append decls (append distincts givens)))
+(println (z3-check-sat ctx))
+
+(define model (z3-get-values ctx all-cells))
+(define (model-ref r c) (car (cdr (assoc (cell r c) model))))
+(println "solution:")
+(show-board model-ref)
+
+;; uniqueness: assert "some cell differs from this model" -- unsat
+;; means no second grid satisfies the puzzle
+(z3-send ctx `(assert (not (and ,@(map (lambda (p) `(= ,(car p) ,(car (cdr p))))
+                                       model)))))
+(println (z3-check-sat ctx))
+(println "unsat above = the solution is unique")
+(z3-close ctx)

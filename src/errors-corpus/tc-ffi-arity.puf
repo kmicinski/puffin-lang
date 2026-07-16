@@ -1,0 +1,4 @@
+;; FFI: arity > 6 exceeds the integer-class caller's ceiling
+(foreign "libSystem.B.dylib"
+  (: f (-> Int Int Int Int Int Int Int Int) #:c-name "labs"))
+(println 1)

@@ -1,0 +1,102 @@
+;; z3.puf -- the Z3 SMT solver as a Puffin library, through the typed
+;; FFI (docs/FFI.md). The whole binding is four handle calls plus
+;; Z3_eval_smtlib2_string: queries go out as SMT-LIB text, answers
+;; come back as text, and since SMT-LIB is s-expressions both
+;; directions are just Puffin data -- value->string on the way out,
+;; the small reader below on the way in.
+;;
+;; Needs the Z3 shared library:   brew install z3
+;; If yours lives elsewhere, edit the library path below (an absolute
+;; path loads as spelled; a bare name goes to the system loader).
+(provide Z3Config Z3Context
+         z3-version z3-new z3-close
+         z3-eval z3-send z3-send* z3-check-sat z3-get-values
+         z3-read-all)
+
+(define-foreign-type Z3Config)
+(define-foreign-type Z3Context)
+
+(foreign "/opt/homebrew/lib/libz3.dylib"
+  (: z3-version     (-> Str)                #:c-name "Z3_get_full_version")
+  (: z3-mk-config   (-> Z3Config)           #:c-name "Z3_mk_config")
+  (: z3-mk-context  (-> Z3Config Z3Context) #:c-name "Z3_mk_context")
+  (: z3-del-config  (-> Z3Config Void)      #:c-name "Z3_del_config"
+                                            #:consumes)
+  (: z3-del-context (-> Z3Context Void)     #:c-name "Z3_del_context"
+                                            #:consumes)
+  ;; the workhorse: evaluate SMT-LIB text in a context, answer as text
+  (: z3-eval        (-> Z3Context Str Str)  #:c-name "Z3_eval_smtlib2_string"))
+
+;; ---- lifecycle -----------------------------------------------------
+;; the config handle only parameterizes context creation; make one,
+;; use it, consume it. Contexts are the long-lived handle -- close
+;; them (or the leak detector will name them at exit).
+(define (z3-new) : Z3Context
+  (define cfg (z3-mk-config))
+  (define ctx (z3-mk-context cfg))
+  (begin (z3-del-config cfg) ctx))
+
+(define (z3-close [ctx : Z3Context]) : Void
+  (z3-del-context ctx))
+
+;; ---- reading Z3's answers back into Puffin data ---------------------
+;; a minimal s-expression reader over Z3's replies: integers, symbols,
+;; nesting -- exactly the shapes (check-sat) and (get-value ...)
+;; produce. Returns the list of top-level forms in the reply.
+(define (z3-read-all [s : Str])
+  (define n (string-length s))
+  (define (ws? b) (or (eq? b 32) (or (eq? b 10) (or (eq? b 9) (eq? b 13)))))
+  (define (delim? b) (or (ws? b) (or (eq? b 40) (eq? b 41))))
+  (define (skip i)
+    (if (and (< i n) (ws? (string-byte s i))) (skip (+ i 1)) i))
+  ;; each reader returns (form . next-index); i points at a non-space
+  (define (read1 i)
+    (if (eq? (string-byte s i) 40)
+        (read-seq (skip (+ i 1)) '())
+        (read-atom i i)))
+  (define (read-seq i acc)
+    (cond
+      [(>= i n) (cons (reverse acc) i)]
+      [(eq? (string-byte s i) 41) (cons (reverse acc) (+ i 1))]
+      [else (let ([r (read1 i)])
+              (read-seq (skip (cdr r)) (cons (car r) acc)))]))
+  (define (read-atom start i)
+    (if (or (>= i n) (delim? (string-byte s i)))
+        (let ([t (substring s start i)])
+          (let ([num (string->number t)])
+            (cons (if num num (string->symbol t)) i)))
+        (read-atom start (+ i 1))))
+  (define (read* i acc)
+    (let ([j (skip i)])
+      (if (>= j n)
+          (reverse acc)
+          (let ([r (read1 j)])
+            (read* (cdr r) (cons (car r) acc))))))
+  (read* 0 '()))
+
+;; ---- talking in data -------------------------------------------------
+;; send one SMT-LIB form (as Puffin data), read the reply back as data
+(define (z3-send [ctx : Z3Context] form)
+  (z3-read-all (z3-eval ctx (value->string form))))
+
+;; send a whole script (a list of forms)
+(define (z3-send* [ctx : Z3Context] forms)
+  (z3-read-all (z3-eval ctx (string-join (map value->string forms) "\n"))))
+
+;; (z3-check-sat ctx) -> 'sat | 'unsat | 'unknown
+(define (z3-check-sat [ctx : Z3Context])
+  (car (z3-send ctx '(check-sat))))
+
+;; Z3 spells negative integers as the application (- k); normalize
+(define (z3-value v)
+  (match v
+    [`(- ,k) (- 0 k)]
+    [_ v]))
+
+;; (z3-get-values ctx '(x y)) -> ((x 42) (y -7)) -- an assoc list of
+;; model values for the named constants, after a sat (check-sat)
+(define (z3-get-values [ctx : Z3Context] names)
+  (match (z3-send ctx `(get-value ,names))
+    [`((,pairs ...))
+     (map (lambda (p) (list (car p) (z3-value (car (cdr p))))) pairs)]
+    [_ (error "z3-get-values: unexpected reply")]))

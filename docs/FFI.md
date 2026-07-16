@@ -25,8 +25,13 @@
 > cwd-relative so the two compilers agree byte-for-byte.
 > Tests: src/test-ffi.rkt (the §8.4 matrix), tests/ffi-demo/
 > (cdemo C library + pfregex Rust crate), web/test-vm-compile.mjs
-> (the browser-refusal golden). Tutorial: docs/tutorial.html §"Calling
-> C (the FFI)".
+> (the browser-refusal golden), and the FFI rows of the differential
+> error corpus (src/errors-corpus/{tc,rt}-ffi-*, tools/test-errors.sh).
+> Tutorial: docs/tutorial.html §"Calling C (the FFI)". Examples:
+> examples/ffi/ (libSystem, no build step) and examples/z3/ — the Z3
+> SMT solver bound as a Puffin API (z3.puf) with a constraint-solving
+> showcase (sudoku.puf: solve + prove-unique); goldens held by
+> tools/test-examples.sh on both self-hosted routes.
 >
 > Original design status note: DESIGN, second edition (2026-07-13). This document
 > REPLACES the 2026-07-07 FFI design in full (the old text is in git

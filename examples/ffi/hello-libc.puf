@@ -1,0 +1,22 @@
+;; hello-libc.puf -- the system C library through the typed FFI
+;; (docs/FFI.md). No build step: libSystem is already loaded; dlopen
+;; just hands back its symbols. Declared types generate all the
+;; marshaling -- and the casts they induce never erase, so a wrong
+;; value at this boundary is a blamed error, not a corrupt heap.
+(foreign "libSystem.B.dylib"
+  (: c-abs    (-> Int Int)            #:c-name "labs")
+  (: c-strlen (-> Str Int)            #:c-name "strlen")
+  (: c-toupper (-> Int Int)           #:c-name "toupper")
+  (: c-isdigit (-> Int Bool)          #:c-name "isdigit")
+  (: c-getenv (-> Str (Nullable Str)) #:c-name "getenv"))
+
+(println (c-abs -42))
+(println (c-strlen "a puffin appears"))
+(println (c-toupper 97))                       ;; 'a' -> 'A' (65)
+(println (c-isdigit 55))                       ;; byte of '7'
+(println (c-isdigit 97))
+;; (Nullable Str): C's NULL arrives as #f, never as a raw word
+(println (if (c-getenv "PATH") 'have-path 'no-path))
+(println (if (c-getenv "PUFFIN_NO_SUCH_VAR") 'set 'unset))
+;; a foreign name is an ordinary value: map it like any function
+(println (map c-abs '(-1 2 -3)))

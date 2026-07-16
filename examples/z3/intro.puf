@@ -1,0 +1,26 @@
+;; intro.puf -- first contact with the Z3 Puffin API (see z3.puf).
+;; Queries are quasiquoted Puffin data; answers come back as data.
+(require "z3.puf")
+
+(define ctx (z3-new))
+
+;; is there an integer strictly between 41 and 43?
+(z3-send* ctx '((declare-const x Int)
+                (assert (> x 41))
+                (assert (< x 43))))
+(println (z3-check-sat ctx))
+(println (z3-get-values ctx '(x)))
+
+;; push a frame, ask an impossible follow-up, pop -- context intact
+(z3-send ctx '(push))
+(z3-send ctx '(assert (> x 100)))
+(println (z3-check-sat ctx))
+(z3-send ctx '(pop))
+
+;; negative model values normalize ((- 7) -> -7)
+(z3-send* ctx '((declare-const y Int)
+                (assert (= (+ x y) 35))))
+(println (z3-check-sat ctx))
+(println (z3-get-values ctx '(x y)))
+
+(z3-close ctx)

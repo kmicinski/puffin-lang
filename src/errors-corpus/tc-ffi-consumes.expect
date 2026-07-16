@@ -1,0 +1,1 @@
+error: typecheck: foreign f: #:consumes requires exactly one foreign-handle argument [tc-ffi-consumes.puf:2]
