@@ -29,9 +29,10 @@ for working on it:
   then `(cd web && npm test)`.
 - The stdlib prim manifest (`src/stdlib.rkt`) and prelude
   (`src/prelude.puf`) are single sources of truth; regenerate derived
-  tables (`racket src/gen-puffincc-tables.rkt`, `src/gen-vm-prims.rkt`
-  via `make -C src/vm`, `racket tools/gen-prim-names.rkt`) rather than
-  editing generated files.
+  tables (`racket src/gen-puffincc-tables.rkt`, `make -C src/vm` for
+  vm-prims.inc — self-hosted via `tools/gen-vm-prims.puf`, Racket
+  cross-checked when present — `racket tools/gen-prim-names.rkt`)
+  rather than editing generated files.
 - Puffin dialect notes for `puffincc-src/` edits: `string-append` is
   binary; no `with-handlers`; no `(or ...)` match patterns or `match*`;
   `(unquote ,e)`-shaped quasiquote patterns are escapes; `#:kw`

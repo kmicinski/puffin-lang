@@ -1,0 +1,47 @@
+;; Puffin -- gen-vm-prims.puf: generate the VM's primitive table
+;; (src/vm/vm-prims.inc) from the COMMITTED manifest table
+;; (puffincc-src/tables.puf) -- the self-hosted twin of
+;; src/gen-vm-prims.rkt. The two generators must emit identical
+;; bytes (the .rkt one reads src/stdlib.rkt directly; this one reads
+;; tables.puf, itself generated from the same manifest -- so a diff
+;; between their outputs is a lockstep check, run by src/vm/Makefile
+;; when both toolchains are present). Regenerate and commit whenever
+;; the manifest changes:
+;;
+;;   build/puffincc tools/gen-vm-prims.puf -o build/gen-vm-prims
+;;   build/gen-vm-prims > src/vm/vm-prims.inc
+(require "../puffincc-src/tables.puf")
+
+;; row = (name arity rt-sym surface? type)
+(define (row-name r) (car r))
+(define (row-arity r) (car (cdr r)))
+(define (row-rt-sym r) (car (cdr (cdr r))))
+
+(define (args-of n)
+  (if (eq? n 0)
+      "void"
+      (string-join (map (lambda (i) "pf") (range 0 n)) ", ")))
+
+(display "// GENERATED from the stdlib manifest -- do not edit.\n")
+(display "// (src/gen-vm-prims.rkt and tools/gen-vm-prims.puf emit this\n")
+(display "// identically; prim ids are manifest-list indices, computed from\n")
+(display "// the same list by the bytecode backends.)\n\n")
+
+(map (lambda (r)
+       (display (string-concat
+                 (list "extern pf " (symbol->string (row-rt-sym r))
+                       "(" (args-of (row-arity r)) ");\n"))))
+     prim-table)
+
+(display "\nstatic const vm_prim vm_prims[] = {\n")
+(map (lambda (r)
+       (display (string-concat
+                 (list "  {\"" (symbol->string (row-name r)) "\", "
+                       (number->string (row-arity r))
+                       ", (vm_prim_fn)" (symbol->string (row-rt-sym r))
+                       "},\n"))))
+     prim-table)
+(display "};\n\n")
+(display (string-concat
+          (list "enum { VM_PRIM_COUNT = "
+                (number->string (length prim-table)) " };\n")))

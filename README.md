@@ -103,12 +103,14 @@ oracle**: it cross-checks puffincc per-pass (`src/diff-ir.rkt`), and
 its reference interpreter re-derives the goldens as a differential
 test — the two implementations must agree byte-for-byte; they do,
 309/309. It also hosts the alternative stage-1 bootstrap
-(`bin/build-puffincc`) and the **generators**: after changing the
-stdlib manifest (`src/stdlib.rkt`) or prelude, regenerating the
-derived tables (`src/vm/vm-prims.inc`, `puffincc-src/tables.puf`,
-docs/STDLIB.md) still uses Racket — the one remaining Racket-needed
-activity. It is not the primary compiler; extend puffincc first and
-verify against `src/`.
+(`bin/build-puffincc`) and most of the **generators**: after changing
+the stdlib manifest (`src/stdlib.rkt`) or prelude, regenerating
+`puffincc-src/tables.puf` and docs/STDLIB.md still uses Racket — the
+remaining Racket-needed activity (`src/vm/vm-prims.inc` is already
+self-hosted: `tools/gen-vm-prims.puf` regenerates it from the
+committed table, with the Racket generator as a byte-identity
+lockstep check when both toolchains are present). It is not the
+primary compiler; extend puffincc first and verify against `src/`.
 
 ```
 bin/build-puffincc                  # hosted stage-1 bootstrap (alternative)

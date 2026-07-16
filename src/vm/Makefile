@@ -35,21 +35,37 @@ $(BIN): puffin-vm.c vm-prims.inc ../runtime/puffin.h $(RUNTIME)
 
 # The prim table derives from the stdlib manifest. The generated file
 # is COMMITTED so the cc-only bootstrap (bin/bootstrap) never needs
-# Racket: when racket is absent the committed table is used as-is
-# (touched so make stops re-firing the rule -- after a fresh clone the
-# checkout mtimes are arbitrary, so "stale" here does not mean the
-# content is stale). When racket is present the table regenerates
-# through a temp file so a generator failure cannot truncate it.
-# After editing ../stdlib.rkt on a Racket machine, this keeps working
-# exactly as before; on a Racket-less machine you get the loud warning.
-vm-prims.inc: ../stdlib.rkt ../gen-vm-prims.rkt
-	@if command -v racket >/dev/null 2>&1; then \
+# a generator at all: when neither toolchain is present the committed
+# table is used as-is (touched so make stops re-firing the rule --
+# after a fresh clone the checkout mtimes are arbitrary, so "stale"
+# here does not mean the content is stale). Regeneration prefers the
+# SELF-HOSTED generator (tools/gen-vm-prims.puf reading the committed
+# puffincc-src/tables.puf; puffincc runs from the repo root because
+# its default --runtime is root-relative), falls back to the Racket
+# one, and when BOTH toolchains are present the Racket output is
+# cmp'd against the Puffin output -- the standing lockstep check.
+# Either path regenerates through a temp file so a generator failure
+# cannot truncate the committed table.
+vm-prims.inc: ../stdlib.rkt ../gen-vm-prims.rkt ../../tools/gen-vm-prims.puf ../../puffincc-src/tables.puf
+	@if [ -x ../../build/puffincc ]; then \
+	  (cd ../.. && build/puffincc tools/gen-vm-prims.puf -o build/gen-vm-prims \
+	     && build/gen-vm-prims > src/vm/vm-prims.inc.tmp) \
+	   && mv vm-prims.inc.tmp vm-prims.inc; \
+	  echo "regenerated vm-prims.inc (self-hosted: tools/gen-vm-prims.puf)"; \
+	  if command -v racket >/dev/null 2>&1; then \
+	    if racket ../gen-vm-prims.rkt | cmp -s - vm-prims.inc; then \
+	      echo "  lockstep: the Racket generator emits identical bytes"; \
+	    else \
+	      echo "  LOCKSTEP FAILURE: gen-vm-prims.rkt and gen-vm-prims.puf disagree"; \
+	      exit 1; \
+	    fi; \
+	  fi; \
+	elif command -v racket >/dev/null 2>&1; then \
 	  racket ../gen-vm-prims.rkt > vm-prims.inc.tmp && mv vm-prims.inc.tmp vm-prims.inc; \
-	  echo "regenerated vm-prims.inc from the stdlib manifest"; \
+	  echo "regenerated vm-prims.inc from the stdlib manifest (racket)"; \
 	else \
-	  echo "vm-prims.inc: racket not found; using the COMMITTED prim table."; \
-	  echo "  (if ../stdlib.rkt actually changed, regenerate on a Racket machine:"; \
-	  echo "   racket src/gen-vm-prims.rkt > src/vm/vm-prims.inc)"; \
+	  echo "vm-prims.inc: no build/puffincc or racket; using the COMMITTED prim table."; \
+	  echo "  (if the manifest actually changed, build puffincc first: bin/bootstrap)"; \
 	  touch vm-prims.inc; \
 	fi
 
