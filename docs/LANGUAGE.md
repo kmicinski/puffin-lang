@@ -242,10 +242,6 @@ playground's "+ file" tab turns the editor into a module DAG.
 
 ## Sharp edges (current)
 
-- Arithmetic on non-integers is unchecked in compiled code (the
-  interpreter errors); the planned gradual type system addresses
-  this properly. Heap operations (`car`, `vector-ref`, hash/set ops)
-  are always checked.
 - Fixnums are 61-bit in compiled code, arbitrary precision in the
   interpreters — stay under ±2^60.
 - `set-car!`/`set-cdr!` don't exist (pairs are immutable).

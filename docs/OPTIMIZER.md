@@ -266,7 +266,7 @@ facts out, modulo set ordering).
 
 ## 8. Testing & benchmarking discipline
 
-- The full corpus (92 programs × 3 inputs) must be green at **every**
+- The full corpus (309 golden checks) must be green at **every**
   level, on both targets, plus the chain-mode per-pass predicates
   (`racket src/test.rkt -m all -O1`, `-O2`).
 - `bench/` runs every benchmark at all three levels; the report shows

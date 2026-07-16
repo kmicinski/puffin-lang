@@ -302,7 +302,7 @@ One C file (~550 lines) linking libpuffin.a:
 ## 7. Known gaps
 
 - No re-encoding assembler: `puffin-vm -d` is a decoder/printer.
-  The corpus (294 checks x 3 optimization levels) is the gate.
+  The corpus (309 checks x 3 optimization levels) is the gate.
 - Units are never unloaded: a very long session accumulates code
   and function-table rows per eval (small; bounded by eval count).
   (Unit *heap data* is collected normally by the §3.3 GC; this gap

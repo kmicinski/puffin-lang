@@ -35,8 +35,10 @@ self-hosting.
   in one command, and it is how three latent class-compiler bugs
   (uniqueify sibling scopes, `revealed?` shadowing, lift-lambdas
   `env` capture) were caught.
-- The web interpreter is held to the same goldens
-  (`node web/test-corpus.mjs`, 183 checks).
+- The browser route is held to the same goldens — today that means
+  puffincc on the wasm VM (`node web/test-vm-corpus.mjs`, 309
+  checks; the retired JS interpreter's `test-corpus.mjs` ran 183 at
+  the time this section was written).
 
 ### Performance (Apple M-series, this machine)
 
