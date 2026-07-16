@@ -15,6 +15,7 @@ compiled/
 /.s
 \#*\#
 .\#*
+*~
 .claude/
 
 # generated browser VM artifacts (tools/gen-web-vm.sh)
