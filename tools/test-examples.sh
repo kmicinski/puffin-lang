@@ -27,9 +27,12 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/puffin-examples.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
 pass=0 fail=0 skip=0
-for exp in examples/*/*.expect; do
+for exp in examples/*/*.expect examples/*/*/*.expect; do
+  [ -e "$exp" ] || continue
   puf=${exp%.expect}.puf
   name=$(basename "$puf" .puf)
+  # module-dir example: the entry is <dir>/main.puf; report the dir name
+  [ "$name" = main ] && name=$(basename "$(dirname "$puf")")
   if [ $# -gt 0 ]; then
     keep=0
     for want in "$@"; do [ "$want" = "$name" ] && keep=1; done

@@ -1,16 +1,38 @@
 # Puffin examples
 
-Runnable programs showing the language against the real world —
-today, that means the FFI (docs/FFI.md): typed `dlopen`'d imports
-with blame on every route. Each example has a `.expect` golden;
-`tools/test-examples.sh` runs them all on both self-hosted routes
-(native and the bytecode VM) and holds the output to the golden.
+Runnable, curated programs — the language by example (`lang/`) and
+the language against the real world (`ffi/`, `z3/`). Each example has
+a `.expect` golden; `tools/test-examples.sh` runs them all on both
+self-hosted routes (native and the bytecode VM) and holds the output
+to the golden.
 
 ```
 build/puffincc examples/z3/sudoku.puf -o sudoku && ./sudoku
 tools/test-examples.sh              # all of them, native + VM
 tools/test-examples.sh sudoku       # just one
 ```
+
+How examples relate to tests: they are the same pool, curated at
+different doors. The golden corpus (`src/test-programs/`, 309 checks)
+doubles as the web playground's example set (`web/src/examples.js`)
+and the benchmark sources; the `lang/` entries below are promoted
+verbatim from that corpus (each notes its corpus twin), and the
+FFI/z3 entries are examples-first (the corpus can't carry them — the
+browser route refuses `dlopen`). Everything user-facing is
+golden-tested; nothing is documentation-only.
+
+## lang/ — the language by example
+
+- **pcf-interp.puf** — an interpreter for PCF, the canonical typed
+  toy language: quasiquote patterns in, quasiquote construction out.
+- **red-black-tree.puf** — Okasaki red-black insertion; `balance` is
+  one four-way match. THE pattern-matching showcase.
+- **hindley-milner.puf** — Algorithm W for mini-ML: unification,
+  generalization, pretty-printed principal types.
+- **zipper.puf** — Huet zippers over binary trees: navigate, edit,
+  rebuild, persistently.
+- **stack-compiler/** — the classic expr→stack-machine compiler,
+  split across three modules (`require`/`provide` in action).
 
 ## ffi/ — first contact
 
