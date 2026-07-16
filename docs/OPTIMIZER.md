@@ -1,4 +1,3 @@
-
 # The Puffin optimizer: pervasive analyses, staged, at three levels
 
 Goal: make Puffin-compiled programs competitive with — and where possible
@@ -109,6 +108,12 @@ One demand-driven recursive rewrite in the cp0 mold, over the core IR:
      residualize if the size limit or effort limit trips. Recursive
      functions inline at most once per call site per round (no loop
      unrolling at `-O1`).
+   - a per-round **code-growth budget** caps multi-use inlining at a
+     third of the program's size (single-use inlines are net-zero and
+     exempt). Without it, a large program with many small hot
+     functions — puffincc itself — bloats 4-5× in assembly and swamps
+     the assembler; with it, big-program compile times stay in cp0
+     territory.
 4. Iterate 1–3 until no change or a round limit (the fuel makes each round
    linear; the round limit is a small constant).
 
@@ -140,6 +145,38 @@ matching arity compile to **direct calls** (no closure fetch, no indirect
 jump) — the analysis-free case is already syntactically visible after
 reveal-functions; `-O2` widens it to flow-proven single-target sites
 (super-beta).
+
+## 5.5 Block-level optimizations (explicate-control, ≥ -O1)
+
+Three transformations that live where control flow becomes explicit
+(`src/compile.rkt`, explicate-control) — downstream of the tree-level
+optimizer, upstream of both backends, so each is written once and both
+targets benefit:
+
+- **Loop recovery** (§6.5 item 3, landed): a self tail call runs the
+  full call protocol — stage arguments, set the arity register, jump,
+  re-execute the prologue — every iteration. Instead, the function's
+  entry tail moves to a fresh `loophead` label and every plain self
+  tail call rewrites to parameter reassignment + `(goto loophead)`.
+  The reassignment is two-phase (arguments into fresh temps, then
+  temps into the formals) because the arguments may read the formals
+  being reassigned. Applied to every non-entry, non-variadic function;
+  `main` is exempt (it must reach its print-result conclusion), and
+  `#%rest` functions keep the call protocol that packs their rest list.
+
+- **Fused compare-and-branch**: an `if` whose test is a single
+  comparison keeps the comparison *inside* the `if` through
+  anf-convert and explicate-control (a new `(if (cmp a b) …)` block
+  tail), so the backends emit `cmp` + conditional branch directly —
+  the boolean is never materialized into a register and immediately
+  re-tested. This is the inner-loop pattern of every numeric benchmark.
+
+- **Blocks cleanup**: (a) jump threading — a block that is exactly
+  `(goto M)` is bypassed by retargeting its predecessors; (b)
+  single-predecessor merging — a terminal `(goto M)` where `M` has
+  exactly one predecessor splices `M`'s tail in place; (c) unreachable
+  blocks are dropped. Mostly hygiene after loop recovery and fusion,
+  but it also shrinks the code the register allocator sees.
 
 ## 6. -O2: the AAM (src/opt/aam.rkt)
 
@@ -181,6 +218,42 @@ contraction):
    unreachable in the final state graph are dropped (subsumes and extends
    the parse-time prelude pruning).
 
+## 6.5b Final measurements (2026-07-07, post join-points/growth-budget/lean)
+
+14-benchmark geomean: **0.954× Racket (Chez) — faster overall**, 8/14
+outright wins. -O1 buys a 1.53× geomean over -O0; -O2's flow analysis
+adds ~1% geomean on these workloads (its clients mostly matter on
+higher-order code the suite underweights). Compile times are honest
+now: the hosted stage-1 build is 8.8s/463MB (--lean), puffincc
+self-compiles in ~527MB. Full interactive breakdown per level:
+bench/report.html ("The optimization explorer").
+
+## 6.5 What the first measurements taught us (2026-07-06)
+
+With `-O1` (contraction + direct known calls + open-coded prims) the
+14-benchmark geomean dropped from 1.46× to **0.98× Chez — faster
+overall**. The decisive fix was embarrassing in hindsight: every call
+to a known top-level function allocated a fresh one-slot closure
+record (30M GC allocations in fib(35)); `-O1` now calls known
+functions without materializing a closure. fib runs 3× faster than
+Chez; DPLL 4×; regex 2.6×; strings 2×.
+
+Where Chez still wins, and why (the next targets):
+
+1. **sort / symdiff (≈3.3×)** — pure small-object allocation churn.
+   Boehm's allocation path vs Chez's generational bump allocator.
+   Candidates: inline bump allocation from GC_malloc_many free lists;
+   flow-guided arena placement for provably non-escaping conses.
+2. **lc-interp (2.2×) / hamt (1.7×)** — persistent-hash operation
+   constants; needs HAMT node specialization or abstract-domain-guided
+   env representation (a flows-to client: monomorphic env keys →
+   vector-backed environments).
+3. **tail-loop (1.5×)** — self-tail-calls run the full call/return
+   protocol every iteration. A self-tail-call should compile to
+   parameter reassignment + a jump to the function entry (loop
+   recovery). This is a contained explicate/select change and the
+   single biggest remaining structural win.
+
 ## 7. The Datalog/Rust future
 
 The staged, labeled formulation is chosen so that migrating the heavyweight
@@ -203,5 +276,28 @@ facts out, modulo set ordering).
   pass; the optimizer's output interpreting identically to its input *on
   every corpus program* is the cheapest strong oracle we have.
 
-puffincc remains `-O0`-only for now; once the reference optimizer settles,
-the contraction layer (§4) is the first candidate for translation.
+**Big programs and -O1 assembly size (known limitation, 2026-07-07).**
+On a program the size of puffincc itself (~5,200 lines, s-expression
+walkers everywhere), §5's open-coded pair/vector primitives multiply
+the assembly by ~4-5× (~90MB), and the system assembler grinds on the
+result — inlining is NOT the culprit (the growth budget above binds it;
+measurements confirmed the size persists with inlining capped). Until
+open-coding is made size-aware (e.g. shared per-function check stubs,
+or a per-function open-coding budget), `bin/build-puffincc` builds
+stage 1 at `-O0`; normal-sized programs (the whole benchmark suite)
+are unaffected, and the report's per-level compile times keep this
+honest.
+
+**The puffincc port (2026-07-07).** The whole optimizer now exists in
+Puffin too: `puffincc-src/contract.puf` (§4, including the effort
+discipline), `puffincc-src/aam.puf` (§3/§6 — the staged CESK*, the
+widened store, all three clients), `optimize.puf` (the level
+dispatch), plus the §5/§5.5 pass hooks in `middle.puf` and the
+direct-call/`tail-jmp-direct` emission in `backends.puf`. puffincc
+takes `-O 0|1|2` and defaults to `-O1` like the reference. The
+differential oracle is `racket src/diff-ir.rkt optimize <prog> [tgt]
+[olvl]`: the reference and puffincc must produce identical IR after
+`optimize`, modulo gensym spelling. Dialect deltas worth knowing:
+Puffin has no exceptions, so the clients' label-desync guard is a
+fatal error rather than a silent identity fallback (the analysis
+ceiling still degrades gracefully to `-O1`).
