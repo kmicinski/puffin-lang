@@ -1,11 +1,13 @@
 # Puffin
 
 Puffin is a minimal Scheme/ML-like functional programming language
-written by Claude Code, directed by (and extending) a compiler written
-by Kristopher Micinski. The compiler is detailed here:
+written by Claude Code, directed by (and extending a compiler written
+by) Kristopher Micinski. The original compiler / language is detailed
+here:
 https://kmicinski.com/functional-programming/2025/11/23/build-a-language/
-I used Claude Code to build Puffin by extending that compiler with
-several useful features:
+I used Claude Code to build Puffin by extending that teaching-focused
+language (from Jeremy Siek's compiler book) with several
+quality-of-life features:
 
 - Match patterns and quasiquoting
 - A gradual type system using consistency-based typing
@@ -14,17 +16,20 @@ several useful features:
 - A simple module system inspired by SML
 - A typed FFI
 
-The project is, in some ways, an adventure in Slop. I glanced at all
+The project is, in some ways, an adventure in Slop. My ultimate goal
+is to use this to replace Racket for my day-to-day brainstorming in
+compiler / interpreters / etc. Claude Fable built the code, I read all
 of the code and understand the compiler's structure--but there are
-still some serious gaps which have not been fully thought-through. I
-have written some very large ports of Racket applications in Puffin
-(some of which I cannot share quite yet) and a ~10kloc application did
-demonstrate a serious Puffin compiler bug--so there are surely both
-(a) genuinely bad, unsound design choices which must be rooted out and
-(b) bugs in the implementation.
+still some serious gaps which have not been fully thought-through:
+gradual typing, modules, these are places which are seriously
+prototypical so far. I have written (again, using Claude Code) some
+large ports of Racket applications into Puffin, and a translation of a
+large (~10kloc) Racket application did demonstrate a serious Puffin
+compiler bug--so there are surely both (a) genuinely bad, unsound
+design choices which must be rooted out and (b) bugs in the
+implementation.
 
-Puffin includes a self-hosting compiler, gradual types, and reasonably
-good error messages. Here is a "hello world" example:
+Here's a "hello world" example:
 
 ```scheme
 (define-type Expr
