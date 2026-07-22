@@ -1732,46 +1732,48 @@
 ;; ---------------------------------------------------------------------
 
 (define (anf-convert p)
+  ;; The tail (return) continuation is the sentinel `ret-k`: the value
+  ;; IS the result. Every other continuation is a real function that
+  ;; binds the value and continues. `apply-k` applies either.
+  ;;
+  ;; join points: naively an if's continuation is duplicated into BOTH
+  ;; branches, which is exponential under nested ifs. The fix is to
+  ;; duplicate ONLY the tail continuation (needed to keep tail calls in
+  ;; branches in tail position) and to reify every other continuation
+  ;; as a single join point: bind the if's value once, apply k once.
+  ;; The tail test is `(eq? k ret-k)` -- deciding it by *probing* k
+  ;; (running it on a fresh var to measure output size) re-ran the whole
+  ;; downstream conversion at every nested if and was itself the source
+  ;; of the exponential blowup, so k is never run to make this choice.
+  (define ret-k (list 'ret))          ;; a unique sentinel, compared by eq?
+  (define (apply-k k v) (if (eq? k ret-k) v (k v)))
   ;; convert a list of expressions left-to-right, collecting atoms
+  ;; (the collector k here is always a real function, never ret-k)
   (define (convert-args es k)
     (match es
       ['() (k '())]
       [`(,hd . ,tl)
        (convert-expr hd (λ (a) (convert-args tl (λ (as) (k (cons a as))))))]))
-  ;; join points: naively an if's continuation is duplicated into
-  ;; BOTH branches, which is exponential under nested ifs. Probe the
-  ;; continuation with a fresh variable; when its output is more
-  ;; than a small bounded expression, bind the if's value once
-  ;; instead -- both branches reduce to an atom, the if sits in a
-  ;; let rhs (a legal ANF join shape; explicate-control gives the
-  ;; continuation a single join block). A trivial continuation (the
-  ;; identity of tail position, or a small wrapper) is still
-  ;; duplicated so tail calls in branches stay in tail position.
-  (define join-size-limit 24)
-  (define (exp-size v)
-    (if (pair? v) (+ (exp-size (car v)) (exp-size (cdr v))) 1))
-  (define (small-continuation? k)
-    (<= (exp-size (k (gensym 'probe))) join-size-limit))
   (define (convert-expr e k) (prov (convert-expr-core e k) e))
   (define (convert-expr-core e k)
     (match e
-      [(? literal?) (k e)]
-      [(? symbol? x) (k x)]
+      [(? literal?) (apply-k k e)]
+      [(? symbol? x) (apply-k k x)]
       ['(read)
        (let ([x (gensym 'read)])
-         (prov `(let ([,x (read)]) ,(k x)) e))]
+         (prov `(let ([,x (read)]) ,(apply-k k x)) e))]
       [`(string-lit ,s)
        (let ([x (gensym 'str)])
-         (prov `(let ([,x (string-lit ,s)]) ,(k x)) e))]
+         (prov `(let ([,x (string-lit ,s)]) ,(apply-k k x)) e))]
       [`(fun-ref ,f)
        (define x (gensym 'funref))
-       (prov `(let ([,x (fun-ref ,f)]) ,(k x)) e)]
+       (prov `(let ([,x (fun-ref ,f)]) ,(apply-k k x)) e)]
       [`(global-ref ,i)
        (define x (gensym 'glob))
-       (prov `(let ([,x (global-ref ,i)]) ,(k x)) e)]
+       (prov `(let ([,x (global-ref ,i)]) ,(apply-k k x)) e)]
       [`(global-set! ,i ,e+)
        (convert-expr e+ (λ (a)
-                          (prov `(let ([_ (global-set! ,i ,a)]) ,(k '(void))) e)))]
+                          (prov `(let ([_ (global-set! ,i ,a)]) ,(apply-k k '(void))) e)))]
       ;; fused compare-and-branch (>= -O1): when the test is one
       ;; comparison, keep it in the if -- never materialize the
       ;; boolean (explicate-control turns it into a cmp+jcc tail)
@@ -1780,60 +1782,60 @@
        (convert-args
         (list ea eb)
         (λ (as)
-          (if (small-continuation? k)
-              `(if (,op ,@as) ,(convert-expr e1 k) ,(convert-expr e2 k))
+          (if (eq? k ret-k)
+              `(if (,op ,@as) ,(convert-expr e1 ret-k) ,(convert-expr e2 ret-k))
               (let ([x (gensym 'join)])
                 `(let ([,x (if (,op ,@as)
-                               ,(convert-expr e1 (λ (a) a))
-                               ,(convert-expr e2 (λ (a) a)))])
-                   ,(k x))))))]
+                               ,(convert-expr e1 ret-k)
+                               ,(convert-expr e2 ret-k))])
+                   ,(apply-k k x))))))]
       [`(if ,e0 ,e1 ,e2)
        (convert-expr
         e0
         (λ (a-g)
-          (if (small-continuation? k)
-              `(if ,a-g ,(convert-expr e1 k) ,(convert-expr e2 k))
+          (if (eq? k ret-k)
+              `(if ,a-g ,(convert-expr e1 ret-k) ,(convert-expr e2 ret-k))
               (let ([x (gensym 'join)])
                 `(let ([,x (if ,a-g
-                               ,(convert-expr e1 (λ (a) a))
-                               ,(convert-expr e2 (λ (a) a)))])
-                   ,(k x))))))]
+                               ,(convert-expr e1 ret-k)
+                               ,(convert-expr e2 ret-k))])
+                   ,(apply-k k x))))))]
       [`(let ([_ (while ,e-g ,e-b)]) ,e-r)
-       `(let ([_ (while ,(convert-expr e-g (λ (a) a)) ,(convert-expr e-b (λ (a) a)))])
+       `(let ([_ (while ,(convert-expr e-g ret-k) ,(convert-expr e-b ret-k))])
           ,(convert-expr e-r k))]
       [`(unsafe-vector-ref ,e0 ,i)
        (convert-expr e0 (λ (a0)
                           (define x (gensym 'uref))
-                          (prov `(let ([,x (unsafe-vector-ref ,a0 ,i)]) ,(k x)) e)))]
+                          (prov `(let ([,x (unsafe-vector-ref ,a0 ,i)]) ,(apply-k k x)) e)))]
       [`(unsafe-vector-set! ,e0 ,i ,e1)
        (convert-expr e0
                      (λ (a0)
                        (convert-expr e1 (λ (a1)
-                                          (prov `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(k '(void))) e)))))]
+                                          (prov `(let ([_ (unsafe-vector-set! ,a0 ,i ,a1)]) ,(apply-k k '(void))) e)))))]
       ;; direct calls (>= -O1): a (fun-ref f) rator stays in place --
       ;; no materialization, the backends emit a direct call/jump
       [`(app (fun-ref ,f) ,es ...)
        #:when (>= (optimize-level) 1)
        (convert-args es (λ (as)
                           (define x (gensym 'app))
-                          (prov `(let ([,x (app (fun-ref ,f) ,@as)]) ,(k x)) e)))]
+                          (prov `(let ([,x (app (fun-ref ,f) ,@as)]) ,(apply-k k x)) e)))]
       [`(papp ,n (fun-ref ,f) ,es ...)
        #:when (>= (optimize-level) 1)
        (convert-args es (λ (as)
                           (define x (gensym 'app))
-                          (prov `(let ([,x (papp ,n (fun-ref ,f) ,@as)]) ,(k x)) e)))]
+                          (prov `(let ([,x (papp ,n (fun-ref ,f) ,@as)]) ,(apply-k k x)) e)))]
       [`(app ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym 'app))
-                          (prov `(let ([,x (app ,@as)]) ,(k x)) e)))]
+                          (prov `(let ([,x (app ,@as)]) ,(apply-k k x)) e)))]
       [`(papp ,n ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym 'app))
-                          (prov `(let ([,x (papp ,n ,@as)]) ,(k x)) e)))]
+                          (prov `(let ([,x (papp ,n ,@as)]) ,(apply-k k x)) e)))]
       [`(,(? prim? op) ,es ...)
        (convert-args es (λ (as)
                           (define x (gensym op))
-                          (prov `(let ([,x (,op ,@as)]) ,(k x)) e)))]
+                          (prov `(let ([,x (,op ,@as)]) ,(apply-k k x)) e)))]
       ;; let (place after the special _ forms)
       [`(let ([,x ,e0]) ,e-b)
        (convert-expr e0 (lambda (atom)
@@ -1841,7 +1843,7 @@
   (define (per-defn definition)
     (match definition
       [`(define (,fname ,formals ...) ,e-body)
-       `(define (,fname ,@formals) ,(convert-expr e-body (lambda (x) x)))]))
+       `(define (,fname ,@formals) ,(convert-expr e-body ret-k))]))
   (match p
     [`(program ,n-globals ,defns ...)
      `(program ,n-globals ,@(map per-defn defns))]))
