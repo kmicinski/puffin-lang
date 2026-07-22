@@ -1,35 +1,23 @@
 # Puffin gradual types: ADTs first, `_` everywhere else
 
-> **Status:** §1–§5 are LIVE in BOTH checkers — `src/types.rkt` (the
-> reference, invoked at the top of desugar so every route checks) and
-> `puffincc-src/types.puf` (byte-identical messages) — including the
-> formerly-v1-deferred pieces: variadic `(->* ...)` types, the
-> `(Mut ...)` container wrapper, exhaustiveness checking over closed
-> ADTs (a stderr warning; `--strict-types` on both CLIs promotes it
-> to an error), and prim types folded into the manifest (`prim-spec`'s
-> `#:type` field is the single source of truth; `tables.puf` and
-> docs/STDLIB.md carry it). `typed-1`/`typed-2` are golden corpus
-> programs; the rejection matrix lives in `src/test-types.rkt`; the
-> whole corpus passes unchanged (300/300 — the gradual guarantee).
-> One refinement beyond the design: in applications, a formal's
-> CONCRETE structure is a contract (violations error) but a
-> constraint that exists only because greedy instantiation bound a
-> type variable from a sibling argument is an inference hint —
-> conflicts there demote the variable to `_`. Casts with blame (§4)
-> and the dedicated ADT heap kind (§2) are shipped as well, and so
-> (2026-07-12) are typed `.pufs`/`.pufi` interfaces for separate
-> compilation (§6; docs/MODULES.md §3.2) — the boundary list is
-> empty.
+This document is the reference for Puffin's gradual type system: the
+type grammar, algebraic datatypes, the bidirectional checker, cast
+semantics with blame, and how types travel through modules and
+separate compilation. It is aimed at anyone writing Puffin code —
+untyped code needs none of it, but every annotation you do write
+behaves as described here.
 
 Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
-and annotations only ever tighten; (2) **algebraic datatypes as the
-foundation** — the interesting types in a PL-course language are tree
-shapes, and quasiquote-matched s-expressions deserve a typed
-alternative; (3) **honest container types** for the collections the
-language already has; (4) **inference over annotation** in practice —
-you annotate module boundaries and tricky spots, the checker fills in
-the rest locally.
+and annotations only ever tighten. Unannotated code keeps compiling,
+and the golden corpus is the standing regression suite for that
+claim. (2) **Algebraic datatypes as the foundation** — the
+interesting types in a PL-course language are tree shapes, and
+quasiquote-matched s-expressions deserve a typed alternative.
+(3) **Honest container types** for the collections the language
+already has. (4) **Inference over annotation** in practice — you
+annotate module boundaries and tricky spots, the checker fills in the
+rest locally.
 
 ## 1. The types
 
@@ -37,7 +25,7 @@ the rest locally.
 τ ::= _                                  the dynamic type (Any); the default
     | Int | Bool | Sym | Str | Void     base types
     | (Pairof τ τ)                       cons cells
-    | (List τ)                           proper lists (see §4: μ-treatment)
+    | (List τ)                           proper lists (equi-recursive; see below)
     | (Vec τ) | (Hash τ τ) | (Set τ)     containers (persistent / read-only view)
     | (Mut τ)                            mutable-container wrapper (τ: Hash/Vec/Set)
     | (-> τ ... τ)                       functions, fixed arity
@@ -59,9 +47,9 @@ arrow supplies at least the fixed arguments (extras against τr).
 Type variables are scoped to the `define-type` or annotation that
 introduces them; there is no explicit `forall` **by design** — top-level
 function annotations with free lowercase names are implicitly
-prenex-polymorphic, instantiated per use. (A deliberate, permanent
-choice, not a staging artifact: with greedy per-use instantiation an
-explicit binder buys no expressiveness and costs syntax.)
+prenex-polymorphic, instantiated per use. With greedy per-use
+instantiation an explicit binder buys no expressiveness and costs
+syntax.
 
 ## 2. Algebraic datatypes
 
@@ -94,49 +82,47 @@ explicit binder buys no expressiveness and costs syntax.)
   `Ctor` names an in-scope constructor; a bare pattern symbol that
   names a nullary constructor matches that constructor (anything else
   stays a binder, as today).
-- **Exhaustiveness** (implemented): a `match` whose scrutinee's
-  synthesized type is a concrete known ADT is checked against the
-  type's constructor set; missing constructors produce a stderr
-  warning (`typecheck warning: match on <Name> is not exhaustive:
-  missing <C1>, <C2>` — declaration order) and compilation proceeds.
-  `--strict-types` (both `bin/puffin` and `puffincc`;
-  `strict-exhaustiveness?` in `system.rkt`) promotes it to an error
-  with the same text. Coverage is conservative in the
-  no-false-warnings direction: a wildcard/binder clause, a guarded
-  catch-all, or any pattern the checker cannot prove partial counts
-  as covering everything, and a constructor pattern covers its
-  constructor even under a `#:when` guard. A `_`-typed scrutinee is
-  exempt (the gradual guarantee: untyped code never warns).
+- **Exhaustiveness**: a `match` whose scrutinee's synthesized type is
+  a concrete known ADT is checked against the type's constructor set;
+  missing constructors produce a stderr warning (`typecheck warning:
+  match on <Name> is not exhaustive: missing <C1>, <C2>` —
+  declaration order) and compilation proceeds. The `--strict-types`
+  flag promotes it to an error with the same text. Coverage is
+  conservative in the no-false-warnings direction: a wildcard/binder
+  clause, a guarded catch-all, or any pattern the checker cannot
+  prove partial counts as covering everything, and a constructor
+  pattern covers its constructor even under a `#:when` guard. A
+  `_`-typed scrutinee is exempt (the gradual guarantee: untyped code
+  never warns).
 
-### Implicit mutual recursion (the fix-block question)
+### Implicit mutual recursion
 
 All `define-type` declarations in a module form **one implicitly
-mutually recursive group** — no `fix`/`and` block. This is NOT hard to
-implement, and it is the only choice consistent with the rest of the
-language: top-level `define`s are already letrec*-mutually-recursive,
-so types behave like values do. Concretely the checker makes two
-passes: pass 1 collects every type's name and arity (and every
-constructor's owner); pass 2 elaborates constructor field types, at
-which point any type in the module (or any imported one) may be
-referenced. A manual fix block would buy nothing — the two-pass
-discipline costs a dozen lines — and would make Puffin's types feel
-foreign next to its values. The natural boundary stays: **cross-module
-type recursion is impossible** because requires form a DAG, and that
-is a feature (a module's types are a closed world once its file ends,
-which is also what makes exhaustiveness checkable).
+mutually recursive group** — no `fix`/`and` block. This is the choice
+consistent with the rest of the language: top-level `define`s are
+already letrec*-mutually-recursive, so types behave like values do.
+Concretely the checker makes two passes: pass 1 collects every type's
+name and arity (and every constructor's owner); pass 2 elaborates
+constructor field types, at which point any type in the module (or
+any imported one) may be referenced. The natural boundary stays:
+**cross-module type recursion is impossible** because requires form a
+DAG, and that is a feature — a module's types are a closed world once
+its file ends, which is also what makes exhaustiveness checkable.
 
 ### Runtime representation
 
-A constructor instance is its own heap kind (`src/runtime/lib/adt.c`,
-kind 18 — one runtime module + kind registration, the HAMT
-precedent): the layout mirrors a vector's (slot 0 holds the
+A constructor instance is its own heap kind, disjoint from every
+other runtime value. The layout mirrors a vector's (slot 0 holds the
 constructor's module-mangled symbol, slots 1..n the fields), but the
-dedicated kind closes the old v1 leak — `(vector? (Some 1))` is
+dedicated kind keeps the surface honest — `(vector? (Some 1))` is
 `#f`, and `adt?` is the disjoint surface predicate. Instances print
 as `(Some 1)`; a nullary constructor (a value, referenced bare)
 prints bare: `None`. `equal?` recurses structurally (same
-constructor, `equal?` fields), like vectors; as hash/set keys,
-instances compare by identity, exactly like vectors. Only the
+constructor, `equal?` fields), like vectors; in the immutable
+(`equal?`-keyed) hashes and sets, instances participate as keys and
+elements by that same structural comparison, while the mutable
+`make-hash`/`make-set` family keys them by identity like any heap
+value (see the collections section of docs/LANGUAGE.md). Only the
 desugar lowering can construct an instance (via the internal
 `adt-alloc`/`adt-set!` prims) or take one apart positionally
 (`adt-tag`/`adt-ref`): `match` compiles a constructor pattern to an
@@ -179,6 +165,13 @@ underdetermined type is `_`, not a quantifier) — ADT constructors and
 prenex-polymorphic prims instantiate their type variables greedily
 against argument types, with `_` filling anything underdetermined.
 
+One refinement keeps greedy instantiation from over-rejecting: in an
+application, a formal's CONCRETE structure is a contract — a
+violation is a type error — but a constraint that exists only because
+greedy instantiation bound a type variable from a sibling argument is
+an inference hint, and a conflict there demotes the variable to `_`
+instead of erroring.
+
 **Lists vs pairs.** `cons : (-> a b (Pairof a b))` (so `(cons 1 2)`
 is fine in any code), and `(List a)` is treated equi-recursively: the
 consistency checker unfolds `(List a)` one step to
@@ -186,11 +179,10 @@ consistency checker unfolds `(List a)` one step to
 assoc-pairs and proper lists honest types simultaneously without
 unions or subtyping.
 
-**Cast semantics (shipped).** Types are checked, then LOWERED —
-not merely erased — in desugar: every *declared* `_`→concrete
-boundary is guarded by a transient-style cast before the annotation
-disappears. Both compilers (src/compile.rkt and
-puffincc-src/desugar.puf) insert the same casts:
+**Cast semantics.** Types are checked, then LOWERED — not merely
+erased — in desugar: every *declared* `_`→concrete boundary is
+guarded by a transient-style cast before the annotation disappears.
+Both implementations of the compiler insert the same casts:
 
 1. annotated formals `[x : τ]` → a check on `x` at function entry
    (also for formals typed by a `(: f (-> ...))`/`(->* ...)`
@@ -211,17 +203,17 @@ shape is validated — `Int`/`Bool`/`Sym`/`Str`/`Void` by tag,
 ADT kind *plus* tag membership in the type's constructor set, so
 `(Some 1)` passes an `(Option Int)` cast but a `Shape` instance
 fails it. Element/field types are never traversed. `_` and type
-variables insert **no cast** (the gradual guarantee: unannotated
-programs compile byte-identically to before), and **arrow types
+variables insert **no cast** (the gradual guarantee: an unannotated
+program compiles byte-identically with the type system on or off),
+and **arrow types
 insert no cast** — on the bytecode VM a bare function value is a
 tagged fixnum function index, indistinguishable from an `Int`, so
 callability cannot be checked soundly; the call site's own failure
 is the arrows' net.
 
 The runtime half is one manifest-appended internal prim,
-`(cast-check v desc blame)` (`pf_cast_check`, src/runtime/lib/cast.c;
-Racket reference impl in the manifest entry). On failure it is fatal,
-byte-identical on every route (interp, native, VM, wasm):
+`(cast-check v desc blame)`. On failure it is fatal, byte-identical
+on every route (interp, native, VM, wasm):
 
 ```
 puffin runtime error: cast: expected Int, got #t (blame: f's argument x)
@@ -235,20 +227,18 @@ checkers read them exactly like `(: name τ)`, but they are TRUSTED —
 the same trust class as the manifest's prim types — so no casts are
 inserted for them (and the prelude's tail loops stay tail; a result
 cast would un-tail them). `cast-check` is in no purity table: a cast
-can abort, so the optimizers never drop or fold it. Runtime tests:
-src/test-casts.rkt.
+can abort, so the optimizers never drop or fold it.
 
 ## 5. Prim and container types come from the manifest
 
-`prim-spec` carries a `#:type` field (default `#f` = untyped, giving
-`(-> _ ... _)` from the arity) — the single-source-of-truth invariant
-extends to types: `src/types.rkt` reads it directly,
-`gen-puffincc-tables.rkt` emits it into `puffincc-src/tables.puf` for
-`types.puf`, `gen-stdlib-docs.rkt` renders it as docs/STDLIB.md's
-Type column, and the manifest asserts type-arity agreement at load.
-The only local table left in the checkers covers desugar-level
-non-manifest forms (`+ - * eq? < <= > >= not`). Representative
-entries:
+Every primitive's type lives in the prim manifest — `prim-spec`
+carries a `#:type` field (default `#f` = untyped, giving
+`(-> _ ... _)` from the arity) — so the single-source-of-truth
+invariant extends to types: both checkers read their prim types from
+it, docs/STDLIB.md's Type column is rendered from it, and the
+manifest asserts type-arity agreement at load. The only local table
+left in the checkers covers desugar-level non-manifest forms
+(`+ - * eq? < <= > >= not`). Representative entries:
 
 ```
 cons        : (-> a b (Pairof a b))        car  : (-> (Pairof a b) a)
@@ -260,20 +250,19 @@ hash-set!   : (-> (Mut (Hash k v)) k v Void)
 println     : (-> a Void)                  read : (-> Int)
 ```
 
-**`(Mut τ)`** (implemented) separates the mutability flavors:
-allocators produce it (`make-hash : (-> (Mut (Hash _ _)))`,
-`make-set`, `make-vector`, and `(vector ...)` literals — there is no
-persistent vector), mutating prims demand it (`hash-set!`,
-`hash-remove!`, `set-add!`, `set-remove!`, `vector-set!`), and
-persistent operations (`hash`, `hash-set`, `set`, `set-add`, ...)
-stay on the plain types. Read-only accessors (`hash-ref`,
-`hash-count`, `vector-ref`, `set-member?`, ...) are typed over the
-plain container and accept both flavors because consistency is
-**directional**: `(Mut τ) ~ τ'` whenever `τ ~ τ'` (a mutable value
-may be used read-only), but a plain container never fits a `(Mut τ)`
-expectation — `(hash-set! (hash 'a 1) 'b 2)` is a compile-time type
-error when the types are concrete, while `_` papers over the
-difference as usual.
+**`(Mut τ)`** separates the mutability flavors: allocators produce it
+(`make-hash : (-> (Mut (Hash _ _)))`, `make-set`, `make-vector`, and
+`(vector ...)` literals — there is no persistent vector), mutating
+prims demand it (`hash-set!`, `hash-remove!`, `set-add!`,
+`set-remove!`, `vector-set!`), and persistent operations (`hash`,
+`hash-set`, `set`, `set-add`, ...) stay on the plain types.
+Read-only accessors (`hash-ref`, `hash-count`, `vector-ref`,
+`set-member?`, ...) are typed over the plain container and accept
+both flavors because consistency is **directional**: `(Mut τ) ~ τ'`
+whenever `τ ~ τ'` (a mutable value may be used read-only), but a
+plain container never fits a `(Mut τ)` expectation —
+`(hash-set! (hash 'a 1) 'b 2)` is a compile-time type error when the
+types are concrete, while `_` papers over the difference as usual.
 
 ## 6. Pipeline placement
 
@@ -287,51 +276,18 @@ read + resolve-modules
 ```
 
 `typecheck` sees the module-flattened surface program, so imported
-types/constructors are ordinary (mangled) top-level names — and since
-2026-07-11 type names are first-class exports: `provide Shape` lets
-importers annotate with `Shape` (or `S.Shape` under `#:as`), the
-checker rejects annotations naming unresolved types (`unknown type
-X`), and every diagnostic renders the SOURCE spelling via the
-resolver-registered demangling table in `system.rkt`/`system.puf`
-(rendering only — comparisons use the mangled identities; see
-docs/MODULES.md §1.1). Interfaces are typed too: `.pufs` signatures
-take typed entries (`(val zero Int)`, `(fun add (-> Int Int Int))`,
+types/constructors are ordinary (mangled) top-level names — and type
+names are first-class exports: `provide Shape` lets importers
+annotate with `Shape` (or `S.Shape` under `#:as`), the checker
+rejects annotations naming unresolved types (`unknown type X`), and
+every diagnostic renders the SOURCE spelling via the
+resolver-registered demangling table (rendering only — comparisons
+use the mangled identities; see the name-mangling discussion in
+docs/MODULES.md). Interfaces are typed too: `.pufs` signatures take
+typed entries (`(val zero Int)`, `(fun add (-> Int Int Int))`,
 `(type Shape)`), and under separate compilation the `.pufi` records
 every export's type — declared, derived, or synthesized — plus full
 ADT definitions with constructor tags, which the importing checker
-registers before `typecheck-program` runs (docs/MODULES.md §3.2).
-The `_`-typed `module-ext` escape survives only for exports whose
-type genuinely is dynamic.
-
-## 7. Adoption ("update all code under our purview")
-
-- **Everything keeps compiling** — unannotated code is `_`-typed by
-  construction. The corpus is the regression suite for that claim.
-- The **prelude** gets annotations where inference can't reach
-  (variadics, higher-order folds); most of it stays inferred.
-- New `typed-*` corpus programs showcase ADTs (a typed Expr evaluator,
-  a typed red-black tree, a typed Option pipeline) alongside their
-  untyped quasiquote twins.
-- The **web examples** gain a typed tour; the web interpreter needs
-  only the *dynamic* semantics of `define-type` (tagged vectors +
-  match extension) to stay golden-equal — the checker itself can stay
-  hosted-only initially.
-- **puffincc** likewise needs only the dynamic semantics to keep the
-  corpus green; porting the checker (and then using ADTs in puffincc's
-  own source) is the last phase, gated on the reference settling.
-
-## 8. Phases
-
-1. Reference: surface syntax, ADT dynamic semantics end-to-end
-   (both backends), the checker, manifest types, `typed-*` corpus.
-   DONE.
-2. Web + puffincc: `define-type`/match dynamic semantics for parity;
-   the ported checker (`types.puf`) with byte-identical messages.
-   DONE.
-3. Variadic `->*`, `(Mut ...)` containers, exhaustiveness (warning +
-   `--strict-types` error option), prim types in the manifest. DONE.
-4. Casts + blame (DONE — see §4 "Cast semantics"); the dedicated ADT
-   heap kind (DONE); typed `.pufs`/`.pufi` interfaces for separate
-   compilation (DONE 2026-07-12 — docs/MODULES.md §3.2). Nothing
-   remains on this roadmap.
-```
+registers before typechecking runs (see the separate-compilation
+section of docs/MODULES.md). The `_`-typed `module-ext` escape
+survives only for exports whose type genuinely is dynamic.

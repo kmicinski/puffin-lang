@@ -1,643 +1,356 @@
-# Puffin in the browser: a bytecode VM, and the end of the JS interpreter
+# The wasm bytecode VM: Puffin in the browser
 
-> **STATUS (2026-07-10): SHIPPED.** Everything below §STATUS is the
-> original design document, kept as written; this block records what
-> actually happened. All milestones landed, plus the retirement the
-> design promised:
->
-> - **M1** — bytecode spec (docs/BYTECODE.md, the new lockstep
->   contract) + reference backend (src/backend-bytecode.rkt) +
->   disassembler (`puffin-vm -d`).
-> - **M2** — the VM in C (src/vm/puffin-vm.c), native
->   (`bin/puffin-vm`) and wasm (wasi-sdk); corpus green natively and
->   under node.
-> - **M3** — puffincc's third backend (backends.puf `-t bytecode`);
->   the stage-2 fixpoint holds on the new target (puffincc-on-the-VM
->   compiles byte-identically to native puffincc).
-> - **M4** — wasm packaging + the JS boundary (web/src/engine/:
->   wasi-shim.js, vm-engine.js; tools/gen-web-vm.sh).
-> - **M5** — REPL sessions: `--repl` v2 link-by-name units, the
->   reactor build, session cell table; 31/31 parity steps against the
->   frozen JS-Session transcript (web/repl-golden.json).
-> - **M6** — the JS interpreter is deleted (§7 step 4:
->   web/src/puffin/ is gone; prelude.js, interp.js, modules.js died
->   with it). The web engine is puffincc-on-the-VM, exclusively.
->
-> The corpus grew from 294 to **300 checks** (100 programs × 3
-> inputs) along the way; all suites are green on every route,
-> including `node web/test-vm-corpus.mjs` (the full corpus compiled
-> *by puffincc running on the wasm VM* and run per input).
->
-> **Where the built system deviates from the design:**
->
-> - **Run needs no reactor.** §5.1 planned one instance doing
->   compile + execute ("two `main` invocations, one heap"); shipped
->   `run()` uses **two command-model instances** sharing the shim's
->   JS-side FS (compile writes /out.pbc, a fresh instance runs it).
->   Simpler, and the second instantiation is ~1 ms.
-> - **Two wasm artifacts**, not one: `puffin-vm.wasm` (command model,
->   whole-program runs and per-eval compiler invocations) and
->   `puffin-vm-repl.wasm` (reactor model, `-DPVM_REACTOR`, one
->   persistent instance per REPL session exporting
->   `pvm_boot`/`pvm_alloc`/`pvm_load_run`).
-> - **REPL results are an opcode.** Instead of §5.2's
->   `host_repl_result` conclusion hook, the unit format grew a
->   version 2 (REPL) variant with named globals and a RESULT opcode;
->   results are rendered VM-side (value->string) and delivered via
->   the `puffin.repl_result` import (one stdout line natively).
->   There is also no HALT opcode: `main` ends in RET and the host
->   prints via `pf_print_result`. Details: docs/BYTECODE.md.
-> - **The §3.3 collector: SHIPPED (2026-07-12).** src/vm/wasm/wasm-gc.c
->   is the designed linear-memory, non-moving mark-sweep over
->   segregated size classes, behind the same GC_MALLOC ABI the
->   scaffold satisfied — precise registered roots + a live-extent
->   frame-stack callback, conservative tracing within the heap
->   (tagged refs AND raw base pointers; on wasm32 the scan stride is
->   the *pointer* size, 4 bytes, so packed C-pointer arrays like
->   symbol_names decode), collection ONLY at dispatch-loop safepoints
->   (jumps/branches/calls — prims never collect), budget =
->   max(4 MB, live-at-last-GC). `PUFFIN_VM_GC_STRESS=1` collects at
->   every safepoint and poisons freed blocks; the full corpus passes
->   under stress (tools/gctest-corpus.sh, the CI gate). Measured: a
->   40-eval allocation-heavy REPL session holds **flat at 16 MB**
->   where the scaffold grew 16 → 252 MB; the wasm corpus run *sped
->   up* 33.7 s → 14.3 s and an alloc-heavy benchmark halved (783 →
->   ~390 ms) — freelist reuse beats never-freeing dlmalloc. The
->   native VM uses Boehm, as designed; `make -C src/vm gctest` builds
->   the native VM through the collector seam for fast iteration.
-> - **Migration was compressed.** §7's two-engines-behind-a-toggle
->   phase was skipped: the corpus + REPL-parity gates ran, the JS
->   Session's observable behavior was frozen into
->   web/repl-golden.json, and the JS interpreter was deleted in the
->   same change series.
-> - **§6's budgets: raw sizes over, everything else far under.**
->   Measured artifacts (2026-07-10): puffin-vm.wasm **374,954 B raw /
->   127,236 B gz** (budget ≤350 KB raw — 7% over, and the reactor
->   build adds a second ~368 KB artifact §6 didn't price in);
->   puffincc.pbc **1,439,866 B raw / 527,407 B gz** (budget ≤1 MB
->   raw — 40% over). Latency estimates were pessimistic by one to
->   two orders of magnitude — see the measured block in §6.
-> - **The §11.7 kill-criterion factor, measured** (Apple M4 Pro,
->   macOS 26.5, node 23.9; details in §6): the wasm VM runs
->   compute-bound bytecode **13–20× slower than native `-O1`
->   compiled code** (native VM: 7–12×) — inside the design's 15–40×
->   envelope and nowhere near a ×40 kill. And the number that
->   mattered most never materialized: *compiling* is prim/allocation
->   dominated, so puffincc-on-the-VM compiles typical programs in
->   **2–35 ms**, not the feared 100–500 ms.
->
-> **Original status:** DESIGN (2026-07-07). Nothing here is implemented. The
-> design is written against the current contract (puffin.h tag scheme
-> + kind registry, the 16-pass pipeline mirrored in src/ and
-> puffincc-src/, the stdlib.rkt manifest, modules on every route,
-> gradual types on the `gradual-typing` branch) and against the web
-> surface as it exists (web/src/puffin/index.js, the two workers, the
-> Pipeline visualizer). Where a number is an estimate it says so, and
-> §6 shows the arithmetic.
+This document describes how Puffin runs in the browser: a compact
+bytecode, a small VM for it written in C and compiled to
+WebAssembly, and — the point of the whole design — **puffincc
+itself, compiled to that bytecode, running on that VM in the tab**,
+compiling and typechecking the editor's programs. It is written for
+contributors and for anyone curious how a self-hosted compiler ends
+up in a web page. The bytecode format and instruction set are
+specified in docs/BYTECODE.md; this document covers the
+architecture around them.
 
-Design goals, in order: (1) **one semantics** — the language is what
-the compiler says it is, and the browser should run *that*, not a
-hand-maintained parallel implementation that needs a bug hunt every
-time desugar changes; (2) **true self-hosting on the web** — the
-thing running in the tab should be puffincc, because a language whose
-compiler runs everywhere the language runs has no second-class
-platforms; (3) **the native contract is sacred** — the 61-bit tag
-scheme, the kind registry, the manifest, the variadic protocol, and
-the 294-golden corpus are the invariants; the VM bends around them,
-never the reverse; (4) **boring technology** — no dependence on wasm
-proposals that aren't universally shipped (no wasm-GC, no
-exception-handling section, no wasm tail calls), one toolchain we
-already use (clang), and a migration where the old and new engines
-run side by side until the corpus says the new one has earned it.
+Design goals, in order:
 
-## 1. Two variants, weighed
+1. **One semantics.** The language is what the compiler says it is,
+   and the browser runs *that* — not a hand-maintained parallel
+   implementation that needs a bug hunt every time desugar changes.
+   There is no separate web interpreter; the engine in the tab is
+   puffincc.
+2. **True self-hosting on the web.** A language whose compiler runs
+   everywhere the language runs has no second-class platforms. The
+   compiler-compiling-itself demo runs in a browser tab.
+3. **The native contract is sacred.** The 61-bit tag scheme, the
+   kind registry, the stdlib manifest, the variadic protocol, and
+   the 309-check golden corpus are the invariants; the VM bends
+   around them, never the reverse.
+4. **Boring technology.** No dependence on wasm proposals that
+   aren't universally shipped (no wasm-GC, no exception-handling
+   section, no wasm tail calls), and one toolchain the project
+   already uses (clang).
 
-### 1.1 What we have today, honestly
+## Architecture at a glance
 
-`web/src/puffin/` is a ~1,850-line hand-written JS tree-walking
-interpreter (interp.js 1,028 + modules.js 410 + values.js 128 +
-reader.js 135 + index.js 139), plus `prelude.js` — a hand-escaped
-*copy* of src/prelude.puf whose header comment admits it exists to
-fail loudly when it drifts. It is good: it passes the same goldens as
-the native backends, it has proper tail calls, Racket truthiness,
-scope-aware prims, the module resolver, and a REPL `Session`. It is
-also the fourth implementation of Puffin semantics (reference
-interpreter, two native backends via one compiler, JS), and it is the
-one that has already produced real bug-log entries (internal defines
-only in lambda/begin bodies; quasiquote unquote order — DELTA.md §9,
-MEMORY). Every language change now costs a JS-interpreter port, and
-the ports are where the divergence lives. Fixnums are BigInts, so
-arithmetic-heavy programs crawl. This document is about retiring it.
+- **The bytecode** — a register (frame-slot) bytecode, 29 opcodes,
+  specified in docs/BYTECODE.md. A compiled program is a `.pbc`
+  *unit*.
+- **The backend** — puffincc's third target, `-t bytecode`,
+  alongside x86-64 and arm64 (backends.puf; reference
+  implementation in src/backend-bytecode.rkt). A disassembler ships
+  with the VM (`puffin-vm -d`).
+- **The VM** — one C file (src/vm/puffin-vm.c) linking the same
+  runtime archive native programs use. It builds natively
+  (`bin/puffin-vm`, a first-class execution route) and to wasm via
+  wasi-sdk, in two flavors: `puffin-vm.wasm` (command model, one
+  run per instance) and `puffin-vm-repl.wasm` (reactor model, one
+  persistent instance per REPL session).
+- **The wasm GC** — src/vm/wasm/wasm-gc.c, a linear-memory
+  non-moving mark-sweep collector with safepoint-only collection.
+  The native VM uses Boehm, like every native Puffin program.
+- **The web engine** — web/src/engine/ (index.js, vm-engine.js,
+  wasi-shim.js). The browser loads the VM plus `puffincc.pbc`
+  (puffincc compiled to bytecode); Run compiles the editor's
+  program to bytecode *in the tab* and runs the result. Artifacts
+  are generated by tools/gen-web-vm.sh, Racket-free end to end.
 
-Both variants below agree on the enabling move: **a compact Puffin
-bytecode, and a small VM for it compiled to WebAssembly.** They
-differ in what runs *on* that VM.
+Why a VM at all, and why puffincc on it? Two alternatives define
+the boundaries. An interpreter *written in Puffin* and compiled
+once would still be a parallel semantics (everything after desugar
+re-decided) and would pay double interpretation — the VM
+interpreting an interpreter interpreting user code. Compiling user
+programs *directly to wasm* founders on GC (linear-memory wasm
+needs exactly the collector the VM needs, with none of the VM's
+explicit-root advantages), on control flow (wasm requires
+structured control flow, and explicate-control emits arbitrary
+CFGs, so codegen would need a relooper), and on per-run
+`WebAssembly.instantiate` latency. A bytecode VM sidesteps all
+three: unstructured `goto` is one opcode, and loading a unit is a
+memcpy. Running the real compiler on that VM means the semantics in
+the tab are the compiler's semantics — the exact error messages,
+the exact variadic protocol, the `-O1` optimizer behavior — and
+every language change reaches the web for free.
 
-### 1.2 Variant A: an interpreter written in Puffin, compiled once
+## The bytecode
 
-Kris's original sketch: write `eval.puf` — a meta-circular
-interpreter for Puffin, in Puffin — compile it *once, offline* with
-puffincc's new bytecode backend, and ship `eval.pbc` to the browser.
-User programs are read (reader.puf is already pure Puffin) and
-interpreted as data.
+### Value representation: the tag scheme survives wasm32 intact
 
-For it:
+A Puffin value stays a tagged 64-bit word — `pf` remains `int64_t`
+— on wasm32:
 
-- **Zero in-browser compile latency.** User programs start
-  instantly; the interpreter walks the AST directly.
-- **The REPL is trivial.** The interpreter owns an environment as
-  ordinary data; persistent globals, redefinition, and result
-  capture need no linking story (§5.2's machinery disappears).
-- **The bytecode backend can be lazier.** It only ever has to
-  compile one known program; corner cases user programs might hit
-  (deep quoted data, huge literal tables) can be deferred.
-- If eval.puf reuses reader.puf + desugar.puf verbatim and interprets
-  the *core* language, the front half of its semantics is literally
-  the compiler's — a genuinely smaller lockstep surface than the JS
-  interpreter has today.
-
-Against it:
-
-- **It is still a parallel semantics.** Everything after desugar —
-  letrec cells, truthiness at every branch, prim dispatch and
-  shadowing, tail positions, variadic collection, error behavior —
-  is re-decided in eval.puf. Better-placed than JS (same value
-  representation, same runtime underneath), but the class of bug
-  that motivated this whole exercise survives, just relocated.
-- **Double interpretation.** The VM interprets eval.puf's bytecode,
-  which interprets the user's AST. Each layer costs roughly an order
-  of magnitude; user code lands ~10–50× slower than variant B's,
-  i.e. plausibly *slower than today's JS interpreter* on arithmetic
-  (BigInt tax notwithstanding, JITted JS is a fast interpreter
-  substrate; our VM is not a JIT).
-- **It buys none of the self-hosting story.** The compiler still
-  doesn't run on the web; the Pipeline mode, `-O1` behavior, and
-  "what does this compile to" teaching surface stay native-only.
-- **It is not actually less work where it counts.** The VM, the GC,
-  the wasm packaging, the JS boundary, and the bytecode backend —
-  the hard 80% — are all required anyway, because eval.puf has to be
-  compiled by *something* onto *something*. Variant A spends that
-  investment on the weaker outcome.
-
-### 1.3 Variant B (recommended): puffincc itself runs in the browser
-
-puffincc gains a third backend target, `bytecode`, alongside x86-64
-and arm64. The build compiles **puffincc itself to bytecode**
-(`puffincc -t bytecode puffincc-src/main.puf -o puffincc.pbc`) —
-stage 1 of the existing bootstrap, retargeted. The browser loads the
-VM (one wasm module) plus `puffincc.pbc`; when the user hits Run,
-puffincc-on-the-VM reads, resolves modules against the virtual file
-map, compiles the program *to bytecode in memory*, and the VM loads
-and runs the result. One compiler, one semantics, on every platform
-it has.
-
-For it:
-
-- **The JS interpreter's entire raison d'être evaporates.** The
-  semantics in the tab are the compiler's semantics, including the
-  `-O1` contract/optimizer behavior if we want it, the exact
-  variadic/papp protocol, the exact error messages. The lockstep
-  chore list gets *shorter*: prelude.js dies, interp.js dies,
-  modules.js dies (modules.puf takes over, fed by the same virtual
-  file map).
-- **User code runs compiled**, one interpretation layer above the
-  metal instead of two. Estimated 5–20× faster than the current JS
-  interpreter on compute-bound code (§6).
-- **True web self-hosting** — the compiler-compiling-itself demo
-  runs in a browser tab, which is worth something to this project
-  beyond engineering.
-- **Variant A comes free later.** Once puffincc runs on the VM, an
-  eval-in-Puffin library is just another Puffin program to compile,
-  useful for instant-feedback modes if compile latency ever hurts.
-
-Against it, honestly (details in §9):
-
-- **In-browser compile latency.** Native puffincc compiles the
-  largest corpus program in ~57 ms; on the VM expect 15–40× that —
-  worst case a couple of seconds, typical examples a few hundred ms
-  (§6, with mitigations: precompiled prelude unit, compile in the
-  worker with a spinner).
-- **The REPL needs a real design** (persistent globals across
-  separately compiled units — §5.2), which touches collect-globals /
-  reveal-functions in both compiler sources. Variant A gets this for
-  free.
-- puffincc needs its I/O prims (read-file, read-all, display,
-  command-line-args) to work against a browser host — §3.5's shim,
-  which is work variant A needs only partially.
-
-### 1.4 A third variant, considered and rejected
-
-Compiling user programs **directly to wasm** (a fourth native-style
-target) was considered: it founders on (a) GC — wasm modules in
-linear memory need exactly the collector the VM needs anyway, with
-none of the VM's explicit-root advantages; (b) control flow — wasm
-requires *structured* control flow, and explicate-control emits
-arbitrary CFGs, so render would need a relooper, a genuinely hard
-pass neither backend has; (c) per-run `WebAssembly.instantiate`
-latency and browser codegen limits for large programs. A bytecode VM
-sidesteps all three: unstructured `goto` is one opcode, and loading a
-unit is a memcpy. If Puffin ever wants a *server-side* wasm target
-(WASI CLI distribution), that is a separate design with a relooper in
-it; nothing here precludes it.
-
-### 1.5 Recommendation
-
-**Variant B.** It is the strictly stronger endpoint for at most
-modestly more work (the REPL linking design and the I/O shim), and it
-converts the web from Puffin's most divergence-prone implementation
-into a first-class consumer of the self-hosted compiler. The rest of
-this document designs it. Where variant A shares a component (the
-bytecode, the VM, the GC, the packaging — §§2–3, most of §6–8), the
-design serves both, so choosing A later would discard only §4's REPL
-mode and half of §5.
-
-## 2. The bytecode
-
-### 2.1 Value representation: the tag scheme survives wasm32 intact
-
-A Puffin value stays a tagged 64-bit word — `pf` remains `int64_t` —
-on wasm32:
-
-- **Fixnums are `n << 3`, 61-bit signed, exactly as native.** This is
-  non-negotiable: golden outputs, overflow behavior, and the
-  `+`/`-`/`eq?`/`<`-work-tagged property must be bit-identical to the
-  native backends or the corpus stops being one corpus. wasm has
+- **Fixnums are `n << 3`, 61-bit signed, exactly as native.** This
+  is non-negotiable: golden outputs, overflow behavior, and the
+  `+`/`-`/`eq?`/`<`-work-tagged property are bit-identical to the
+  native backends, or the corpus stops being one corpus. wasm has
   native i64 arithmetic; there is no BigInt tax inside the VM (the
   tax moves to the JS *boundary*, crossed only for I/O).
-- **Heap references are `address | 1`** where the address is a wasm32
-  linear-memory offset (< 2^32), stored in an i64 word whose high 32
-  bits are zero. `pf_heap_ptr` truncates i64 → pointer, which is
-  exactly the cast `(int64_t *)(v - PF_TAG_HEAP)` already performs —
-  on wasm32 it compiles to `i32.wrap_i64`. One caveat to patch:
-  `pf_heap_ref` casts through `intptr_t` (32-bit on wasm32), which
-  would *sign-extend* addresses above 2 GB; route it through
-  `uintptr_t` instead (a one-line, native-safe change to puffin.h)
-  or cap the VM heap at 2 GB. Do both.
-- Immediates (`#f`=2, `#t`=10, void=18, `'()`=26), symbols
-  (`id << 3 | 3`), headers (`len << 8 | kind`), kind ids (1–6 core,
-  16/17 HAMTs), Racket truthiness: **unchanged, byte for byte.** The
-  whole point is that lib/*.c compiles as-is (§3.2).
+- **Heap references are `address | 1`** where the address is a
+  wasm32 linear-memory offset, stored in an i64 word whose high 32
+  bits are zero. `pf_heap_ptr` truncates i64 → pointer — on wasm32
+  that compiles to `i32.wrap_i64`. The reverse cast (`pf_heap_ref`)
+  routes through `uintptr_t`, not `intptr_t`: on a 32-bit target an
+  `intptr_t` cast would sign-extend addresses above 2 GB into the
+  tag bits.
+- Immediates (`#f`=2, `#t`=10, void=18, `'()`=26, and the REPL
+  cells' unbound sentinel `#<undef>`=34), symbols (`id << 3 | 3`),
+  headers (`len << 8 | kind`), kind ids, Racket truthiness:
+  **unchanged, byte for byte.** The point is that the runtime's
+  lib/*.c compiles as-is.
 
-The cost of i64 values on a 32-bit memory is 8 bytes per slot where 4
-would often do. Accepted without ceremony: it buys source-identical
-runtime code and semantics, and the playground's heaps are small.
+The cost of i64 values on a 32-bit memory is 8 bytes per slot where
+4 would often do. Accepted without ceremony: it buys
+source-identical runtime code and semantics, and the playground's
+heaps are small.
 
-### 2.2 The cut point: after uncover-locals
+### The cut point: after uncover-locals
 
-Where does the bytecode backend tap the pipeline? The candidates:
-
-- **After anf-convert** (stack machine): compile ANF directly to a
-  stack bytecode. Smaller instructions, classic design — but it
-  discards explicate-control (tail-call discovery, `main` untailing,
-  the `-O1` loop recovery and blocks cleanup) and uncover-locals,
-  re-deciding tail positions and control flow in the new backend.
-  Everything explicate-control settles would need settling again,
-  divergently.
-- **After uncover-locals** (register/slot machine — **recommended**):
-  the IR here is
-  `(program info (define locals (f params ...) blocks) ...)` with
-  `blocks` a label→tail map over
-  `seq/assign/effect/global-set!/return/goto/if-cmp/tail-app` and
-  rhs forms that are prim applications, `app`/`papp`, `fun-ref`,
-  `global-ref`, `string-lit`, closures-as-vectors, and atoms. Every
-  variable is a named local with function scope, enumerated in the
-  `locals` set. This maps 1:1 onto a frame-slot bytecode: **a local
-  is a slot index, an assign is an instruction, a tail is a branch.**
-  The three-address shape is already there; "instruction selection"
-  is a structural transcription, and every pass the two native
-  backends share keeps paying rent — including diff-ir as the
-  differential oracle for the new backend's frontend half.
-- **After allocate-registers**: pointless — physical registers and
-  spill frames model an ISA the VM doesn't have. Register allocation
-  *is* the thing a VM frame makes unnecessary.
-
-So: **register (frame-slot) bytecode, cut after uncover-locals.**
-The backend chain mirrors the native ones in shape (§4), which also
-keeps the Pipeline visualizer's layer model intact.
+The bytecode backend taps the pipeline **after uncover-locals**.
+The IR there is
+`(program info (define locals (f params ...) blocks) ...)` with
+`blocks` a label→tail map over
+`seq/assign/effect/global-set!/return/goto/if-cmp/tail-app`, and
+every variable a named local with function scope, enumerated in the
+`locals` set. This maps 1:1 onto a frame-slot bytecode: **a local
+is a slot index, an assign is an instruction, a tail is a branch.**
+Every pass the two native backends share keeps paying rent —
+tail-call discovery, `main` untailing, the `-O1` loop recovery and
+blocks cleanup all run before the cut — and diff-ir stays the
+differential oracle for the shared frontend. (Cutting earlier, at
+ANF, would re-decide tail positions and control flow in the new
+backend; cutting later, after allocate-registers, would model an
+ISA the VM doesn't have.)
 
 One deliberate consequence: `limit-functions` and the packed-call
-protocol (`papp`, packing strictly above 6 args) stay in the frontend
-**unchanged**, even though a VM has no six-register limit. The VM's
-call convention mirrors the native one — ≤6 direct argument slots,
-extra args packed in a vector, logical arity carried alongside — so
-`pf_collect_rest` compiles verbatim and variadic semantics are
-provably the same code path as native. Elegance loses to parity.
+protocol (`papp`, packing strictly above 6 args) stay in the
+frontend **unchanged**, even though a VM has no six-register limit.
+The VM's call convention mirrors the native one — ≤6 direct
+argument slots, extra args packed in a vector, logical arity
+carried alongside — so `pf_collect_rest` compiles verbatim and
+variadic semantics are provably the same code path as native.
+Elegance loses to parity.
 
-### 2.3 The instruction set (sketch)
+### The instruction set
 
 Variable-length encoding: one opcode byte, then operands. Slots are
-u16 (a function with >65k locals has other problems); jump targets
-are s32 byte offsets after linearization; constants live in per-unit
-pools. Roughly 40 opcodes:
+u16; jump targets are byte offsets after linearization; constants
+live in per-unit pools. The full opcode table with encodings is in
+docs/BYTECODE.md; the 29 opcodes group as:
 
-```
-;; data movement
-MOV       d, s               ; slot <- slot
-IMM       d, k64             ; slot <- tagged immediate (fixnum/bool/void/nil)
-IMM8      d, k8              ; common small tagged constants
-SYM       d, symidx          ; slot <- tagged symbol (unit table; patched at load, §2.5)
-STR       d, stridx          ; slot <- interned string constant (pf_string_const path)
+- **Constants and moves** — `MOV`, `IMM`, `IMM8`, `SYM`, `STR`,
+  `FUNREF`. Literals never appear as operands of other
+  instructions; the backend stages them into slots first.
+- **Intrinsics** — `NEG ADD MUL LT EQ`: exactly the ops the native
+  selects open-code at `-O0`, tagged arithmetic with native
+  overflow behavior.
+- **Control** — `JMP`, the fused compare-branch family
+  `BREQ/BRLT/BRLE/BRGT/BRGE`, and `RET`. There is no HALT opcode:
+  `main` never contains tail calls (untailed upstream), so its
+  conclusion is a `RET`, and the host prints the result via
+  `pf_print_result`, matching the native conclusion.
+- **Calls** — `CALL`/`CALLI` (direct/indirect), `TCALL`/`TCALLI`
+  (tail, frame reuse), `PRIM` (manifest prim, direct C call via a
+  generated table), `COLLECT` (the variadic prologue: spill the
+  argument slots and call `pf_collect_rest`).
+- **Heap the compiler controls** — `UGET`/`USET`
+  (unsafe-vector-ref/set!, closure slots and packed-argument
+  vectors).
+- **Globals** — `GGET`/`GSET`; and `RESULT`, the REPL-unit result
+  hook (see the REPL section below).
 
-;; intrinsics (exactly the ops select-instructions open-codes)
-NEG d,a   ADD d,a,b   MUL d,a,b          ; tagged arithmetic, native overflow behavior
-LT  d,a,b EQ  d,a,b                      ; tagged compare -> #t/#f
+Other prims — `car`, `vector-ref`, `hash-set`, all of lib/ — do
+*not* get opcodes: they are `PRIM` calls at every optimization
+level, same as the native `-O0` route. The VM's prim table
+(src/vm/vm-prims.inc) is *generated* from the stdlib.rkt manifest
+by the self-hosted tools/gen-vm-prims.puf (src/gen-vm-prims.rkt is
+the Racket cross-check), and the backend computes prim ids from the
+same list — one more derived view in the manifest discipline. If
+profiling ever justifies it, hot prims can become opcodes one at a
+time; the seam is the same one the native backends use for
+open-coding.
 
-;; control (blocks linearized; every explicate-control tail form appears)
-JMP       off
-BRF       s, off             ; branch if slot = #f   (the (eq? a #f) if-tail)
-BRLT      a, b, off          ; fused compare-branch  (the -O1 if-cmp tails)
-BREQ      a, b, off
-RET       s
+### Calls, closures, variadics, tail calls
 
-;; calls (§2.4: base = first argument slot; args contiguous)
-CALL      d, fidx, base, nargs, arity    ; direct   (app/papp (fun-ref f) ...)
-CALLI     d, fs,   base, nargs, arity    ; indirect (closure value in slot fs)
-TCALL     fidx, base, nargs, arity       ; direct tail call: frame reuse
-TCALLI    fs,   base, nargs, arity
-PRIM      d, primid, base, nargs         ; manifest prim: direct C call via table
-COLLECT   d, kfixed                      ; variadic prologue: build #%rest list
-
-;; heap the compiler controls (closures; checked variants stay prims)
-CLO       d, size            ; pf_make_closure
-UGET      d, a, i8           ; unsafe-vector-ref  (closure slots, packed args)
-USET      a, i8, s           ; unsafe-vector-set!
-
-;; globals
-GGET      d, g               ; g is a unit-local global index, bound at load (§5.2)
-GSET      g, s
-
-;; misc
-HALT      s                  ; main's conclusion: pf_print_result + stop
-```
-
-Notes:
-
-- **Open-coded prims** (`car`, `cdr`, `vector-ref`, `pair?`, ...) do
-  *not* get opcodes in v1. At `-O0` they are `PRIM` calls, same as
-  the native `-O0` route; the VM's prim table is generated from the
-  same stdlib.rkt manifest that drives everything else (the
-  derived-views discipline extends: the manifest gains nothing, the
-  table generator gains one output). If profiling later justifies it,
-  hot prims become opcodes one at a time — the seam is the same
-  `#:when (open-code-prims?)` seam the native backends use.
-- **The dispatch loop owns safepoints** (§3.3): GC may run between
-  instructions, never within one.
-- A **disassembler ships with the assembler** from day one
-  (`puffin-vm -d unit.pbc`); it is the debugging surface that
-  replaces reading .s files, and M1's gate depends on it.
-
-### 2.4 Calls, closures, variadics, tail calls
-
-**Frames.** A frame is `[header | slot 0 .. slot n-1]` on a growable
-frame stack in linear memory (not the C stack). `nlocals` comes from
-the function table; formals occupy the first slots. Frame overflow
-grows the segment — the native builds reserve 512 MB of stack for
-deep non-tail recursion (map is non-tail); the VM equivalent is a
-frame stack that grows toward the wasm 4 GB ceiling, with a
-configurable depth limit so runaway recursion errors like native
-does rather than OOMing the tab.
+**Frames.** Frame slots live on a growable value stack in the VM's
+memory, not the C stack; frame metadata (function index, return ip,
+result slot) lives on a separate control stack that holds no Puffin
+values. Deep non-tail recursion grows the stack up to a
+configurable depth limit (`PUFFIN_VM_MAX_DEPTH`), so runaway
+recursion errors the way native builds do rather than OOMing the
+tab.
 
 **Calling convention.** The caller stages arguments in contiguous
-slots (`base..base+nargs-1`) of its own frame; `CALL` copies them
-into the callee frame's formal slots (or aliases them via
-overlapping frames later — an optimization, not v1). `arity` is the
-*logical* argument count, the VM register that replaces native
-r10/x12: variadic callees read it, and packed calls carry
-`arity > 6` with `nargs = 6` and slot `base+5` holding the packed
-vector — precisely the native protocol, so `COLLECT` can call
-`pf_collect_rest` after spilling the six argument values to
-`pf_arg_spill`, which compiles unchanged and is scanned as a root
-exactly as its comment already promises.
+slots of its own frame; `CALL` copies them into the callee's formal
+slots. The logical `arity` operand is the VM register that replaces
+native r10/x12: variadic callees read it, and packed calls carry
+`arity > 6` with the packed vector in the last argument slot —
+precisely the native protocol, so `COLLECT` calls `pf_collect_rest`
+after spilling to `pf_arg_spill`, which compiles unchanged.
 
-**Closures** keep kind 4 and their layout: header + slot 0 + captured
-values, allocated by `CLO` via `pf_make_closure`, slots read with
-`UGET` — but slot 0 holds a **function index** (tagged fixnum into
-the unit's function table) instead of a raw code pointer. `CALLI`
-checks the kind, reads slot 0, and dispatches. Raw code pointers
-must not appear in heap values: units come and go (REPL), and a
-fixnum index is GC-inert and serializable. The one place codegen
-knows closure layout today (slot 0, `unsafe-vector-ref`) is the one
-place the bytecode backend differs.
+**Closures** keep kind 4 and their layout — header + slot 0 +
+captured values — but slot 0 holds a **function index** (a tagged
+fixnum) instead of a raw code pointer. Raw code pointers must not
+appear in heap values: units come and go in a REPL session, and a
+fixnum index is GC-inert. Function indices are unit-relative and
+biased by the unit's function-table base at dispatch, so a closure
+made in one unit calls correctly from another.
 
-**Proper tail calls are mandatory and structural.** `TCALL`/`TCALLI`
-evaluate arguments into the caller's staging slots, then overwrite
-the current frame's formals and resize/reuse it — constant stack by
-construction, for *all* tail calls including mutual recursion and
-closure calls, exactly matching the native `tail-jmp` guarantee.
-`main` stays exempt (explicate-control's `untail` already runs before
-our cut point, so the backend never sees a tail-app in `main`). This
-does **not** depend on the wasm tail-call proposal: the VM loop is a
-loop; frame reuse is arithmetic.
+**Proper tail calls are mandatory and structural.**
+`TCALL`/`TCALLI` overwrite the current frame and reuse it —
+constant stack by construction, for *all* tail calls including
+mutual recursion and closure calls, exactly matching the native
+`tail-jmp` guarantee. This does **not** depend on the wasm
+tail-call proposal: the VM loop is a loop; frame reuse is
+arithmetic. The `-O1` loop recovery and blocks cleanup arrive free,
+since they run before the cut point.
 
-**Loop recovery and blocks cleanup** (`-O1`) arrive free: they run
-before the cut point, so self tail calls are already `goto`s when the
-backend sees them.
+### Symbols, gensym, and the unit format
 
-### 2.5 Symbols, gensym, and the unit format
-
-A compiled program is a **unit** (`.pbc`), the loadable object:
-
-```
-header    magic "PUF\1", version, target-check word
-symtab    n, then n names          ; every symbol literal in the unit
-strtab    n, then n byte strings   ; string-lit pool (byte strings, embedded NULs fine)
-globals   n, then n mangled names  ; unit-local index -> name (§5.2 links by name)
-funcs     n, then per function:
-            name (diagnostics), nformals, variadic? (+kfixed), nlocals,
-            code offset, code length
-entry     function index of main
-code      the instruction stream
-```
+A compiled program is a **unit** (`.pbc`): header with a version
+word, symbol table, string pool, globals table, function table,
+entry index, and the instruction stream (exact encoding in
+docs/BYTECODE.md).
 
 - **Symbols intern at load.** The compiler assigns symbol ids from
-  its sorted literal table (bk-scan-literals), but ids are *unit-
-  relative*: the loader interns each symtab name through
-  `pf_intern_symbol` (which already exists and already dedups) and
-  **patches every `SYM` operand once** to the VM-global id. Two
-  units loaded into one session therefore agree on `eq?` for symbols
-  — the same promise MODULES.md §3 makes for separate native
-  compilation, delivered by the same mechanism (runtime interning).
-- **gensym is `pf_gensym`, unchanged**: it interns
-  base+counter names, skipping taken ones, with a VM-global counter
-  — so gensyms from different REPL units never collide, and
-  read-back survives, exactly as native.
+  its sorted literal table, but ids are unit-relative: the loader
+  interns each name through `pf_intern_symbol` and patches every
+  `SYM` operand once to the VM-global id. Two units loaded into one
+  session therefore agree on `eq?` for symbols — the same promise
+  the separate-compilation section of docs/MODULES.md makes for
+  native code, delivered by the same mechanism.
+- **gensym is `pf_gensym`, unchanged**, with a VM-global counter —
+  gensyms from different REPL units never collide, and read-back
+  survives, exactly as native.
 - **Strings** are byte strings in the pool; `STR` goes through the
-  `pf_string_const` cache path (one heap string per literal per
-  unit, lazily).
-- Quoted **structured** data needs nothing: desugar has already
-  lowered `'(a 1 "s")` to cons/string-lit constructors before the
-  cut point.
-- The unit format is **not** a stable serialization contract in v1:
-  it is versioned, and the VM refuses mismatches. The compiler and
-  VM ship together; nothing archives .pbc files yet.
+  `pf_string_const` cache path. Quoted *structured* data needs
+  nothing: desugar has already lowered it to constructors before
+  the cut point.
+- The unit format comes in two versions: **v1** (whole-program,
+  private zero-seeded globals) and **v2** (REPL: globals carry
+  *names*, resolved against the session cell table at load).
+- The unit format is **not** a stable serialization contract: it is
+  versioned, and the VM refuses mismatches. The compiler and VM
+  ship together; nothing archives .pbc files.
 
-Since Puffin strings are byte strings and `write-file` writes bytes,
-**backends.puf can render this binary format directly** — `render`
-builds the unit as a byte string. No new I/O machinery.
+Since Puffin strings are byte strings and `write-file` writes
+bytes, backends.puf renders this binary format directly — no new
+I/O machinery in the compiler.
 
-## 3. The VM
+## The VM
 
-### 3.1 Implementation language: C, compiled with wasi-sdk
+### Implementation language: C, compiled with wasi-sdk
 
-The options:
+The VM and the runtime are **one compilation unit**: the dispatch
+loop calls `pf_cons` the way core.c does, includes puffin.h, and
+inherits the tag scheme from the single header that defines it. One
+toolchain (clang, already the project's assembler/linker), one
+language for all runtime code. The alternatives were weighed and
+declined: hand-written WAT is thousands of lines of untyped stack
+assembly for a component with a GC in it, and Rust would put an FFI
+boundary between the VM and the C runtime it calls into on every
+manifest prim — exactly where bugs live.
 
-- **Hand-written WAT.** Total control of output size; also thousands
-  of lines of untyped stack assembly for a component with a GC in
-  it. The VM will be rewritten twice before it is right; WAT makes
-  every rewrite a fresh injury. No.
-- **Rust.** A fine VM language in general, but here it is a second
-  toolchain, a std-shaped binary floor, and — decisively — an FFI
-  boundary against the C runtime it must call into ~80 times
-  (every manifest prim). The FFI design (FFI.md §6) treats Rust as a
-  guest for *leaf* libraries precisely because boundary crossings
-  are where bugs live; putting the VM↔runtime boundary through it
-  inverts that logic. No.
-- **C (recommended).** The VM and the runtime become **one
-  compilation unit**: the dispatch loop calls `pf_cons` the way
-  core.c does, includes puffin.h, and inherits the tag scheme from
-  the single header that defines it. One toolchain (clang, already
-  the project's assembler/linker), one language for all runtime
-  code, and the native-build story (§8, M2) is `cc` with a different
-  target flag. The VM is an interpreter loop, a loader, and a GC —
-  ~2,000–3,000 lines of exactly the C this project already writes.
+The wasm builds use **wasi-sdk** (clang targeting `wasm32-wasi`)
+rather than Emscripten: the host surface is small enough that a
+purpose-built shim beats a generic runtime by hundreds of KB, and
+the collector below removes the need for Emscripten's Boehm port.
+Dispatch is a switch loop (computed goto is a possible later
+upgrade; measured performance below is with the switch).
 
-Toolchain: **wasi-sdk** (clang targeting `wasm32-wasi`) rather than
-Emscripten. Emscripten earns its keep when you need its ports
-(Boehm, SDL), its JS glue, or Asyncify; §3.3 removes the Boehm need,
-§3.4 removes the unwinding need, and the remaining host surface is
-small enough that a purpose-built shim (§3.5) beats a generic
-runtime by hundreds of KB. Dispatch uses computed goto
-(labels-as-values — clang lowers it to `br_table` on wasm); a
-portable `switch` fallback stays behind an `#ifdef` for MSVC-less
-lives and debugging.
+The same source compiles **natively** with plain clang.
+`bin/puffin-vm` is the primary development target and a supported
+execution route in its own right — fast-startup portable execution
+on machines without the assembler toolchain.
 
-The same source compiles **natively** (`bin/puffin-vm`) with plain
-clang; the native build is the primary development target, gets the
-corpus first (§8), and — bonus — gives Puffin a fast-startup
-portable execution route on machines without the assembler
-toolchain.
+### The C runtime: hosted, not replaced
 
-### 3.2 The C runtime's fate: hosted, not replaced
-
-The runtime is small and the VM should treasure that: core.c is 311
-lines, lib/*.c ≈ 1,020 (arith 49, pairs 49, vectors 70, strings 118,
-hashes 114, sets 84, hamt 342, table 64+h, io 93, predicates 12,
-stdlib_init 24). **All of it compiles for wasm32 as-is**, with these
-exceptions, each a seam not a rewrite:
+The runtime is small and the VM treasures that: core.c plus lib/*.c
+compile for wasm32 as-is, with these seams:
 
 | Native piece | wasm build |
 |---|---|
-| Boehm (`GC_MALLOC`, `GC_MALLOC_ATOMIC`) | replaced behind `pf_alloc`/`pf_alloc_atomic`/`pf_alloc_raw` by §3.3's collector — those three entries were the whole allocation ABI all along |
-| `pf_fatal`/`pf_error`/`exit` | host abort import; §3.4 |
+| Boehm (`GC_MALLOC`, `GC_MALLOC_ATOMIC`) | replaced behind `pf_alloc`/`pf_alloc_atomic`/`pf_alloc_raw` by the collector below — those entries were the whole allocation ABI all along |
+| `pf_fatal`/`pf_error`/`exit` | host abort import (error handling section below) |
 | `pf_read_int`/`pf_read_all` (scanf/fread on stdin) | wasi-libc fd 0 against the shim's stdin buffer — code unchanged |
 | lib/io.c `read-file`/`write-file`/`system` | fopen against the shim's in-memory FS (the module file map); `system` returns the documented web refusal error |
-| `open_memstream` (value->string) | provided by wasi-libc's musl stdio; **verify in M2**, else a 20-line memstream fallback |
-| `__attribute__((constructor))` argv capture | loader passes argv explicitly (REPL/compile invocations construct it anyway) |
+| `open_memstream` (value->string) | provided by wasi-libc's musl stdio |
+| `__attribute__((constructor))` argv capture | the loader passes argv explicitly |
 
-The rule that matters: **the wasm runtime is the same source files.**
-No `#ifdef` forests — the platform differences live in the allocator
-module, the host-abort module, and the shim. lib/*.c must not learn
-it is in a browser.
+The rule that matters: **the wasm runtime is the same source
+files.** No `#ifdef` forests — the platform differences live in the
+allocator module, the host-abort module, and the shim. lib/*.c does
+not know it is in a browser. `pf_print_result`, display formatting,
+error message texts: all identical, because the corpus diff is
+textual and the corpus is the gate.
 
-`pf_print_result`, display formatting, error message texts: all
-identical, because the corpus diff is textual and the corpus is the
-gate at every stage.
+### GC: safepoint-only mark-sweep in linear memory
 
-### 3.3 GC: the Boehm question, answered with safepoints
+The native VM uses Boehm, like every native Puffin program. The
+wasm build cannot: Boehm's soundness hinges on scanning the stack,
+and *wasm locals are not memory* — a value held only in a wasm
+local is invisible to any scanner. Emscripten's `--spill-pointers`
+mitigation spills pointer-typed i32 locals, but Puffin values are
+i64 tagged words, not pointer-typed, so a `pf` held in a wasm local
+across a collection would be a use-after-free. The other tempting
+exit — representing values as JS objects or wasm-GC structs and
+letting V8 collect them — abandons the tag scheme and discards
+every line of lib/*.c: it is a parallel runtime with extra steps.
 
-> **SHIPPED (2026-07-12), as designed, stress-gated.** The collector
-> below is implemented in src/vm/wasm/wasm-gc.c (its header comment
-> is the as-built reference). Deltas from this section's sketch:
-> (a) roots are *fully registered* — the runtime's pf-holding statics
-> (core.c's symbol_names/string_const_cache/pf_arg_spill, hamt.c's
-> empty-singleton cells) register themselves via GC_add_roots, so the
-> native gctest build needs no data-segment scan; the wasm build
-> scans [__global_base, __data_end) *as well*, as belt-and-suspenders;
-> (b) the VM exposes the frame stack's LIVE extent through a
-> pvm_gc_frame_roots callback instead of whole-chunk regions, which
-> is what makes stress mode tractable; (c) in-heap tracing recognizes
-> raw base pointers (tag 000) in addition to tagged refs — hamt nodes
-> and table slot arrays are reachable only through such words — and
-> on wasm32 scans at 4-byte (pointer-size) granularity; (d) freed
-> blocks are poisoned (0xAB) under stress. The stress corpus gate is
-> the third leg of tools/gctest-corpus.sh.
-
-The strategies considered:
-
-**Host JS GC via externref / wasm-GC** — represent Puffin values as
-JS objects or wasm-GC structs and let V8 collect them. Rejected
-outright: it abandons the tag scheme (fixnums stop being 61-bit
-words; `eq?`, hashing, and HAMT layout all diverge), discards every
-line of lib/*.c, and reintroduces exactly the parallel-runtime
-maintenance this design exists to end. It is the JS interpreter with
-extra steps. (wasm-GC also fails the boring-technology bar for another
-year or so.)
-
-**Boehm compiled to wasm** — bdwgc has Emscripten support, but its
-soundness on wasm hinges on scanning the stack, and *wasm locals are
-not memory*: a pointer held only in a wasm local is invisible to any
-scanner. Emscripten's answer is Binaryen's `--spill-pointers` pass,
-which spills pointer-typed i32 locals to the shadow stack — but
-Puffin values are **i64 tagged words, not pointer-typed**, so
-spill-pointers does not know to spill them, and a `pf` held in a
-wasm local across a collection is a use-after-free. Making Boehm
-sound here means auditing codegen output or forcing everything
-through memory with volatile tricks. That is a research project
-wearing a dependency's clothes. Rejected.
-
-**Linear-memory mark-sweep with safepoint discipline
-(recommended).** The VM changes the problem: unlike compiled native
-code, an interpreter *knows where all the values are*. Design:
+The VM changes the problem: unlike compiled native code, an
+interpreter *knows where all the values are*. The wasm collector
+(src/vm/wasm/wasm-gc.c, whose header comment is the detailed
+reference) is:
 
 - **Heap:** non-moving mark-sweep over segregated size classes in
   linear memory, `memory.grow` to expand. Non-moving preserves
-  `eq?`-as-address, interior-pointer tagged refs, and every layout
-  assumption lib/*.c makes. An allocation header bit distinguishes
-  atomic payloads (strings) — the existing
-  `pf_alloc`/`pf_alloc_atomic` split, kept.
-- **Roots, exactly:** (1) the VM frame stack and staging slots —
-  every slot is a `pf`, scanned precisely; (2) the global table
-  (§5.2); (3) the wasm data+bss segment `[__global_base, __data_end)`
-  scanned conservatively — this covers core.c's statics
-  (`symbol_names`, `string_const_cache` pointer, `pf_arg_spill`)
-  with zero source changes, mirroring Boehm's static-data scan;
-  (4) a pin table for the JS boundary, if we ever hold values across
-  host calls.
+  `eq?`-as-address and every layout assumption lib/*.c makes. An
+  allocation header bit distinguishes atomic payloads (strings) —
+  the existing `pf_alloc`/`pf_alloc_atomic` split, kept.
+- **Roots, precisely registered:** the VM exposes the frame stack's
+  *live* extent through a `pvm_gc_frame_roots` callback; the
+  session cell table is a root set; and the runtime's pf-holding
+  statics (core.c's `symbol_names`, the string-constant cache,
+  `pf_arg_spill`, hamt.c's empty-singleton cells) register
+  themselves via `GC_add_roots`. The wasm build additionally scans
+  the data segment `[__global_base, __data_end)` conservatively,
+  as belt and suspenders.
 - **Tracing:** conservative *within the heap* — non-atomic payloads
-  and `pf_alloc_raw` blocks are scanned word-by-word; a word that
-  decodes as `addr|1` into a live block marks it. This is Boehm's
-  trick with Boehm's soundness argument, minus the part Boehm can't
-  do on wasm (C stack scanning). No per-kind trace hooks, no
-  changes to hamt.c's node building or table.c's raw slot arrays.
+  and `pf_alloc_raw` blocks are scanned; a word that decodes as a
+  tagged ref **or a raw base pointer** into a live block marks it
+  (hamt nodes and table slot arrays are reachable only through raw
+  C pointers). On wasm32 the scan stride is the *pointer* size, 4
+  bytes, so packed C-pointer arrays like `symbol_names` decode.
+  This is Boehm's trick with Boehm's soundness argument, minus the
+  part Boehm can't do on wasm (C stack scanning). No per-kind trace
+  hooks, no changes to hamt.c or table.c.
 - **The safepoint rule, which makes it sound:** collection runs
-  *only* in the dispatch loop, between instructions, when the
-  allocation budget is exceeded. Prims and runtime helpers **never
-  trigger GC**: `pf_alloc` inside a prim takes from the current
-  budget or grows memory, and the deficit is settled at the next
-  safepoint. Therefore a `pf` held in a C local (equivalently, a
-  wasm local) mid-prim — hamt.c building a node chain, strings.c
-  mid-append — is *never* live across a collection, because prims
-  return before the loop reaches a safepoint. The unscannable-locals
-  problem is not solved; it is made unreachable.
-- Failure mode, stated: a single prim allocating unboundedly (a
-  `make-vector` of 2^30) grows memory rather than collecting first —
-  the same behavior class as native Boehm under a huge single
-  allocation. Acceptable.
-- **Stress mode is non-negotiable:** `PUFFIN_VM_GC_STRESS=1` collects
-  at *every* safepoint; the corpus runs under stress in CI (§8, M2
-  gate). A conservative collector's bugs are silent until they
-  aren't; stress + 294 goldens is how we buy sleep.
+  *only* in the dispatch loop, between instructions (at jumps,
+  branches, and calls), when the allocation budget — max(4 MB,
+  live-at-last-GC) — is exceeded. Prims and runtime helpers **never
+  trigger GC**: `pf_alloc` inside a prim takes from the budget or
+  grows memory, and the deficit is settled at the next safepoint.
+  Therefore a `pf` held in a C local (equivalently, a wasm local)
+  mid-prim is *never* live across a collection, because prims
+  return before the loop reaches a safepoint. The
+  unscannable-locals problem is not solved; it is made unreachable.
+- Known boundary, stated: a single prim allocating unboundedly (a
+  `make-vector` of 2^30) grows memory rather than collecting first
+  — the same behavior class as native Boehm under a huge single
+  allocation.
+- **Stress mode:** `PUFFIN_VM_GC_STRESS=1` collects at *every*
+  safepoint and poisons freed blocks (0xAB). The full corpus runs
+  under stress as a standing CI gate (tools/gctest-corpus.sh). A
+  conservative collector's bugs are silent until they aren't;
+  stress plus the golden corpus is how the project buys sleep.
 
-Estimated size: ~400–600 lines of C. It is the scariest component in
-this document and it is still smaller than hamt.c plus its test
-surface was.
+`make -C src/vm gctest` builds the *native* VM through the
+collector seam (safepoint hooks, no Boehm) for fast iteration on
+the collector itself.
 
-### 3.4 Errors that don't kill the tab
+### Errors that don't kill the tab
 
 Native `pf_fatal` is `exit(255)` and `(error v)` is print +
 `exit(1)`; a browser session must survive both, and the REPL must
-keep its globals afterward. Mechanism, without setjmp and without the
-wasm exception-handling proposal:
+keep its globals afterward. The mechanism needs neither setjmp nor
+the wasm exception-handling proposal:
 
 - The wasm build's `pf_fatal`/`pf_error` print through the normal
   output path (golden parity: the `error: ...` line is part of
@@ -645,465 +358,264 @@ wasm exception-handling proposal:
   `host_abort(code)`, which **throws a JS exception**. A JS
   exception thrown from an import unwinds all wasm frames — core
   wasm behavior, universally shipped.
-- The JS boundary catches it, and the engine **resets the VM's
-  execution state** (frame stack pointer, staging slots) in linear
-  memory — trivially possible because that state is data, not wasm
-  frames. The heap, symbol table, and global table survive: a REPL
-  error behaves like the JS Session's `PuffinHalt` today (results so
-  far are kept, session continues).
-- One rule inherited by all runtime code: **no runtime function may
-  hold non-memory state that matters across a fatal error.** True
-  today (prims are leaf calls); the VM keeps it true by construction.
+- The JS boundary catches it and resets the VM's execution state
+  (frame stacks, the exported `__stack_pointer`) — trivially
+  possible because that state is data in linear memory, not wasm
+  frames. The heap, interned symbols, and session cells survive: a
+  REPL error keeps the session's definitions and continues.
+- One rule inherited by all runtime code: no runtime function may
+  hold non-memory state that matters across a fatal error. True of
+  the prims by construction (they are leaf calls).
 
 This is strictly better than native semantics require, and it costs
 one import.
 
-### 3.5 The host shim (stdin/stdout/files), ~300 lines of JS
+### The host shim
 
-wasi-libc wants a WASI-shaped host. Rather than a full generic
-polyfill, a purpose-built shim implements the handful of syscalls the
-runtime actually reaches: `fd_write` (1/2 → `onOutput`, streamed
-synchronously), `fd_read` (0 ← the stdin buffer), `path_open`/
-`fd_read`/`fd_write` against an **in-memory FS initialized from the
-module file map** — which is how puffincc's `read-file`-based module
-resolution works unchanged in the browser — plus `proc_exit` (throws,
-§3.4), `clock_time_get`, and stubs that return `ENOSYS` loudly.
+wasi-libc wants a WASI-shaped host. Rather than a generic polyfill,
+web/src/engine/wasi-shim.js implements the handful of syscalls the
+runtime actually reaches: `fd_write` (stdout/stderr → `onOutput`,
+streamed synchronously), `fd_read` (stdin buffer), and
+`path_open`/`fd_read`/`fd_write` against an **in-memory FS
+initialized from the module file map** — which is how puffincc's
+`read-file`-based module resolution works unchanged in the browser
+— plus `proc_exit`, `clock_time_get`, and stubs that fail loudly.
 
-- **stdin:** the boundary accepts what the app has today (`input:
-  number[]`) and renders it as whitespace-separated text into the
-  stdin buffer, so `scanf`-based `read` and `read-all` behave
-  natively; a raw-text form (`stdin: string`) is also accepted for
-  reader-based programs.
-- **stdout streaming:** `fd_write` invokes `onOutput` synchronously;
-  the existing run-worker buffering (8 KB / 50 ms flush) already
-  handles flood control and stays exactly as is.
-- **Cancellation** stays `worker.terminate()` + respawn, unchanged
-  from today. (A cooperative fuel check at safepoints is a cheap
-  later nicety; SharedArrayBuffer-based interrupts need COOP/COEP
-  headers and are explicitly not v1.)
+- **stdin:** the boundary accepts the app's `input: number[]` shape
+  and renders it as whitespace-separated text, so `scanf`-based
+  `read` and `read-all` behave natively; a raw-text form
+  (`stdin: string`) is also accepted.
+- **stdout streaming:** `fd_write` invokes `onOutput`
+  synchronously; the app's existing worker-side buffering handles
+  flood control.
+- **Cancellation** is `worker.terminate()` + respawn.
 
-## 4. puffincc's third backend
+## The compiler backend (`-t bytecode`)
 
-The reference implementation (src/) grows the backend first — that is
-where diff-ir, provenance, and fast iteration live — then
-backends.puf ports it, per the standing lockstep discipline. What the
-four backend passes become for target `bytecode`:
+The backend chain mirrors the native ones in shape, per the
+standing lockstep discipline (reference implementation in src/,
+ported in backends.puf; diff-ir takes `bytecode` as a target and
+remains the per-pass differential oracle):
 
-- **select-instructions-bc** — the structural transcription of §2.2:
-  walk each definition's blocks, `h-atom` maps atoms to
-  `imm/sym/str/slot` operands, each assign/effect/tail form to the
-  §2.3 instruction (symbol/string literals collected by the existing
-  `bk-scan-literals`). The variadic prologue emits `COLLECT`; the
+- **select-instructions-bc** — a structural transcription of the
+  blocks IR: atoms to slot operands (literals staged), statements
+  to instructions, the `COLLECT` prologue for variadics. The
   `pair?`/`vector?` block-splitting and trap-block machinery of the
-  native backends **does not exist** (no open-coding at v1: prims are
-  `PRIM`). It is the smallest of the three select passes by a
-  multiple.
-- **allocate-slots** — replaces allocate-registers: number the
-  `locals` set (sorted, for deterministic output — the bootstrap
-  fixpoint discipline extends to .pbc bytes), formals first; emit
-  `nlocals`. No liveness, no interference, no spills. A later
-  optimization may reuse dead slots via the existing live-interval
-  hulls to shrink frames; explicitly not v1.
-- **patch-instructions** — becomes **linearize**: order blocks
-  (entry first, then a DFS order that favors fall-through), resolve
-  label references to byte offsets, fuse `if-cmp` tails into
-  `BRLT`/`BREQ` + `JMP`. No register staging, no imm64 splitting, no
-  sp-adjust arithmetic.
-- **prelude-and-conclusion** — mostly dissolves: no callee-save
-  areas, no stack probes. What remains is per-function metadata
-  (function-table rows) and `main`'s `HALT` conclusion.
-- **render-bc** — binary encoding of the §2.5 unit into a byte
-  string (Puffin strings are byte strings; `write-file` writes
-  bytes). The hosted route writes `.pbc` where it writes `.s` today;
-  `-o prog.pbc` skips the clang link step entirely.
+  native selects does not exist here — no open-coding, so it is the
+  smallest of the three select passes by a multiple.
+- **allocate-slots-bc** — replaces allocate-registers: number the
+  `locals` set (formals first, rest sorted — deterministic bytes
+  are part of the bootstrap fixpoint discipline), emit `nlocals`.
+  No liveness, no interference, no spills.
+- **linearize-bc** — replaces patch-instructions: order blocks
+  (entry first, then DFS favoring fall-through), resolve labels to
+  byte offsets, fuse `if-cmp` tails into the `BRcc` family, drop
+  jumps to the fall-through block.
+- **render-pbc** — encode the unit as a byte string. `-o prog.pbc`
+  skips the assembler/linker entirely.
 
-Estimated size: ~350–500 lines in backends.puf vs ~640/650 for each
-native backend. Tables: gen-puffincc-tables.rkt grows the primid
-table (manifest-derived, same generator run — the standing lockstep
-chore, nothing new). diff-ir already takes a target argument; it
-gains `bytecode` and remains the differential oracle for every
-frontend pass plus select/allocate (the encoded unit is compared via
-the disassembler).
+Prelude-and-conclusion mostly dissolves: no callee-save areas, no
+stack probes — what remains is function-table metadata. The full
+corpus is green through this route at `-O0`, `-O1`, and `-O2`; the
+`-O1` machinery (loop recovery, blocks cleanup, direct calls, fused
+compare branches) needs nothing bytecode-specific because it all
+runs before the cut point.
 
-**REPL compilation mode** (used by §5.2): a driver flag under which
-collect-globals treats *every* top-level define — functions included
-— as a named global cell, reveal-functions reveals nothing across
-the top level (all top-level calls go through `GGET` + `CALLI`), and
-free variables that are neither locals nor prims become late-bound
-`GGET`s by name instead of errors. Units compiled this way always run
-at `-O0`. This is a real, contained change to two passes in both
-compiler sources; it is the one place variant B touches pass code,
-and it is called out in §11 because Kris should sign off on it
-specifically. Cells need an *unbound* sentinel distinct from the
-current seed of fixnum 0 — reserve immediate 34 (`#<undef>`) in the
-wasm/VM globals table; `GGET` of an unbound cell errors with the
-variable's name. Whole-program mode is unaffected (collect-globals
-keeps erroring on genuinely unbound names at compile time).
+### REPL compilation mode
 
-## 5. The JS boundary API
+`--repl` is a driver flag, implemented identically in both compiler
+sources, under which collect-globals compiles *every* top-level
+define — functions included — into a **named** global cell
+(function defines become lambda initializers run in source order),
+late-binds free variables by name instead of erroring, and wraps
+each top-level expression in an internal result form that
+select-instructions-bc lowers to the `RESULT` opcode.
+reveal-functions then has nothing to reveal, so every top-level
+call is indirect — which is exactly what makes redefinition
+retroactive: defining `f` again stores a new closure in the same
+cell, and every earlier unit's `GGET f` sees it. REPL units always
+compile at `-O0` and render as v2 units. Whole-program mode is
+unaffected (collect-globals keeps erroring on genuinely unbound
+names at compile time), and unbound cells hold the reserved
+`#<undef>` sentinel, so reading one is a runtime error carrying the
+variable's name.
 
-### 5.1 One engine interface
+`RESULT` renders the value VM-side with the runtime's own
+value->string and delivers it through the `puffin.repl_result` host
+import (natively: one stdout line) — formatting is the runtime's,
+never the host's.
 
-The current index.js surface is nearly right and the workers already
-isolate it; it becomes the **engine interface**, implemented twice
-during migration (§7):
+## The web engine
 
-```js
-// web/src/engine/index.js -- the only import App/workers use
+### One engine interface
+
+web/src/engine/index.js is the only import the app and its workers
+use:
+
+```
 run(source, { input, stdin, onOutput, files, entry })
   -> { ok: true, value: string | null } | { ok: false, error: string }
 class Session {
   constructor({ input, stdin, onOutput })
   eval(text) -> { ok, results: string[], error? }
 }
-defaultInput(), render, surfacePrimNames, ModuleError, ...
 ```
 
-The VM engine implements it as:
+vm-engine.js implements it over two wasm artifacts:
 
-- **Boot (once per worker):** instantiate `puffin-vm.wasm`, load
-  `puffincc.pbc` and the precompiled `prelude.pbc` (§6).
-- **run():** write source + file map into the shim FS; invoke
-  puffincc's entry with argv `["puffincc", "-t", "bytecode",
-  "-o", "/out.pbc", "/main.puf"]`; load `/out.pbc`; run it with a
-  fresh globals table. Compile and execute happen in the same VM
-  instance — two `main` invocations, one heap. Errors from either
-  phase surface via §3.4 and map onto today's `{ok:false, error}`.
-- **Prelude injection** happens inside puffincc (main.puf's
-  `prelude-inject`), not in JS: prelude.js is deleted, and the drift
-  class it represents dies with it.
+- **run()** uses the command-model `puffin-vm.wasm`, twice: one
+  instance invokes puffincc
+  (`/puffincc.pbc main.puf -t bytecode -o /out.pbc`) against the
+  shim FS holding the source and module file map; a fresh instance
+  then runs `/out.pbc`. The two instances share the shim's JS-side
+  FS, and the second instantiation costs about a millisecond.
+  Errors from either phase surface through the abort import and map
+  onto `{ok:false, error}`.
+- **Session** uses the reactor build `puffin-vm-repl.wasm`
+  (`-DPVM_REACTOR -mexec-model=reactor`): one persistent instance
+  per session exporting `pvm_boot` (once), then `pvm_alloc` +
+  `pvm_load_run` per eval. Each `eval(text)` compiles the new forms
+  as one `--repl` unit with puffincc (a command-model invocation)
+  and loads it into the reactor, where the session cell table
+  resolves its named globals — cross-eval references, shadowing,
+  and redefinition all follow from the link-by-name design above.
+  The prelude loads once per session as a REPL unit, compiled from
+  the compiler's own embedded prelude (`--repl-prelude`) and cached
+  per page. Session reset is a worker respawn.
 
-The interface deliberately keeps `input`/`onOutput`/`files`/`entry`
-shapes identical so run-worker.js and repl-worker.js change only
-their import path.
+Prelude injection for whole-program runs happens inside puffincc
+(main.puf's prelude-inject), not in JS — the browser has no copy of
+the prelude to drift.
 
-### 5.2 REPL sessions: linking by name
+The artifacts (`puffin-vm.wasm`, `puffin-vm-repl.wasm`,
+`puffincc.pbc`) are build products generated into web/public/ by
+tools/gen-web-vm.sh, from the self-hosted `build/puffincc` — the
+web pipeline is Racket-free end to end.
 
-Today's Session is an interpreter environment; the VM Session is a
-**link-by-name unit loader**:
-
-- The VM keeps a session-global table: mangled name → cell (a `pf`
-  slot, GC root). Loading a unit resolves each unit-local global
-  index against this table, creating unbound cells on demand
-  (§4's sentinel).
-- `Session.eval(text)`: compile the new forms as one **REPL-mode
-  unit** (§4) with puffincc-in-the-VM; load; run its `main` (which
-  contains only the *new* forms' initializers and expressions —
-  nothing re-executes). Top-level expression results are delivered
-  through a `host_repl_result(v)` hook the REPL-mode conclusion
-  calls instead of `pf_print_result`, rendered via `value->string`
-  on the VM side so formatting is the runtime's own.
-- **Redefinition** works like the JS Session: defining `f` again
-  stores a new closure in the same cell, and every earlier unit's
-  `GGET f` sees it — because REPL mode compiles all top-level calls
-  as indirect (§4). This matches interpreter semantics exactly,
-  which whole-program `-O1` direct calls would not; hence the
-  REPL/whole-program mode split.
-- The prelude loads once per session as a REPL-mode unit
-  (precompiled at build time); user definitions shadow by
-  redefinition, mirroring today's Session behavior.
-- Session reset = discard the globals table + heap (or cheaper:
-  respawn the worker, which is what the app does today anyway).
-
-Cost stated plainly: per-eval compile latency (~tens of ms for
-typical REPL entries on the VM — a one-liner is a small unit; the
-prelude is *not* recompiled). Acceptable for a REPL; measured at M5.
-
-### 5.3 The pipeline visualizer
+### The pipeline visualizer
 
 Pipeline mode's provenance (`back` edges, breadcrumbs) is built on
-Racket-side object identity: a weak eq-hash tagging every constructed
-node, composed across passes by feeding each pass's literal output
-object to the next. **puffincc cannot reproduce this cheaply** — the
-bootstrap deliberately dropped prov wrappers, Puffin hashes are
-equal?-keyed with no weak references, and retrofitting explicit
-origin ids through 16 passes is a redesign of every walker.
+Racket-side object identity: a weak eq-hash tagging every
+constructed node, composed across passes. puffincc cannot reproduce
+this cheaply — the bootstrap deliberately dropped prov wrappers,
+and Puffin hashes are equal?-keyed with no weak references. So,
+honestly: **Pipeline mode is served by src/ir-server.rkt**, a
+dev-mode tool that requires a local Racket process. A
+provenance-free "layers only" in-browser trace from puffincc's
+serialize-ir machinery is a recorded idea, not a design.
 
-So, honestly: **Pipeline mode stays served by src/ir-server.rkt**
-(unchanged — it is a dev-mode tool that already requires a local
-Racket process, and its API contract with Pipeline.jsx is untouched
-by everything above). Two cheap improvements ride along later,
-neither gating anything: (a) ir-server grows the bytecode backend's
-layers automatically once src/ has them (the pass-table plumbing is
-generic, and select/linearize/render-bc slot into the existing layer
-model, with the disassembly as the terminal `lineBack` layer);
-(b) a provenance-free "layers only" trace from puffincc's existing
-`serialize-ir`/dump-after machinery could someday power a degraded
-in-browser pipeline view — recorded as an idea, not designed here.
+## Measured performance
 
-### 5.4 Boundary summary
+Numbers below were measured on an Apple M4 Pro (macOS 26.5), node
+v23.9.0 for the wasm rows, wasi-sdk 33 (`-O2`, switch dispatch),
+everything built from the tree (`make -C src/vm wasm wasm-repl`,
+tools/gen-web-vm.sh). Native rows are whole-process wall time, best
+of 5; wasm rows time `_start` on a fresh instance of a pre-compiled
+module.
 
-| Need | Mechanism |
-|---|---|
-| compile+run | shim FS + puffincc.pbc invocation, in-worker |
-| streaming stdout | `fd_write` → `onOutput`, existing worker buffering |
-| stdin | `input: number[]` rendered to text, or raw `stdin: string` |
-| module file maps | shim in-memory FS; puffincc's own resolver |
-| REPL persistence | session globals table + link-by-name units |
-| REPL results | `host_repl_result` hook, `value->string` rendering |
-| errors | `host_abort` throw → `{ok:false,error}`; VM state reset |
-| cancellation | `worker.terminate()` + respawn (unchanged) |
-| pipeline traces | ir-server.rkt, unchanged (dev-mode) |
+Artifact sizes:
 
-## 6. Size and startup budgets
-
-Estimates with their arithmetic; **numbers marked (m) are measured
-today, others are estimates to be validated at the marked
-milestone.**
-
-| Artifact | Estimate | Basis | Budget (gate) |
-|---|---|---|---|
-| puffin-vm.wasm | 150–300 KB raw, 50–100 KB gz | VM ~2.5k lines + runtime ~1.3k lines (m) + wasi-libc stdio/malloc; no Emscripten runtime | ≤ 350 KB raw (M4) |
-| puffincc.pbc | 300 KB–1 MB, 100–300 KB gz | flattened source 133 KB (m); native .o 1.8 MB (m), asm text 6.1 MB (m); bytecode ≈ 3–8× denser than native code | ≤ 1 MB raw (M4) |
-| prelude.pbc | 10–40 KB | prelude is a small fraction of puffincc | — |
-| shim + engine JS | 10–20 KB | ~500 lines | — |
-| **Total added** | **~0.5–1.3 MB raw** | vs ~60 KB for the JS interpreter it replaces | lazy-loaded on first Run |
-
-Startup and latency:
-
-| Event | Estimate | Basis |
+| Artifact | Raw | gzip -9 |
 |---|---|---|
-| wasm instantiate + .pbc load | 30–150 ms | streaming compile of ≤1.3 MB; load = memcpy + symbol interning |
-| compile typical example on VM | 100–500 ms | native 3–57 ms (m) × 15–40 (VM interpretation factor, the honest unknown — measured at M2) |
-| compile largest corpus program | 1–2.5 s | 57 ms (m) × 15–40 |
-| REPL eval (one form) | 10–100 ms | small unit; prelude precompiled |
-| user-code speed vs JS interpreter | 3–20× faster (compute-bound) | i64 fixnums vs BigInt tree-walking; measured head-to-head at M5 with bench/ pairs |
-| user-code speed vs native | 15–40× slower | classic bytecode-VM range for this design (no JIT); fib35 ≈ 4–10 s vs 0.25 s (m) native |
+| puffin-vm.wasm (command) | 374,954 B | 127,236 B |
+| puffin-vm-repl.wasm (reactor) | 368,488 B | 125,504 B |
+| puffincc.pbc | 1,439,866 B | 527,407 B |
+| **Total added** | **~2.18 MB** | **~780 KB** |
 
-### §6-measured (2026-07-10) — the estimates above, validated
+Honesty note: the original design budgeted ≤350 KB raw for the VM
+wasm and ≤1 MB raw for puffincc.pbc; the shipped artifacts exceed
+both (7% and 40% over respectively), and the reactor build is a
+second artifact the budget never priced in. Gzip is what the wire
+sees, and everything is lazy-loaded on first Run.
 
-Apple M4 Pro, macOS 26.5; node v23.9.0 for the wasm rows; wasi-sdk 33
-(`-O2`, switch dispatch); everything built from this tree
-(`make -C src/vm wasm wasm-repl`, `tools/gen-web-vm.sh`). Native and
-native-VM rows are whole-process wall time, best of 5 (≈2 ms process
-startup included); wasm rows time `_start` only on a fresh instance
-of a pre-compiled module, best of 3–5.
+Interpretation factor (the same `.pbc` on `bin/puffin-vm` and under
+node through the shim, against native `-O1` compiled output):
 
-Artifacts vs budgets:
-
-| Artifact | Measured raw | gzip -9 | Budget | Verdict |
-|---|---|---|---|---|
-| puffin-vm.wasm (command) | 374,954 B | 127,236 B | ≤ 350 KB raw | **7% over** |
-| puffin-vm-repl.wasm (reactor) | 368,488 B | 125,504 B | (not budgeted) | second artifact, §STATUS |
-| puffincc.pbc | 1,439,866 B | 527,407 B | ≤ 1 MB raw | **40% over** |
-| **Total added** | **~2.18 MB raw** | **~780 KB gz** | ~0.5–1.3 MB raw | over raw, lazy-loaded; gz is what the wire sees |
-
-Interpretation factor (same .pbc on `bin/puffin-vm` vs under node
-through the WasiShim, against `build/puffincc`-compiled native `-O1`):
-
-| Workload | native -O1 | native VM | wasm VM (node) | nVM / wasm factor |
+| Workload | native -O1 | native VM | wasm VM (node) | factors |
 |---|---|---|---|---|
 | fib(30) | 6.7 ms | 45 ms | 72 ms | 6.7× / 10.7× |
 | fib(35) | 40 ms | 460 ms | 820 ms | 11.5× / 20× |
 | tail-loop 20M adds | 45 ms | 317 ms | 593 ms | 7.0× / 13.2× |
 | HAMT 200k insert+lookup | 109 ms | 125 ms | 1,309 ms | 1.15× / 12× |
 
-So: **7–12× (native VM) and 13–20× (wasm VM) on compute-bound
-code** — inside the 15–40× envelope, well clear of a ×40 kill
-(§11.7). Two notes the estimates missed: (a) prim-dominated work
-(HAMT) is nearly native speed on the native VM because the time is
-in the C runtime, not the dispatch loop; (b) the same workload is
-~10× worse on the *wasm* build — allocation-heavy code paid for the
-scaffold allocator (calloc + never-free + memory.grow); the §3.3
-collector roughly halved alloc-heavy wasm times (a 4M-pair
-build/consume benchmark: 783 → ~390 ms) and cut the full wasm corpus
-run from 33.7 s to 14.3 s. (fib35 native measured 40 ms here vs the
-0.25 s (m) above — that older number predates `-O1` and this
-machine.)
+So: **7–12× native VM and 13–20× wasm VM slower than native `-O1`
+on compute-bound code** — the classic no-JIT bytecode-VM range.
+Prim-dominated work (the HAMT row) is nearly native speed on the
+native VM because the time is in the C runtime, not the dispatch
+loop.
 
-In-browser-equivalent Run latency (puffincc-on-the-wasm-VM, `_start`
-timed, compile to /out.pbc): hello-world **2 ms**, small typed
-program **3–4 ms**, fib **33 ms**, the HAMT program **6 ms** — vs
-the 100–500 ms estimate. Compilation is prim/allocation-bound (reader,
-HAMTs, strings), which the VM executes as native C, so the compiler's
-effective interpretation factor is ~1.2–2×, not 15–40×. End-to-end
-`run()` (compile + instantiate + execute) under node: hello **2–3 ms**,
-fib(30) **~100 ms** (of which ~72 ms is running fib(30) itself).
+Compile latency in the browser-equivalent path (puffincc on the
+wasm VM, compile to `/out.pbc`): hello-world **2 ms**, a small
+typed program **3–4 ms**, fib **33 ms**, the HAMT program **6 ms**.
+Compilation is prim/allocation-bound (reader, HAMTs, strings),
+which the VM executes as native C, so the compiler's *effective*
+interpretation factor is ~1.2–2×, not 13–20×. End-to-end `run()`
+(compile + instantiate + execute) under node: hello **2–3 ms**,
+fib(30) **~100 ms** — of which ~72 ms is running fib(30) itself.
 
-REPL (engine Session over the reactor build, per test-vm-repl.mjs's
-path): first-ever boot including wasm module compile **~165 ms**;
-session boot + first eval with warm modules **2–4 ms**; per-eval
-**1.5–8 ms** for one-liners through a 100k-iteration loop — vs the
-10–100 ms estimate.
+REPL (engine Session over the reactor build): first-ever boot
+including wasm module compile **~165 ms**; session boot + first
+eval with warm modules **2–4 ms**; per-eval **1.5–8 ms** for
+one-liners through a 100k-iteration loop.
 
-Full `node web/test-vm-corpus.mjs` (every corpus program compiled by
-puffincc-on-the-VM and run per input, 300 checks): **33.8 s wall**.
+GC effect: a 40-eval allocation-heavy REPL session holds **flat at
+16 MB** where the never-freeing scaffold allocator it replaced grew
+16 → 252 MB; a 4M-pair build/consume benchmark halved (783 →
+~390 ms), and the full wasm corpus run dropped from ~34 s to
+**14.3 s** — freelist reuse beats never-freeing malloc.
 
-If the ×15–40 interpretation factor comes in materially worse at M2,
-the fallback levers are, in order: open-code the hot prims as opcodes
-(§2.3), superinstructions for the `MOV`-heavy patterns select emits,
-and slot-reuse frames — all inside the VM/backend, none touching
-semantics.
+If performance ever needs more, the levers are, in order:
+open-code the hot prims as opcodes, superinstructions for the
+`MOV`-heavy patterns select emits, and slot-reuse frames — all
+inside the VM and backend, none touching semantics.
 
-## 7. Migration: two engines behind one interface
+## Verification
 
-The JS interpreter is not deleted; it is **outlived**.
+The corpus — 309 golden checks — is the gate on every route, and
+golden texts are never edited to accommodate the VM: output
+differences are VM bugs by definition.
 
-1. Extract today's index.js surface into `web/src/engine/` with the
-   JS interpreter as the sole implementation. Pure refactor;
-   `node web/test-corpus.mjs` (294 checks (m)) green — this is the
-   gate that proves the interface cut drew no blood.
-2. Land the VM engine beside it. Engine selection: `?engine=vm`
-   query param + a settings toggle; default stays `js`.
-   test-corpus.mjs grows `--engine`, and **CI runs the full corpus
-   on both engines** from this point on.
-3. Flip the default to `vm` when §8's M5 gate holds. The JS engine
-   stays selectable for one release as the escape hatch.
-4. Delete `web/src/puffin/` (interp.js, prelude.js, modules.js,
-   values.js — reader.js survives only if any UI feature still wants
-   client-side parsing for, e.g., form-boundary detection in the
-   REPL input; otherwise it goes too). The lockstep documentation
-   (MEMORY, BOOTSTRAP.md) is updated the same day: "sync prelude.puf
-   → prelude.js" dies as a chore; ".pbc format ↔ VM decoder ↔
-   backends.puf render-bc" is born as one.
+- **Native:** the corpus through `-t bytecode` + `bin/puffin-vm`,
+  at every optimization level.
+- **GC stress:** the corpus under `PUFFIN_VM_GC_STRESS=1` through
+  the collector seam (tools/gctest-corpus.sh).
+- **wasm, under node:** web/test-vm-smoke.mjs,
+  web/test-vm-compile.mjs, and web/test-vm-corpus.mjs — the last
+  compiles every corpus program *with puffincc running on the wasm
+  VM* and runs each input.
+- **REPL parity:** web/test-vm-repl.mjs replays a frozen 31-step
+  transcript (web/repl-golden.json) covering defines,
+  redefinition, prelude shadowing, error recovery, and result
+  formatting.
+- **Self-hosting fixpoint:** puffincc compiled to bytecode, running
+  on the VM, compiles byte-identically to native puffincc — the
+  bootstrap's stage-2 fixpoint, holding on this target like the
+  others (docs/BOOTSTRAP.md).
 
-The corpus is the gate at *every* stage: no stage merges with fewer
-than 294/294 on its route, and the golden texts are never edited to
-accommodate the VM — output differences are VM bugs by definition.
+## Limitations and non-goals
 
-## 8. Staged milestones, each with its verification gate
-
-- **M1 — Bytecode spec + reference backend.** Freeze §2 into
-  docs/BYTECODE.md (opcode table, encodings, unit format, call
-  protocol — the new lockstep contract). Implement
-  select/allocate-slots/linearize/render for target `bytecode` in
-  src/ (backend-bytecode.rkt), plus an assembler-independent
-  **disassembler**. *Gate:* encode→decode→re-encode is a fixpoint on
-  10 seed programs (fib, variadics, papp>6, closures, HAMT-heavy,
-  deep non-tail map, gensym, error paths); disassembly is
-  code-reviewed against the spec.
-- **M2 — VM in C, native first, then Node.** Dispatch loop, loader,
-  frames, safepoint GC; runtime compiled in unchanged. Build
-  `bin/puffin-vm` (native) and `puffin-vm.wasm` (wasi-sdk).
-  *Gate:* full corpus — 294/294 goldens — through
-  `racket src/main.rkt -t bytecode | puffin-vm`, natively **and**
-  under Node on the wasm build, **and** natively under
-  `PUFFIN_VM_GC_STRESS=1`. Measure the interpretation factor here;
-  revisit §6 if it exceeds ×40.
-- **M3 — puffincc's third backend + self-hosting on the VM.** Port
-  the backend to backends.puf; extend gen-puffincc-tables.rkt.
-  *Gate:* diff-ir green per pass for target bytecode; corpus 294/294
-  via native puffincc `-t bytecode`; then the bootstrap closes —
-  **puffincc compiled to bytecode, running on the VM, compiles the
-  corpus to bytecode byte-identically to native puffincc's output**
-  (the stage-2 fixpoint, relocated to the new target).
-- **M4 — wasm packaging + JS boundary.** The shim, the engine
-  module, error unwinding, budgets. *Gate:*
-  `node web/test-corpus.mjs --engine=vm` 294/294 (this exercises the
-  full in-browser path: puffincc-on-VM compiling and running every
-  corpus program, module programs included, under Node); size
-  budgets of §6 enforced by a CI check.
-- **M5 — Web integration.** Workers wired, REPL-mode compilation
-  (§4/§5.2), examples, stdin, streaming, both engines behind the
-  toggle. *Gate:* corpus on both engines in CI; a scripted REPL
-  parity suite (defines, redefinition, shadowing prelude, error
-  recovery, results formatting) run against both Sessions with
-  identical transcripts; every web example runs under `?engine=vm`;
-  the bench/ paired workloads measured VM-vs-JS-interpreter and the
-  numbers published in this document's revision. Default flips when
-  Kris says the REPL feels right.
-
-Ordering note: the task of writing the VM before puffincc's backend
-exists is served by M1's *reference* backend — the same
-src-first-then-port sequence every pass has followed, with diff-ir as
-the bridge.
-
-## 9. Risks and honest costs
-
-- **A fifth implementation?** The VM is new executable surface
-  (~3–4k lines with the GC and shim) that must be maintained. The
-  mitigation is what it *isn't*: it implements the bytecode spec,
-  not the language — semantics keep flowing from the one compiler.
-  Net, the project trades ~1,850 lines of semantics-bearing JS for
-  ~3.5k lines of semantics-free C+JS plus a spec. That is more code
-  and less risk; worth saying plainly rather than pretending it is
-  less of both.
-- **The GC is the scary part.** A conservative-heap collector's bugs
-  are heisenbugs. Mitigations are structural (safepoint rule makes
-  the unscannable-locals problem unreachable; non-moving keeps
-  invariants simple) and procedural (stress mode in CI from M2,
-  corpus as the detector). Residual risk: real, accepted, and
-  contained to one 500-line file.
-- **Compile latency is user-visible.** 100–500 ms typical, seconds
-  worst-case (§6). Mitigations: precompiled prelude, worker +
-  spinner (already the UX), and the interpretation-factor levers.
-  If it still hurts, variant A's eval.puf becomes the instant-start
-  mode *on the same VM* — the designs compose rather than compete.
-- **REPL mode touches passes.** §4's collect-globals /
-  reveal-functions REPL flag violates the "new features are never
-  pass edits" instinct. It is small, flag-gated, and lands in both
-  compiler sources in lockstep with diff-ir coverage — but it is a
-  pass edit, and it is the piece most likely to surface a subtle
-  semantic difference (top-level mutual recursion across evals,
-  shadowing order). The parity transcript suite at M5 exists for it.
+- **No JIT.** The VM is an interpreter; the 13–20× wasm factor is
+  the accepted cost. Open-coded prim opcodes, superinstructions,
+  and slot-reuse frames are named seams, not shipped features.
+- **`.pbc` is not a distribution format.** It is versioned and the
+  VM refuses mismatches; the compiler and VM ship together.
 - **wasm32 address-space ceiling.** 4 GB (practically 2 GB in some
-  engines) bounds heap + frame stack. The native 512 MB
-  deep-recursion reservation becomes a growable segment, but a
-  program that legitimately needs multi-GB heaps is a native
-  program. The playground has never been that; stated so no one is
-  surprised.
+  engines) bounds heap + frame stack. A program that legitimately
+  needs multi-GB heaps is a native program; the playground has
+  never been that.
 - **i64 at the JS boundary** costs BigInt conversions — confined to
-  `host_repl_result` and diagnostics; program I/O crosses as bytes.
-  Negligible, but it is why the boundary API traffics in strings.
-- **Two artifacts to version together** (puffincc.pbc ↔ VM). The
-  unit-format version word (§2.5) plus shipping them in one bundle
-  makes skew a load-time error, not a wrong answer.
-- **What gradual typing asks of all this: nothing, yet.** TYPES.md
-  v1 is erasure — the checker runs pre-desugar, no casts exist at
-  runtime, ADTs are a dedicated heap kind whose prims (lib/adt.c)
-  reach the VM through the manifest like any others. When
-  phase-3 casts land, they arrive as runtime prims with blame labels
-  (manifest entries + lib module, per FFI.md's pattern), i.e. `PRIM`
-  calls — no opcodes, no VM changes. The FFI itself stays
-  native-only with the documented web refusal (FFI.md §8), which the
-  VM inherits by simply not linking foreign archives.
-
-## 10. What stays out (v1)
-
-A JIT or baseline compiler in the VM; open-coded prim opcodes and
-superinstructions (named seam, §2.3/§6); slot-reuse frame
-compaction; wasm-GC/externref anything; the wasm exception-handling
-and tail-call proposals; SharedArrayBuffer interrupts; .pbc as a
-stable distribution format; a WASI CLI/server target (separate
-design); FFI in the browser; in-browser provenance for Pipeline mode
-(§5.3); variant A's eval.puf (composes later if wanted).
-
-## 11. Decisions for Kris
-
-1. **Variant: B** — puffincc-as-bytecode in the browser, compiling
-   user programs to bytecode on the VM — over A (Puffin-written
-   interpreter on the same VM). §1 is the case; A remains buildable
-   later on B's substrate. Sign off on B?
-2. **VM implementation language: C via wasi-sdk**, one compilation
-   unit with the existing runtime, native build first-class; over
-   Rust (boundary + toolchain cost) and hand-WAT (unmaintainable).
-   Agreed?
-3. **GC: linear-memory non-moving mark-sweep, precise VM-stack roots
-   + conservative heap tracing, collection only at dispatch-loop
-   safepoints**; Boehm-on-wasm rejected for the i64-locals soundness
-   hole, JS-GC/externref rejected as runtime abandonment. The
-   safepoint rule ("prims never collect; grow instead") is the load-
-   bearing invariant. Agreed, including stress-mode-in-CI as a
-   standing gate?
-4. **Cut point: after uncover-locals, register/frame-slot bytecode**,
-   keeping limit-functions' packed-call protocol and pf_collect_rest
-   verbatim for parity; over an ANF-cut stack machine. Agreed?
-5. **REPL mode as a pass flag** (all-top-levels-as-globals,
-   late-bound names, indirect top-level calls, `-O0`) in both
-   compiler sources — the one pass edit in the design. Acceptable,
-   or would you rather v1 ship whole-program runs only and defer the
-   VM REPL (keeping the JS Session alive longer)?
-6. **Pipeline mode stays ir-server-backed** (dev-only, Racket
-   required) rather than attempting in-browser provenance. Fine
-   long-term, or should a provenance-free layers view be a real
-   milestone?
-7. **Budgets** (§6): ~1 MB added download (lazy), 100–500 ms typical
-   compile, seconds worst-case — acceptable for the playground, or
-   should M2's measured interpretation factor gate the whole project
-   (i.e., a kill criterion at ×N)?
-   *[Measured 2026-07-10 (§6-measured): the interpretation factor is
-   7–12× native VM / 13–20× wasm VM on compute-bound code — no kill;
-   typical in-browser compiles measured 2–35 ms, not 100–500 ms.]*
-8. **Retirement**: JS interpreter deleted one release after the
-   default flips (§7). Comfortable, or keep it indefinitely as a
-   reference implementation despite the lockstep cost?
+  diagnostics and REPL results; program I/O crosses as bytes. It is
+  why the boundary API traffics in strings.
+- **FFI is native-only**, with the documented web refusal (see
+  docs/FFI.md on the web boundary) — the VM inherits it by simply
+  not linking foreign archives.
+- **Pipeline provenance stays dev-mode** (src/ir-server.rkt, local
+  Racket), as described above.
+- **Cancellation is worker termination**, not cooperative
+  interruption; SharedArrayBuffer-based interrupts would need
+  COOP/COEP headers and are not part of the design.
+- **Maintenance cost, stated plainly:** the VM is real new surface
+  (the dispatch loop, the loader, the wasm collector, the shim)
+  that must be maintained. The mitigation is what it *isn't*: it
+  implements the bytecode spec, not the language — semantics flow
+  from the one compiler, and the corpus polices the boundary.

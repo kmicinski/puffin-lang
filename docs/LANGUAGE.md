@@ -1,15 +1,20 @@
 # The Puffin Language
 
-A compact reference for writing Puffin day to day. For how it's
-implemented (and what changed vs the class p5 compiler), see
-[DELTA.md](DELTA.md); for the library, see [STDLIB.md](STDLIB.md).
+The day-to-day reference for writing Puffin: programs and modules,
+the data model, expressions, types, pattern matching, and how to run
+things. New to the language? Start with the tutorial
+([tutorial.html](tutorial.html), *Puffin for Racketeers*). The
+standard library is catalogued in [STDLIB.md](STDLIB.md), the type
+system in depth in [TYPES.md](TYPES.md), and the implementation in
+[DELTA.md](DELTA.md).
 
 ## Programs
 
 A `.puf`/`.scm` file is a sequence of top-level forms — function
 defines, value defines, and expressions — evaluated in order. The
-last expression's value is printed (unless it's void). The class
-`(program ...)` wrapper is also accepted.
+last expression's value is printed (unless it's void). The
+`(program ...)` wrapper from the course-era compiler is also
+accepted.
 
 ```scheme
 (define greeting 'hello)              ;; a top-level value
@@ -20,9 +25,9 @@ last expression's value is printed (unless it's void). The class
 
 Top-level defines are mutually recursive; value defines are
 initialized in source order (a function may mention a later global —
-it's read at call time). Top-level definitions shadow standard-library
-primitives, so old class programs that define their own `cons` run
-unchanged.
+it's read at call time). Top-level definitions shadow
+standard-library primitives, so a program that defines its own
+`cons` runs unchanged.
 
 ## Modules
 
@@ -47,17 +52,17 @@ Signature files (`.pufs`) optionally constrain a module's exports:
 the export set to exactly the signature. Import collisions — two
 modules providing the same name, or an import colliding with a local
 define or a reserved word — are compile-time errors; disambiguate
-with `#:as` or `#:rename`. Everything (the reference compiler, the
-web playground's file tabs, and puffincc) understands modules; a file
-with no require/provide compiles exactly as before.
+with `#:as` or `#:rename`. Modules work on every route — the native
+backends, the bytecode VM, and the browser playground's file tabs —
+and a file with no require/provide compiles exactly as before.
 
 ## Values
 
 Fixnums (61-bit), booleans `#t`/`#f`, `(void)`, symbols `'foo`, the
-empty list `'()`, pairs/lists, vectors, strings `"..."`, hashes, sets,
-and procedures. Only `#f` is false. `eq?` is identity (fine for
-fixnums, booleans, symbols); `equal?` is structural over pairs,
-vectors, and strings.
+empty list `'()`, pairs/lists, vectors, strings `"..."`, hashes,
+sets, and procedures. Only `#f` is false. `eq?` is identity (fine
+for fixnums, booleans, symbols); `equal?` is structural over pairs,
+vectors, strings, and the immutable collections.
 
 ## Expressions
 
@@ -107,7 +112,7 @@ Data:
 (gensym 'tmp)                         ;; fresh interned symbols
 (list 1 2 3)  (cons 1 '())  (car p) (cdr p) (pair? p) (null? p)
 (vector 1 2 3) (make-vector n) (vector-ref v i) (vector-set! v i x) (vector-length v)
-(hash k v ...)      an immutable hash; the default. eq?-keyed.
+(hash k v ...)      an immutable hash; the default. equal?-keyed.
 (hash-set h k v)    a NEW hash with the mapping added (h untouched)
 (hash-remove h k)   a NEW hash without the key
 (hash-ref h k) (hash-ref/default h k d) (hash-has-key? h k)
@@ -126,12 +131,15 @@ Data:
 immutable; hashes and sets are immutable *by default* — `hash-set`
 returns a new hash sharing structure with the old (a persistent HAMT
 in the native runtime, so it's O(log n), not a copy), and immutable
-collections compare by value under `equal?`. Mutability is tolerated
-where you ask for it: `set!`, vectors (the raw mutable building
-block), and the `make-hash`/`hash-set!` family, which are identity-
-compared and eq?-keyed open-addressing tables. Keys in either flavor
-are compared by identity — the right notion for fixnums, booleans,
-and (interned) symbols.
+collections compare by value under `equal?`. Immutable hashes and sets
+key **structurally** (by `equal?`): heap values — lists, vectors,
+ADTs, computed strings, nested collections — are valid keys and
+elements, deduped by content, exactly like fixnums and symbols.
+Mutability is tolerated where you ask for it: `set!`, vectors (the raw
+mutable building block), and the `make-hash`/`hash-set!` family, which
+are eq?-keyed open-addressing tables — identity-keyed, so heap keys in
+a *mutable* collection are distinguished by object identity, not
+content.
 
 Predicates: `fixnum? boolean? symbol? void? procedure? pair? null?
 vector? string? hash? set?`.
@@ -149,6 +157,40 @@ For writing compilers (see docs/BOOTSTRAP.md): `value->string`,
 
 Primitives are first-class-ish: naming one in value position
 eta-expands it, so `(map car xs)` works.
+
+## Types
+
+Puffin is gradually typed (docs/TYPES.md is the full story):
+annotations are optional anywhere, `_` is the dynamic type, and
+unannotated code just runs. `define-type` declares an algebraic
+datatype; a constructor with fields is an ordinary function, a
+nullary constructor is a value referenced bare (`None`, not
+`(None)`), and `match` destructures both.
+
+```scheme
+(define-type (Option a) (None) (Some a))   ;; parameterized ADT
+(define-type Expr                          ;; plain ADT
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+(define (eval-expr [e : Expr]) : Int       ;; annotated formals + result
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (eval-expr a) (eval-expr b))]
+    [(Mul a b) (* (eval-expr a) (eval-expr b))]))
+
+(: scale Int)                              ;; standalone declaration
+(define scale 100)
+(ann (car xs) Int)                         ;; expression ascription
+```
+
+Checking is bidirectional with consistency — `_` is compatible with
+everything, so typed and untyped code mix freely — and declared
+boundaries get transient run-time casts with blame. A
+non-exhaustive `match` over an ADT warns on stderr; `--strict-types`
+(on both `bin/puffin` and `puffincc`) promotes the warning to a
+compile-time error.
 
 ## Foreign functions
 
@@ -192,6 +234,7 @@ as a Puffin API, with a solve-and-prove-unique Sudoku showcase);
   [(cons hd tl) ...]           ;; pairs
   [(list a b c) ...]           ;; exactly three elements
   [(vector x y) ...]           ;; vectors by length
+  [(Some x) ...]               ;; ADT constructors (docs/TYPES.md)
   [(? fixnum? n) ...]          ;; predicate guard around a subpattern
   [`(add ,a ,b) ...]           ;; quasiquote: literal structure + unquote holes
   [`(lambda (,xs ...) ,body) ...]  ;; ellipsis: xs collects a sublist
@@ -204,7 +247,7 @@ Ellipsis in quasiquote patterns is Racket-style: the repeated
 pattern matches each element of a middle segment (fixed-shape
 patterns may follow it), and each variable under the `...` collects
 a list of its per-element matches — the idiom the Puffin compiler
-itself is written in, ready for bootstrapping.
+itself is written in.
 
 No clause matching raises `error: match-failure`. Quasiquote patterns
 make ASTs pleasant to work with:
@@ -219,31 +262,42 @@ make ASTs pleasant to work with:
 
 ## Running
 
+`puffincc` is the compiler. Build it once with `bin/bootstrap` — no
+Racket required, just a C toolchain — then:
+
+```
+build/puffincc prog.puf -o prog             # compile + assemble + link
+build/puffincc -O 2 prog.puf -o prog        # optimization level (default -O1)
+build/puffincc -t x86-64 prog.puf -o prog   # cross-target (runs under Rosetta)
+build/puffincc -t bytecode prog.puf -o prog.pbc   # compile to bytecode
+bin/puffin-vm prog.pbc                      # run bytecode on the native VM
+```
+
+With `-o file.s` it writes assembly instead of linking; with no `-o`
+it prints assembly to stdout. Module programs work everywhere a
+single file does: point the compiler at the entry file and the
+require DAG is resolved from disk.
+
+The Racket driver `bin/puffin` fronts the optional consistency
+oracle in `src/` and adds a REPL and an interpreter:
+
 ```
 bin/puffin                      # REPL (,help ,env ,quit)
 bin/puffin prog.puf             # compile natively + run
 bin/puffin -i prog.puf          # interpret
 bin/puffin -c prog.puf -o prog  # compile only
-bin/puffin -t x86-64 prog.puf   # cross-target (runs under Rosetta)
-bin/puffin -O 0 prog.puf        # optimization level (default -O1)
 ```
 
-Module programs work everywhere a single file does: point any of the
-above at the entry file and the require DAG is resolved from disk.
-The self-hosted compiler is a standalone driver with the same shape:
-
-```
-build/puffincc prog.puf -o prog   # compile + assemble + link, no scripts
-build/puffincc -O 2 -t x86-64 prog.puf -o prog.s
-```
-
-The web REPL (`web/`) runs the same language in the browser; the
+The browser playground (`web/`) runs the same language because it
+runs the same compiler: puffincc itself, compiled to bytecode,
+executing on a WebAssembly build of the bytecode VM. The
 playground's "+ file" tab turns the editor into a module DAG.
 
-## Sharp edges (current)
+## Sharp edges
 
-- Fixnums are 61-bit in compiled code, arbitrary precision in the
-  interpreters — stay under ±2^60.
+- Fixnums are 61-bit in compiled code (native and bytecode); the
+  Racket interpreter (`bin/puffin -i`) is arbitrary-precision — stay
+  under ±2^60.
 - `set-car!`/`set-cdr!` don't exist (pairs are immutable).
 - A REPL define can't shadow a primitive name (files can).
 - `main` is reserved for the program entry point (defining it is a
