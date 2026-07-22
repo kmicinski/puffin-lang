@@ -282,7 +282,7 @@ annotate with `Shape` (or `S.Shape` under `#:as`), the checker
 rejects annotations naming unresolved types (`unknown type X`), and
 every diagnostic renders the SOURCE spelling via the
 resolver-registered demangling table (rendering only — comparisons
-use the mangled identities; see the name-mangling discussion in
+use the mangled identities; see the type-exports section of
 docs/MODULES.md). Interfaces are typed too: `.pufs` signatures take
 typed entries (`(val zero Int)`, `(fun add (-> Int Int Int))`,
 `(type Shape)`), and under separate compilation the `.pufi` records
