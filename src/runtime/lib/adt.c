@@ -84,7 +84,17 @@ static pf equal_adt(pf a, pf b) {
   return PF_TRUE;
 }
 
+// structural hash consistent with equal_adt (constructor tag -- an
+// interned symbol word -- plus field count and ordered fields)
+static uint64_t hash_adt(pf v) {
+  int64_t nf = pf_len_of(v) - 1;
+  uint64_t h = pf_mix64(0xAD70A9ULL ^ (uint64_t)nf);
+  h = pf_mix64(h ^ (uint64_t)pf_heap_ptr(v)[1]);          // tag symbol (canonical word)
+  for (int64_t i = 0; i < nf; i++) h = pf_mix64(h ^ pf_hash(pf_heap_ptr(v)[2 + i]));
+  return h;
+}
+
 void pf_lib_adt_init(void) {
-  static const pf_kind_desc desc = { "adt", display_adt, equal_adt };
+  static const pf_kind_desc desc = { "adt", display_adt, equal_adt, hash_adt };
   pf_register_kind(PF_KIND_ADT, &desc);
 }

@@ -43,7 +43,15 @@ static pf equal_pair(pf a, pf b) {
                  pf_equal(pf_heap_ptr(a)[2], pf_heap_ptr(b)[2]) == PF_TRUE);
 }
 
+// structural hash consistent with equal_pair (car then cdr, ordered)
+static uint64_t hash_pair(pf v) {
+  uint64_t h = 0x9E3779B97F4A7C15ULL;              // pair seed
+  h = pf_mix64(h ^ pf_hash(pf_heap_ptr(v)[1]));    // car
+  h = pf_mix64(h ^ pf_hash(pf_heap_ptr(v)[2]));    // cdr
+  return h;
+}
+
 void pf_lib_pairs_init(void) {
-  static const pf_kind_desc desc = { "pair", display_pair, equal_pair };
+  static const pf_kind_desc desc = { "pair", display_pair, equal_pair, hash_pair };
   pf_register_kind(PF_KIND_PAIR, &desc);
 }

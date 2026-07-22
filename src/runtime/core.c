@@ -208,6 +208,29 @@ pf pf_equal(pf a, pf b) {
   return PF_FALSE;
 }
 
+// fmix64 (the MurmurHash3 finalizer): a bijective avalanche on 64-bit
+// words. Good distribution; used both to hash a canonical value word
+// and to fold sub-hashes together.
+uint64_t pf_mix64(uint64_t x) {
+  x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+  x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
+  x ^= x >> 33;
+  return x;
+}
+
+// Structural hash consistent with pf_equal (see puffin.h). Fixnums,
+// symbols and immediates ARE their canonical word, so hashing the word
+// is already structural for them; heap kinds dispatch to their
+// registered `hash` handler, falling back to identity for kinds whose
+// equal? is identity-only (closures, foreign handles, mutable
+// collections).
+uint64_t pf_hash(pf v) {
+  if ((v & PF_TAG_MASK) != PF_TAG_HEAP) return pf_mix64((uint64_t)v);
+  int k = pf_kind_of(v);
+  if (k > 0 && k < PF_KIND_MAX && kinds[k].hash) return kinds[k].hash(v);
+  return pf_mix64((uint64_t)v);
+}
+
 // ---------------------------------------------------------------
 // I/O
 // ---------------------------------------------------------------

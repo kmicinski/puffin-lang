@@ -40,6 +40,17 @@ static pf equal_string(pf a, pf b) {
                  memcmp(pf_heap_ptr(a) + 1, pf_heap_ptr(b) + 1, pf_len_of(a)) == 0);
 }
 
+// structural hash consistent with equal_string (length + bytes): FNV-1a
+// over the payload, avalanched. Two equal? strings (a literal and a
+// computed one) hash identically, so they key an immutable set/hash.
+static uint64_t hash_string(pf v) {
+  int64_t n = pf_len_of(v);
+  const unsigned char *b = (const unsigned char *)(pf_heap_ptr(v) + 1);
+  uint64_t h = 1469598103934665603ULL;             // FNV-1a offset basis
+  for (int64_t i = 0; i < n; i++) { h ^= b[i]; h *= 1099511628211ULL; }
+  return pf_mix64(h ^ (uint64_t)n);
+}
+
 pf pf_string_equal_huh(pf a, pf b) {
   pf_expect_kind(a, PF_KIND_STRING);
   pf_expect_kind(b, PF_KIND_STRING);
@@ -109,7 +120,7 @@ static void display_string(pf v, FILE *out) {
 }
 
 void pf_lib_strings_init(void) {
-  static const pf_kind_desc desc = { "string", display_string, equal_string };
+  static const pf_kind_desc desc = { "string", display_string, equal_string, hash_string };
   pf_register_kind(PF_KIND_STRING, &desc);
 }
 

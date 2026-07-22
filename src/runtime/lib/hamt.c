@@ -15,10 +15,17 @@
 // root to leaf; everything else is shared, which is what makes
 // `(hash-set h k v)` cheap enough to be the default idiom.
 //
-// A load-bearing simplification: keys are tagged words compared by
-// identity, and the hash is fmix64, a *bijection* on 64-bit words.
-// Distinct keys therefore have distinct hashes and can never share
-// all eleven 6-bit chunks: no collision buckets exist in this trie.
+// Keys are keyed STRUCTURALLY: the hash is pf_hash (consistent with
+// pf_equal) and keys compare by pf_equal. So heap values -- lists,
+// vectors, ADTs, computed strings, nested immutable collections --
+// work as elements/keys, not just interned scalars.
+//
+// pf_hash is not a bijection, so distinct-but-unequal keys CAN share
+// all 64 hash bits. Such a full-hash collision is stored in a
+// collision node: a leaf holding a linear list of entries, searched
+// with pf_equal. Collision nodes are distinguished from trie nodes by
+// (n[0] & n[1]) != 0 -- impossible for a trie node, whose datamap and
+// nodemap are disjoint by construction (see is_collision).
 //
 // Removal leaves single-entry nodes uncollapsed (correct, slightly
 // sparser than a textbook CHAMP after heavy deletion).
@@ -33,12 +40,8 @@
 #define PF_KIND_IHASH 16
 #define PF_KIND_ISET  17
 
-static uint64_t hash_word(uint64_t x) {
-  x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
-  x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
-  x ^= x >> 33;
-  return x;
-}
+// keys are equal? if identical or structurally equal
+static inline int key_eq(pf a, pf b) { return a == b || pf_equal(a, b) == PF_TRUE; }
 
 // ---------------------------------------------------------------
 // Nodes. Layout (all int64 words):
@@ -82,8 +85,63 @@ static node copy_node(node n) {
   return m;
 }
 
+// ---- collision nodes -------------------------------------------------
+// A collision node holds entries whose keys share the same full 64-bit
+// pf_hash but are not pf_equal. Layout: [0]=1 [1]=1 (the marker word
+// pair, giving n[0]&n[1] != 0) [2]=count, then count*2 (k,v) words.
+// A trie node always has datamap&nodemap==0, so the marker is
+// unambiguous.
+static inline int is_collision(node n) {
+  return n && (((uint64_t)n[0] & (uint64_t)n[1]) != 0);
+}
+static inline int coll_count(node n) { return (int)n[2]; }
+static inline pf *coll_entry(node n, int i) { return (pf *)&n[3 + 2 * i]; }
+static node alloc_collision(int count) {
+  node n = (node)pf_alloc_raw((3 + 2 * count) * 8);
+  n[0] = 1; n[1] = 1; n[2] = count;
+  return n;
+}
+// find key k in a collision node, or -1
+static int coll_find(node n, pf k) {
+  for (int i = 0, c = coll_count(n); i < c; i++)
+    if (key_eq(coll_entry(n, i)[0], k)) return i;
+  return -1;
+}
+// insert/overwrite (k,v) in a collision node; *added set if key is new
+static node coll_insert(node n, pf k, pf v, int *added) {
+  int i = coll_find(n, k);
+  if (i >= 0) {
+    node m = alloc_collision(coll_count(n));
+    for (int j = 0, c = coll_count(n); j < c; j++) {
+      coll_entry(m, j)[0] = coll_entry(n, j)[0];
+      coll_entry(m, j)[1] = coll_entry(n, j)[1];
+    }
+    coll_entry(m, i)[1] = v;
+    *added = 0;
+    return m;
+  }
+  int c = coll_count(n);
+  node m = alloc_collision(c + 1);
+  for (int j = 0; j < c; j++) {
+    coll_entry(m, j)[0] = coll_entry(n, j)[0];
+    coll_entry(m, j)[1] = coll_entry(n, j)[1];
+  }
+  coll_entry(m, c)[0] = k;
+  coll_entry(m, c)[1] = v;
+  *added = 1;
+  return m;
+}
+// build a fresh 2-entry collision node
+static node make_collision2(pf k0, pf v0, pf k1, pf v1) {
+  node m = alloc_collision(2);
+  coll_entry(m, 0)[0] = k0; coll_entry(m, 0)[1] = v0;
+  coll_entry(m, 1)[0] = k1; coll_entry(m, 1)[1] = v1;
+  return m;
+}
+
 // insert (k,v); *added = 1 if the key is new. Returns the new root.
 static node node_insert(node n, uint64_t h, int shift, pf k, pf v, int *added) {
+  if (is_collision(n)) return coll_insert(n, k, v, added);
   uint64_t bit = bit_of(h, shift);
   if (n == 0) {
     node m = alloc_node(bit, 0);
@@ -96,20 +154,25 @@ static node node_insert(node n, uint64_t h, int shift, pf k, pf v, int *added) {
   if (datamap & bit) {
     int i = index_of(datamap, bit);
     pf k0 = entry_at(n, i)[0], v0 = entry_at(n, i)[1];
-    if (k0 == k) {
+    if (key_eq(k0, k)) {
       // overwrite in place (copy)
       node m = copy_node(n);
       entry_at(m, i)[1] = v;
       *added = 0;
       return m;
     }
-    // two distinct keys in one chunk: push the old entry down a
-    // level and retry (their hashes differ, so this terminates)
-    uint64_t h0 = hash_word((uint64_t)k0);
-    node sub = 0;
-    int dummy;
-    sub = node_insert(sub, h0, shift + 6, k0, v0, &dummy);
-    sub = node_insert(sub, h, shift + 6, k, v, &dummy);
+    // two distinct keys in one chunk: push the old entry down a level.
+    // If their full hashes are equal (or the hash bits are exhausted),
+    // no depth can separate them -- store both in a collision node.
+    uint64_t h0 = pf_hash(k0);
+    node sub;
+    if (h0 == h || shift + 6 >= 64) {
+      sub = make_collision2(k0, v0, k, v);
+    } else {
+      int dummy;
+      sub = node_insert((node)0, h0, shift + 6, k0, v0, &dummy);
+      sub = node_insert(sub, h, shift + 6, k, v, &dummy);
+    }
     // new node: entry i removed, child added
     uint64_t ndata = datamap & ~bit;
     uint64_t nnode = nodemap | bit;
@@ -159,11 +222,17 @@ static node node_insert(node n, uint64_t h, int shift, pf k, pf v, int *added) {
 // lookup: returns 1 and writes *out if present
 static int node_lookup(node n, uint64_t h, int shift, pf k, pf *out) {
   while (n) {
+    if (is_collision(n)) {
+      int i = coll_find(n, k);
+      if (i < 0) return 0;
+      *out = coll_entry(n, i)[1];
+      return 1;
+    }
     uint64_t bit = bit_of(h, shift);
     uint64_t datamap = (uint64_t)n[0], nodemap = (uint64_t)n[1];
     if (datamap & bit) {
       int i = index_of(datamap, bit);
-      if (entry_at(n, i)[0] == k) { *out = entry_at(n, i)[1]; return 1; }
+      if (key_eq(entry_at(n, i)[0], k)) { *out = entry_at(n, i)[1]; return 1; }
       return 0;
     }
     if (!(nodemap & bit)) return 0;
@@ -176,11 +245,26 @@ static int node_lookup(node n, uint64_t h, int shift, pf k, pf *out) {
 // remove k; *removed set if it was present. (No node collapsing.)
 static node node_remove(node n, uint64_t h, int shift, pf k, int *removed) {
   if (n == 0) { *removed = 0; return 0; }
+  if (is_collision(n)) {
+    int i = coll_find(n, k);
+    if (i < 0) { *removed = 0; return n; }
+    *removed = 1;
+    int c = coll_count(n);
+    if (c <= 1) return 0;                 // bucket emptied
+    node m = alloc_collision(c - 1);      // (may leave a 1-entry bucket; fine)
+    for (int j = 0, dst = 0; j < c; j++) {
+      if (j == i) continue;
+      coll_entry(m, dst)[0] = coll_entry(n, j)[0];
+      coll_entry(m, dst)[1] = coll_entry(n, j)[1];
+      dst++;
+    }
+    return m;
+  }
   uint64_t bit = bit_of(h, shift);
   uint64_t datamap = (uint64_t)n[0], nodemap = (uint64_t)n[1];
   if (datamap & bit) {
     int i = index_of(datamap, bit);
-    if (entry_at(n, i)[0] != k) { *removed = 0; return n; }
+    if (!key_eq(entry_at(n, i)[0], k)) { *removed = 0; return n; }
     *removed = 1;
     uint64_t ndata = datamap & ~bit;
     node m = alloc_node(ndata, nodemap);
@@ -209,6 +293,11 @@ static node node_remove(node n, uint64_t h, int shift, pf k, int *removed) {
 // fold every entry through a callback
 static void node_walk(node n, void (*fn)(pf k, pf v, void *acc), void *acc) {
   if (n == 0) return;
+  if (is_collision(n)) {
+    for (int i = 0, c = coll_count(n); i < c; i++)
+      fn(coll_entry(n, i)[0], coll_entry(n, i)[1], acc);
+    return;
+  }
   for (int i = 0; i < n_entries(n); i++) fn(entry_at(n, i)[0], entry_at(n, i)[1], acc);
   for (int i = 0; i < n_children(n); i++) node_walk(*child_at(n, i), fn, acc);
 }
@@ -250,26 +339,26 @@ pf pf_iset_empty(void) {
 pf pf_ihash_set(pf hv, pf k, pf v) {
   pf_expect_kind(hv, PF_KIND_IHASH);
   int added = 0;
-  node root = node_insert(root_node(hv), hash_word((uint64_t)k), 0, k, v, &added);
+  node root = node_insert(root_node(hv), pf_hash(k), 0, k, v, &added);
   return make_root(PF_KIND_IHASH, root_count(hv) + added, root);
 }
 
 pf pf_ihash_remove(pf hv, pf k) {
   pf_expect_kind(hv, PF_KIND_IHASH);
   int removed = 0;
-  node root = node_remove(root_node(hv), hash_word((uint64_t)k), 0, k, &removed);
+  node root = node_remove(root_node(hv), pf_hash(k), 0, k, &removed);
   if (!removed) return hv;
   return make_root(PF_KIND_IHASH, root_count(hv) - 1, root);
 }
 
 int pf_ihash_lookup(pf hv, pf k, pf *out) {
-  return node_lookup(root_node(hv), hash_word((uint64_t)k), 0, k, out);
+  return node_lookup(root_node(hv), pf_hash(k), 0, k, out);
 }
 
 pf pf_iset_add(pf sv, pf k) {
   pf_expect_kind(sv, PF_KIND_ISET);
   int added = 0;
-  node root = node_insert(root_node(sv), hash_word((uint64_t)k), 0, k, PF_TRUE, &added);
+  node root = node_insert(root_node(sv), pf_hash(k), 0, k, PF_TRUE, &added);
   if (!added) return sv;
   return make_root(PF_KIND_ISET, root_count(sv) + 1, root);
 }
@@ -277,7 +366,7 @@ pf pf_iset_add(pf sv, pf k) {
 pf pf_iset_remove(pf sv, pf k) {
   pf_expect_kind(sv, PF_KIND_ISET);
   int removed = 0;
-  node root = node_remove(root_node(sv), hash_word((uint64_t)k), 0, k, &removed);
+  node root = node_remove(root_node(sv), pf_hash(k), 0, k, &removed);
   if (!removed) return sv;
   return make_root(PF_KIND_ISET, root_count(sv) - 1, root);
 }
@@ -322,7 +411,7 @@ static void check_entry_set(pf k, pf v, void *a) {
   (void)v;
   if (!acc->ok) return;
   pf dummy;
-  if (!node_lookup(root_node(acc->other), hash_word((uint64_t)k), 0, k, &dummy)) acc->ok = 0;
+  if (!node_lookup(root_node(acc->other), pf_hash(k), 0, k, &dummy)) acc->ok = 0;
 }
 static pf equal_iset(pf a, pf b) {
   if (root_count(a) != root_count(b)) return PF_FALSE;
@@ -334,9 +423,34 @@ static pf equal_iset(pf a, pf b) {
 static void display_ihash(pf v, FILE *out) { fprintf(out, "#<hash:%" PRId64 ">", root_count(v)); }
 static void display_iset(pf v, FILE *out)  { fprintf(out, "#<set:%" PRId64 ">", root_count(v)); }
 
+// ---------------------------------------------------------------
+// structural hash handlers -- ORDER-INDEPENDENT, since equal? on these
+// collections is order-independent. Per-entry hashes are combined with
+// a commutative op (addition) so iteration order cannot matter.
+// ---------------------------------------------------------------
+struct hash_acc { uint64_t sum; };
+static void hash_entry_set(pf k, pf v, void *a) {
+  (void)v;
+  ((struct hash_acc *)a)->sum += pf_mix64(pf_hash(k));
+}
+static uint64_t hash_iset(pf v) {
+  struct hash_acc acc = { 0 };
+  node_walk(root_node(v), hash_entry_set, &acc);
+  return pf_mix64(0x5E70A9ULL ^ (uint64_t)root_count(v) ^ acc.sum);
+}
+static void hash_entry_hash(pf k, pf v, void *a) {
+  // combine key and value for this entry, then add (commutative)
+  ((struct hash_acc *)a)->sum += pf_mix64(pf_hash(k) ^ pf_mix64(pf_hash(v)));
+}
+static uint64_t hash_ihash(pf v) {
+  struct hash_acc acc = { 0 };
+  node_walk(root_node(v), hash_entry_hash, &acc);
+  return pf_mix64(0x4A5EULL ^ (uint64_t)root_count(v) ^ acc.sum);
+}
+
 void pf_lib_hamt_init(void) {
-  static const pf_kind_desc hdesc = { "hash", display_ihash, equal_ihash };
-  static const pf_kind_desc sdesc = { "set", display_iset, equal_iset };
+  static const pf_kind_desc hdesc = { "hash", display_ihash, equal_ihash, hash_ihash };
+  static const pf_kind_desc sdesc = { "set", display_iset, equal_iset, hash_iset };
   pf_register_kind(PF_KIND_IHASH, &hdesc);
   pf_register_kind(PF_KIND_ISET, &sdesc);
   // The empty-singleton cache cells above are GC-pointer-holding

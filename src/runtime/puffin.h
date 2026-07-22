@@ -133,6 +133,16 @@ void pf_display_value_to(pf v, FILE *out);
 // kind registry. Returns PF_TRUE / PF_FALSE.
 pf pf_equal(pf a, pf b);
 
+// Structural hash, CONSISTENT with pf_equal: equal? values hash the
+// same. Dispatches through the kind registry's `hash` handler (see
+// pf_kind_desc); immediates/symbols/fixnums hash their canonical
+// word, heap kinds without a hash handler hash by identity (matching
+// their identity-only equal?). Used to key the immutable HAMT
+// collections structurally. pf_mix64 is the fmix64 finalizer, a good
+// 64-bit avalanche used to fold words together.
+uint64_t pf_hash(pf v);
+uint64_t pf_mix64(uint64_t x);
+
 // Symbol interning (also used by string->symbol).
 int64_t pf_intern_symbol(const char *name);
 const char *pf_symbol_name(pf sym);
@@ -148,6 +158,10 @@ typedef struct {
   const char *name;              // e.g. "hash" -> prints #<hash ...> by default
   void (*display)(pf v, FILE *); // NULL: print #<name>
   pf (*equal)(pf a, pf b);       // NULL: identity only
+  uint64_t (*hash)(pf v);        // NULL: identity hash (pf_mix64 of the word).
+                                 // MUST be provided whenever `equal` is a
+                                 // STRUCTURAL comparison, and consistent with
+                                 // it: a==b (by equal) implies hash(a)==hash(b).
 } pf_kind_desc;
 
 void pf_register_kind(int kind, const pf_kind_desc *desc);

@@ -126,12 +126,15 @@ Data:
 immutable; hashes and sets are immutable *by default* — `hash-set`
 returns a new hash sharing structure with the old (a persistent HAMT
 in the native runtime, so it's O(log n), not a copy), and immutable
-collections compare by value under `equal?`. Mutability is tolerated
-where you ask for it: `set!`, vectors (the raw mutable building
-block), and the `make-hash`/`hash-set!` family, which are identity-
-compared and eq?-keyed open-addressing tables. Keys in either flavor
-are compared by identity — the right notion for fixnums, booleans,
-and (interned) symbols.
+collections compare by value under `equal?`. Immutable hashes and sets
+key **structurally** (by `equal?`): heap values — lists, vectors,
+ADTs, computed strings, nested collections — are valid keys and
+elements, deduped by content, exactly like fixnums and symbols.
+Mutability is tolerated where you ask for it: `set!`, vectors (the raw
+mutable building block), and the `make-hash`/`hash-set!` family, which
+are eq?-keyed open-addressing tables — identity-keyed, so heap keys in
+a *mutable* collection are distinguished by object identity, not
+content.
 
 Predicates: `fixnum? boolean? symbol? void? procedure? pair? null?
 vector? string? hash? set?`.

@@ -345,8 +345,14 @@
    ;; 64-way fanout; extension kinds 16/17). `hash-set` returns a new
    ;; hash; the input is untouched. Mutability is tolerated, not
    ;; default: see make-hash / make-set below.
-   (prim-spec 'hash     0 'pf_ihash_empty #t (λ () (hasheqv))
-              "The empty immutable hash. (hash k v ...) builds one by chained hash-set."
+   ;;
+   ;; Keyed STRUCTURALLY (by equal?): heap values -- lists, vectors,
+   ;; ADTs, computed strings, nested collections -- are valid keys and
+   ;; elements, deduped by content (lib/hamt.c uses pf_hash + pf_equal;
+   ;; the interpreter mirrors this with Racket's equal?-based (hash) /
+   ;; (set), NOT hasheqv / seteqv, so interp and compiled agree).
+   (prim-spec 'hash     0 'pf_ihash_empty #t (λ () (hash))
+              "The empty immutable hash (keyed by equal?). (hash k v ...) builds one by chained hash-set."
               #:type '(-> (Hash _ _)))
    (prim-spec 'hash-set 3 'pf_ihash_set #t hash-set
               "A new immutable hash: like the input, with key mapped to value."
@@ -354,8 +360,8 @@
    (prim-spec 'hash-remove 2 'pf_ihash_remove #t hash-remove
               "A new immutable hash: like the input, without the key."
               #:type '(-> (Hash k v) k (Hash k v)))
-   (prim-spec 'set      0 'pf_iset_empty #t (λ () (seteqv))
-              "The empty immutable set. (set v ...) builds one by chained set-add."
+   (prim-spec 'set      0 'pf_iset_empty #t (λ () (set))
+              "The empty immutable set (keyed by equal?). (set v ...) builds one by chained set-add."
               #:type '(-> (Set _)))
    (prim-spec 'set-add  2 'pf_iset_add #t set-add
               "A new immutable set: like the input, with the value present."

@@ -64,7 +64,18 @@ static pf equal_vector(pf a, pf b) {
   return PF_TRUE;
 }
 
+// structural hash consistent with equal_vector (length + ordered
+// elements). NB vectors are mutable: like Racket's equal?-based
+// hashes, storing one as a key and then mutating it makes the key
+// unreachable -- the standard equal-hash caveat.
+static uint64_t hash_vector(pf v) {
+  int64_t n = pf_len_of(v);
+  uint64_t h = pf_mix64(0x56EC70A9ULL ^ (uint64_t)n);   // vector seed + length
+  for (int64_t i = 0; i < n; i++) h = pf_mix64(h ^ pf_hash(pf_heap_ptr(v)[1 + i]));
+  return h;
+}
+
 void pf_lib_vectors_init(void) {
-  static const pf_kind_desc desc = { "vector", display_vector, equal_vector };
+  static const pf_kind_desc desc = { "vector", display_vector, equal_vector, hash_vector };
   pf_register_kind(PF_KIND_VECTOR, &desc);
 }
