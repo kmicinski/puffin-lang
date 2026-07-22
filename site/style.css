@@ -74,7 +74,7 @@ a:hover { text-decoration: underline; }
   max-width: 46rem; margin: 0 auto; padding: 3.5rem 1.2rem 1rem;
   text-align: center;
 }
-.hero-logo { display: inline-block; font-size: 4.5rem; line-height: 1; }
+.hero-logo { display: block; margin: 0 auto 0.5rem; font-size: 16rem; line-height: 1; }
 .hero h1 {
   margin: 0.4rem 0 0.6rem; color: var(--ink);
   font-size: 3rem; letter-spacing: -0.02em;
