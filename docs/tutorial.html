@@ -110,7 +110,7 @@ thead th { color: var(--text-secondary); font-weight: 600; }
     <summary>Contents</summary>
     <div class="toc-title">Puffin for Racketeers</div>
     <a href="#hero">What Puffin is</a>
-    <a href="#core">The familiar core</a>
+    <a href="#core">What carries over from Racket</a>
     <a href="#matching">Pattern matching</a>
     <a href="#types">Gradual types</a>
     <a href="#modules">Modules</a>
@@ -123,21 +123,23 @@ thead th { color: var(--text-secondary); font-weight: 600; }
 
 <section id="hero">
 <h1>Puffin for Racketeers</h1>
-<p class="lede">Puffin is a Racket-family language that started as a PL-course
-compiler and grew real: a <strong>self-hosting compiler</strong> with native
-(arm64, x86-64) and bytecode backends, <strong>gradual types</strong> built on
-algebraic datatypes, a file-based <strong>module system</strong> with separate
-compilation — and it now beats Racket-on-Chez on its own benchmark suite. The
-same compiler runs in the <a href="#running">browser playground</a>, compiled to
-bytecode on a WebAssembly VM. If you took an undergrad PL course and
-know Racket, you already know most of Puffin. This tutorial is about the
-<em>differences</em>: each one shown as a Racket/Puffin pair, with a paragraph on why.</p>
+<p class="lede">Puffin is a small Racket-family language. It began as a
+compilers-course project and was extended — with Claude Code — into a
+<strong>self-hosting compiler</strong> (native arm64 and x86-64 backends, plus a
+bytecode VM), <strong>gradual types</strong> over algebraic datatypes, and a
+file-based <strong>module system</strong>. The same compiler runs in the
+<a href="#running">browser playground</a>, compiled to bytecode on a WebAssembly
+VM. If you know Racket, most of Puffin will read as familiar; this tutorial
+walks the <em>differences</em>, each as a Racket/Puffin pair with a note on why
+it works that way. It is a young language with rough edges, and some of its
+design decisions are still open to second-guessing — those are called out where
+they come up rather than papered over.</p>
 
 <div class="tiles">
-  <div class="tile"><div class="n">0.95×</div><div class="l">geometric-mean wall time vs Racket 8.15 (Chez), 14 paired benchmarks, arm64 (&lt;1 is faster) — <code>bench/report.html</code></div></div>
-  <div class="tile"><div class="n">stage 3 ≡ stage 2</div><div class="l">self-hosting fixpoint: <code>puffincc</code>, the compiler written in Puffin, compiles itself byte-identically</div></div>
-  <div class="tile"><div class="n">297 / 297</div><div class="l">untyped golden checks that still pass under the typechecker — the gradual guarantee, measured</div></div>
-  <div class="tile"><div class="n">9 ms</div><div class="l">process startup for a compiled Puffin binary (vs 147 ms for <code>racket</code>)</div></div>
+  <div class="tile"><div class="n">stage 3 ≡ stage 2</div><div class="l">the self-hosting fixpoint: <code>puffincc</code>, written in Puffin, compiles itself byte-identically</div></div>
+  <div class="tile"><div class="n">297 / 309</div><div class="l">golden programs with no annotations that still pass under the typechecker — the gradual guarantee, measured</div></div>
+  <div class="tile"><div class="n">no Racket</div><div class="l"><code>bin/bootstrap</code> rebuilds the whole compiler from a committed bytecode seed with only a C toolchain</div></div>
+  <div class="tile"><div class="n">in your browser</div><div class="l">the same compiler, on a WebAssembly build of the VM — the playground runs it, not a re-implementation</div></div>
 </div>
 
 <p>Ten lines of typed Puffin — an interpreter, of course:</p>
@@ -161,8 +163,8 @@ verbatim. Every example also pastes straight into the
 </section>
 
 <section id="core">
-<h2>The familiar core</h2>
-<p>Most of your Racket muscle memory transfers directly:</p>
+<h2>What carries over from Racket</h2>
+<p>Most of what you already know from Racket works unchanged:</p>
 <p>
 <span class="badge">only <code>#f</code> is false</span>
 <span class="badge">proper tail calls</span>
@@ -230,16 +232,17 @@ follow the same story. Pairs are immutable, full stop: there is no
 </code></pre></div>
 </div>
 <p>Puffin trades Racket's numeric tower for one unboxed machine representation:
-fixnums fit in a tagged 64-bit word, so arithmetic compiles to arithmetic. This is
-where a lot of the benchmark numbers come from, and for compilers, interpreters,
-and data-structure work — the language's home turf — it is the honest trade. The
-compiled routes — native code and the bytecode VM the playground runs on — share
-one 61-bit tagged representation; the Racket-hosted reference interpreter uses
-arbitrary precision, so if you overflow 2^60 its answer can disagree with the
-compiled one. This is a representation seam, documented honestly: the type
-system's casts check a value's <em>shape</em> (an overflowed fixnum is still an
-<code>Int</code>), so they do not close it — course-scale arithmetic never gets
-near 2^60.</p>
+a fixnum fits in a tagged 64-bit word, so arithmetic compiles straight to machine
+arithmetic. That keeps the compiler and its data structures fast, but it is a
+genuine limitation — there are no floats, no bignums, no rationals, and code that
+needs them has to build them itself or reach across the FFI. There is also a seam
+between routes: native code and the bytecode VM share one 61-bit tagged
+representation, while the Racket-hosted reference interpreter uses arbitrary
+precision, so a program that overflows 2^60 can get different answers from the
+two. The type system does not close that seam — its casts check a value's
+<em>shape</em>, and an overflowed fixnum is still an <code>Int</code>. It is a
+real sharp edge, worth knowing about, even if course-scale arithmetic rarely
+reaches it.</p>
 </section>
 
 <section id="matching">
@@ -266,8 +269,8 @@ both languages (modulo <code>#lang</code>):</p>
 (println (analyze 7))                   ;; number
 </code></pre>
 <p>Under nested ellipsis each variable collects a list of its per-element matches,
-Racket-style — this is the idiom the Puffin compiler itself is written in. So far,
-no difference. The difference is what you match <em>on</em>.</p>
+as in Racket — this is the idiom the Puffin compiler itself is written in. None of
+this differs from Racket; what differs is what you match <em>on</em>.</p>
 
 <h3>The same interpreter, two ways</h3>
 <div class="pair">
@@ -313,9 +316,9 @@ s-expression can leak in, and nothing owns the set of cases. In the ADT version,
 recognizes it because <code>Add</code> is bound as a constructor — and the type
 declaration is the single place the shape of expressions is defined.</p>
 
-<p>Here is the argument in one typo. Misspell a quasiquote tag and you get a
-clause that silently never matches — your program dies at runtime, on the input
-that should have worked. Misspell a constructor and the compiler stops you
+<p>The difference shows up in a single typo. Misspell a quasiquote tag and you
+get a clause that silently never matches — the program dies at runtime, on the
+input that should have worked. Misspell a constructor and the compiler stops you
 immediately, even when the bad clause is unreachable:</p>
 <div class="pair">
 <div><div class="side-label rkt">Quasiquote typo: dead clause, runtime failure</div>
@@ -359,9 +362,9 @@ every ADT — which is what makes exhaustiveness checking possible at all.</p>
 </code></pre>
 <p>A nullary constructor is a <em>value</em>, not a function you call:
 <code>Point</code>, not <code>(Point)</code> — in expressions and in patterns
-alike. This reads like ML. A bare pattern symbol that names a nullary constructor
-matches that constructor; anything else stays a binder, exactly as today, so
-untyped code cannot change meaning.</p>
+alike, as in ML. A bare pattern symbol that names a nullary constructor matches
+that constructor; anything else stays a binder, exactly as before, so untyped
+code cannot change meaning.</p>
 
 <aside class="qa">
 <div class="q">Do types flow into <code>match</code>?</div>
@@ -397,12 +400,12 @@ per the gradual guarantee — and a genuine fall-through at runtime still raises
 
 <section id="types">
 <h2>Gradual types</h2>
-<p>This is the centerpiece. Typed Racket's answer to "how do I type Scheme?" is a
-<em>second language</em>: a separate <code>#lang</code>, subtyping with unions,
-occurrence typing, contracts at module boundaries. Puffin's answer is one language
-where the unannotated type is <code>_</code> (Any) and annotations only ever
-tighten. Whole programs with no annotations typecheck by construction — gradual,
-not optional-but-nagging.</p>
+<p>Gradual typing is where Puffin departs most from both Racket and Typed Racket.
+Typed Racket's answer to "how do I type Scheme?" is a <em>second language</em>: a
+separate <code>#lang</code>, subtyping with unions, occurrence typing, contracts
+at module boundaries. Puffin's answer is one language in which the unannotated
+type is <code>_</code> (Any) and annotations only ever tighten it. A whole
+program with no annotations typechecks as written.</p>
 
 <h3>Declaring types: <code>define-type</code>, implicitly mutually recursive</h3>
 <div class="pair">
@@ -449,8 +452,8 @@ struct-per-variant plus a union on the side. And there is no <code>fix</code> or
 <code>and</code> block for mutual recursion: <strong>all
 <code>define-type</code>s in a module form one implicitly mutually recursive
 group</strong>, mirroring how top-level <code>define</code>s are already
-letrec*-recursive. Types behave the way values do; anything else would feel
-foreign. Parameterized types work as you'd expect:
+letrec*-recursive — types follow the same scoping rule as values. Parameterized
+types work the same way:
 <code>(define-type (Option a) (None) (Some a))</code> gives
 <code>Some : (-&gt; a (Option a))</code> and <code>None : (Option a)</code>.</p>
 
@@ -829,8 +832,8 @@ top level runs — a missing library or symbol is a <em>load-time</em> error.
 width spellings <code>I8</code>…<code>U64</code> for narrow C types),
 <code>Bool</code>, <code>Str</code> (borrowed out, copied in), <code>Void</code>
 results, opaque handle types, and <code>(Nullable τ)</code> results, which map
-C's <code>NULL</code> to <code>#f</code> — C's billion-dollar mistake stays
-quarantined in the marshaler. A foreign name is an ordinary binding:
+C's <code>NULL</code> to <code>#f</code> so a null pointer never reaches your
+code as a bare word. A foreign name is an ordinary binding:
 <code>procedure?</code> says <code>#t</code>, it <code>provide</code>s, and
 <code>(map c-abs xs)</code> works.</p>
 <aside class="qa">
@@ -993,8 +996,8 @@ reference), <code>docs/TYPES.md</code> (the type system design),
 <code>docs/MODULES.md</code> (modules and separate compilation),
 <code>docs/OPTIMIZER.md</code> (the three optimization levels),
 <code>docs/BYTECODE.md</code> + <code>docs/WASM-VM.md</code> (the bytecode VM and
-the browser architecture), and <code>bench/report.html</code> (the full benchmark
-report this page's numbers come from).</p>
+the browser architecture), and <code>bench/report.html</code> (benchmarks against
+Racket — the wins and the losses both).</p>
 </section>
 
 </main>

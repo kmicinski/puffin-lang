@@ -363,10 +363,14 @@ and per-optimization-level measurements, run {meta['n_runs']}× each on {html.es
 Racket {html.escape(meta['racket_version'].replace('Welcome to Racket v', ''))} (Chez backend, bytecode pre-compiled
 with <code>raco make</code>); Puffin via its native arm64 and x86-64 (Rosetta) backends at <code>-O1</code>.
 All {len(R["benchmarks"]) * len(ROUTES)} program outputs agree byte-for-byte.</p>
+<p class="note">This is a small, self-selected suite — a sanity check on the compiler across
+optimization levels, not a verdict against a system as mature and heavily tuned as Chez.
+Read the per-benchmark numbers, not a headline: Puffin is ahead on some and behind on others,
+and the losses (below) are the more informative half.</p>
 
 <div class="tiles">
   <div class="tile"><div class="n">{geomean:.2f}×</div><div class="l">geometric-mean wall time vs Racket (arm64; &lt;1 is faster)</div></div>
-  <div class="tile"><div class="n">{wins} / {len(ratio_rows)}</div><div class="l">benchmarks where Puffin arm64 beats Racket outright</div></div>
+  <div class="tile"><div class="n">{wins} / {len(ratio_rows)}</div><div class="l">benchmarks where Puffin arm64 is faster — Racket wins the rest</div></div>
   <div class="tile"><div class="n">{meta['puffin_startup']*1000:.0f} ms vs {meta['racket_startup']*1000:.0f} ms</div><div class="l">process startup, Puffin binary vs <code>racket</code> (measured, subtract mentally for tiny scripts)</div></div>
   <div class="tile"><div class="n">294 ×route</div><div class="l">corpus golden checks (98 programs × 3 inputs, modules included): hosted arm64, hosted x86-64, and <strong>puffincc</strong> (the compiler written in Puffin)</div></div>
   <div class="tile"><div class="n">stage 3 ≡ stage 2</div><div class="l">self-hosting fixpoint: puffincc compiling its own module DAG is byte-identical</div></div>

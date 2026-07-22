@@ -261,27 +261,32 @@ ceiling still degrades gracefully to `-O1` in both.
 
 ## Performance
 
-On the 14-benchmark suite (`bench/`), measured against Racket CS
-(the Chez backend):
+There is a small 14-benchmark suite (`bench/`) run against Racket CS
+(the Chez backend). Read it for what it is: a tiny, self-selected set
+of programs, useful for keeping the optimizer honest across `-O`
+levels, not a basis for any claim about beating Chez. Chez is a mature
+system with decades of tuning behind it, and this suite is not the
+evidence that would settle a comparison. On these programs Puffin's
+native code lands in the same broad ballpark — ahead on some, behind
+on others.
 
-- geomean **0.954× Racket — faster overall**, with 8/14 outright
-  wins (fib and DPLL roughly 4× faster; regex and strings 2–3×);
-- `-O1` is a 1.53× geomean improvement over `-O0`;
-- `-O2` adds about 1% geomean on these workloads — its clients
-  mostly matter on higher-order code the suite underweights.
+What the suite does show reliably is the effect of the levels
+themselves: `-O1` is roughly a 1.5× geomean improvement over `-O0`;
+`-O2` adds about 1% on these workloads (its clients mostly matter on
+higher-order code the suite underweights).
 
-Where Chez still wins, and why:
+Where Puffin is clearly slower, the causes are understood:
 
-- **sort / symdiff (≈3×)** — pure small-object allocation churn:
-  Boehm's allocation path against Chez's generational bump
+- **sort / symdiff** — small-object allocation churn: the Boehm
+  collector's allocation path against Chez's generational bump
   allocator.
-- **lc-interp / hamt (≈2×)** — persistent-hash operation constants;
-  closing this needs HAMT node specialization or flow-guided
+- **lc-interp / hamt** — persistent-hash operation constants; closing
+  this would need HAMT node specialization or a flow-guided
   environment representation.
 
 `bench/report.html` breaks every benchmark down per level, showing
-run time *and* compile time — the optimizer's own cost is a
-reported number, not a footnote.
+run time *and* compile time — the optimizer's own cost is a reported
+number, not a footnote.
 
 ## Testing discipline
 
