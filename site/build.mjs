@@ -144,7 +144,12 @@ function renderMarkdown(mdSource, { srcDir, pageDir }) {
 
 // ------------------------------------------------------------------ the shell
 
-const LOGO = `<svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><circle cx="29" cy="33" r="26" fill="var(--ink)"/><ellipse cx="22" cy="35" rx="15" ry="17" fill="var(--paper)"/><path d="M41 17 Q63 22 61 36 Q59 50 42 47 Q35 43 35 32 Q35 22 41 17Z" fill="#dc322f"/><path d="M41 17 Q55 20 58 28 L37 30 Q36 22 41 17Z" fill="#f2b53c"/><circle cx="24" cy="26" r="3.2" fill="var(--ink)"/></svg>`;
+// The logo is the plain penguin emoji (matches the playground header).
+const LOGO = `<span class="logo" aria-hidden="true">🐧</span>`;
+// Favicon: the same emoji drawn into an SVG tile.
+const FAVICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+  + '<text y=".9em" font-size="90">🐧</text></svg>';
 
 function page({ title, body, depth, active, description }) {
   const p = '../'.repeat(depth);
@@ -157,7 +162,7 @@ function page({ title, body, depth, active, description }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
-<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(LOGO.replace('var(--ink)', '%23073642').replace('var(--paper)', '%23fdf6e3').replace('var(--ink)', '%23073642'))}">
+<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(FAVICON)}">
 <link rel="stylesheet" href="${p}style.css">
 </head>
 <body>
