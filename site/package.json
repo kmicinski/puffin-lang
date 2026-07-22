@@ -1,0 +1,12 @@
+{
+  "name": "puffin-site",
+  "private": true,
+  "type": "module",
+  "description": "Static site generator for the Puffin GitHub Pages site (renders README.md + docs/).",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "marked": "^15.0.0"
+  }
+}
