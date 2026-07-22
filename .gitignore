@@ -30,6 +30,14 @@ bin/puffin-vm.wasm
 bin/puffin-vm-repl.wasm
 bin/puffin-vm-gctest
 
+# ...EXCEPT the three the GitHub Pages playground deploys: these are
+# TRACKED so CI (.github/workflows/pages.yml) can `npm run build` the
+# playground without a wasm toolchain. Regenerate at release points
+# with tools/gen-web-vm.sh (rebuild puffincc first) and re-commit.
+!web/public/puffin-vm.wasm
+!web/public/puffin-vm-repl.wasm
+!web/public/puffincc.pbc
+
 # the bootstrap seed (bin/bootstrap) is the ONE tracked .pbc:
 # puffincc compiled to bytecode. The web/public copies above stay
 # ignored; refresh the seed at release points with bin/refresh-boot.

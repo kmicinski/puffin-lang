@@ -27,12 +27,23 @@ export class EngineNotReady extends Error {
   constructor(msg) { super(msg); this.name = 'EngineNotReady'; }
 }
 
-// Where the built artifacts will live once the wasm build is on.
-// (vite serves web/public/ at the root; the Makefile's install step
-// will drop puffin-vm.wasm + puffincc.pbc there.)
-const VM_WASM_URL = '/puffin-vm.wasm';
-const VM_REPL_WASM_URL = '/puffin-vm-repl.wasm';
-const PUFFINCC_PBC_URL = '/puffincc.pbc';
+// The artifacts (puffin-vm.wasm, puffin-vm-repl.wasm, puffincc.pbc)
+// are vite public files. Resolving their URL so fetch() works from a
+// Worker, in dev AND in a built site at any base, needs two cases:
+//  - dev: vite serves web/public/ at the origin root, and this module
+//    is served from /src/…, so use an origin-absolute '/name'.
+//  - built: this module is bundled to <base>/assets/<chunk>.js and the
+//    public files sit at <base>/, one level up — resolve '../name'
+//    against import.meta.url so it tracks any base ('/play/' locally,
+//    '/<repo>/play/' on GitHub Pages). Non-literal so vite leaves it
+//    as a runtime expression rather than a build-time asset.
+const artifactUrl = (name) =>
+  import.meta.env.DEV
+    ? new URL('/' + name, self.location.origin).href
+    : new URL('../' + name, import.meta.url).href;
+const VM_WASM_URL = artifactUrl('puffin-vm.wasm');
+const VM_REPL_WASM_URL = artifactUrl('puffin-vm-repl.wasm');
+const PUFFINCC_PBC_URL = artifactUrl('puffincc.pbc');
 
 let compiledModule = null;     // cached WebAssembly.Module (command)
 let compiledReplModule = null; // cached WebAssembly.Module (reactor)

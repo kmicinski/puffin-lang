@@ -91,6 +91,10 @@ a:hover { text-decoration: underline; }
 }
 .button:hover { text-decoration: none; filter: brightness(1.07); }
 .button.ghost { background: transparent; color: var(--blue); }
+.button.primary {
+  background: var(--green); border-color: var(--green);
+  font-size: 1.08rem; padding: 0.62rem 1.4rem; box-shadow: 0 1px 6px rgba(133,153,0,0.35);
+}
 
 /* ------------------------------------------------------------------- prose */
 

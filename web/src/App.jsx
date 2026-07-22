@@ -346,7 +346,7 @@ export default function App() {
               running… {(elapsed() / 1000).toFixed(1)}s
             </div>
           </Show>
-          <a class="tutorial-link" href="/tutorial.html" target="_blank" rel="noopener"
+          <a class="tutorial-link" href="tutorial.html" target="_blank" rel="noopener"
              title="Open the Puffin tutorial in a new tab">
             📖 Tutorial ↗
           </a>

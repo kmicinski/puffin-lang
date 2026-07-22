@@ -201,6 +201,18 @@ fs.copyFileSync(path.join(ROOT, 'site/style.css'), path.join(OUT, 'style.css'));
 for (const f of ['tutorial.html', 'stdlib.html'])
   fs.copyFileSync(path.join(ROOT, 'docs', f), path.join(OUT, 'docs', f));
 
+// The web playground (built by `cd web && npm run build` → web/dist,
+// which bundles the wasm VM + puffincc.pbc). Copied to _site/play so
+// the landing page's "Try it in your browser" is a live, one-click
+// playground. Omitted with a warning if web/dist is absent.
+const PLAY_SRC = path.join(ROOT, 'web', 'dist');
+if (fs.existsSync(PLAY_SRC)) {
+  fs.cpSync(PLAY_SRC, path.join(OUT, 'play'), { recursive: true });
+} else {
+  console.warn('site/build: web/dist not found — playground omitted '
+    + '(run `cd web && npm run build` first)');
+}
+
 const DESCRIPTION =
   'Puffin: a minimal Scheme/ML-like functional language — self-hosting compiler, gradual types, modules, and a typed FFI.';
 
@@ -215,8 +227,9 @@ const DESCRIPTION =
   <p class="tagline">A minimal Scheme/ML-like functional language — self-hosting
   compiler, gradual types, modules, and a typed FFI.</p>
   <p class="cta">
-    <a class="button" href="#quick-start">Quick start</a>
+    <a class="button primary" href="play/index.html">▶ Try it in your browser</a>
     <a class="button" href="docs/tutorial.html">Puffin for Racketeers</a>
+    <a class="button" href="#quick-start">Quick start</a>
     <a class="button ghost" href="${GITHUB}">Source on GitHub</a>
   </p>
 </section>`;

@@ -22,6 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Build playground
+        run: |
+          cd web
+          npm ci
+          npm run build
       - name: Build site
         run: |
           cd site
