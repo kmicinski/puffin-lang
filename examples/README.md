@@ -1,10 +1,16 @@
 # Puffin examples
 
-Runnable, curated programs — the language by example (`lang/`) and
-the language against the real world (`ffi/`, `z3/`). Each example has
-a `.expect` golden; `tools/test-examples.sh` runs them all on both
-self-hosted routes (native and the bytecode VM) and holds the output
-to the golden.
+Curated, runnable Puffin programs. `lang/` shows the language by
+example; `ffi/` and `z3/` show it against the real world through the
+typed FFI. Every example ships with a `.expect` golden and is held
+to it on both self-hosted routes — native code and the bytecode VM —
+so everything on this page runs, verbatim, today.
+
+## Running them
+
+You need the compiler (`bin/bootstrap` builds `build/puffincc`;
+no Racket required). Compile and run an example directly, or let the
+test script run the whole set:
 
 ```
 build/puffincc examples/z3/sudoku.puf -o sudoku && ./sudoku
@@ -12,14 +18,8 @@ tools/test-examples.sh              # all of them, native + VM
 tools/test-examples.sh sudoku       # just one
 ```
 
-How examples relate to tests: they are the same pool, curated at
-different doors. The golden corpus (`src/test-programs/`, 309 checks)
-doubles as the web playground's example set (`web/src/examples.js`)
-and the benchmark sources; the `lang/` entries below are promoted
-verbatim from that corpus (each notes its corpus twin), and the
-FFI/z3 entries are examples-first (the corpus can't carry them — the
-browser route refuses `dlopen`). Everything user-facing is
-golden-tested; nothing is documentation-only.
+Examples whose foreign library is missing on your machine are
+skipped, not failed — the `z3/` examples need `brew install z3`.
 
 ## lang/ — the language by example
 
@@ -34,6 +34,11 @@ golden-tested; nothing is documentation-only.
 - **stack-compiler/** — the classic expr→stack-machine compiler,
   split across three modules (`require`/`provide` in action).
 
+The `lang/` programs share sources with the golden test corpus
+(`src/test-programs/`), which also feeds the web playground's
+example menu — the playground is the fastest way to try them
+without building anything.
+
 ## ffi/ — first contact
 
 - **hello-libc.puf** — the system C library through the typed FFI.
@@ -45,13 +50,14 @@ golden-tested; nothing is documentation-only.
 ## z3/ — a real library as a Puffin API
 
 `z3.puf` binds the [Z3 SMT solver](https://github.com/Z3Prover/z3)
-(`brew install z3`; edit the library path at the top if yours isn't
-Homebrew's). The binding is deliberately thin — two
-`define-foreign-type` handles and six imports, of which
-`Z3_eval_smtlib2_string` is the workhorse — because SMT-LIB is
-s-expressions: queries are quasiquoted **Puffin data** rendered by
-`value->string`, and replies are read back into Puffin data by the
-~30-line reader in the same file. `require` it like any module:
+(`brew install z3`; if your `libz3` isn't at Homebrew's default
+path, edit the library path at the top of `z3.puf`). The binding is
+deliberately thin — two `define-foreign-type` handles and six
+imports, of which `Z3_eval_smtlib2_string` is the workhorse —
+because SMT-LIB is s-expressions: queries are quasiquoted **Puffin
+data** rendered by `value->string`, and replies are read back into
+Puffin data by the ~30-line reader in the same file. `require` it
+like any module:
 
 ```scheme
 (require "z3.puf")
@@ -70,10 +76,9 @@ s-expressions: queries are quasiquoted **Puffin data** rendered by
   the solved board — then asserts the negation of the model and gets
   `unsat`, proving the solution unique.
 
-The FFI test fixtures (a C library exercising every marshaling row
-and error path, and a Rust `cdylib` guest) live in `tests/ffi-demo/`;
-the tutorial's FFI chapter (`docs/tutorial.html`) walks the design.
+The FFI chapter of the tutorial (`docs/tutorial.html`) walks the
+design behind these bindings.
 
-Note the honest limit: the browser playground has no `dlopen`, so
-these examples compile there but refuse to run at load —
+One honest limit: the browser playground has no `dlopen`, so the
+FFI and z3 examples compile there but refuse to run at load —
 `error: foreign library ... is not available in the browser`.

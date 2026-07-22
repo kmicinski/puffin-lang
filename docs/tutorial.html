@@ -136,7 +136,7 @@ know Racket, you already know most of Puffin. This tutorial is about the
 <div class="tiles">
   <div class="tile"><div class="n">0.95×</div><div class="l">geometric-mean wall time vs Racket 8.15 (Chez), 14 paired benchmarks, arm64 (&lt;1 is faster) — <code>bench/report.html</code></div></div>
   <div class="tile"><div class="n">stage 3 ≡ stage 2</div><div class="l">self-hosting fixpoint: <code>puffincc</code>, the compiler written in Puffin, compiles itself byte-identically</div></div>
-  <div class="tile"><div class="n">297 / 297</div><div class="l">untyped corpus programs that still pass under the typechecker — the gradual guarantee, measured</div></div>
+  <div class="tile"><div class="n">297 / 297</div><div class="l">untyped golden checks that still pass under the typechecker — the gradual guarantee, measured</div></div>
   <div class="tile"><div class="n">9 ms</div><div class="l">process startup for a compiled Puffin binary (vs 147 ms for <code>racket</code>)</div></div>
 </div>
 
@@ -154,11 +154,10 @@ know Racket, you already know most of Puffin. This tutorial is about the
 
 (println (eval-expr (Add (Mul (Num 3) (Num 4)) (Num 1))))   ;; 13
 </code></pre>
-<p class="note">Every example on this page is real: it was run (and typechecked)
-with <code>bin/puffin -i</code> — the Racket-hosted oracle CLI — in July 2026,
-when this page was written. Error messages are quoted verbatim. Every example
-also pastes straight into the <a href="#running">web playground</a>, which runs
-the real compiler.</p>
+<p class="note">Every example on this page is real: each one was run (and
+typechecked) with the toolchain in this repo, and error messages are quoted
+verbatim. Every example also pastes straight into the
+<a href="#running">web playground</a>, which runs the real compiler.</p>
 </section>
 
 <section id="core">
@@ -530,7 +529,7 @@ toward constructors, where the checker's answers are exact.</p>
 
 <h3>The gradual guarantee — and contracts vs hints</h3>
 <p>The design rule: <strong>unannotated code never fails to check</strong>. The
-entire pre-types corpus — 297 programs — passes under the checker unchanged; that
+entire untyped corpus — 297 of the 309 golden checks — passes under the checker unchanged; that
 is the regression suite for the claim. Making that true required one careful
 distinction inside applications. A formal's <em>concrete</em> structure is a
 contract — violate it and you get an error:</p>
@@ -786,7 +785,7 @@ type error, an exhaustiveness warning, and a runtime cast blame all say
 annotation fails honestly — <code>error: typecheck: unknown type Shape</code> —
 rather than checking against something you can't name. Two guardrails come with
 this: a module can't <code>define-type</code> a name it also
-<code>define</code>s (provides would be ambiguous — that's now an error), and
+<code>define</code>s (provides would be ambiguous — it's an error), and
 <code>define-type Int</code> (or any built-in type or former) is rejected
 outright.</p>
 <p>Separate compilation carries types too: under <code>--separate</code> (the
@@ -954,7 +953,9 @@ guest rules, and what stays out (floats, callbacks, struct marshaling) — is
 <p>The compiler is <code>puffincc</code> — written in Puffin, compiled by Puffin,
 byte-stable at its own fixpoint — with three backends: arm64, x86-64, and
 bytecode for the VM:</p>
-<pre><code>bin/build-puffincc               # stage-1 bootstrap, then:
+<pre><code>bin/bootstrap                    # Racket-free bootstrap from the committed
+                                 # bytecode seed (or bin/build-puffincc via
+                                 # the Racket oracle), then:
 build/puffincc prog.puf -o prog  # compile + link natively, or...
 build/puffincc -t bytecode prog.puf -o prog.pbc   # ...compile to bytecode
 bin/puffin-vm prog.pbc           # and run it on the native VM

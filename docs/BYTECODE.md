@@ -1,31 +1,36 @@
 # The Puffin bytecode (.pbc), versions 1 and 2
 
-> **Status:** IMPLEMENTED (docs/WASM-VM.md milestones M1–M2 for v1;
-> M5's REPL units are v2). This document is the format contract — the
-> lockstep surface between the bytecode backend
-> (src/backend-bytecode.rkt and backends.puf) and the VM
-> (src/vm/puffin-vm.c). Any change to an encoding, an opcode, or the
-> unit layout bumps the version word, and the VM refuses versions it
-> does not implement. The format is **not** a stable distribution
-> contract: the compiler and the VM ship together; nothing archives
-> .pbc files.
->
-> **Version 1** is a whole-program unit. **Version 2** is a REPL unit
-> (`--repl`; docs/WASM-VM.md §4/§5.2): identical layout except the
-> globals section carries the cells' NAMES (§3.1) and the RESULT
-> opcode may appear. v1 bytes are unchanged by v2's existence.
+This document is the format contract for Puffin's bytecode: the
+lockstep surface between the bytecode backends — puffincc's
+(puffincc-src/backends.puf, the primary implementation) and the
+Racket oracle's (src/backend-bytecode.rkt) — and the VM
+(src/vm/puffin-vm.c, built as bin/puffin-vm). It is written for
+contributors touching either side of that surface. Any change to an
+encoding, an opcode, or the unit layout bumps the version word, and
+the VM refuses versions it does not implement. The format is **not**
+a stable distribution contract: the compiler and the VM ship
+together; nothing archives .pbc files.
+
+**Version 1** is a whole-program unit. **Version 2** is a REPL unit
+(`--repl`): identical layout except the globals section carries the
+cells' NAMES (§3.1) and the RESULT opcode may appear. v1 bytes are
+unchanged by v2's existence. The wasm builds of this VM are what run
+the browser playground: puffincc itself, compiled to bytecode,
+executes on the wasm VM, and the playground REPL is a session of v2
+units on the reactor build.
 
 ## 0. Quick use
 
 ```
-bin/puffin -t bytecode prog.puf          # compile to a unit and run it on the VM
-bin/puffin -c -t bytecode prog.puf       # produce prog.pbc
+build/puffincc -t bytecode prog.puf -o prog.pbc   # compile a unit
+build/puffincc --repl e.puf -o e.pbc     # compile one REPL eval (v2)
+build/puffincc --repl-prelude -o p.pbc   # the prelude as a REPL unit
+bin/puffin -t bytecode prog.puf          # Racket driver: compile and run on the VM
+bin/puffin -c -t bytecode prog.puf       # ... or just produce prog.pbc
+racket src/main.rkt -f --repl -o e.pbc e.puf   # Racket oracle, one REPL eval
 bin/puffin-vm prog.pbc                   # run a unit
 bin/puffin-vm -d prog.pbc                # disassemble a unit
 bin/puffin-vm --session u1.pbc u2.pbc    # one SESSION, many units (REPL semantics)
-racket src/main.rkt -f --repl -o e.pbc e.puf   # compile one REPL eval (v2)
-build/puffincc --repl e.puf -o e.pbc     # same, self-hosted
-build/puffincc --repl-prelude -o p.pbc   # the prelude as a REPL unit
 make -C src/vm                           # build bin/puffin-vm (native)
 make -C src/vm wasm wasm-repl            # the wasm command + reactor builds
 racket src/test.rkt -m bytecode -O 0     # the golden corpus through this route
@@ -33,17 +38,19 @@ racket src/test.rkt -m bytecode -O 0     # the golden corpus through this route
 
 ## 1. The machine, in one paragraph
 
-A **register (frame-slot) machine** cut after uncover-locals
-(WASM-VM.md §2.2): each function's named locals become numbered
-frame slots, each blocks-IR statement becomes one instruction, each
-tail becomes a branch. Values are the native runtime's 61-bit tagged
-words, byte for byte (system.rkt / puffin.h: fixnum `n<<3`, heap
+A **register (frame-slot) machine** cut after uncover-locals — the
+same cut point the native backends use (docs/WASM-VM.md describes
+the pipeline): each function's named locals become numbered frame
+slots, each blocks-IR statement becomes one instruction, each tail
+becomes a branch. Values are the native runtime's 61-bit tagged
+words, byte for byte (src/runtime/puffin.h: fixnum `n<<3`, heap
 `ptr|1`, immediates `#f=2 #t=10 void=18 '()=26`, symbol `id<<3|3`).
 The VM hosts the existing C runtime — prims are direct calls into
-libpuffin.a, allocation is Boehm (native build; the linear-memory
-collector is M4) — and frames live on a chunked value stack in
-GC-visible memory, not the C stack, which is what makes proper tail
-calls a `memmove`.
+libpuffin.a; allocation is Boehm in the native build, and the wasm
+builds use the VM's own mark-sweep collector
+(src/vm/wasm/wasm-gc.c, §6) — and frames live on a chunked value
+stack in GC-visible memory, not the C stack, which is what makes
+proper tail calls a `memmove`.
 
 ## 2. Frames, slots, and the call protocol
 
@@ -63,8 +70,9 @@ frames are zeroed (slot value fixnum 0), matching the native
 zero-seeded globals discipline and keeping the value stack clean for
 conservative GC.
 
-**The call protocol mirrors native exactly** (WASM-VM.md §2.4 —
-"elegance loses to parity"):
+**The call protocol mirrors native exactly** — parity with the
+native calling convention beats VM-local elegance, because closures
+and variadic collection share C code with native builds:
 
 - At most **6 physical argument slots**. The caller stages arguments
   contiguously at `base..base+nargs-1` in its own frame; CALL copies
@@ -100,9 +108,10 @@ values.
 
 **Errors:** arity is not checked at calls (native doesn't); CALLI of
 a value that is not a function index is a fatal error ("application
-of a non-procedure"). Frame-stack depth is capped (default 4M
-frames; `PUFFIN_VM_MAX_DEPTH` overrides) so runaway recursion errors
-like native instead of consuming the machine.
+of a non-procedure"). The arithmetic and comparison intrinsics
+tag-check their operands (§4). Frame-stack depth is capped (default
+4M frames; `PUFFIN_VM_MAX_DEPTH` overrides) so runaway recursion
+errors like native instead of consuming the machine.
 
 ## 3. The unit format
 
@@ -135,14 +144,14 @@ symbol ids from its sorted literal table, but ids are unit-relative;
 the loader interns each symtab name through `pf_intern_symbol`
 (which dedups) and maps SYM operands to VM-global tagged symbols.
 Two units loaded into one session therefore agree on `eq?` for
-symbols — the same promise MODULES.md §3 makes for separate native
-compilation, by the same mechanism. String literals materialize
-**lazily, once per literal per unit** (the `pf_string_const` cache
-behavior, kept: repeated evaluation of one literal is `eq?`).
-v1 globals are zero-seeded (`fixnum 0`), like the native `.space`
-array.
+symbols — the same promise the separate-compilation section of
+docs/MODULES.md makes for native builds, by the same mechanism.
+String literals materialize **lazily, once per literal per unit**
+(the `pf_string_const` cache behavior, kept: repeated evaluation of
+one literal is `eq?`). v1 globals are zero-seeded (`fixnum 0`), like
+the native `.space` array.
 
-### 3.1 Sessions and v2 link-by-name globals (docs/WASM-VM.md §5.2)
+### 3.1 Sessions and v2 link-by-name globals
 
 One VM instance may load MANY units (`--session` natively; the wasm
 reactor build in the browser). Each unit's functions append to one
@@ -165,10 +174,12 @@ and pay no check.
 The wasm **reactor** build (`make -C src/vm wasm-repl`,
 `-DPVM_REACTOR -mexec-model=reactor`) exports the session boundary:
 `pvm_boot()` once, then `pvm_alloc(len)` + `pvm_load_run(ptr, len)`
-per unit, all in one instance. Aborts (§WASM-VM 3.4) unwind only the
-wasm frames; the host restores the exported `__stack_pointer` and
-the session (heap, interned symbols, cells) survives —
-`pvm_load_run` resets the VM frame stacks on entry.
+per unit, all in one instance. Aborts (`pf_error`/`pf_fatal`) unwind
+only the wasm frames; the host restores the exported
+`__stack_pointer` and the session (heap, interned symbols, cells)
+survives — `pvm_load_run` resets the VM frame stacks on entry. This
+is the build behind the playground REPL
+(web/src/engine/vm-engine.js drives it).
 
 ## 4. The instruction set (29 opcodes)
 
@@ -181,8 +192,8 @@ u16 table indices, `i` a u8 payload-slot index.
 
 Literals never appear as instruction operands: the backend stages
 them into staging slots with IMM/SYM first, so every operand is a
-slot. (This is the MOV-heavy pattern superinstructions would later
-compress; WASM-VM.md §6 names that seam.)
+slot. (The resulting MOV-heavy pattern is a known compression seam —
+superinstructions — left deliberately unexploited.)
 
 | op | encoding | semantics |
 |---|---|---|
@@ -192,7 +203,7 @@ compress; WASM-VM.md §6 names that seam.)
 | 0x04 SYM    | `d sym`        | `R[d] =` interned symbol for unit symbol `sym` |
 | 0x05 STR    | `d str`        | `R[d] =` cached heap string for literal `str` (lazy) |
 | 0x06 FUNREF | `d fn`         | `R[d] = fix(fn)` (a closure-slot-0 value) |
-| 0x07 NEG    | `d a`          | `R[d] = 0 - R[a]` (tagged negate, wrapping) |
+| 0x07 NEG    | `d a`          | `R[d] = 0 - R[a]` (tagged, wrapping) |
 | 0x08 ADD    | `d a b`        | `R[d] = R[a] + R[b]` (tagged, wrapping) |
 | 0x09 MUL    | `d a b`        | `R[d] = (R[a] >> 3) * R[b]` (tagged, wrapping) |
 | 0x0A LT     | `d a b`        | `R[d] = R[a] <s R[b] ? #t : #f` (signed tagged) |
@@ -218,6 +229,11 @@ compress; WASM-VM.md §6 names that seam.)
 
 Notes:
 
+- **Arithmetic tag checks:** NEG/ADD/MUL/LT and the ordered branches
+  (BRLT/BRLE/BRGT/BRGE) check that their operands are fixnums; a
+  non-fixnum dies with "`<op>`: expected Int, got `<value>`" instead
+  of computing a garbage tagged word. EQ and BREQ are `eq?` — any
+  word, no check.
 - **No HALT opcode:** `main` never contains tail calls (untailed
   upstream), so its conclusion is a RET; the host prints the result
   via `pf_print_result` and exits 0, matching the native conclusion.
@@ -228,26 +244,34 @@ Notes:
 - **Intrinsics are exactly the ops the native selects open-code at
   -O0**: `+ - * eq? <`. Everything else — `car`, `vector-ref`,
   `hash-set`, all of lib/ — is a PRIM call at every optimization
-  level in v1 (WASM-VM.md §2.3: no open-coded prims; the seam for
-  adding them one at a time is named there).
-- **Prim ids are stdlib.rkt manifest indices.** The VM's table
-  (src/vm/vm-prims.inc) is *generated* from the manifest
-  (`racket src/gen-vm-prims.rkt > src/vm/vm-prims.inc`), and the
-  backend computes ids from the same list — one more derived view in
-  the manifest discipline. A manifest change means regenerating the
-  .inc and rebuilding the VM (and, being an encoding change, is only
-  version-compatible if entries are appended).
+  level: the bytecode target open-codes no prims, a designed
+  boundary (docs/WASM-VM.md names the seam for adding them one at a
+  time).
+- **Prim ids are stdlib-manifest indices.** The VM's table
+  (src/vm/vm-prims.inc) is *generated* from the manifest and
+  committed; the backend computes ids from the same list — one more
+  derived view in the manifest discipline. The generator is
+  self-hosted (tools/gen-vm-prims.puf, run by `make -C src/vm` when
+  build/puffincc exists), with src/gen-vm-prims.rkt as the Racket
+  fallback; when both toolchains are present the Makefile `cmp`s
+  their outputs — a standing lockstep check. A manifest change means
+  regenerating the .inc and rebuilding the VM (and, being an
+  encoding change, is only version-compatible if entries are
+  appended).
 
 ## 5. What the backend passes do
 
-The chain mirrors the native backends' shape (WASM-VM.md §4), in
-src/backend-bytecode.rkt:
+The chain mirrors the native backends' shape, and like every other
+stage it exists twice in lockstep: in puffincc
+(puffincc-src/backends.puf, the primary implementation) and in the
+Racket oracle (src/backend-bytecode.rkt). The passes:
 
 - **select-instructions-bc** — structural transcription of the
   blocks IR: atoms to slot operands (literals staged), statements to
   §4 instructions, calls staged per §2, the COLLECT prologue for
   variadics. No trap blocks, no `pair?`/`vector?` splitting — those
-  are native open-coding machinery, and v1 does not open-code.
+  are native open-coding machinery, and the bytecode target does not
+  open-code.
 - **allocate-slots-bc** — numbers the locals (formals first, rest
   sorted — deterministic bytes are part of the bootstrap fixpoint
   discipline), sizes the staging area, resolves `(var x)`/`(stage k)`
@@ -255,12 +279,13 @@ src/backend-bytecode.rkt:
   *mentioned* gets a slot even if never assigned (a match-clause
   predicate on a path never executed is read-only garbage natively;
   here it reads fixnum 0). No liveness, no interference, no spills;
-  slot-reuse compaction is a named non-goal for v1.
+  slot-reuse compaction is a named non-goal.
 - **linearize-bc** — orders blocks (entry first, then DFS favoring
   fall-through), lowers two-way branches, drops jumps to the next
   block.
-- **render-pbc** — encodes §3/§4 into bytes. main.rkt writes them as
-  the `.pbc` output and skips the assembler/linker entirely.
+- **render-pbc** — encodes §3/§4 into bytes, written directly as the
+  `.pbc` output; the assembler/linker half of the toolchain is
+  skipped entirely.
 
 `-O1` needs nothing new: loop recovery has already turned self tail
 calls into gotos, blocks cleanup ran, direct `(app (fun-ref f) ...)`
@@ -268,11 +293,11 @@ calls become CALL/TCALL, and fused compare branches use the BRcc
 family. The full golden corpus is green through this route at -O0,
 -O1, and -O2.
 
-**REPL mode** (`--repl`, docs/WASM-VM.md §4; both compiler sources):
-collect-globals compiles every top-level define — functions included
-— into a NAMED cell (function defines become lambda initializers run
-in source order), late-binds free variables by name, and wraps each
-top-level expression in the internal `#%repl-result` prim, which
+**REPL mode** (`--repl`; both compiler sources): collect-globals
+compiles every top-level define — functions included — into a NAMED
+cell (function defines become lambda initializers run in source
+order), late-binds free variables by name, and wraps each top-level
+expression in the internal `#%repl-result` prim, which
 select-instructions-bc lowers to RESULT. reveal-functions then has
 nothing to reveal (only the synthesized entry exists), so every
 top-level call is indirect — which is exactly what makes redefinition
@@ -280,24 +305,39 @@ retroactive. REPL units always compile at -O0 and render as v2.
 
 ## 6. The VM (src/vm/puffin-vm.c)
 
-One C file (~550 lines) linking libpuffin.a:
+One C file linking the runtime:
 
-- **Dispatch:** a switch loop (computed-goto is a later, measured
-  upgrade; fib(32) runs ~13x slower than native -O1 as is, inside
-  the design's 15–40x envelope).
-- **Value stack:** chunked (8 MB chunks) slot storage, each chunk a
-  registered Boehm root region (`GC_add_roots`), so every frame slot
-  is scanned. The C stack never holds Puffin state across
+- **Dispatch:** a switch loop. Call-heavy microbenchmarks run
+  roughly 7–13x slower than native -O1, inside the design's 15–40x
+  envelope; computed-goto dispatch and superinstructions are the
+  named upgrades, to be taken only when measurement demands them.
+- **Value stack:** chunked (8 MB chunks) slot storage. Under Boehm
+  each chunk is a registered root region (`GC_add_roots`), so every
+  frame slot is scanned; the C stack never holds Puffin state across
   instructions except prim temporaries, which Boehm's native stack
   scan covers.
 - **Control stack:** frame metadata only (function index, return ip,
   result slot, slot-array bookkeeping) in plain malloc memory — no
   pf values live there.
-- **Runtime fate (WASM-VM.md §3.2):** hosted, not replaced. core.c's
-  weak whole-program literal tables are satisfied with empty
-  definitions; symbol interning, gensym, display, equal?, errors,
-  and I/O are the very same code native programs run, which is why
-  the corpus gate is byte-for-byte.
+- **Runtime fate:** hosted, not replaced. core.c's weak
+  whole-program literal tables are satisfied with empty definitions;
+  symbol interning, gensym, display, equal?, errors, and I/O are the
+  very same code native programs run, which is why the corpus gate
+  is byte-for-byte. The argv seam is `pf_set_args`: the VM hands the
+  hosted program its own argument vector, so `command-line-args`
+  sees the .pbc program's arguments, not the VM's.
+- **The wasm collector:** the wasm builds replace Boehm with a
+  precise-rooted mark-sweep collector (src/vm/wasm/wasm-gc.c) that
+  collects at safepoints in the dispatch loop — every control
+  transfer (JMP, the conditional branches, all four call forms)
+  carries one, so the allocation a basic block can run up is bounded
+  by its length, and collection never happens inside a prim.
+  `PUFFIN_VM_GC_STRESS=1` collects at every safepoint with
+  freed-block poisoning; `make -C src/vm gctest` builds a native VM
+  through the same GC seam (no Boehm, no wasi-sdk needed), and
+  tools/gctest-corpus.sh runs the full corpus through it, stress
+  mode included, diffed against the Boehm VM. Under Boehm the
+  safepoint macro compiles away.
 
 ## 7. Known gaps
 
@@ -305,17 +345,8 @@ One C file (~550 lines) linking libpuffin.a:
   The corpus (309 checks x 3 optimization levels) is the gate.
 - Units are never unloaded: a very long session accumulates code
   and function-table rows per eval (small; bounded by eval count).
-  (Unit *heap data* is collected normally by the §3.3 GC; this gap
-  is about code + loader metadata only.)
+  (Unit *heap data* is collected normally; this gap is about code +
+  loader metadata only.)
 - REPL evals may not define `main` (the entry name is synthesized
   per unit); the compile error returns to the session without
   killing it.
-
-(Resolved since M2: the argv seam — `pf_set_args` lets the VM hand
-the hosted program its own argv; the globals name table and version
-bump landed as v2, above. Resolved with the §3.3 collector: the wasm
-build's allocator now collects — mark-sweep at dispatch-loop
-safepoints, src/vm/wasm/wasm-gc.c — and `PUFFIN_VM_GC_STRESS=1`
-collects at every safepoint with freed-block poisoning; the full
-corpus runs under stress as the third leg of tools/gctest-corpus.sh.
-Under Boehm the safepoint macro compiles away, as before.)

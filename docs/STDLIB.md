@@ -123,5 +123,8 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
    module to `lib/stdlib_init.c` and the runtime `Makefile`, then `make -C src/runtime`).
 2. Add one `prim-spec` entry to `src/stdlib.rkt` (name, arity, runtime symbol,
    reference implementation, doc line).
-3. Regenerate this file. No compiler-pass changes are needed: the IR predicates,
-   instruction selection, externs, and interpreters all derive from the manifest.
+3. Regenerate the derived artifacts: puffincc's copy of the manifest
+   (`racket src/gen-puffincc-tables.rkt`), the VM's prim table (`make -C src/vm`),
+   this file, and the styled reference (`racket tools/gen-stdlib-html.rkt`).
+   No compiler-pass changes are needed: the IR predicates, instruction
+   selection, externs, and interpreters all derive from the manifest.

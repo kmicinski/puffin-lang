@@ -18,6 +18,10 @@ compiled/
 *~
 .claude/
 
+# the GitHub Pages site (site/build.mjs writes _site/; CI deploys it)
+_site/
+site/node_modules/
+
 # generated browser VM artifacts (tools/gen-web-vm.sh)
 web/public/*.wasm
 web/public/*.pbc
