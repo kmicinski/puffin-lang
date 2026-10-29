@@ -1,0 +1,67 @@
+;; puffincc tests -- test-syntax.puf: hold syntax.puf's span reader to
+;; the compiler's reader.
+;;
+;; Run (tools/test-syntax.sh does exactly this):
+;;   build/puffincc -t bytecode puffincc-src/tests/test-syntax.puf -o /tmp/ts.pbc
+;;   bin/puffin-vm /tmp/ts.pbc FILE...
+;;
+;; For every FILE: stripping spans gives exactly the compiler reader's
+;; forms, and every node's span re-reads, on its own, as that node's
+;; datum (so spans are exact, not merely plausible). Prints one line
+;; per file and a summary; any failure names the file and the span.
+;; A span cut mid-form can make the reader itself abort (Puffin errors
+;; are fatal); that exits non-zero too, just less politely. FILEs must
+;; read cleanly: reader errors are the error corpus's business.
+
+(require "../reader.puf")
+(require "../syntax.puf")
+
+(define failures 0)
+
+(define (fail! msg)
+  (set! failures (+ failures 1))
+  (println msg))
+
+;; every node under n, n included
+(define (all-nodes n)
+  (cons n (append-map all-nodes (syn-kids n))))
+
+(define (check-file path)
+  (let* ([src (read-file path)]
+         [nodes (read-syntax-from-string src)]
+         [datums (map syn->datum nodes)])
+    (if (not (equal? datums (read-forms-from-string src)))
+        (fail! (format "FAIL ~a: datums differ from read-forms-from-string" path))
+        (let ([bad (filter (lambda (n)
+                             (not (equal? (read-forms-from-string
+                                           (substring src (syn-start n) (syn-end n)))
+                                          (list (syn->datum n)))))
+                           (append-map all-nodes nodes))])
+          (if (pair? bad)
+              (fail! (format "FAIL ~a: ~a node spans do not re-read; first [~a, ~a)"
+                             path (length bad) (syn-start (car bad)) (syn-end (car bad))))
+              (println (format "ok   ~a (~a forms)" path (length nodes))))))))
+
+;; syn-path-at: innermost first; just past a closer is the parent's
+(define (check-path-at)
+  (let* ([src "(define (f x) (match x [(Some y) y]))"]
+         [nodes (read-syntax-from-string src)]
+         [heads (lambda (pos)
+                  (map (lambda (n) (substring src (syn-start n) (syn-end n)))
+                       (syn-path-at nodes pos)))])
+    (unless (equal? (heads 26)
+                    (list "Some" "(Some y)" "[(Some y) y]" "(match x [(Some y) y])"
+                          "(define (f x) (match x [(Some y) y]))"))
+      (fail! (format "FAIL syn-path-at 26: ~a" (heads 26))))
+    (unless (equal? (heads 13) (list "(define (f x) (match x [(Some y) y]))"))
+      (fail! (format "FAIL syn-path-at 13: ~a" (heads 13))))
+    (unless (equal? (heads 99) '())
+      (fail! (format "FAIL syn-path-at 99: ~a" (heads 99))))))
+
+(check-path-at)
+(let loop ([paths (command-line-args)])
+  (when (pair? paths)
+    (check-file (car paths))
+    (loop (cdr paths))))
+(println (format "~a files, ~a failures" (length (command-line-args)) failures))
+(when (> failures 0) (error "test-syntax failed"))

@@ -1,0 +1,119 @@
+;; puffincc -- syntax.puf: the span-preserving reader for editor
+;; assists (docs/STUDIO.md §2.1).
+;;
+;; (read-syntax-from-string s) -> list of top-level syntax nodes.
+;; A node records the byte span [start, end) of its source text:
+;;
+;;   (atom start end datum)             symbols, numbers, #t/#f, strings
+;;   (lst start end open kids tail)     ( ... ) or [ ... ]; open is the
+;;                                      opener byte; tail is the node
+;;                                      after a `.`, or #f
+;;   (sugar start end head inner)       ' ` , ,@ -- head is quote,
+;;                                      quasiquote, unquote, or
+;;                                      unquote-splicing
+;;
+;; The lexing is reader.puf's (rd-skip, rd-atom, rd-string, and its
+;; error reporting); only the tree building is redone here. The one
+;; invariant: (map syn->datum (read-syntax-from-string s)) is equal?
+;; to (read-forms-from-string s) -- tests/test-syntax.puf holds every
+;; corpus program and every compiler source to it.
+
+(require "reader.puf")
+
+;; one node at i (i already past whitespace) -> (next-pos . node);
+;; the same case analysis as reader.puf's rd-form
+(: syn-form (-> Int (Pairof Int _)))
+(define (syn-form i)
+  (define b (rd-peek i))
+  (cond
+    [(< b 0) (reader-error "reader-unexpected-eof" i)]
+    [(eq? b B-lparen) (syn-list i B-rparen)]
+    [(eq? b B-lbrack) (syn-list i B-rbrack)]
+    [(or (eq? b B-rparen) (eq? b B-rbrack)) (reader-error "reader-unexpected-closer" i)]
+    [(eq? b B-dquote) (syn-leaf i (rd-string i))]
+    [(eq? b B-quote) (syn-sugar i 1 'quote)]
+    [(eq? b B-backquote) (syn-sugar i 1 'quasiquote)]
+    [(eq? b B-comma)
+     (if (eq? (rd-peek (+ i 1)) B-at)
+         (syn-sugar i 2 'unquote-splicing)
+         (syn-sugar i 1 'unquote))]
+    [(eq? b B-hash)
+     (define n (rd-peek (+ i 1)))
+     (cond
+       [(and (eq? n 116) (delim-byte? (rd-peek (+ i 2)))) (syn-leaf i (cons (+ i 2) #t))]
+       [(and (eq? n 102) (delim-byte? (rd-peek (+ i 2)))) (syn-leaf i (cons (+ i 2) #f))]
+       [else (syn-leaf i (rd-atom i))])]
+    [else (syn-leaf i (rd-atom i))]))
+
+;; an atom from a reader.puf (next-pos . datum) result
+(: syn-leaf (-> Int (Pairof Int _) (Pairof Int _)))
+(define (syn-leaf i r)
+  (cons (car r) (list 'atom i (car r) (cdr r))))
+
+;; a prefix of `width` bytes at i, then the form it applies to
+(: syn-sugar (-> Int Int Sym (Pairof Int _)))
+(define (syn-sugar i width head)
+  (let ([f (syn-form (rd-skip (+ i width)))])
+    (cons (car f) (list 'sugar i (car f) head (cdr f)))))
+
+;; a list whose opener is AT i; closer is the matching bracket
+(: syn-list (-> Int Int (Pairof Int _)))
+(define (syn-list i closer)
+  (let loop ([j (rd-skip (+ i 1))] [acc '()])
+    (define b (rd-peek j))
+    (cond
+      [(< b 0) (reader-error "reader-unterminated-list" j)]
+      [(eq? b closer)
+       (cons (+ j 1) (list 'lst i (+ j 1) (rd-peek i) (reverse acc) #f))]
+      ;; dotted tail: `.` followed by a delimiter
+      [(and (eq? b B-dot) (delim-byte? (rd-peek (+ j 1))))
+       (define tail (syn-form (rd-skip (+ j 1))))
+       (define after (rd-skip (car tail)))
+       (unless (eq? (rd-peek after) closer) (reader-error "reader-bad-dotted-tail" after))
+       (cons (+ after 1) (list 'lst i (+ after 1) (rd-peek i) (reverse acc) (cdr tail)))]
+      [else
+       (define f (syn-form j))
+       (loop (rd-skip (car f)) (cons (cdr f) acc))])))
+
+(: read-syntax-from-string (-> Str (List _)))
+(define (read-syntax-from-string s)
+  (set! reader-src s)
+  (set! reader-len (string-length s))
+  (let loop ([i (rd-skip 0)] [acc '()])
+    (if (>= i reader-len)
+        (reverse acc)
+        (let ([f (syn-form i)])
+          (loop (rd-skip (car f)) (cons (cdr f) acc))))))
+
+;; ---- accessors ---------------------------------------------------------
+
+(define (syn-start n) (car (cdr n)))
+(define (syn-end n) (car (cdr (cdr n))))
+
+;; the nodes directly inside n, in source order (a dotted tail last)
+(define (syn-kids n)
+  (match n
+    [`(lst ,_ ,_ ,_ ,kids #f) kids]
+    [`(lst ,_ ,_ ,_ ,kids ,tail) (append kids (list tail))]
+    [`(sugar ,_ ,_ ,_ ,inner) (list inner)]
+    [_ '()]))
+
+;; the plain datum the compiler's reader produces for the same text
+(define (syn->datum n)
+  (match n
+    [`(atom ,_ ,_ ,d) d]
+    [`(sugar ,_ ,_ ,head ,inner) (list head (syn->datum inner))]
+    [`(lst ,_ ,_ ,_ ,kids ,tail)
+     (foldr (lambda (k acc) (cons (syn->datum k) acc))
+            (if (eq? tail #f) '() (syn->datum tail))
+            kids)]))
+
+;; the nodes whose span contains byte offset pos, innermost first.
+;; A node contains pos when start <= pos < end, so a cursor just past
+;; a closer belongs to the enclosing form, not the one it closes.
+(define (syn-path-at nodes pos)
+  (let loop ([nodes nodes] [path '()])
+    (let ([hit (filter (lambda (n) (and (<= (syn-start n) pos) (< pos (syn-end n)))) nodes)])
+      (if (null? hit)
+          path
+          (loop (syn-kids (car hit)) (cons (car hit) path))))))
