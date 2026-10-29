@@ -1,0 +1,8 @@
+;; assist: assists @ "(normalize total" +1
+;; a call to a name nothing binds: define it, arity and argument
+;; names from the call site
+(define (average xs)
+  (let ([total (foldl + 0 xs)])
+    (normalize total (length xs))))
+
+(println (average (list 1 2 3)))

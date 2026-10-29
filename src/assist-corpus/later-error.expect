@@ -1,0 +1,20 @@
+== assists @ 230 (exit 1)
+== stdout
+{"id":"fill-match","title":"Fill match on Color","source":"type","edits":[{"start":231,"end":231,"text":"\n    [Red (error \"TODO: Red\")]\n    [Green (error \"TODO: Green\")]"}]}
+error: typecheck: +: argument has type Str, expected Int [later-error.puf:9]
+== stderr
+typecheck warning: match on Color is not exhaustive: missing Red, Green [later-error.puf:6]
+== apply 1: fill-match
+;; assist: assists @ "(match e))" +7
+;; a type error AFTER the match: the assists printed before the
+;; checker stopped stand, and the error text follows them
+(define-type Color (Red) (Green))
+
+(define (name [e : Color])
+  (match e
+    [Red (error "TODO: Red")]
+    [Green (error "TODO: Green")]))
+
+(define oops (+ 1 "two"))
+== check (exit 1)
+error: typecheck: +: argument has type Str, expected Int [later-error.puf:11]

@@ -1,0 +1,12 @@
+;; assist: assists @ "(match e))" +7
+;; an empty match on an annotated ADT parameter: every constructor,
+;; with the recursive calls already placed on recursive fields
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e))
+
+(println (eval-expr (Num 1)))

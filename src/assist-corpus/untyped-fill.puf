@@ -1,0 +1,15 @@
+;; assist: assists @ "(match e))" +7
+;; untyped data: no type to read, so the cases come from the other
+;; matches in the file and the quasiquote templates it builds
+(define (eval-expr e)
+  (match e
+    [`(add ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(mul ,a ,b) (* (eval-expr a) (eval-expr b))]
+    [(? fixnum? n) n]))
+
+(define (neg x) `(neg ,x))
+
+(define (size e)
+  (match e))
+
+(println (eval-expr '(add 1 2)))

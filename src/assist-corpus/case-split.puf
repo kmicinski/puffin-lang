@@ -1,0 +1,15 @@
+;; assist: assists @ "(Add a b) (simp" +5
+;; split a binder inside a constructor pattern into its own type's
+;; constructors; the body still sees `a`, rebuilt from its parts
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr))
+
+(define (simp [e : Expr]) : Expr
+  (match e
+    [(Add a b) (simp-add a b)]
+    [_ e]))
+
+(define (simp-add [a : Expr] [b : Expr]) : Expr (Add a b))
+
+(println (simp (Add (Num 0) (Num 1))))

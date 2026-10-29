@@ -1,0 +1,7 @@
+;; assist: assists @ "(Leaf)" +1
+;; inside a define-type: write the structural-recursion template
+(define-type Tree
+  (Leaf)
+  (Node Tree Int Tree))
+
+(println Leaf)

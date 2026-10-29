@@ -19,6 +19,14 @@ for working on it:
   touching a checker, resolver, reader, or runtime error message, run
   it — and `node web/test-errors.mjs` for the same corpus through the
   wasm VM.
+- Editor assists (`puffincc --assist`, `puffincc-src/assist.puf`;
+  docs/STUDIO.md) are corpus-tested too: `tools/test-assist.sh`
+  runs every case in `src/assist-corpus/`, applies each assist it
+  offers, and re-checks the result (`gen` writes the `.expect`
+  transcripts — read them before committing). The span reader they
+  stand on is held to the compiler's reader by
+  `tools/test-syntax.sh`. Run both after touching the reader, the
+  checker, or assist.puf.
 - If `puffincc-src` outgrows the committed seed (a new language
   feature the seed can't compile), refresh the seed first
   (`bin/refresh-boot` from a commit that can compile the tree; see

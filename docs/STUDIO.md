@@ -1,7 +1,11 @@
 # Puffin Studio: a REPL you co-develop a program with
 
-Status: design, 2026-10-29. Nothing here is built yet except where a
-section says so. The phases at the end are the plan of record.
+Status, 2026-10-29: the design of record, partly built. Built so far:
+the span reader (`puffincc-src/syntax.puf`), `puffincc --assist`
+with `check`, `forms`, `type-at`, and assists 1 to 5 and 7
+(`puffincc-src/assist.puf`), the assist corpus, and the Emacs
+commands `puffin-assist` (C-c C-a) and `puffin-type-at-point`
+(C-c C-t). §8 tracks the rest.
 
 Puffin Studio replaces the console REPL (`src/repl.rkt`, the Racket
 interpreter loop) with a local web workbench: an editor over the
@@ -68,16 +72,85 @@ a 1,000-line module takes about 50 ms natively (`build/puffincc`,
 `puffincc-src/types.puf`), and a one-line file about 13 ms.
 
 The server writes the program's files to a scratch directory and
-runs one operation; puffincc prints one s-expression reply on
-stdout.
+runs one operation; puffincc prints one JSON object on stdout and
+exits 0. A fatal error (reader, resolver, type error) instead prints
+puffincc's usual `error: ...` text and exits non-zero; its
+`[file:line]` suffix locates it. Typecheck warnings go to stderr as
+`typecheck warning: ... [file:line]`. Positions are byte offsets
+into the file.
 
 ```
-puffincc --assist check   main.puf      -> (ok) | (error file line msg)
-puffincc --assist forms   main.puf      -> ((key "define:eval-expr" start end hash) ...)
-puffincc --assist type-at main.puf POS  -> (type τ) | (unknown)
-puffincc --assist fill-match main.puf POS
-                                        -> (edit file start end "new text" source)
+puffincc --assist check FILE
+  -> {"ok":true}
+puffincc --assist forms FILE
+  -> {"forms":[{"key":"define:eval-expr","start":0,"end":212,"line":3}, ...]}
+puffincc --assist type-at FILE POS
+  -> {"type":"Expr"}  |  {"type":null}
+puffincc --assist assists FILE POS
+  -> one JSON object per line, each an assist:
+     {"id":"fill-match","title":"Fill match on Expr","source":"type",
+      "edits":[{"start":40,"end":40,"text":"..."}]}
+     ...
+     {"done":true}
 ```
+
+`assists` prints every assist that applies at POS with its edits
+already computed, so the client shows a menu and applies one
+without a second round trip. It prints them as it finds them: a
+type error elsewhere in the file can stop the checker part way, and
+the assists already printed stand (the error text follows; a client
+ignores stdout lines that are not JSON). `source` says where the
+knowledge came from: `type` (the checker), `patterns` (other
+matches and quasiquote templates in the file), or `call-site`.
+
+### 2.2 `puffin-vm --serve`
+
+The live and preview lanes are VM sessions that must survive a
+runtime error, which today calls `exit`. `--serve` forks per
+evaluation: the child runs the unit; if it fails or is interrupted
+the parent is still the intact session, and if it succeeds the
+child carries on as the session and the parent exits. The process
+group is fixed at startup (`setpgid(0, 0)`), so the server
+interrupts with SIGINT to the group; the waiting session ignores
+it. The server watches its pipes, not the pid, since the pid it
+spawned exits after the first successful evaluation.
+
+Commands, one per line on stdin:
+
+```
+load PATH     run a .pbc unit (v1 or v2) as the next session state
+try PATH      run it against the current state, then discard the result
+quit
+```
+
+Blank lines are ignored; `PATH` is everything after the first
+space; a trailing `\r` is stripped; end of input exits.
+
+Program output passes through on stdout and stderr. In serve mode
+each REPL result is one stdout line `\x1fR` + the rendered value,
+with any newline inside the value written as `\x1e` so the result
+stays one line. Every command ends with exactly one stdout line,
+after all of that evaluation's output:
+
+- `\x1fOK`
+- `\x1fERR <n>`: the evaluation exited with status n (1 for
+  `error`, 255 for a runtime fault or a malformed unit; 2 for an
+  unknown command or an unreadable path, with a message on stderr)
+- `\x1fERR signal <n>`: killed by a signal other than SIGINT
+- `\x1fINT`: interrupted
+
+A marker always starts a line: when program output left a partial
+line, serve mode writes a newline first, so a client can look for
+`\x1f` at line starts. Units cannot read the command stream: their
+stdin is `/dev/null`. Fork is sound because the process is single
+threaded (the bundled Boehm GC is built without threads); a foreign
+library that starts threads would break that.
+
+REPL units compile with `puffincc --repl IN.puf -o OUT.pbc` (about
+6 ms natively); the prelude unit with `puffincc --repl-prelude -o
+OUT.pbc`. Each unit is checked alone, so a later unit does not know
+an earlier unit's `define-type`: the server keeps the session's
+type declarations and prepends them to each unit it compiles.
 
 Every assist returns plain text edits (§4), never a new AST. This
 requires a **span-preserving reader**: today only each top-level
@@ -165,7 +238,12 @@ an assistant tool. In planned order:
 6. **Typed holes.** The goal type and the in-scope names that fit it.
 7. **Matches for untyped data**, from quasiquote patterns already
    used on the same value (layer 1), flow shapes (layer 3), and
-   observed values (layer 4), each labelled with its source.
+   observed values (layer 4), each labelled with its source. Built
+   for layer 1: a match whose scrutinee is not an ADT is offered the
+   cases of the file's other matches that share a case with it (or
+   all of them, when it is empty), and the shapes of the quasiquote
+   templates the file builds. Clause patterns are copied verbatim, so
+   binder names and ellipses survive.
 8. **Identity traversal.** For an ADT or a family of quasiquote
    patterns, the pass that rebuilds every case unchanged, ready to
    change one.

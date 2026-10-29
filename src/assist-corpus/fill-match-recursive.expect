@@ -1,0 +1,24 @@
+== assists @ 277 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on Expr","source":"type","edits":[{"start":278,"end":278,"text":"\n    [(Num n) (error \"TODO: Num\")]\n    [(Add e1 e2) (let ([r1 (eval-expr e1)] [r2 (eval-expr e2)]) (error \"TODO: Add\"))]\n    [(Neg e1) (let ([r1 (eval-expr e1)]) (error \"TODO: Neg\"))]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Expr is not exhaustive: missing Num, Add, Neg [fill-match-recursive.puf:9]
+== apply 1: fill-match
+;; assist: assists @ "(match e))" +7
+;; an empty match on an annotated ADT parameter: every constructor,
+;; with the recursive calls already placed on recursive fields
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [(Num n) (error "TODO: Num")]
+    [(Add e1 e2) (let ([r1 (eval-expr e1)] [r2 (eval-expr e2)]) (error "TODO: Add"))]
+    [(Neg e1) (let ([r1 (eval-expr e1)]) (error "TODO: Neg"))]))
+
+(println (eval-expr (Num 1)))
+== check (exit 0)
+{"ok":true}

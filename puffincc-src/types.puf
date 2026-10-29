@@ -701,6 +701,9 @@
          [`(quote ,d) (cond [(symbol? d) 'Sym] [(null? d) '(List _)] [else '_])]
          [(list 'quasiquote _) '_]
          [(? symbol? x) (lookup env x)]
+         ;; an editor assist's probe (system.puf probe-hook)
+         [`(#%probe ,e0) #:when probe-hook
+          (let ([t (synth e0 env)]) (probe-hook t env) t)]
          [`(ann ,e0 ,t)
           (check-type-wf t '() adts)
           (let ([et (synth e0 env)])

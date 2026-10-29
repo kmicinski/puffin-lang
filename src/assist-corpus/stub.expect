@@ -1,0 +1,19 @@
+== assists @ 194 (exit 0)
+== stdout
+{"id":"stub","title":"Define normalize (stub, 2 arguments)","source":"call-site","edits":[{"start":136,"end":136,"text":"(define (normalize total x2)\n  (error \"TODO: normalize\"))\n\n"}]}
+{"done":true}
+== stderr
+== apply 1: stub
+;; assist: assists @ "(normalize total" +1
+;; a call to a name nothing binds: define it, arity and argument
+;; names from the call site
+(define (normalize total x2)
+  (error "TODO: normalize"))
+
+(define (average xs)
+  (let ([total (foldl + 0 xs)])
+    (normalize total (length xs))))
+
+(println (average (list 1 2 3)))
+== check (exit 0)
+{"ok":true}

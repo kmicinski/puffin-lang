@@ -1,0 +1,2 @@
+(provide Shape Circle Rect Dot)
+(define-type Shape (Circle Int) (Rect Int Int) (Dot))

@@ -1,0 +1,11 @@
+;; assist: assists @ "(match (parse 3)))" +7
+;; the scrutinee's type comes from the checker, not an annotation:
+;; any expression whose type synthesizes to an ADT works
+(define-type Tok (Lit Int) (Plus) (Times))
+
+(define (parse [n : Int]) : Tok (Lit n))
+
+(define (show-tok)
+  (match (parse 3)))
+
+(show-tok)

@@ -1,0 +1,10 @@
+;; assist: assists @ "(match b" +7
+;; an exhaustive match offers nothing; a plain expression no stub
+(define-type B (T) (F))
+
+(define (flip [b : B]) : B
+  (match b
+    [T F]
+    [F T]))
+
+(println (flip T))

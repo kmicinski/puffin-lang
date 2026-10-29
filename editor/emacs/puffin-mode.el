@@ -166,6 +166,91 @@
       (puffin-send-region (point) end))))
 
 ;; ---------------------------------------------------------------------
+;; Assists: compiler-driven edits at point (docs/STUDIO.md §5), from
+;; `puffincc --assist'.  The buffer goes to a sibling temp file so
+;; requires resolve against the real directory and nothing is saved.
+;; ---------------------------------------------------------------------
+
+(defun puffin--puffincc ()
+  "Absolute path of build/puffincc in the dominating repo."
+  (let ((root (puffin--repo-root)))
+    (unless root (user-error "Not inside the puffin-lang checkout"))
+    (expand-file-name "build/puffincc" root)))
+
+(defun puffin--assist-run (op &optional pos)
+  "Run `puffincc --assist OP' on the buffer (at byte offset POS).
+Returns its stdout lines."
+  (let* ((dir (if buffer-file-name (file-name-directory buffer-file-name) default-directory))
+         (tmp (make-temp-file (expand-file-name ".puffin-assist-" dir) nil ".puf"))
+         (text (buffer-substring-no-properties (point-min) (point-max))))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (set-buffer-file-coding-system 'utf-8-unix)
+            (insert text))
+          (with-temp-buffer
+            (let ((default-directory dir))
+              (apply #'call-process (puffin--puffincc) nil (list t nil) nil
+                     "--assist" op (file-name-nondirectory tmp)
+                     (if pos (list (number-to-string pos)) nil)))
+            (split-string (buffer-string) "\n" t)))
+      (delete-file tmp))))
+
+(defun puffin--byte-offset (pos)
+  "The 0-based UTF-8 byte offset of buffer position POS."
+  (- (position-bytes pos) (position-bytes (point-min))))
+
+(defun puffin--json-lines (lines)
+  "The JSON objects among LINES, parsed; other lines are diagnostics."
+  (delq nil (mapcar (lambda (l)
+                      (and (string-prefix-p "{" l)
+                           (json-parse-string l :object-type 'alist :array-type 'list)))
+                    lines)))
+
+(defun puffin--apply-assist-edits (edits)
+  "Apply EDITS (byte offsets into the buffer text) as one undoable change."
+  (let ((base (position-bytes (point-min))))
+    (atomic-change-group
+      (dolist (e (sort (copy-sequence edits)
+                       (lambda (a b) (> (alist-get 'start a) (alist-get 'start b)))))
+        (let ((start (byte-to-position (+ base (alist-get 'start e))))
+              (end (byte-to-position (+ base (alist-get 'end e)))))
+          (goto-char start)
+          (delete-region start end)
+          (insert (alist-get 'text e)))))))
+
+(defun puffin-assist ()
+  "Offer the compiler's assists at point and apply the one chosen.
+Fill a match from its scrutinee's type, add missing cases, split a
+binder into constructors, write a structural-recursion template,
+stub an unbound function -- or, for untyped data, cases taken from
+the file's other matches and quasiquote templates."
+  (interactive)
+  (let* ((lines (puffin--assist-run "assists" (puffin--byte-offset (point))))
+         (assists (seq-filter (lambda (o) (alist-get 'id o)) (puffin--json-lines lines)))
+         (diag (seq-find (lambda (l) (string-prefix-p "error:" l)) lines)))
+    (if (null assists)
+        (message "No assists here%s" (if diag (concat " (" diag ")") ""))
+      (let* ((choices (mapcar (lambda (a)
+                                (cons (format "%s  [%s]" (alist-get 'title a) (alist-get 'source a)) a))
+                              assists))
+             (pick (if (null (cdr choices))
+                       (car choices)
+                     (assoc (completing-read "Assist: " choices nil t) choices))))
+        (save-excursion (puffin--apply-assist-edits (alist-get 'edits (cdr pick))))
+        (message "%s" (alist-get 'title (cdr pick)))))))
+
+(defun puffin-type-at-point ()
+  "Show the type the checker synthesizes for the expression at point."
+  (interactive)
+  (let* ((lines (puffin--assist-run "type-at" (puffin--byte-offset (point))))
+         (reply (car (puffin--json-lines lines)))
+         (diag (seq-find (lambda (l) (string-prefix-p "error:" l)) lines)))
+    (cond ((and reply (stringp (alist-get 'type reply))) (message "%s" (alist-get 'type reply)))
+          (diag (message "%s" diag))
+          (t (message "No type here")))))
+
+;; ---------------------------------------------------------------------
 ;; Eglot integration
 ;; ---------------------------------------------------------------------
 
@@ -195,6 +280,8 @@ puffin buffer current)."
     (define-key map (kbd "C-c C-z") #'run-puffin)
     (define-key map (kbd "C-c C-r") #'puffin-send-region)
     (define-key map (kbd "C-M-x")   #'puffin-send-definition)
+    (define-key map (kbd "C-c C-a") #'puffin-assist)
+    (define-key map (kbd "C-c C-t") #'puffin-type-at-point)
     map)
   "Keymap for `puffin-mode'.")
 

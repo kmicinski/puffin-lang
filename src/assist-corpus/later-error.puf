@@ -1,0 +1,9 @@
+;; assist: assists @ "(match e))" +7
+;; a type error AFTER the match: the assists printed before the
+;; checker stopped stand, and the error text follows them
+(define-type Color (Red) (Green))
+
+(define (name [e : Color])
+  (match e))
+
+(define oops (+ 1 "two"))

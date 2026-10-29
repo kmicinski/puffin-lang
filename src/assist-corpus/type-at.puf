@@ -1,0 +1,6 @@
+;; assist: type-at @ "(string-append s" +0
+;; the type the checker synthesizes for the expression at the cursor
+(define (greet [s : Str]) : Str
+  (string-append s "!"))
+
+(greet "hi")

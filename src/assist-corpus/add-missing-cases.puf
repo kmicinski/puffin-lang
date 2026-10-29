@@ -1,0 +1,15 @@
+;; assist: assists @ "[(Num n) 1]" +1
+;; a partial match: the constructors it misses, in declaration
+;; order, in the existing clauses' bracket style and indentation
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [(Num n) 1]
+    [(Mul a b) (+ 1 (+ (size a) (size b)))]))
+
+(println (size (Num 3)))

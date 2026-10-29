@@ -1,0 +1,26 @@
+== assists @ 295 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add missing cases: Add, Neg","source":"type","edits":[{"start":349,"end":349,"text":"\n    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: Add\"))]\n    [(Neg e1) (let ([r1 (size e1)]) (error \"TODO: Neg\"))]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Expr is not exhaustive: missing Add, Neg [add-missing-cases.puf:10]
+== apply 1: add-missing-cases
+;; assist: assists @ "[(Num n) 1]" +1
+;; a partial match: the constructors it misses, in declaration
+;; order, in the existing clauses' bracket style and indentation
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [(Num n) 1]
+    [(Mul a b) (+ 1 (+ (size a) (size b)))]
+    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error "TODO: Add"))]
+    [(Neg e1) (let ([r1 (size e1)]) (error "TODO: Neg"))]))
+
+(println (size (Num 3)))
+== check (exit 0)
+{"ok":true}

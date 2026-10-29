@@ -1,0 +1,8 @@
+;; assist: assists @ "(match s))" +7
+;; a type from another module: constructors in their source spelling
+(require "shapes.puf")
+
+(define (area [s : Shape]) : Int
+  (match s))
+
+(println (area Dot))

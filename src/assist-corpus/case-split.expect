@@ -1,0 +1,24 @@
+== assists @ 278 (exit 0)
+== stdout
+{"id":"case-split","title":"Split a into Num, Add","source":"type","edits":[{"start":272,"end":298,"text":"[(Add (Num n) b) (let ([a (Num n)]) (simp-add a b))]\n    [(Add (Add e1 e2) b) (let ([a (Add e1 e2)]) (simp-add a b))]"}]}
+{"done":true}
+== stderr
+== apply 1: case-split
+;; assist: assists @ "(Add a b) (simp" +5
+;; split a binder inside a constructor pattern into its own type's
+;; constructors; the body still sees `a`, rebuilt from its parts
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr))
+
+(define (simp [e : Expr]) : Expr
+  (match e
+    [(Add (Num n) b) (let ([a (Num n)]) (simp-add a b))]
+    [(Add (Add e1 e2) b) (let ([a (Add e1 e2)]) (simp-add a b))]
+    [_ e]))
+
+(define (simp-add [a : Expr] [b : Expr]) : Expr (Add a b))
+
+(println (simp (Add (Num 0) (Num 1))))
+== check (exit 0)
+{"ok":true}

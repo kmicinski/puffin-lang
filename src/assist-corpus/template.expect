@@ -1,0 +1,20 @@
+== assists @ 119 (exit 0)
+== stdout
+{"id":"template","title":"Write a function over Tree (structural recursion)","source":"type","edits":[{"start":148,"end":148,"text":"\n\n(define (fn-for-tree [t : Tree])\n  (match t\n    [Leaf (error \"TODO: Leaf\")]\n    [(Node t1 n t2) (let ([r1 (fn-for-tree t1)] [r2 (fn-for-tree t2)]) (error \"TODO: Node\"))]))"}]}
+{"done":true}
+== stderr
+== apply 1: template
+;; assist: assists @ "(Leaf)" +1
+;; inside a define-type: write the structural-recursion template
+(define-type Tree
+  (Leaf)
+  (Node Tree Int Tree))
+
+(define (fn-for-tree [t : Tree])
+  (match t
+    [Leaf (error "TODO: Leaf")]
+    [(Node t1 n t2) (let ([r1 (fn-for-tree t1)] [r2 (fn-for-tree t2)]) (error "TODO: Node"))]))
+
+(println Leaf)
+== check (exit 0)
+{"ok":true}

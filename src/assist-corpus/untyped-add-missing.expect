@@ -1,0 +1,24 @@
+== assists @ 346 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add cases from eval-expr: mul, fixnum?","source":"patterns","edits":[{"start":390,"end":390,"text":"\n    [`(mul ,a ,b) (error \"TODO: mul\")]\n    [(? fixnum? n) (error \"TODO: fixnum?\")]"}]}
+{"done":true}
+== stderr
+== apply 1: add-missing-cases
+;; assist: assists @ "[`(add ,a ,b) (list" +1
+;; untyped and partial: a match that shares a case with this one
+;; offers what it has that this one lacks
+(define (eval-expr e)
+  (match e
+    [`(add ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(mul ,a ,b) (* (eval-expr a) (eval-expr b))]
+    [(? fixnum? n) n]))
+
+(define (show e)
+  (match e
+    [`(add ,a ,b) (list 'plus (show a) (show b))]
+    [`(mul ,a ,b) (error "TODO: mul")]
+    [(? fixnum? n) (error "TODO: fixnum?")]))
+
+(println (eval-expr '(mul 2 3)))
+== check (exit 0)
+{"ok":true}

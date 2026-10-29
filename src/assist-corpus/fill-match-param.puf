@@ -1,0 +1,9 @@
+;; assist: assists @ "(match o))" +7
+;; a parameterized type at an instance: field types substitute
+;; (Some's field is an Int here), a nullary constructor is bare
+(define-type (Option a) (None) (Some a))
+
+(define (get-or-zero [o : (Option Int)]) : Int
+  (match o))
+
+(println (get-or-zero (Some 4)))

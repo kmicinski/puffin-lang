@@ -1,0 +1,4 @@
+;; assist: check
+;; check reports puffincc's own diagnostic and exits non-zero
+(define (f [x : Int]) : Int (string-length x))
+(f 1)

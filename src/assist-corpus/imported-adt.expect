@@ -1,0 +1,20 @@
+== assists @ 172 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on Shape","source":"type","edits":[{"start":173,"end":173,"text":"\n    [(Circle n) (error \"TODO: Circle\")]\n    [(Rect n1 n2) (error \"TODO: Rect\")]\n    [Dot (error \"TODO: Dot\")]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Shape is not exhaustive: missing Circle, Rect, Dot [main.puf:5]
+== apply 1: fill-match
+;; assist: assists @ "(match s))" +7
+;; a type from another module: constructors in their source spelling
+(require "shapes.puf")
+
+(define (area [s : Shape]) : Int
+  (match s
+    [(Circle n) (error "TODO: Circle")]
+    [(Rect n1 n2) (error "TODO: Rect")]
+    [Dot (error "TODO: Dot")]))
+
+(println (area Dot))
+== check (exit 0)
+{"ok":true}

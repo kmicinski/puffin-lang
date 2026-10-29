@@ -1,0 +1,4 @@
+== check (exit 1)
+== stdout
+error: typecheck: string-length: argument has type Int, expected Str [check-error.puf:3]
+== stderr

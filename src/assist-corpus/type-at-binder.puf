@@ -1,0 +1,6 @@
+;; assist: type-at @ "[s : Str]" +1
+;; a binder is not an expression: no probe, no type
+(define (greet [s : Str]) : Str
+  (string-append s "!"))
+
+(greet "hi")

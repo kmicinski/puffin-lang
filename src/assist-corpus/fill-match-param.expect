@@ -1,0 +1,20 @@
+== assists @ 262 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on (Option Int)","source":"type","edits":[{"start":263,"end":263,"text":"\n    [None (error \"TODO: None\")]\n    [(Some n) (error \"TODO: Some\")]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Option is not exhaustive: missing None, Some [fill-match-param.puf:6]
+== apply 1: fill-match
+;; assist: assists @ "(match o))" +7
+;; a parameterized type at an instance: field types substitute
+;; (Some's field is an Int here), a nullary constructor is bare
+(define-type (Option a) (None) (Some a))
+
+(define (get-or-zero [o : (Option Int)]) : Int
+  (match o
+    [None (error "TODO: None")]
+    [(Some n) (error "TODO: Some")]))
+
+(println (get-or-zero (Some 4)))
+== check (exit 0)
+{"ok":true}

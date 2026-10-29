@@ -1,0 +1,9 @@
+;; assist: forms
+;; each top-level form's stable key and span
+(define-type Shape (Circle Int) (Sq Int))
+(: area (-> Shape Int))
+(define (area s) (match s [(Circle r) (* 3 (* r r))] [(Sq k) (* k k)]))
+(define unit 1)
+(println (area (Sq 2)))
+(define unit 2)
+(area (Circle 1))

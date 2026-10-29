@@ -54,6 +54,24 @@
 ;; off) is byte-for-byte unaffected.
 (define repl-mode #f)
 
+;; Editor assists (docs/STUDIO.md §2.1; puffincc --assist) read one
+;; file's text from here instead of from disk -- the buffer as typed,
+;; or the buffer with a probe spliced in: (path . text), or #f. The
+;; module resolver and the driver read sources through read-source.
+(define source-override (ann #f _))
+(: read-source (-> Str Str))
+(define (read-source path)
+  (if (and source-override (string=? (car source-override) path))
+      (cdr source-override)
+      (read-file path)))
+
+;; The typechecker reports an assist's probe here: when set, a
+;; (#%probe e) form synthesizes e's type and calls
+;; (probe-hook type env), env being the local (name . type) bindings.
+;; Unset, #%probe is an ordinary (unbound) name, so whole-program
+;; compilation is unaffected.
+(define probe-hook (ann #f _))
+
 ;; Promote the typechecker's exhaustiveness WARNING (a match over a
 ;; closed ADT that misses constructors; docs/TYPES.md §2) to a
 ;; compile-time error. Off by default: the warning goes to stderr

@@ -19,6 +19,7 @@
 (require "desugar.puf")
 (require "middle.puf")
 (require "backends.puf")
+(require "assist.puf")
 
 (define dump-after-pass (ann #f _))   ;; #f or a pass-name symbol
 
@@ -191,6 +192,10 @@
 ;;                   unit (no input file)
 (define opt-repl #f)
 (define opt-repl-prelude #f)
+;; editor assists (docs/STUDIO.md §2.1; assist.puf):
+;;   --assist OP FILE [POS]   run one assist operation, print JSON
+(define opt-assist (ann #f _))
+(define opt-assist-args '())
 
 (: parse-args (-> (List Str) Void))
 (define (parse-args args)
@@ -224,6 +229,13 @@
      (begin (set! opt-repl #t) (parse-args (cdr args)))]
     [(string=? (car args) "--repl-prelude")
      (begin (set! opt-repl #t) (set! opt-repl-prelude #t) (parse-args (cdr args)))]
+    [(string=? (car args) "--assist")
+     (begin (set! opt-assist (flag-arg "--assist" (cdr args)))
+            (parse-args (cdr (cdr args))))]
+    ;; an assist's operands after FILE (a position)
+    [(and opt-assist opt-input)
+     (begin (set! opt-assist-args (append opt-assist-args (list (car args))))
+            (parse-args (cdr args)))]
     [else
      (begin
        (when opt-input (error "puffincc: expected at most one input file"))
@@ -240,6 +252,12 @@
 
 (: compile-forms (-> (List _) _ _))
 (define (compile-forms raw-forms user-origins)
+  (run-chain (assemble-program raw-forms user-origins)))
+
+;; the (program ...) a file's top-level forms compile as: unwrapped
+;; from a class-style (program ...), the prelude injected (except in
+;; REPL mode), and form-origins set for diagnostics
+(define (assemble-program raw-forms user-origins)
   ;; class-style files wrap everything in one (program ...) form
   (define user-forms
     (match raw-forms
@@ -257,14 +275,14 @@
   (if repl-mode
       (begin
         (set! form-origins #f)
-        (run-chain `(program ,@user-forms)))
+        `(program ,@user-forms))
       (let ([pre (prelude-inject user-forms)])
         (begin
           ;; the prelude's forms carry no positions (embedded
           ;; pre-parsed data)
           (set! form-origins
                 (if origins (append (map (lambda (f) #f) pre) origins) #f))
-          (run-chain `(program ,@pre ,@user-forms))))))
+          `(program ,@pre ,@user-forms)))))
 
 (: ends-with? (-> Str Str Bool))
 (define (ends-with? s suffix)
@@ -285,37 +303,47 @@
   (unless (zero? rc)
     (error (str-cat "puffincc: assembler/linker failed: " cmd))))
 
+;; read an entry file and resolve its module DAG (or take a plain
+;; file's forms, minus directives): (list forms origins), each origin
+;; the (basename . line) of its top-level form
+(define (load-entry path)
+  (let* ([base (path-basename path)]
+         ;; name the entry file for the reader's error messages
+         [_rf (set! reader-file base)]
+         [raw (read-forms-from-string (read-source path))]
+         [raw-lines reader-form-lines]
+         ;; module programs take their options from the CLI, not
+         ;; directives; plain files keep the classic directives.
+         ;; Each top-level form's (basename . line) origin rides
+         ;; along: the resolver stashes the flattened DAG's origins;
+         ;; a plain file's origins drop the leading directives the
+         ;; way strip-directives does.
+         [fo (if (module-forms? raw)
+                 (let ([fs (resolve-modules path)])
+                   (list fs resolved-origins))
+                 (let* ([fs0 (strip-directives raw)]
+                        ;; foreign library paths in a plain file
+                        ;; resolve against the file's directory
+                        ;; (docs/FFI.md §3), like the module resolver
+                        [fs (map (lambda (f)
+                                   (resolve-foreign-paths f (path-dirname path)))
+                                 fs0)]
+                        [lines (drop raw-lines (- (length raw) (length fs)))])
+                   (list fs (map (lambda (l) (cons base l)) lines))))])
+    fo))
+
 (cond
   ;; --repl-prelude: compile the embedded prelude as a REPL unit (the
   ;; session's first unit; docs/WASM-VM.md §5.2). No input file.
   [opt-repl-prelude
    (let ([result (compile-forms prelude-forms-data #f)])
      (if opt-output (write-file opt-output result) (display result)))]
+  ;; --assist OP FILE [POS]: one editor assist (assist.puf)
+  [(and opt-assist opt-input)
+   (run-assist opt-assist opt-input opt-assist-args load-entry assemble-program)]
   ;; file mode: the entry of a module DAG (or a plain single file)
   [opt-input
-   (let* ([base (path-basename opt-input)]
-          ;; name the entry file for the reader's error messages
-          [_rf (set! reader-file base)]
-          [raw (read-forms-from-string (read-file opt-input))]
-          [raw-lines reader-form-lines]
-          ;; module programs take their options from the CLI, not
-          ;; directives; plain files keep the classic directives.
-          ;; Each top-level form's (basename . line) origin rides
-          ;; along: the resolver stashes the flattened DAG's origins;
-          ;; a plain file's origins drop the leading directives the
-          ;; way strip-directives does.
-          [fo (if (module-forms? raw)
-                  (let ([fs (resolve-modules opt-input)])
-                    (list fs resolved-origins))
-                  (let* ([fs0 (strip-directives raw)]
-                         ;; foreign library paths in a plain file
-                         ;; resolve against the file's directory
-                         ;; (docs/FFI.md §3), like the module resolver
-                         [fs (map (lambda (f)
-                                    (resolve-foreign-paths f (path-dirname opt-input)))
-                                  fs0)]
-                         [lines (drop raw-lines (- (length raw) (length fs)))])
-                    (list fs (map (lambda (l) (cons base l)) lines))))]
+   (let* ([fo (load-entry opt-input)]
           [forms (first fo)]
           [origins (second fo)])
      (begin

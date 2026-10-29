@@ -1,0 +1,744 @@
+;; puffincc -- assist.puf: editor assists, `puffincc --assist OP FILE
+;; [POS]` (docs/STUDIO.md §2.1, §5).
+;;
+;; Each operation runs in its own process and prints JSON on stdout.
+;; A fatal error (reader, resolver, type error) prints puffincc's usual
+;; `error: ... [file:line]` text and exits non-zero instead. Positions
+;; are byte offsets into FILE.
+;;
+;;   check FILE         {"ok":true}
+;;   forms FILE         {"forms":[{"key":..,"start":..,"end":..,"line":..}, ...]}
+;;   type-at FILE POS   {"type":"Expr"} | {"type":null}
+;;   assists FILE POS   one JSON object per line, each an assist
+;;                      {"id":..,"title":..,"source":..,"edits":[{"start":..,"end":..,"text":..}]},
+;;                      then {"done":true}. A type error elsewhere in
+;;                      the file can stop the checker part way: the
+;;                      assists already printed stand.
+;;
+;; Types at a point come from a probe: the target's text is wrapped in
+;; (#%probe ...), the program is checked, and the checker reports the
+;; type it synthesized through probe-hook (system.puf). Every assist is
+;; a plain text edit computed from syntax.puf's spans; nothing here
+;; reprints a tree, so comments and layout outside an edit survive.
+;;
+;; The driver hands in two functions, since main.puf owns how a file
+;; becomes a program: (load-entry path) -> (list forms origins), and
+;; (assemble forms origins) -> the (program ...) to check, prelude
+;; included.
+
+(require "system.puf")
+(require "reader.puf")
+(require "syntax.puf")
+(require "modules.puf")   ;; str-cat
+(require "types.puf")     ;; collect-adts, ctor-*, subst, ty, typecheck-program
+(require "desugar.puf")   ;; desugar (runs the typechecker first)
+
+;; ---- JSON ---------------------------------------------------------------
+
+(: json-str (-> Str Str))
+(define (json-str s)
+  (let loop ([i 0] [acc (list "\"")])
+    (if (>= i (string-length s))
+        (string-concat (reverse (cons "\"" acc)))
+        (let ([b (string-byte s i)])
+          (loop (+ i 1)
+                (cons (cond [(eq? b 34) "\\\""]
+                            [(eq? b 92) "\\\\"]
+                            [(eq? b 10) "\\n"]
+                            [(eq? b 13) "\\r"]
+                            [(eq? b 9) "\\t"]
+                            [(< b 32) (str-cat "\\u00" (hex2 b))]
+                            [else (substring s i (+ i 1))])
+                      acc))))))
+
+(define (hex2 b)
+  (let ([digits "0123456789abcdef"])
+    (str-cat (substring digits (quotient b 16) (+ (quotient b 16) 1))
+             (substring digits (remainder b 16) (+ (remainder b 16) 1)))))
+
+;; pairs: (key . already-rendered-json)
+(define (json-obj pairs)
+  (str-cat "{"
+           (string-join (map (lambda (kv) (str-cat (json-str (car kv)) ":" (cdr kv))) pairs) ",")
+           "}"))
+(define (json-list xs) (str-cat "[" (string-join xs ",") "]"))
+(define (json-int n) (number->string n))
+
+;; ---- the entry file's text and syntax ------------------------------------
+
+(define entry-path "")
+(define entry-text "")
+(define entry-nodes '())
+
+(define (node-text n) (substring entry-text (syn-start n) (syn-end n)))
+(define (lst? n) (eq? (car n) 'lst))
+(define (atom? n) (eq? (car n) 'atom))
+(define (lst-open n) (fourth n))
+(define (lst-kids n) (fifth n))
+(define (atom-datum n) (fourth n))
+(define (fourth xs) (car (cdr (cdr (cdr xs)))))
+(define (fifth xs) (car (cdr (cdr (cdr (cdr xs))))))
+
+;; the symbol at the head of a list node, or #f
+(define (head-sym n)
+  (if (and (lst? n) (pair? (lst-kids n)))
+      (let ([h (car (lst-kids n))])
+        (if (and (atom? h) (symbol? (atom-datum h))) (atom-datum h) #f))
+      #f))
+
+;; the column (0-based) and line (1-based) of a byte offset
+(define (col-of pos)
+  (let loop ([i pos])
+    (if (or (eq? i 0) (eq? (string-byte entry-text (- i 1)) 10))
+        (- pos i)
+        (loop (- i 1)))))
+(define (line-of pos) (reader-advance-line-in entry-text 0 pos 1))
+(define (reader-advance-line-in s from to line)
+  (let loop ([j from] [line line])
+    (if (>= j to)
+        line
+        (loop (+ j 1) (if (eq? (string-byte s j) 10) (+ line 1) line)))))
+
+(define (spaces n) (string-concat (map (lambda (i) " ") (range 0 n))))
+
+;; ---- forms ------------------------------------------------------------------
+
+;; a top-level form's stable key: what it defines, else its kind and
+;; ordinal. Version history and analysis facts key on these.
+(define (form-key n expr-index)
+  (let ([d (syn->datum n)])
+    (match d
+      [`(define (,f . ,_) ,_ ...) #:when (symbol? f) (str-cat "define:" (symbol->string f))]
+      [`(define ,x ,_ ...) #:when (symbol? x) (str-cat "define:" (symbol->string x))]
+      [`(define-type (,t . ,_) ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
+      [`(define-type ,t ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
+      [`(: ,x ,_) #:when (symbol? x) (str-cat "sig:" (symbol->string x))]
+      [`(require ,m ,_ ...) #:when (string? m) (str-cat "require:" m)]
+      [`(provide ,_ ...) "provide"]
+      [_ (str-cat "expr:" (number->string expr-index))])))
+
+(define (op-forms)
+  (let loop ([ns entry-nodes] [i 0] [seen (hash)] [acc '()])
+    (if (null? ns)
+        (println (json-obj (list (cons "forms" (json-list (reverse acc))))))
+        (let* ([n (car ns)]
+               [k0 (form-key n i)]
+               [dup (hash-ref/default seen k0 0)]
+               [k (if (eq? dup 0) k0 (str-cat k0 "#" (number->string (+ dup 1))))])
+          (loop (cdr ns) (+ i 1) (hash-set seen k0 (+ dup 1))
+                (cons (json-obj (list (cons "key" (json-str k))
+                                      (cons "start" (json-int (syn-start n)))
+                                      (cons "end" (json-int (syn-end n)))
+                                      (cons "line" (json-int (line-of (syn-start n))))))
+                      acc))))))
+
+;; ---- probes -----------------------------------------------------------------
+
+(define (splice-probe start end)
+  (str-cat (substring entry-text 0 start)
+           "(#%probe " (substring entry-text start end) ")"
+           (substring entry-text end (string-length entry-text))))
+
+;; check the program with [start, end) probed; hook gets (type env)
+;; once, the first time the checker reaches the probe
+(define (run-probe start end hook load-entry assemble)
+  (let ([fired #f])
+    (set! source-override (cons entry-path (splice-probe start end)))
+    (set! probe-hook (lambda (t env)
+                       (unless fired
+                         (set! fired #t)
+                         (hook t env))))
+    (let ([fo (load-entry entry-path)])
+      (typecheck-program (assemble (first fo) (second fo))))
+    (set! probe-hook #f)
+    (set! source-override #f)
+    fired))
+
+(define (render-type t) (value->string (ty t)))
+
+;; is the node at the head of `path` (innermost first) somewhere a
+;; probe must not go: a binder, a type, or a match pattern? Probing
+;; one would change what the form means.
+(define (binder-position? path)
+  (or (in-match-pattern? path)
+      (let loop ([p path] [i 0])
+        (if (or (null? p) (null? (cdr p)))
+            #f
+            (let* ([child (car p)] [parent (car (cdr p))]
+                   [h (head-sym parent)]
+                   [kids (if (lst? parent) (lst-kids parent) '())]
+                   [at (lambda (k) (and (> (length kids) k) (eq? (list-ref kids k) child)))]
+                   ;; child is a let's binding list: the cursor is a
+                   ;; binder iff it IS the name of the binding it is in
+                   [names-binding? (lambda ()
+                                     (and (eq? i 2)
+                                          (let ([b (list-ref path 1)])
+                                            (and (lst? b) (pair? (lst-kids b))
+                                                 (eq? (car (lst-kids b)) (car path))))))])
+              (cond
+                ;; (define x ...), (define (f a [b : T]) ...), (lambda (a ...) ...)
+                [(and (member h '(define lambda λ)) (at 1)) #t]
+                ;; (let ([x e] ...) ...), and a named let's name and bindings
+                [(and (member h '(let let* letrec)) (at 1) (lst? child)) (names-binding?)]
+                [(and (eq? h 'let) (at 1) (atom? child)) #t]
+                [(and (eq? h 'let) (at 2) (lst? child)) (names-binding?)]
+                ;; types: (ann e T), (: x T), (define-type ...)
+                [(and (eq? h 'ann) (at 2)) #t]
+                [(member h '(: define-type)) #t]
+                [else (loop (cdr p) (+ i 1))]))))))
+
+(define (in-match-pattern? path)
+  (let loop ([p path])
+    (cond
+      [(or (null? p) (null? (cdr p)) (null? (cdr (cdr p)))) #f]
+      [(let ([clause (car (cdr p))] [m (car (cdr (cdr p)))])
+         (and (eq? (head-sym m) 'match) (lst? clause) (pair? (lst-kids clause))
+              (eq? (car (lst-kids clause)) (car p))
+              (memq-node clause (cdr (cdr (lst-kids m))))))
+       #t]
+      [else (loop (cdr p))])))
+
+(define (memq-node n ns)
+  (cond [(null? ns) #f] [(eq? (car ns) n) #t] [else (memq-node n (cdr ns))]))
+
+(define (op-type-at pos load-entry assemble)
+  (let* ([path (syn-path-at entry-nodes pos)])
+    (if (or (null? path) (binder-position? path))
+        (println (json-obj (list (cons "type" "null"))))
+        (let* ([n (car path)]
+               [fired (run-probe (syn-start n) (syn-end n)
+                                 (lambda (t env)
+                                   (println (json-obj (list (cons "type" (json-str (render-type t)))))))
+                                 load-entry assemble)])
+          (unless fired (println (json-obj (list (cons "type" "null")))))))))
+
+;; ---- assists: shared pieces ---------------------------------------------------
+
+(define (edit start end text)
+  (json-obj (list (cons "start" (json-int start)) (cons "end" (json-int end))
+                  (cons "text" (json-str text)))))
+
+(define (emit-assist id title source edits)
+  (println (json-obj (list (cons "id" (json-str id)) (cons "title" (json-str title))
+                           (cons "source" (json-str source))
+                           (cons "edits" (json-list edits))))))
+
+(define (lower-initial s)
+  (let ([b (string-byte s 0)])
+    (if (and (< 64 b) (< b 91))
+        (substring "abcdefghijklmnopqrstuvwxyz" (- b 65) (- b 64))
+        (substring s 0 1))))
+
+;; a binder name for a field of type t (adt? says which names are ADTs)
+(define (binder-base t adt?)
+  (cond [(eq? t 'Int) "n"] [(eq? t 'Bool) "b"] [(eq? t 'Str) "s"] [(eq? t 'Sym) "sym"]
+        [(eq? t 'Void) "v"]
+        [(symbol? t) (if (adt? t) (lower-initial (symbol->string (nm t))) "x")]
+        [(pair? t)
+         (let ([h (car t)])
+           (cond [(eq? h 'List) "xs"] [(eq? h 'Vec) "vec"] [(eq? h 'Hash) "h"] [(eq? h 'Set) "st"]
+                 [(eq? h 'Pairof) "p"] [(or (eq? h '->) (eq? h '->*)) "f"]
+                 [(eq? h 'Mut) (binder-base (car (cdr t)) adt?)]
+                 [(and (symbol? h) (adt? h)) (lower-initial (symbol->string (nm h)))]
+                 [else "x"]))]
+        [else "x"]))
+
+;; fresh binder names for field types: a base used twice, or one the
+;; context already uses, is numbered (e1 e2)
+(define (field-names fts adt? avoid)
+  (let* ([bases (map (lambda (t) (binder-base t adt?)) fts)]
+         [count (lambda (b) (length (filter (lambda (x) (string=? x b)) bases)))])
+    (let loop ([bs bases] [seen (hash)] [acc '()])
+      (if (null? bs)
+          (reverse acc)
+          (let* ([b (car bs)]
+                 [k (+ 1 (hash-ref/default seen b 0))]
+                 [numbered? (or (> (count b) 1) (member b avoid))])
+            (loop (cdr bs) (hash-set seen b k)
+                  (cons (if numbered? (str-cat b (number->string k)) b) acc)))))))
+
+(define (todo-body ctor-name rec-calls)
+  (let ([err (str-cat "(error \"TODO: " ctor-name "\")")])
+    (if (null? rec-calls)
+        err
+        (str-cat "(let ("
+                 (string-join (map (lambda (rc) (str-cat "[" (car rc) " " (cdr rc) "]")) rec-calls) " ")
+                 ") " err ")"))))
+
+;; one clause [(C x y) body]; rec maps a field (name . type) to a
+;; recursive-call text or #f
+(define (ctor-clause open name fts adt? avoid rec)
+  (let* ([close (if (eq? open 91) "]" ")")]
+         [openers (if (eq? open 91) "[" "(")]
+         [names (field-names fts adt? avoid)]
+         [pat (if (null? fts) name (str-cat "(" name " " (string-join names " ") ")"))]
+         [calls (filter-map (lambda (nt) (rec nt)) (map2 cons names fts))]
+         [rec-calls (map2 (lambda (c i) (cons (str-cat "r" (number->string i)) c))
+                          calls (range 1 (+ 1 (length calls))))])
+    (str-cat openers pat " " (todo-body name rec-calls) close)))
+
+;; the top-level node containing a path
+(define (top-of path) (last path))
+
+;; an enclosing (define (f p ...) ...): (f . param-names), or #f
+(define (enclosing-function path)
+  (match (syn->datum (top-of path))
+    [`(define (,f ,ps ...) ,_ ...) #:when (symbol? f)
+     (cons f (map (lambda (p) (match p [`(,x : ,_) x] [x x])) ps))]
+    [_ #f]))
+
+;; the recursive call for field b, when the function's parameter
+;; `param` is the one being matched: (f a ... b ... c)
+(define (rec-call fn param b)
+  (let ([args (map (lambda (p) (if (eq? p param) b (symbol->string p))) (cdr fn))])
+    (str-cat "(" (symbol->string (car fn)) " " (string-join args " ") ")")))
+
+;; where new clauses go in match node m, and how they are indented
+(define (clause-insertion m)
+  (let ([clauses (cdr (cdr (lst-kids m)))])
+    (if (null? clauses)
+        (list (syn-end (car (cdr (lst-kids m)))) (+ (col-of (syn-start m)) 2) 91)
+        (let ([lastc (last clauses)])
+          (list (syn-end lastc) (col-of (syn-start (car clauses)))
+                (if (lst? (car clauses)) (lst-open (car clauses)) 91))))))
+
+(define (insert-clauses-edit m clause-texts)
+  (let* ([ins (clause-insertion m)]
+         [indent (spaces (second ins))])
+    (edit (first ins) (first ins)
+          (string-concat (map (lambda (c) (str-cat "\n" indent c)) clause-texts)))))
+
+;; ---- ADT tables (from the checker's own collect-adts) -------------------------
+
+(define adt-tables (ann #f _))
+(define (adts) (first adt-tables))
+(define (ctors) (second adt-tables))
+(define (ctor-orders) (third adt-tables))
+(define (adt-name? t) (hash-has-key? (adts) t))
+;; source spelling -> the (possibly module-mangled) constructor
+(define (ctor-by-source s)
+  (findf (lambda (c) (eq? (nm c) s)) (hash-keys (ctors))))
+
+;; the ADT a type names, with its arguments: (name . args), or #f
+(define (adt-of t)
+  (cond [(and (symbol? t) (adt-name? t)) (cons t '())]
+        [(and (pair? t) (symbol? (car t)) (adt-name? (car t))) (cons (car t) (cdr t))]
+        [else #f]))
+
+;; a constructor's field types with the scrutinee's type arguments
+;; substituted for its parameters
+(define (ctor-field-types c args)
+  (let* ([info (hash-ref (ctors) c)]
+         [env (make-hash)])
+    (map2 (lambda (p a) (hash-set! env p a)) (ctor-params info) args)
+    (map (lambda (ft) (subst ft env)) (ctor-fields info))))
+
+;; ---- assist: fill match / add missing cases (from the scrutinee's type) ---------
+
+;; the constructors (source spellings) a match's clauses already
+;; cover; 'all when a clause can't be proven partial (mirrors
+;; check-match-exhaustiveness in types.puf)
+(define (covered-ctors m owner)
+  (let loop ([cls (cdr (cdr (lst-kids m)))] [acc '()])
+    (if (null? cls)
+        (reverse acc)
+        (let* ([cl (car cls)]
+               [p (if (and (lst? cl) (pair? (lst-kids cl))) (syn->datum (car (lst-kids cl))) '_)]
+               [cname (cond [(symbol? p) p]
+                            [(and (pair? p) (symbol? (car p))) (car p)]
+                            [else #f])]
+               [c (and cname (ctor-by-source cname))])
+          (cond
+            [(and c (eq? (ctor-owner (hash-ref (ctors) c)) owner)) (loop (cdr cls) (cons cname acc))]
+            [c (loop (cdr cls) acc)]
+            [(and (pair? p) (symbol? (car p)) (not (member (car p) '(quote quasiquote cons list vector ?))))
+             ;; an unknown head: not a pattern this checker proves partial
+             'all]
+            [else 'all])))))
+
+(define (match-assists m path t)
+  (let* ([ad (adt-of t)])
+    (when ad
+      (let* ([owner (car ad)] [args (cdr ad)]
+             [order (hash-ref/default (ctor-orders) owner '())]
+             [covered (covered-ctors m owner)])
+        (unless (eq? covered 'all)
+          (let* ([missing (filter (lambda (c) (not (member (nm c) covered))) order)]
+                 [fn (enclosing-function path)]
+                 [scrut (car (cdr (lst-kids m)))]
+                 [scrut-sym (and (atom? scrut) (symbol? (atom-datum scrut)) (atom-datum scrut))]
+                 [param (and fn scrut-sym (member scrut-sym (cdr fn)) scrut-sym)]
+                 [avoid (map symbol->string (append (if scrut-sym (list scrut-sym) '())
+                                                    (if fn (cons (car fn) (cdr fn)) '())))]
+                 [open (third (clause-insertion m))]
+                 [rec (lambda (nt)
+                        (and param (equal? (cdr nt) t) (rec-call fn param (car nt))))]
+                 [texts (map (lambda (c)
+                               (ctor-clause open (symbol->string (nm c)) (ctor-field-types c args)
+                                            adt-name? avoid rec))
+                             missing)]
+                 [tname (render-type t)])
+            (when (pair? missing)
+              (if (null? covered)
+                  (emit-assist "fill-match" (str-cat "Fill match on " tname) "type"
+                               (list (insert-clauses-edit m texts)))
+                  (emit-assist "add-missing-cases"
+                               (str-cat "Add missing cases: "
+                                        (string-join (map (lambda (c) (symbol->string (nm c))) missing) ", "))
+                               "type"
+                               (list (insert-clauses-edit m texts)))))))))))
+
+;; ---- assist: case-split a binder in a constructor pattern ----------------------
+
+;; path: innermost first. The cursor's atom sits directly in a
+;; constructor pattern (C ... x ...) somewhere inside clause cl of m.
+(define (case-split-assist m cl path t)
+  (let* ([a (car path)])
+    (when (and (atom? a) (symbol? (atom-datum a)) (pair? (cdr path)))
+      (let* ([p (car (cdr path))]
+             [cname (head-sym p)]
+             [c (and cname (not (eq? (car (lst-kids p)) a)) (ctor-by-source cname))])
+        (when c
+          (let* ([ad (adt-of t)]
+                 ;; the clause's own pattern gets the scrutinee's type
+                 ;; arguments; deeper patterns keep the parameters
+                 [args (if (and ad (eq? p (car (lst-kids cl))) (eq? (car ad) (ctor-owner (hash-ref (ctors) c))))
+                           (cdr ad)
+                           '())]
+                 [fts (ctor-field-types c args)]
+                 [i (index-of-node a (cdr (lst-kids p)))]
+                 [ft (list-ref fts i)]
+                 [fad (adt-of ft)])
+            (when fad
+              (let* ([order (hash-ref/default (ctor-orders) (car fad) '())]
+                     [avoid (map symbol->string (symbols-of (syn->datum cl)))]
+                     [indent (str-cat "\n" (spaces (col-of (syn-start cl))))]
+                     [x (atom-datum a)]
+                     ;; the guard and body still see x: rebuild it from
+                     ;; its parts when they mention it
+                     [uses-x? (member x (symbols-of (map syn->datum (cdr (lst-kids cl)))))]
+                     [texts
+                      (map (lambda (d)
+                             (let* ([dfts (ctor-field-types d (cdr fad))]
+                                    [names (field-names dfts adt-name? avoid)]
+                                    [repl (if (null? dfts)
+                                              (symbol->string (nm d))
+                                              (str-cat "(" (symbol->string (nm d)) " " (string-join names " ") ")"))])
+                               (split-clause cl a repl uses-x?)))
+                           order)])
+                (emit-assist "case-split"
+                             (str-cat "Split " (symbol->string (atom-datum a)) " into "
+                                      (string-join (map (lambda (d) (symbol->string (nm d))) order) ", "))
+                             "type"
+                             (list (edit (syn-start cl) (syn-end cl) (string-join texts indent))))))))))))
+
+;; clause cl with binder atom a replaced by pattern text repl; when
+;; the clause's guard or body mentions the binder, each body form is
+;; wrapped to rebind it to the value the pattern took apart
+(define (split-clause cl a repl rebind?)
+  (let* ([kids (lst-kids cl)]
+         [pat (car kids)]
+         [pat-text (str-cat (substring entry-text (syn-start pat) (syn-start a))
+                            repl
+                            (substring entry-text (syn-end a) (syn-end pat)))]
+         [rest-start (syn-end pat)]
+         [rest-end (- (syn-end cl) 1)]
+         [rest (substring entry-text rest-start rest-end)]
+         [x (symbol->string (atom-datum a))]
+         [opener (substring entry-text (syn-start cl) (syn-start pat))]
+         [closer (substring entry-text rest-end (syn-end cl))])
+    (if (and rebind? (pair? (cdr kids)) (not (has-guard? kids)))
+        (str-cat opener pat-text " (let ([" x " " repl "])"
+                 (substring entry-text rest-start (syn-start (car (cdr kids))))
+                 (substring entry-text (syn-start (car (cdr kids))) rest-end)
+                 ")" closer)
+        (str-cat opener pat-text rest closer))))
+
+;; a clause [p #:when g body ...]
+(define (has-guard? kids)
+  (and (pair? (cdr kids)) (atom? (car (cdr kids)))
+       (eq? (atom-datum (car (cdr kids))) (string->symbol "#:when"))))
+
+(define (index-of-node n ns)
+  (let loop ([ns ns] [i 0])
+    (cond [(null? ns) #f] [(eq? (car ns) n) i] [else (loop (cdr ns) (+ i 1))])))
+
+(define (symbols-of d)
+  (cond [(symbol? d) (list d)]
+        [(pair? d) (append (symbols-of (car d)) (symbols-of (cdr d)))]
+        [else '()]))
+
+;; ---- assist: cases from patterns already in the file (untyped data) -------------
+
+;; a clause pattern's family key: what shape of value it recognizes,
+;; independent of binder names; #f for binders, wildcards, literals,
+;; and constructor patterns (types handle those)
+(define (pattern-key d)
+  (match d
+    ;; list/cons patterns, not quasiquote: a literal quasiquote or
+    ;; unquote inside a quasiquote pattern would read as an escape
+    [(list 'quasiquote (cons h _)) #:when (symbol? h) (str-cat "qq:" (symbol->string h))]
+    [(list 'quote h) #:when (symbol? h) (str-cat "quote:" (symbol->string h))]
+    [(cons '? (cons pred _)) #:when (symbol? pred) (str-cat "pred:" (symbol->string pred))]
+    [(cons 'list (cons (list 'quote h) _)) #:when (symbol? h) (str-cat "qq:" (symbol->string h))]
+    [_ #f]))
+
+;; every match node in the file, with its enclosing top-level form
+(define (all-matches)
+  (append-map (lambda (top) (map (lambda (m) (cons m top)) (matches-in top))) entry-nodes))
+(define (matches-in n)
+  (let ([inner (append-map matches-in (syn-kids n))])
+    (if (eq? (head-sym n) 'match) (cons n inner) inner)))
+
+;; a match's recognized cases: ((key . pattern-node) ...)
+(define (match-cases m)
+  (filter-map (lambda (cl)
+                (and (lst? cl) (pair? (lst-kids cl))
+                     (let ([k (pattern-key (syn->datum (car (lst-kids cl))))])
+                       (and k (cons k (car (lst-kids cl)))))))
+              (cdr (cdr (lst-kids m)))))
+
+;; quasiquote templates the file BUILDS, outside match patterns:
+;; `(add ,a ,b) offers the case `(add ,a ,b)
+(define (constructed-cases)
+  (let walk ([ns entry-nodes] [acc '()])
+    (if (null? ns)
+        acc
+        (let ([n (car ns)])
+          (cond
+            [(eq? (head-sym n) 'match)
+             ;; the scrutinee, and each clause's guard and body -- not its pattern
+             (walk (append (list (car (cdr (lst-kids n))))
+                           (append (append-map (lambda (cl) (if (and (lst? cl) (pair? (lst-kids cl))) (cdr (lst-kids cl)) '()))
+                                               (cdr (cdr (lst-kids n))))
+                                   (cdr ns)))
+                   acc)]
+            [(and (eq? (car n) 'sugar) (eq? (fourth n) 'quasiquote))
+             (let ([k (pattern-key (syn->datum n))])
+               (walk (cdr ns) (if (and k (not (assoc k acc))) (cons (cons k n) acc) acc)))]
+            [(eq? (car n) 'sugar) (walk (cdr ns) acc)]
+            [else (walk (append (syn-kids n) (cdr ns)) acc)])))))
+
+(define (top-name top)
+  (match (syn->datum top)
+    [`(define (,f . ,_) ,_ ...) (symbol->string f)]
+    [`(define ,x ,_ ...) (value->string x)]
+    [_ "a top-level expression"]))
+
+(define (case-key-label k)   ;; "qq:add" -> "add"
+  (substring k (+ 1 (index-of-colon k)) (string-length k)))
+(define (index-of-colon k)
+  (let loop ([i 0]) (if (eq? (string-byte k i) 58) i (loop (+ i 1)))))
+
+(define (pattern-clause open pat-text label)
+  (str-cat (if (eq? open 91) "[" "(") pat-text " (error \"TODO: " label "\")" (if (eq? open 91) "]" ")")))
+
+(define (pattern-assists m)
+  (let* ([mine (match-cases m)]
+         [my-keys (map car mine)]
+         [open (third (clause-insertion m))]
+         [families
+          (filter (lambda (f) (pair? (cdr f)))
+                  (map (lambda (mt) (cons (top-name (cdr mt)) (match-cases (car mt))))
+                       (filter (lambda (mt) (not (eq? (car mt) m))) (all-matches))))]
+         [built (constructed-cases)]
+         [families (if (pair? built) (append families (list (cons #f built))) families)]
+         ;; a family is relevant when it shares a case with this match
+         ;; (or this match has none yet); offer what it adds
+         [offers
+          (filter-map
+           (lambda (f)
+             (let ([new (filter (lambda (kc) (not (member (car kc) my-keys))) (cdr f))])
+               (and (pair? new)
+                    (or (null? my-keys) (ormap (lambda (kc) (member (car kc) my-keys)) (cdr f)))
+                    (cons (car f) new))))
+           families)]
+         ;; one offer per distinct set of new cases, the largest first
+         [offers (dedupe-offers (sort offers (lambda (a b) (> (length (cdr a)) (length (cdr b))))))])
+    (let loop ([os offers] [n 0])
+      (when (and (pair? os) (< n 3))
+        (let* ([o (car os)]
+               [labels (map (lambda (kc) (case-key-label (car kc))) (cdr o))]
+               [texts (map (lambda (kc) (pattern-clause open (node-text (cdr kc)) (case-key-label (car kc))))
+                           (cdr o))])
+          (emit-assist (if (null? my-keys) "fill-match" "add-missing-cases")
+                       (str-cat (cond [(not (car o)) "Match the shapes this file builds: "]
+                                      [(null? my-keys) (str-cat "Match like " (str-cat (car o) ": "))]
+                                      [else (str-cat "Add cases from " (str-cat (car o) ": "))])
+                                (string-join labels ", "))
+                       "patterns"
+                       (list (insert-clauses-edit m texts)))
+          (loop (cdr os) (+ n 1)))))))
+
+(define (dedupe-offers os)
+  (let loop ([os os] [seen '()] [acc '()])
+    (if (null? os)
+        (reverse acc)
+        (let ([ks (sort (map car (cdr (car os))) string<?)])
+          (if (member ks seen)
+              (loop (cdr os) seen acc)
+              (loop (cdr os) (cons ks seen) (cons (car os) acc)))))))
+
+;; ---- assist: structural-recursion template for a define-type ---------------------
+
+(define (template-assist top)
+  (match (syn->datum top)
+    [`(define-type ,head ,cs ...)
+     (let* ([tname (match head [`(,n ,_ ...) n] [n n])]
+            [params (match head [`(,_ ,ps ...) ps] [_ '()])]
+            [tann (if (null? params)
+                      (symbol->string tname)
+                      (str-cat "(" (symbol->string tname) " "
+                               (string-join (map (lambda (p) "_") params) " ") ")"))]
+            [fname (str-cat "fn-for-" (string-downcase (symbol->string tname)))]
+            [v (lower-initial (symbol->string tname))]
+            [recursive? (lambda (ft) (or (eq? ft tname) (and (pair? ft) (eq? (car ft) tname))))]
+            [clauses
+             (map (lambda (c)
+                    (ctor-clause 91 (symbol->string (car c)) (cdr c)
+                                 adt-name? (list v fname)
+                                 (lambda (nt) (and (recursive? (cdr nt))
+                                                   (str-cat "(" fname " " (car nt) ")")))))
+                  cs)])
+       (emit-assist "template"
+                    (str-cat "Write a function over " (symbol->string tname) " (structural recursion)")
+                    "type"
+                    (list (edit (syn-end top) (syn-end top)
+                                (str-cat "\n\n(define (" fname " [" v " : " tann "])\n"
+                                         "  (match " v
+                                         (string-concat (map (lambda (cl) (str-cat "\n    " cl)) clauses))
+                                         "))")))))]
+    [_ (void)]))
+
+(define (string-downcase s)
+  (string-concat
+   (map (lambda (i)
+          (let ([b (string-byte s i)])
+            (if (and (< 64 b) (< b 91))
+                (substring "abcdefghijklmnopqrstuvwxyz" (- b 65) (- b 64))
+                (substring s i (+ i 1)))))
+        (range 0 (string-length s)))))
+
+;; ---- assist: stub an unbound function from a call ------------------------------
+
+(define special-forms
+  '(define lambda λ let let* letrec if cond case match when unless begin while set!
+    quote quasiquote unquote and or not else ann : define-type require provide
+    foreign define-foreign-type list vector hash set))
+
+;; names bound around the cursor by the forms on its path
+(define (local-binders path)
+  (append-map
+   (lambda (n)
+     (match (syn->datum n)
+       [`(define (,f . ,ps) ,body ...) (cons f (append (formal-names ps) (body-defines body)))]
+       [`(,lam ,ps ,body ...) #:when (member lam '(lambda λ)) (append (formal-names ps) (body-defines body))]
+       [`(let ,name (,bs ...) ,_ ...) #:when (symbol? name) (cons name (binding-names bs))]
+       [`(,l (,bs ...) ,_ ...) #:when (member l '(let let* letrec)) (binding-names bs)]
+       [`(match ,_ ,cls ...) (append-map (lambda (cl) (if (pair? cl) (symbols-of (car cl)) '())) cls)]
+       [_ '()]))
+   path))
+(define (formal-names ps)
+  (cond [(symbol? ps) (list ps)]
+        [(pair? ps) (cons (match (car ps) [`(,x : ,_) x] [x x]) (formal-names (cdr ps)))]
+        [else '()]))
+(define (binding-names bs) (filter-map (lambda (b) (and (pair? b) (symbol? (car b)) (car b))) bs))
+(define (body-defines body)
+  (filter-map (lambda (f) (match f
+                            [`(define (,g . ,_) ,_ ...) g]
+                            [`(define ,x ,_) #:when (symbol? x) x]
+                            [_ #f]))
+              body))
+
+;; every name the program defines at top level, prelude and imports
+;; included, in source spelling
+(define (program-names forms)
+  (append (filter-map (lambda (f) (match f
+                                    [`(define (,g . ,_) ,_ ...) (nm g)]
+                                    [`(define ,x ,_ ...) #:when (symbol? x) (nm x)]
+                                    [`(: ,x ,_) (nm x)]
+                                    [_ #f]))
+                      forms)
+          (map nm (hash-keys (ctors)))))
+
+(define (stub-assist path forms)
+  ;; the innermost call around the cursor; nothing inside quoted data
+  ;; or a match pattern is a call
+  (let ([call (and (not (ormap (lambda (n) (eq? (car n) 'sugar)) path))
+                   (not (in-match-pattern? path))
+                   (findf head-sym path))])
+    (begin
+      (when call
+        (let ([f (head-sym call)])
+          (unless (or (prim? f) (member f special-forms)
+                      (member f (local-binders path))
+                      (member f (program-names forms))
+                      (eq? (string-byte (symbol->string f) 0) 35))   ;; #%internal
+            (let* ([args (cdr (lst-kids call))]
+                   [names (map2 (lambda (a i)
+                                  (if (and (atom? a) (symbol? (atom-datum a)))
+                                      (symbol->string (atom-datum a))
+                                      (str-cat "x" (number->string i))))
+                                args (range 1 (+ 1 (length args))))]
+                   [names (dedupe-names names)]
+                   [top (top-of path)]
+                   [fs (symbol->string f)])
+              (emit-assist "stub"
+                           (str-cat "Define " fs " (stub, " (number->string (length args)) " arguments)")
+                           "call-site"
+                           (list (edit (syn-start top) (syn-start top)
+                                       (str-cat "(define (" fs (if (null? names) "" " ") (string-join names " ") ")\n"
+                                                "  (error \"TODO: " fs "\"))\n\n")))))))))))
+
+(define (dedupe-names names)
+  (let loop ([ns names] [i 1] [seen '()] [acc '()])
+    (if (null? ns)
+        (reverse acc)
+        (let ([n (if (member (car ns) seen) (str-cat "x" (number->string i)) (car ns))])
+          (loop (cdr ns) (+ i 1) (cons n seen) (cons n acc))))))
+
+;; ---- the assists operation --------------------------------------------------------
+
+(define (op-assists pos load-entry assemble)
+  (let* ([path (syn-path-at entry-nodes pos)]
+         [fo (load-entry entry-path)]
+         [prog (assemble (first fo) (second fo))]
+         [forms (match prog [`(program ,fs ...) fs])])
+    (set! adt-tables (collect-adts forms))
+    (when (pair? path)
+      (let* ([top (top-of path)]
+             [m (findf (lambda (n) (eq? (head-sym n) 'match)) path)]
+             [cl (and m (findf (lambda (n) (memq-node n (cdr (cdr (lst-kids m))))) path))])
+        (when (eq? (head-sym top) 'define-type) (template-assist top))
+        (stub-assist path forms)
+        (when (and m (pair? (cdr (lst-kids m))))
+          (let ([scrut (car (cdr (lst-kids m)))])
+            (run-probe (syn-start scrut) (syn-end scrut)
+                       (lambda (t env)
+                         (if (adt-of t)
+                             (begin (match-assists m path t)
+                                    (when cl (case-split-assist m cl path t)))
+                             (pattern-assists m)))
+                       load-entry assemble)))))
+    (println (json-obj (list (cons "done" "true"))))))
+
+;; ---- check ----------------------------------------------------------------------
+
+(define (op-check load-entry assemble)
+  (let ([fo (load-entry entry-path)])
+    (desugar (assemble (first fo) (second fo)))
+    (println (json-obj (list (cons "ok" "true"))))))
+
+;; ---- entry point ------------------------------------------------------------------
+
+(define (run-assist op path args load-entry assemble)
+  (set! entry-path path)
+  (set! entry-text (read-source path))
+  (set! entry-nodes (read-syntax-from-string entry-text))
+  (let ([pos (if (pair? args) (string->number (car args)) #f)])
+    (cond
+      [(string=? op "check") (op-check load-entry assemble)]
+      [(string=? op "forms") (op-forms)]
+      [(and (string=? op "type-at") pos) (op-type-at pos load-entry assemble)]
+      [(and (string=? op "assists") pos) (op-assists pos load-entry assemble)]
+      [else (error (str-cat "puffincc: unknown --assist operation or missing position: " op))])))

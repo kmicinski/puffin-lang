@@ -1,0 +1,23 @@
+== assists @ 283 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on Tok","source":"type","edits":[{"start":292,"end":292,"text":"\n    [(Lit n) (error \"TODO: Lit\")]\n    [Plus (error \"TODO: Plus\")]\n    [Times (error \"TODO: Times\")]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Tok is not exhaustive: missing Lit, Plus, Times [fill-match-let-bound.puf:8]
+== apply 1: fill-match
+;; assist: assists @ "(match (parse 3)))" +7
+;; the scrutinee's type comes from the checker, not an annotation:
+;; any expression whose type synthesizes to an ADT works
+(define-type Tok (Lit Int) (Plus) (Times))
+
+(define (parse [n : Int]) : Tok (Lit n))
+
+(define (show-tok)
+  (match (parse 3)
+    [(Lit n) (error "TODO: Lit")]
+    [Plus (error "TODO: Plus")]
+    [Times (error "TODO: Times")]))
+
+(show-tok)
+== check (exit 0)
+{"ok":true}

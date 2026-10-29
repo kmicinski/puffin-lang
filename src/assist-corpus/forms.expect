@@ -1,0 +1,4 @@
+== forms (exit 0)
+== stdout
+{"forms":[{"key":"define-type:Shape","start":62,"end":103,"line":3},{"key":"sig:area","start":104,"end":127,"line":4},{"key":"define:area","start":128,"end":199,"line":5},{"key":"define:unit","start":200,"end":215,"line":6},{"key":"expr:4","start":216,"end":239,"line":7},{"key":"define:unit#2","start":240,"end":255,"line":8},{"key":"expr:6","start":256,"end":273,"line":9}]}
+== stderr
