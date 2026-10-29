@@ -49,6 +49,14 @@ const inputs = readdirSync(inputsDir)
   .map((f) => f.replace(/\.in$/, ''))
   .sort();
 
+// The corpus stdin convention (tools/test-corpus.sh, test.rkt
+// input-ints): the input file's whitespace-separated integers,
+// re-joined by single spaces, plus one trailing newline.
+function stdinBytes(input) {
+  const ints = readFileSync(join(inputsDir, `${input}.in`), 'utf8').split(/\s+/).filter((t) => t !== '');
+  return new TextEncoder().encode(ints.join(' ') + '\n');
+}
+
 // One VM instance, run to _start completion; returns captured output
 // (stdout+stderr interleaved, like the reference harness) + shim FS.
 async function exec({ files, args, stdin }) {
@@ -107,7 +115,7 @@ for (const prog of programs) {
     const run = await exec({
       files: { '/out.pbc': outPbc },
       args: ['/out.pbc'],
-      stdin: readFileSync(join(inputsDir, `${input}.in`)),
+      stdin: stdinBytes(input),
     });
     if (run.output.trim() !== golden.trim()) {
       failures++;

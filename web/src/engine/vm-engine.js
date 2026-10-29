@@ -38,7 +38,7 @@ export class EngineNotReady extends Error {
 //    '/<repo>/play/' on GitHub Pages). Non-literal so vite leaves it
 //    as a runtime expression rather than a build-time asset.
 const artifactUrl = (name) =>
-  import.meta.env.DEV
+  import.meta.env?.DEV
     ? new URL('/' + name, self.location.origin).href
     : new URL('../' + name, import.meta.url).href;
 const VM_WASM_URL = artifactUrl('puffin-vm.wasm');
