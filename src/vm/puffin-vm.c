@@ -7,6 +7,10 @@
 //                                     semantics: v2 units link their
 //                                     named globals into the shared
 //                                     session cell table)
+//   puffin-vm --serve                 a long-lived session driven by
+//                                     load/try/quit commands on stdin,
+//                                     surviving runtime errors (native
+//                                     only; docs/STUDIO.md §2.2)
 //
 // Design (docs/WASM-VM.md §3, §5.2):
 //  - The VM *hosts* the existing runtime: this file links against
@@ -41,12 +45,28 @@
 //    Results of REPL top-level expressions are delivered through the
 //    RESULT opcode -> vm_host_repl_result (a host import on wasm; on
 //    native builds each result prints as its own stdout line).
+//  - --serve (native only) keeps a session alive across runtime
+//    errors by forking per evaluation; see "Serve mode" below.
+
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE // fopencookie, for --serve's stdout
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
 #include "../runtime/puffin.h"
+
+#if !defined(PVM_REACTOR) && !defined(__wasi__)
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#endif
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -468,9 +488,89 @@ static void reset_exec_state(void) {
 // host_repl_result import (module "puffin", name "repl_result").
 extern void vm_host_repl_result(const char *bytes, i64 len);
 #else
+// ---- Serve-mode stdout framing ----------------------------------
+// Under --serve, stdout is a protocol stream: program output passes
+// through, and the VM writes marker lines that begin with \x1f (a
+// byte programs do not normally print). Every marker starts a line.
+// To know whether program output left a partial line, serve mode
+// replaces stdout with a line-buffered stream whose writes go to fd 1
+// through serve_write_fd, which records whether the last byte written
+// was a newline. The flag lives in a MAP_SHARED page, so every
+// process in the fork lineage sees the same flag: a session process
+// printing a marker after its evaluation child died knows what the
+// child wrote. serve_fresh_line ends a partial line before a marker.
+
+static int serve_mode = 0;
+static volatile u8 *serve_bol = NULL; // 1 = fd 1 is at the start of a line
+
+static ssize_t serve_write_fd(const char *buf, size_t n) {
+  size_t off = 0;
+  while (off < n) {
+    ssize_t w = write(1, buf + off, n - off);
+    if (w < 0) {
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    off += (size_t)w;
+  }
+  if (n) *serve_bol = buf[n - 1] == '\n';
+  return (ssize_t)n;
+}
+
+#ifdef __APPLE__
+static int serve_cookie_write(void *cookie, const char *buf, int n) {
+  (void)cookie;
+  return (int)serve_write_fd(buf, (size_t)n);
+}
+#else
+static ssize_t serve_cookie_write(void *cookie, const char *buf, size_t n) {
+  (void)cookie;
+  return serve_write_fd(buf, n);
+}
+#endif
+
+static void serve_install_stdout(void) {
+  fflush(stdout);
+  void *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+  if (page == MAP_FAILED) vm_die("--serve: cannot map the line-state page");
+  serve_bol = page;
+  *serve_bol = 1;
+#ifdef __APPLE__
+  FILE *f = funopen(NULL, NULL, serve_cookie_write, NULL, NULL);
+#else
+  cookie_io_functions_t io = { NULL, serve_cookie_write, NULL, NULL };
+  FILE *f = fopencookie(NULL, "w", io);
+#endif
+  if (!f) vm_die("--serve: cannot open the framed stdout");
+  setvbuf(f, NULL, _IOLBF, 4096);
+  stdout = f;
+}
+
+static void serve_fresh_line(void) {
+  fflush(stdout);
+  if (!*serve_bol) fputc('\n', stdout);
+}
+
+// One marker line (s already carries its \x1f), flushed.
+static void serve_marker(const char *s) {
+  serve_fresh_line();
+  fputs(s, stdout);
+  fputc('\n', stdout);
+  fflush(stdout);
+}
+
 // native: each result prints as its own stdout line (the transcript
-// surface --session runs produce).
+// surface --session runs produce). Under --serve it is the line
+// \x1fR + the rendered value; a newline inside the rendering is
+// written as \x1e (ASCII RS) so the result stays one line.
 static void vm_host_repl_result(const char *bytes, i64 len) {
+  if (serve_mode) {
+    serve_fresh_line();
+    fputs("\x1f" "R", stdout);
+    for (i64 i = 0; i < len; i++) fputc(bytes[i] == '\n' ? '\x1e' : bytes[i], stdout);
+    fputc('\n', stdout);
+    return;
+  }
   fwrite(bytes, 1, (size_t)len, stdout);
   fputc('\n', stdout);
 }
@@ -836,6 +936,214 @@ static u8 *read_file_bytes(const char *path, size_t *len_out) {
   return buf;
 }
 
+#ifndef __wasi__
+// ---------------------------------------------------------------
+// Serve mode (puffin-vm --serve; docs/STUDIO.md §2.2): a session that
+// survives runtime errors, for the Studio's live and preview lanes.
+//
+// A runtime error calls exit(), so the session cannot run a unit in
+// its own process. Each evaluation forks instead:
+//  - `load PATH`: the child restores default SIGINT and runs the
+//    unit. On success it ignores SIGINT again, prints \x1fOK itself,
+//    reports success to the parent over a status pipe, and carries on
+//    as the session; the parent exits without writing anything. If
+//    the child dies first (exit status from pf_error/pf_fatal/vm_die,
+//    or a signal), the pipe reads EOF, the parent reaps the child and
+//    prints \x1fERR <n>, \x1fERR signal <n>, or \x1fINT, and stays the
+//    session with its state as it was before the command.
+//  - `try PATH`: the same fork, but the child always exits after
+//    reporting; the parent reaps it, prints the terminator, and stays
+//    the session. The unit's effects on session state are discarded.
+//  - `quit`, or end of input: \x1fOK (quit only), then exit 0.
+//  - Anything else, or a PATH that cannot be read: a message on
+//    stderr and \x1fERR 2. A malformed unit fails in the child
+//    (vm_die, \x1fERR 255).
+// Ordering: the terminator is written either by the child after its
+// own output, or by the parent after the child has exited, so every
+// byte an evaluation wrote to fd 1 precedes its terminator. stdout is
+// line-buffered (serve_install_stdout), so output streams while an
+// evaluation runs and a SIGINT loses at most a partial line.
+//
+// Interrupts: setpgid(0, 0) at startup fixes the process group for
+// the whole fork lineage (a successor keeps the original pid as its
+// pgid), so kill(-pgid, SIGINT) reaches the in-flight evaluation.
+// Every session process ignores SIGINT; only an evaluation child runs
+// with the default action.
+//
+// Commands come from a private dup of fd 0, read into a static
+// buffer; fd 0 itself becomes /dev/null, so a unit's read-line or
+// read-all sees end of input instead of consuming protocol. Buffered
+// reading is safe across fork: only the session process ever reads
+// commands, the child inherits a copy of the buffer at fork, and
+// whichever process continues as the session resumes from the same
+// position.
+//
+// Boehm and fork: the vendored collector is built without thread
+// support and the runtime never enables incremental collection, so
+// the process is single-threaded and fork() copies a consistent heap.
+// No at-fork handling is needed (GC_set_handle_fork is not called).
+// ---------------------------------------------------------------
+
+#define SERVE_OK  "\x1f" "OK"
+#define SERVE_INT "\x1f" "INT"
+
+static int serve_cmd_fd = -1;
+static char serve_inbuf[4096];
+static size_t serve_in_pos = 0, serve_in_len = 0;
+
+// The next command line without its newline (or a trailing \r);
+// NULL at end of input.
+static char *serve_read_line(void) {
+  size_t cap = 256, n = 0;
+  char *line = xmalloc(cap);
+  for (;;) {
+    if (serve_in_pos == serve_in_len) {
+      ssize_t r = read(serve_cmd_fd, serve_inbuf, sizeof serve_inbuf);
+      if (r < 0 && errno == EINTR) continue;
+      if (r <= 0) {
+        if (n == 0) { free(line); return NULL; }
+        break;
+      }
+      serve_in_pos = 0;
+      serve_in_len = (size_t)r;
+    }
+    char c = serve_inbuf[serve_in_pos++];
+    if (c == '\n') break;
+    if (n + 1 >= cap) {
+      cap *= 2;
+      line = realloc(line, cap);
+      if (!line) vm_die("out of memory (command line)");
+    }
+    line[n++] = c;
+  }
+  if (n && line[n - 1] == '\r') n--;
+  line[n] = 0;
+  return line;
+}
+
+// read_file_bytes without exiting: NULL if PATH is not a readable
+// regular file.
+static u8 *serve_read_file(const char *path, size_t *len_out) {
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return NULL;
+  struct stat sb;
+  if (fstat(fd, &sb) != 0 || !S_ISREG(sb.st_mode)) { close(fd); return NULL; }
+  size_t n = (size_t)sb.st_size, got = 0;
+  u8 *buf = xmalloc(n ? n : 1);
+  while (got < n) {
+    ssize_t r = read(fd, buf + got, n - got);
+    if (r < 0 && errno == EINTR) continue;
+    if (r <= 0) { close(fd); free(buf); return NULL; }
+    got += (size_t)r;
+  }
+  close(fd);
+  *len_out = n;
+  return buf;
+}
+
+static void serve_err(const char *detail) {
+  char line[64];
+  snprintf(line, sizeof line, "\x1f" "ERR %s", detail);
+  serve_marker(line);
+}
+
+static void serve_fail(const char *what, const char *arg) {
+  fflush(stdout);
+  fprintf(stderr, "puffin-vm: --serve: %s%s\n", what, arg);
+  serve_err("2");
+}
+
+// Run the unit at PATH in a child. keep: `load` (a successful child
+// becomes the session) vs `try` (the parent always stays).
+static void serve_eval(const char *path, int keep) {
+  size_t n = 0;
+  u8 *buf = serve_read_file(path, &n);
+  if (!buf) { serve_fail("cannot open ", path); return; }
+  int st[2];
+  if (pipe(st) != 0) { free(buf); serve_fail("pipe failed", ""); return; }
+  fflush(stdout);
+  fflush(stderr);
+  pid_t pid = fork();
+  if (pid < 0) {
+    free(buf);
+    close(st[0]);
+    close(st[1]);
+    serve_fail("fork failed", "");
+    return;
+  }
+  if (pid == 0) {
+    close(st[0]);
+    signal(SIGINT, SIG_DFL);
+    reset_exec_state();
+    run_unit_bytes(buf, n);
+    free(buf);
+    signal(SIGINT, SIG_IGN);
+    fflush(stderr);
+    if (keep) serve_marker(SERVE_OK);
+    else fflush(stdout);
+    if (write(st[1], "k", 1) != 1) _exit(254);
+    close(st[1]);
+    if (!keep) _exit(0);
+    reset_exec_state();
+    return; // this process is the session now
+  }
+  free(buf);
+  close(st[1]);
+  char b;
+  ssize_t r;
+  do r = read(st[0], &b, 1); while (r < 0 && errno == EINTR);
+  close(st[0]);
+  if (r == 1 && keep) _exit(0); // the child carries on as the session
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+  char detail[32];
+  if (r == 1) serve_marker(SERVE_OK);
+  else if (WIFSIGNALED(status) && WTERMSIG(status) == SIGINT) serve_marker(SERVE_INT);
+  else if (WIFSIGNALED(status)) {
+    snprintf(detail, sizeof detail, "signal %d", WTERMSIG(status));
+    serve_err(detail);
+  } else {
+    snprintf(detail, sizeof detail, "%d", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    serve_err(detail);
+  }
+}
+
+static int serve(void) {
+  static char *repl_argv[] = { (char *)"repl", NULL };
+  pf_set_args(1, repl_argv);
+  setpgid(0, 0);
+  signal(SIGINT, SIG_IGN);
+  serve_cmd_fd = dup(0);
+  if (serve_cmd_fd < 0) vm_die("--serve: cannot dup stdin");
+  int devnull = open("/dev/null", O_RDONLY);
+  if (devnull >= 0) {
+    dup2(devnull, 0);
+    close(devnull);
+  }
+  serve_install_stdout();
+  serve_mode = 1;
+  pf_init();
+  for (;;) {
+    char *line = serve_read_line();
+    if (!line) return 0;
+    if (line[0] == 0) {
+      // blank lines are not commands
+    } else if (strcmp(line, "quit") == 0) {
+      serve_marker(SERVE_OK);
+      free(line);
+      return 0;
+    } else if (strncmp(line, "load ", 5) == 0) {
+      serve_eval(line + 5, 1);
+    } else if (strncmp(line, "try ", 4) == 0) {
+      serve_eval(line + 4, 0);
+    } else {
+      serve_fail("unknown command: ", line);
+    }
+    free(line);
+  }
+}
+#endif // !__wasi__
+
 int main(int argc, char **argv) {
   int dis = 0, session = 0;
   const char *path = NULL;
@@ -843,11 +1151,22 @@ int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-d") == 0) dis = 1;
     else if (strcmp(argv[i], "--session") == 0) session = 1;
+#ifndef __wasi__
+    else if (strcmp(argv[i], "--serve") == 0) {
+      const char *depth = getenv("PUFFIN_VM_MAX_DEPTH");
+      if (depth) cmax = (size_t)atoll(depth);
+      return serve();
+    }
+#endif
     else if (!path) { path = argv[i]; path_idx = i; }
   }
   if (!path) {
     fprintf(stderr, "usage: puffin-vm [-d] prog.pbc [args...]\n"
-                    "       puffin-vm --session u1.pbc [u2.pbc ...]\n");
+                    "       puffin-vm --session u1.pbc [u2.pbc ...]\n"
+#ifndef __wasi__
+                    "       puffin-vm --serve\n"
+#endif
+                    );
     return 2;
   }
   // Forward the hosted program's own argv: argv[0] = the unit path,
