@@ -345,6 +345,21 @@ pf pf_read_all(void) {
   return s;
 }
 
+// (read-line): the next line of standard input without its "\n", or
+// #f at end of input. A last line with no newline still counts. The
+// line-at-a-time reader for long-running request loops
+// (puffincc --serve).
+pf pf_read_line(void) {
+  char *buf = NULL;
+  size_t cap = 0;
+  ssize_t got = getline(&buf, &cap, stdin);
+  if (got < 0) { free(buf); return PF_FALSE; }
+  if (got > 0 && buf[got - 1] == '\n') got--;
+  pf s = pf_string_from_bytes(buf, (int64_t)got);
+  free(buf);
+  return s;
+}
+
 // (error v): display the value and abort with exit code 1. The
 // message goes to stdout so golden tests see identical output from
 // the native binary and the interpreters.

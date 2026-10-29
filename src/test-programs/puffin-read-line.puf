@@ -1,0 +1,16 @@
+;; read-line: the next line of stdin without its newline, #f at end
+;; of input. The corpus feeds each input as one line, so the first
+;; read-line takes all of it and the second answers #f.
+
+(define (count-spaces [s : Str]) : Int
+  (let loop ([i 0] [n 0])
+    (if (< i (string-length s))
+        (loop (+ i 1) (if (eq? (string-byte s i) 32) (+ n 1) n))
+        n)))
+
+(define first (read-line))
+(println (string? first))
+(println (+ 1 (count-spaces first)))   ;; the input's integer count
+(println (string-length first))
+(println (read-line))
+(println (read-line))

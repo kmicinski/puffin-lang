@@ -45,6 +45,7 @@ export function surfacePrimNames() {
     "read",
     "read-all",
     "read-file",
+    "read-line",
     "remainder",
     "set",
     "set->list",

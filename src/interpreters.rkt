@@ -58,7 +58,7 @@
     ;; the REPL reads live from the terminal
     ['stdin (let ([v (read)])
               (if (fixnum? v) v (error 'interpret "(read) expected an integer")))]
-    ['() (error 'interpret "input exhausted for (read)")]
+    [(or '() 'eof) (error 'interpret "input exhausted for (read)")]
     [`(,hd . ,tl) (set-box! inbox tl) hd]))
 
 ;; (read-all): the rest of the input, rendered the way it would look
@@ -66,7 +66,20 @@
 (define (rest-of-input! inbox)
   (match (unbox inbox)
     ['stdin (port->string (current-input-port))]
+    ['eof ""]
     [ints (set-box! inbox '())
+          (string-join (map number->string ints) " ")]))
+
+;; (read-line): the next line without its newline, or #f at end of
+;; input. A test inbox is one line (the corpus feeds its integers
+;; space-joined plus one newline), so the first read-line takes all of
+;; it and the next answers #f.
+(define (next-line! inbox)
+  (match (unbox inbox)
+    ['stdin (let ([l (read-line (current-input-port) 'linefeed)])
+              (if (eof-object? l) #f l))]
+    ['eof #f]
+    [ints (set-box! inbox 'eof)
           (string-join (map number->string ints) " ")]))
 
 ;; The REPL's persistent top-level: consulted when a variable isn't
@@ -177,6 +190,7 @@
        (match impl
          ['read (next-input! inbox)]
          ['read-all (rest-of-input! inbox)]
+         ['read-line (next-line! inbox)]
          [_ (apply impl (map (λ (e) (ev e env)) es))])]
       [`(,e-f ,e-args ...)
        (define f (ev e-f env))
@@ -303,6 +317,7 @@
        (match impl
          ['read (next-input! inbox)]
          ['read-all (rest-of-input! inbox)]
+         ['read-line (next-line! inbox)]
          [_ (apply impl (map (λ (a) (atom-val a env)) as))])]
       [a (atom-val a env)]))
   (define (go s env stack)

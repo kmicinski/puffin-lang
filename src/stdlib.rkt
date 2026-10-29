@@ -663,7 +663,14 @@
    (prim-spec 'foreign-ptr? 1 'pf_foreign_ptr_huh #t
               foreign-handle?
               "Is this value a foreign handle (an opaque pointer from a foreign library)?"
-              #:type '(-> a Bool))))
+              #:type '(-> a Bool))
+
+   ;; ---- line-oriented stdin (docs/STUDIO.md §2.1) -------------------------
+   ;; appended, never inserted: prim ids are manifest indices, and the
+   ;; committed seed's bytecode must keep meaning what it meant
+   (prim-spec 'read-line 0 'pf_read_line #t 'read-line
+              "The next line of standard input without its newline, or #f at end of input."
+              #:type '(-> _))))
 
 ;; manifest self-agreement: a typed prim's arrow arity must equal its
 ;; declared arity (the type field cannot drift from the manifest it

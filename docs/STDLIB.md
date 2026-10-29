@@ -45,10 +45,10 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `string->symbol` | 1 | `(-> Str Sym)` | `pf_string_to_symbol` | Intern a string as a symbol. |
 | `quotient` | 2 | `(-> Int Int Int)` | `pf_quotient` | Integer division truncated toward zero (checked: nonzero divisor). |
 | `remainder` | 2 | `(-> Int Int Int)` | `pf_remainder` | Integer remainder (checked: nonzero divisor). |
-| `hash` | 0 | `(-> (Hash _ _))` | `pf_ihash_empty` | The empty immutable hash. (hash k v ...) builds one by chained hash-set. |
+| `hash` | 0 | `(-> (Hash _ _))` | `pf_ihash_empty` | The empty immutable hash (keyed by equal?). (hash k v ...) builds one by chained hash-set. |
 | `hash-set` | 3 | `(-> (Hash k v) k v (Hash k v))` | `pf_ihash_set` | A new immutable hash: like the input, with key mapped to value. |
 | `hash-remove` | 2 | `(-> (Hash k v) k (Hash k v))` | `pf_ihash_remove` | A new immutable hash: like the input, without the key. |
-| `set` | 0 | `(-> (Set _))` | `pf_iset_empty` | The empty immutable set. (set v ...) builds one by chained set-add. |
+| `set` | 0 | `(-> (Set _))` | `pf_iset_empty` | The empty immutable set (keyed by equal?). (set v ...) builds one by chained set-add. |
 | `set-add` | 2 | `(-> (Set a) a (Set a))` | `pf_iset_add` | A new immutable set: like the input, with the value present. |
 | `set-remove` | 2 | `(-> (Set a) a (Set a))` | `pf_iset_remove` | A new immutable set: like the input, without the value. |
 | `make-hash` | 0 | `(-> (Mut (Hash _ _)))` | `pf_make_hash` | Allocate an empty MUTABLE key/value map (eq?-keyed, open addressing). |
@@ -94,6 +94,7 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `eprintln` | 1 | `(-> a Void)` | `pf_eprintln` | Display a value followed by a newline on standard error; returns void. |
 | `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value a define-type constructor instance? |
 | `foreign-ptr?` | 1 | `(-> a Bool)` | `pf_foreign_ptr_huh` | Is this value a foreign handle (an opaque pointer from a foreign library)? |
+| `read-line` | 0 | `(-> _)` | `pf_read_line` | The next line of standard input without its newline, or #f at end of input. |
 
 ## Compiler-internal primitives
 

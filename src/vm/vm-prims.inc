@@ -92,6 +92,7 @@ extern pf pf_ffi_call4(pf, pf, pf, pf, pf);
 extern pf pf_ffi_call5(pf, pf, pf, pf, pf, pf);
 extern pf pf_ffi_call6(pf, pf);
 extern pf pf_foreign_ptr_huh(pf);
+extern pf pf_read_line(void);
 
 static const vm_prim vm_prims[] = {
   {"read", 0, (vm_prim_fn)pf_read_int},
@@ -183,6 +184,7 @@ static const vm_prim vm_prims[] = {
   {"#%ffi-call5", 6, (vm_prim_fn)pf_ffi_call5},
   {"#%ffi-call6", 2, (vm_prim_fn)pf_ffi_call6},
   {"foreign-ptr?", 1, (vm_prim_fn)pf_foreign_ptr_huh},
+  {"read-line", 0, (vm_prim_fn)pf_read_line},
 };
 
-enum { VM_PRIM_COUNT = 89 };
+enum { VM_PRIM_COUNT = 90 };

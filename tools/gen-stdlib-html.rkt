@@ -160,8 +160,8 @@
      "define-type declares an algebraic datatype whose constructors work in expressions and in match patterns; see the tutorial for the full story. Constructor instances are their own heap kind, disjoint from vectors."
      (adt?))
     ("I/O &amp; the REPL"
-     "println renders any value the way the REPL does. (read) and (read-all) consume standard input (the playground's stdin box feeds them)."
-     (println display displayln newline read read-all eprintln
+     "println renders any value the way the REPL does. (read), (read-line), and (read-all) consume standard input (the playground's stdin box feeds them)."
+     (println display displayln newline read read-line read-all eprintln
               read-file write-file file-exists? command-line-args system))
     ("Control &amp; misc"
      "Halting, fresh names, and the remaining predicates."
@@ -323,6 +323,7 @@
    'displayln (make-ex "(displayln \"hi\")" "hi\n")
    'newline (make-ex "(display 1)\n(newline)\n(display 2)\n(newline)" "1\n2\n")
    'read (make-ex "(println (+ (read) (read)))" "7\n" #:input '(3 4) #:note "with 3 4 on stdin")
+   'read-line (make-ex "(println (read-line))\n(println (read-line))" "1 2 3\n#f\n" #:input '(1 2 3) #:note "with 1 2 3 on stdin")
    'read-all (make-ex "(println (string-length (read-all)))" "5\n" #:input '(1 2 3) #:note "with 1 2 3 on stdin")
    'eprintln (make-ex "(eprintln 'warning)" "" #:err "warning\n")
    'read-file (make-ex "(write-file \"note.txt\" \"hello\")\n(println (read-file \"note.txt\"))" "hello\n")

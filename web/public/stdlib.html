@@ -135,15 +135,15 @@ pre code { background: none; border: 0; padding: 0; font-size: 12.5px; tab-size:
 <h1>The Puffin Standard Library</h1>
 <p class="lede">Small but mighty: everything you need for lists, recursion,
 higher-order functions, pattern matching over ADTs, assoc-list environments,
-graphs, and interpreters — and deliberately nothing more. 130 functions in
+graphs, and interpreters — and deliberately nothing more. 131 functions in
 three layers: compiler <em>intrinsics</em>, runtime <em>primitives</em> (one C
 implementation, one reference implementation, one VM implementation, kept in
 lockstep by the manifest), and a <em>prelude written in Puffin itself</em>,
 injected only when mentioned. New to the language? Start with the
 <a href="tutorial.html">tutorial</a>.</p>
 <p>
-<span class="badge">130 functions</span>
-<span class="badge">136 examples, all machine-verified</span>
+<span class="badge">131 functions</span>
+<span class="badge">137 examples, all machine-verified</span>
 <span class="badge">types as the checker sees them</span>
 </p>
 <p class="note">This page is <strong>generated</strong> — edit
@@ -573,7 +573,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <p class="catlede">The default hash is immutable (a persistent HAMT: hash-set returns a NEW hash in O(log n)); make-hash is the tolerated mutable variant. Keys compare by identity (eq?).</p>
 <div class="entry" id="e-hash">
 <div class="sighead"><code class="nm">hash</code> <code class="ty">(-> (Hash _ _))</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
-<p class="doc">The empty immutable hash. (hash k v ...) builds one by chained hash-set.</p>
+<p class="doc">The empty immutable hash (keyed by equal?). (hash k v ...) builds one by chained hash-set.</p>
 <pre><code>(println (hash-count (hash 'a 1 'b 2)))   ;; 2</code></pre></div>
 <div class="entry" id="e-hash_45set">
 <div class="sighead"><code class="nm">hash-set</code> <code class="ty">(-> (Hash k v) k v (Hash k v))</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
@@ -644,7 +644,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <p class="catlede">Same story as hashes: immutable by default (set-add returns a new set), mutable on request (make-set), identity-keyed.</p>
 <div class="entry" id="e-set">
 <div class="sighead"><code class="nm">set</code> <code class="ty">(-> (Set _))</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
-<p class="doc">The empty immutable set. (set v ...) builds one by chained set-add.</p>
+<p class="doc">The empty immutable set (keyed by equal?). (set v ...) builds one by chained set-add.</p>
 <pre><code>(println (set-count (set 1 2 2 3)))   ;; 3</code></pre></div>
 <div class="entry" id="e-set_45add">
 <div class="sighead"><code class="nm">set-add</code> <code class="ty">(-> (Set a) a (Set a))</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
@@ -811,7 +811,7 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 
 <section id="cat-9">
 <h2>I/O &amp; the REPL</h2>
-<p class="catlede">println renders any value the way the REPL does. (read) and (read-all) consume standard input (the playground's stdin box feeds them).</p>
+<p class="catlede">println renders any value the way the REPL does. (read), (read-line), and (read-all) consume standard input (the playground's stdin box feeds them).</p>
 <div class="entry" id="e-println">
 <div class="sighead"><code class="nm">println</code> <code class="ty">(-> a Void)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
 <p class="doc">Display a value followed by a newline; returns void.</p>
@@ -844,6 +844,15 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <p class="doc">Read an integer from standard input.</p>
 <pre><code>;; with 3 4 on stdin
 (println (+ (read) (read)))   ;; 7</code></pre></div>
+<div class="entry" id="e-read_45line">
+<div class="sighead"><code class="nm">read-line</code> <code class="ty">(-> _)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
+<p class="doc">The next line of standard input without its newline, or #f at end of input.</p>
+<pre><code>;; with 1 2 3 on stdin
+(println (read-line))
+(println (read-line))
+;; prints:
+;;   1 2 3
+;;   #f</code></pre></div>
 <div class="entry" id="e-read_45all">
 <div class="sighead"><code class="nm">read-all</code> <code class="ty">(-> Str)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
 <p class="doc">The rest of standard input, as one string.</p>
