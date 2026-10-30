@@ -759,9 +759,11 @@
       (set! observed-record (if (pair? forms) (car forms) '())))))
 
 ;; (calls . per-argument shape lists) for function f, or #f
-(define (observed-of f)
-  (let ([hit (findf (lambda (r) (and (pair? r) (eq? (car r) f))) observed-record)])
-    (and hit (cons (second hit) (third hit)))))
+(define (observed-of f) ((observed-of-in observed-record) f))
+(define (observed-of-in record)
+  (lambda (f)
+    (let ([hit (findf (lambda (r) (and (pair? r) (eq? (car r) f))) record)])
+      (and hit (cons (second hit) (third hit))))))
 
 ;; a shape's case key, comparable with pattern-key's (so observed
 ;; shapes a match already handles are not offered again); #f when a
@@ -867,10 +869,30 @@
     (and i (list fn i x))))
 
 (define (observed-match-assist m path)
+  (shape-match-assist m path (observed-of-in observed-record) "observed"
+                      "Match on observed values: " "Add observed cases: " " call" " calls"))
+
+;; is the enclosing function's i-th formal written [x : T]?
+(define (param-annotated? path i)
+  (match (syn->datum (top-of path))
+    [`(define (,_ ,ps ...) ,_ ...) (and (< i (length ps)) (pair? (list-ref ps i)))]
+    [_ #f]))
+
+;; the same from the file's own calls with literal arguments
+(define (call-site-match-assist m path)
+  (shape-match-assist m path (observed-of-in (call-site-record)) "call-site"
+                      "Match on the shapes passed at call sites: " "Add cases passed at call sites: "
+                      " call site" " call sites"))
+
+;; cases for a match on a parameter, from a record of the shapes that
+;; parameter takes (observations or call sites)
+(define (shape-match-assist m path lookup source fill-title add-title one many)
   (let ([sp (scrutinee-param m path)])
-    (when sp
+    ;; an annotated parameter has a type to fill from; shapes are for
+    ;; the untyped ones
+    (when (and sp (not (param-annotated? path (second sp))))
       (let* ([fn (first sp)] [i (second sp)] [x (third sp)]
-             [obs (observed-of (car fn))])
+             [obs (lookup (car fn))])
         (when (and obs (< i (length (cdr obs))))
           (let* ([have (clause-keys m)]
                  [avoid (map symbol->string (cons x (cdr fn)))]
@@ -883,11 +905,100 @@
                  [calls (number->string (car obs))])
             (when (pair? new)
               (emit-assist (if (null? (cdr (cdr (lst-kids m)))) "fill-match" "add-missing-cases")
-                           (str-cat (if (null? (cdr (cdr (lst-kids m)))) "Match on observed values: " "Add observed cases: ")
+                           (str-cat (if (null? (cdr (cdr (lst-kids m)))) fill-title add-title)
                                     (string-join (map shape-label new) ", ")
-                                    " (" calls (if (string=? calls "1") " call)" " calls)"))
-                           "observed"
+                                    " (" calls (if (string=? calls "1") one many) ")")
+                           source
                            (list (insert-clauses-edit m texts))))))))))
+
+;; ---- layer 3, first cut: shapes at call sites ---------------------------------------
+
+;; Without running anything, the file's calls with literal arguments
+;; already say what a function receives: (interp '(add 1 2) env)
+;; passes interp a (list add 3). call-site-record has the observation
+;; record's form, ((f CALLS ((shape ...) ...)) ...), counting only the
+;; calls that pass at least one literal.
+(define call-site-cache (ann #f _))
+(define (call-site-record)
+  (unless call-site-cache
+    (set! call-site-cache (build-call-site-record)))
+  call-site-cache)
+
+(define (build-call-site-record)
+  (let* ([fns (filter-map (lambda (top) (match (syn->datum top)
+                                          [`(define (,f ,ps ...) ,_ ...)
+                                           #:when (and (symbol? f) (andmap (lambda (p) (or (symbol? p) (pair? p))) ps))
+                                           (cons f (length ps))]
+                                          [_ #f]))
+                          entry-nodes)]
+         [calls (append-map (lambda (top) (calls-in top fns)) entry-nodes)])
+    (filter-map
+     (lambda (fa)
+       (let* ([f (car fa)] [arity (cdr fa)]
+              [mine (filter (lambda (c) (and (eq? (car c) f) (eq? (length (cdr c)) arity))) calls)]
+              [shaped (filter (lambda (c) (ormap (lambda (s) s) (cdr c))) mine)])
+         (and (pair? shaped)
+              (list f (length shaped)
+                    (map (lambda (i)
+                           (dedupe-by (lambda (s) s)
+                                      (filter-map (lambda (c) (list-ref (cdr c) i)) shaped)))
+                         (range 0 arity))))))
+     fns)))
+
+;; every call to one of fns in node n: (f shape-or-#f ...), outside
+;; quoted data
+(define (calls-in n fns)
+  (cond
+    [(atom? n) '()]
+    [(eq? (car n) 'sugar)
+     (cond [(eq? (fourth n) 'quote) '()]
+           [(eq? (fourth n) 'quasiquote) (calls-in-template (fifth n) fns)]
+           [else (calls-in (fifth n) fns)])]
+    [else
+     (let* ([h (head-sym n)]
+            [here (if (and h (assoc h fns) (not (eq? h 'define)))
+                      (list (cons h (map literal-shape (cdr (lst-kids n)))))
+                      '())])
+       (append here (append-map (lambda (k) (calls-in k fns)) (lst-kids n))))]))
+
+;; calls inside a quasiquote template's unquotes
+(define (calls-in-template n fns)
+  (cond
+    [(and (eq? (car n) 'sugar) (member (fourth n) '(unquote unquote-splicing))) (calls-in (fifth n) fns)]
+    [(eq? (car n) 'sugar) (calls-in-template (fifth n) fns)]
+    [(lst? n) (append-map (lambda (k) (calls-in-template k fns)) (lst-kids n))]
+    [else '()]))
+
+;; the shape of a literal argument, or #f
+(define (literal-shape n)
+  (cond
+    [(atom? n)
+     (let ([d (atom-datum n)])
+       (cond [(fixnum? d) 'Int] [(string? d) 'Str] [(boolean? d) 'Bool]
+             [(and (symbol? d) (ctor-by-source d)
+                   (null? (ctor-fields (hash-ref (ctors) (ctor-by-source d)))))
+              (list 'adt d)]
+             [else #f]))]
+    [(eq? (car n) 'sugar)
+     (cond [(eq? (fourth n) 'quote) (datum-shape (syn->datum (fifth n)))]
+           [(eq? (fourth n) 'quasiquote)
+            (let ([t (fifth n)])
+              (and (lst? t) (pair? (lst-kids t)) (head-sym t)
+                   (list 'list (head-sym t)
+                         (if (ormap (lambda (k) (and (eq? (car k) 'sugar) (eq? (fourth k) 'unquote-splicing)))
+                                    (lst-kids t))
+                             #f
+                             (length (lst-kids t))))))]
+           [else #f])]
+    [(and (head-sym n) (ctor-by-source (head-sym n))) (list 'adt (head-sym n))]
+    [else #f]))
+
+(define (datum-shape d)
+  (cond [(null? d) 'Nil] [(symbol? d) (list 'sym d)] [(fixnum? d) 'Int] [(string? d) 'Str]
+        [(boolean? d) 'Bool]
+        [(and (pair? d) (symbol? (car d)) (list? d)) (list 'list (car d) (length d))]
+        [(pair? d) 'Pair]
+        [else #f]))
 
 ;; the type a list of shapes supports, or _
 (define (shapes-type ss)
@@ -1209,7 +1320,9 @@
             (begin (stub-assist path forms)
                    (did-you-mean-assist path forms)))
         ;; observed shapes need no checker run, so they come first
-        (when (and m (pair? (cdr (lst-kids m)))) (observed-match-assist m path))
+        (when (and m (pair? (cdr (lst-kids m))))
+          (observed-match-assist m path)
+          (call-site-match-assist m path))
         (when (and (not on-hole) (eq? (head-sym top) 'define)) (annotate-assist top))
         (when (and m (pair? (cdr (lst-kids m))))
           (let ([scrut (car (cdr (lst-kids m)))])
@@ -1296,13 +1409,19 @@
          [prog (assemble (first fo) (second fo))]
          [forms (match prog [`(program ,fs ...) fs])])
     (set! adt-tables (collect-adts forms))
+    (lint-with (observed-of-in observed-record) "observed" " was seen as " " in this session")
+    (lint-with (observed-of-in (call-site-record)) "call-site" " is passed " " at a call site in this file")
+    (println (json-obj (list (cons "done" "true"))))))
+
+(define (lint-with lookup source verb where)
+  (begin
     (for-each-node
      (lambda (top)
        (for-each-node
         (lambda (m)
           (let* ([path (list m top)]
                  [sp (and (pair? (cdr (lst-kids m))) (scrutinee-param m path))]
-                 [obs (and sp (observed-of (car (first sp))))])
+                 [obs (and sp (lookup (car (first sp))))])
             (when (and obs (< (second sp) (length (cdr obs)))
                        (not (ormap catch-all-clause? (cdr (cdr (lst-kids m))))))
               (let* ([have (clause-keys m)]
@@ -1315,14 +1434,13 @@
                     (list (cons "start" (json-int (syn-start m)))
                           (cons "end" (json-int (syn-end m)))
                           (cons "line" (json-int (line-of (syn-start m))))
-                          (cons "source" (json-str "observed"))
+                          (cons "source" (json-str source))
                           (cons "message"
-                                (json-str (str-cat (symbol->string (third sp)) " was seen as "
+                                (json-str (str-cat (symbol->string (third sp)) verb
                                                    (string-join (map shape-label missed) ", ")
-                                                   " in this session, and no clause matches it")))))))))))
+                                                   where ", and no clause matches it")))))))))))
         (matches-in top)))
-     entry-nodes)
-    (println (json-obj (list (cons "done" "true"))))))
+     entry-nodes)))
 
 (define (for-each-node f ns)
   (when (pair? ns) (f (car ns)) (for-each-node f (cdr ns))))

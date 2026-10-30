@@ -1,0 +1,16 @@
+;; assist: lint
+;; a match with no catch-all that a literal call in this file is sure
+;; to fail: flagged statically, from call sites
+(define-type Shape (Circle Int) (Sq Int))
+
+(define (area s)
+  (match s
+    [(Sq k) (* k k)]))
+
+(define (interp e env)
+  (match e
+    [`(add ,a ,b) 0]
+    [_ e]))
+
+(area (Circle 2))
+(interp '(mul 1 2) '())

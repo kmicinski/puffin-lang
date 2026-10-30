@@ -1,0 +1,12 @@
+;; assist: assists @ "(match e" +7
+;; without running anything: the calls in this file pass interp a mul
+;; form (built by a quasiquote, with a call inside its unquote) and a
+;; symbol, which no clause handles yet
+(define (interp e env)
+  (match e
+    [`(add ,a ,b) (+ (interp a env) (interp b env))]
+    [(? fixnum? n) n]))
+
+(interp '(add 1 2) '())
+(interp `(mul ,(interp 3 '()) 4) '())
+(interp 'x '())

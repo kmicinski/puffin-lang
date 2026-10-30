@@ -383,7 +383,12 @@ transcripts can be goldens too.
 - **M1.** Assists 1 to 5, usable headless and from `puffin-mode.el`.
 - **M2.** The server and web client: live transcript,
   eval-from-buffer, ask mode, checked proposals, versions.
-- **M3.** Observations and flow shapes; assists 6 to 9. Built:
+- **M3.** Observations and flow shapes; assists 6 to 9. Layer 3's
+  first cut is built: call-site shapes (a function's literal-argument
+  calls in the file give the shapes of its parameters, in the
+  observation record's form), feeding the same match assists (source
+  `call-site`) and the lint. Shape-based match assists, observed or
+  call-site, apply only to unannotated parameters. Built:
   observations, the observation lint, assists 6, 8 (ADTs), and 9
   (observed); in the studio, session awareness, observed assists and
   hovers, and the Facts panel. Not yet: flow shapes (layer 3, `aam.puf` with a shape

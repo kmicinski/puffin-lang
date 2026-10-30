@@ -1,0 +1,5 @@
+== lint (exit 0)
+== stdout
+{"start":196,"end":226,"line":7,"source":"call-site","message":"s is passed Circle at a call site in this file, and no clause matches it"}
+{"done":true}
+== stderr

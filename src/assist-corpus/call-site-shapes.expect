@@ -1,0 +1,22 @@
+== assists @ 246 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add cases passed at call sites: mul, Sym (4 call sites)","source":"call-site","edits":[{"start":322,"end":322,"text":"\n    [`(mul ,a ,b) (error \"TODO: mul\")]\n    [(? symbol? x) (error \"TODO: Sym\")]"}]}
+{"done":true}
+== stderr
+== apply 1: add-missing-cases
+;; assist: assists @ "(match e" +7
+;; without running anything: the calls in this file pass interp a mul
+;; form (built by a quasiquote, with a call inside its unquote) and a
+;; symbol, which no clause handles yet
+(define (interp e env)
+  (match e
+    [`(add ,a ,b) (+ (interp a env) (interp b env))]
+    [(? fixnum? n) n]
+    [`(mul ,a ,b) (error "TODO: mul")]
+    [(? symbol? x) (error "TODO: Sym")]))
+
+(interp '(add 1 2) '())
+(interp `(mul ,(interp 3 '()) 4) '())
+(interp 'x '())
+== check (exit 0)
+{"ok":true}
