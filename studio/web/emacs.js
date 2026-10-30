@@ -107,6 +107,21 @@ export function bindEmacs(monaco, editor, { onSave }) {
     const end = lineEnd();
     return kill(here, end === here ? here + 1 : end);
   }
+  // M-d, M-Backspace: the next or previous word. With structured editing
+  // on, the delimiters on the way to it stay (paredit's forward-kill-word):
+  // `|(foo bar)` M-d gives `(| bar)`, never `| bar)`.
+  function killWord(dir) {
+    const here = point();
+    const t = text();
+    if (dir > 0) {
+      let start = here;
+      while (start < t.length && !WORD.test(t[start])) start++;
+      return kill(structured.on ? start : here, wordForward(start));
+    }
+    let end = here;
+    while (end > 0 && !WORD.test(t[end - 1])) end--;
+    return kill(wordBackward(end), structured.on ? end : here, true);
+  }
   function killRegion(copy) {
     const { start, end } = selection();
     if (start === end) return mark === null ? null : (mark = null, goTo(start, false), "kill");
@@ -183,6 +198,8 @@ export function bindEmacs(monaco, editor, { onSave }) {
     mark = null;
     prefix = false;
     goTo(point(), false);
+    editor.trigger("emacs", "hideSuggestWidget", null);
+    editor.trigger("emacs", "editor.action.inlineSuggest.hide", null);
     return null;
   }
 
@@ -214,9 +231,9 @@ export function bindEmacs(monaco, editor, { onSave }) {
   const meta = {
     KeyF: () => goTo(wordForward(point())),
     KeyB: () => goTo(wordBackward(point())),
-    KeyD: () => kill(point(), wordForward(point())),
-    Backspace: () => kill(wordBackward(point()), point(), true),
-    Delete: () => kill(wordBackward(point()), point(), true),
+    KeyD: () => killWord(1),
+    Backspace: () => killWord(-1),
+    Delete: () => killWord(-1),
     KeyV: () => page(-1),
     KeyW: () => killRegion(true),
     KeyY: yankPop,
@@ -263,4 +280,10 @@ export function bindEmacs(monaco, editor, { onSave }) {
     last = kind === "kill" || kind === "yank" ? kind : kind === "prefix" ? last : null;
   });
   editor.onMouseDown(() => { mark = null; last = null; });
+  // Monaco's own motions (the arrows, Home, End, ...) extend the
+  // selection from the mark too
+  editor.onDidChangeCursorPosition((event) => {
+    if (mark === null || event.reason !== monaco.editor.CursorChangeReason.Explicit || !editor.getSelection().isEmpty()) return;
+    editor.setSelection(monaco.Selection.fromPositions(positionOf(mark), event.position));
+  });
 }

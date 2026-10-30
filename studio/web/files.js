@@ -87,6 +87,8 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
     state.editTimer = null;
     state.files = new Map(files.map(({ path, text, version, saved }) =>
       [path, { text, version, local: carried(known.get(path), text), saved }]));
+    const kept = [...state.files].filter(([path, file]) => file.local !== file.text && known.get(path)?.text !== file.text).map(([path]) => path);
+    if (kept.length) note(`kept this tab's unsaved text for ${kept.join(", ")}; the studio's copy differed`);
     for (const path of known.keys()) if (!state.files.has(path)) editor.forget(path);
     const first = state.files.has("main.puf") ? "main.puf" : [...state.files.keys()][0];
     const active = state.files.has(state.active) ? state.active : first;
@@ -194,10 +196,16 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
   };
 }
 
-// The text a tab shows for a file the studio sent as `text`: its own unsent
-// typing only when that is over exactly the text the studio still has.
+// The text a tab shows for a file the studio sent as `text`: its own
+// whenever it holds unsaved work -- typing over the text the studio still
+// has, or over one it no longer has (the studio restarted and read the
+// disk, another tab saved): what is on screen is the newest work, and
+// pump sends it back as an edit. A tab with nothing unsaved takes the
+// studio's text.
 export function carried(mine, text) {
-  return mine && mine.text === text ? mine.local : text;
+  if (!mine) return text;
+  if (mine.text === text) return mine.local;
+  return mine.local !== mine.text || !mine.saved ? mine.local : text;
 }
 
 function span(className, text) {

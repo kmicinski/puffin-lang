@@ -21,6 +21,29 @@ export function holesIn(text) {
     .map(({ start, end }) => ({ start, end }));
 }
 
+// Typing at a hole replaces it: a printable key with the cursor in or at
+// a `??`, or with exactly one selected (F8 leaves it so), first deletes
+// the hole, so what is typed takes its place -- paredit's `(` opens a
+// list there rather than wrapping the hole. Space and `?` are typed as
+// they are. Bound before paredit's keys (editor.js), which see the text
+// with the hole gone.
+export function bindHoles(monaco, editor) {
+  editor.onKeyDown((event) => {
+    const key = event.browserEvent;
+    if (key.key.length !== 1 || key.key === " " || key.key === "?" || key.ctrlKey || key.metaKey || key.altKey || key.isComposing) return;
+    const model = editor.getModel();
+    const s = editor.getSelection();
+    const start = model.getOffsetAt(s.getStartPosition());
+    const end = model.getOffsetAt(s.getEndPosition());
+    const text = model.getValue();
+    if (text[start - 1] !== "?" && text[start] !== "?") return;
+    const hole = holesIn(text).find((h) => (start === end ? h.start <= start && start <= h.end : h.start === start && h.end === end));
+    if (!hole) return;
+    editor.executeEdits("hole", [{ range: monaco.Range.fromPositions(model.getPositionAt(hole.start), model.getPositionAt(hole.end)), text: "" }]);
+    editor.setPosition(model.getPositionAt(hole.start));
+  });
+}
+
 export function createHoles({ editor, files, note, onCount = () => {} }) {
   // file -> { version, items: [{ start, end, pos, line, goal }] } from the studio
   const known = new Map();

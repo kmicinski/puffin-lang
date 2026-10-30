@@ -37,6 +37,7 @@
 
 import { bindMonaco, bindTextarea } from "./paredit.js";
 import { bindEmacs } from "./emacs.js";
+import { bindHoles } from "./holes.js";
 import { surfacePrimNames } from "./prim-names.js";
 
 export async function createEditor(element, handlers) {
@@ -214,6 +215,7 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
       onTrace?.({ line: position.lineNumber });
     }
   });
+  bindHoles(monaco, editor); // before paredit's keys: typing at a hole replaces it
   bindMonaco(monaco, editor);
   bindEmacs(monaco, editor, { onSave });
 

@@ -557,7 +557,24 @@ transcripts can be goldens too.
   for a body form (`define`, `match`, `let`, `lambda`, `cond`, ...),
   under the first argument when one sits beside the head, else under
   the head; the REPL prompt's Enter still submits, and Enter is
-  Monaco's while the completion list is up.
+  Monaco's while the completion list is up. Tab re-indents the line
+  by the same rule (or takes the ghost text when one is showing).
+  `M-d` and `M-Backspace` skip delimiters, which stay (paredit's
+  forward-kill-word); the mark extends under Monaco's own motions
+  too; `C-g` also dismisses the completion list and ghost text.
+- **A reconnect keeps the tab's unsaved text** (`files.js`
+  `carried`): when the studio comes back with a text that is not the
+  one this tab typed over (it restarted and read the disk, another
+  tab saved), a tab holding unsaved work keeps what is on screen and
+  sends it back as an edit, with a note; only a tab with nothing
+  unsaved takes the studio's copy. (Before, that tab's work was
+  dropped as "changed elsewhere": a restart while editing lost the
+  buffer.)
+- **Typing at a hole replaces it** (`holes.js` `bindHoles`): a
+  printable key with the cursor in or beside a `??`, or with one
+  selected as `F8` leaves it, first deletes the hole, so `(` opens a
+  list there (paredit would otherwise wrap the hole: `(??)`) and a
+  word does not glue onto it (`??x`). Space and `?` are typed as is.
 - **The page is the playground's** (`web/src/App.jsx`): the editor
   with file tabs on the left, the output and the `puffin>` prompt on
   the right, Run / Reset session in the header. Panels are the

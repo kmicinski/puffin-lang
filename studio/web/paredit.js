@@ -163,6 +163,20 @@ export function bindMonaco(monaco, editor) {
     event.preventDefault();
     event.stopPropagation();
   });
+  // Tab: the ghost text when one is showing (assists.js; one press, even
+  // when it begins with indentation Monaco would otherwise spend the Tab
+  // on), else the line re-indented. With the completion list up Tab
+  // takes an item, Monaco's.
+  editor.onKeyDown((event) => {
+    if (event.browserEvent.code !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+      || readOnly() || completing() || editor.getSelections().length > 1) return;
+    const version = model().getVersionId();
+    editor.trigger("paredit", "editor.action.inlineSuggest.commit", null);
+    const took = model().getVersionId() !== version || (structured.on && run(paredit.indentLine));
+    if (!took) return;
+    event.preventDefault();
+    event.stopPropagation();
+  });
 }
 
 // Replace the textarea's text with `result`, as one edit undo can take

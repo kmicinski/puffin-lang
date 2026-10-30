@@ -557,10 +557,26 @@ function newline(text, selection) {
   return { text: `${text.slice(0, from)}\n${indent}${text.slice(to)}`, selection: cursor(from + 1 + indent.length) };
 }
 
+// Tab: the line re-indented for where it starts, the cursor keeping its
+// place in it. A line inside a string is the editor's own.
+function indentLine(text, selection) {
+  const pos = selection.start;
+  const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
+  let content = lineStart;
+  while (content < text.length && (text[content] === " " || text[content] === "\t")) content++;
+  const root = parse(text);
+  if (leafAt(root, lineStart)?.kind === "string") return null;
+  const indent = " ".repeat(indentation(text, content, root));
+  const current = text.slice(lineStart, content);
+  if (current === indent) return same(text, selection);
+  const at = pos < content ? lineStart + indent.length : pos + indent.length - current.length;
+  return { text: text.slice(0, lineStart) + indent + text.slice(content), selection: cursor(at) };
+}
+
 // The operations, by name ------------------------------------------------
 
 export const unguarded = {
-  insertOpen, insertClose, insertQuote, insertSemicolon, deleteBackward, deleteForward, newline,
+  insertOpen, insertClose, insertQuote, insertSemicolon, deleteBackward, deleteForward, newline, indentLine,
   slurpForward, slurpBackward, barfForward, barfBackward,
   splice, raise, wrap, split, join, kill,
   expandSelection, contractSelection, forwardSexp, backwardSexp, upList, forwardUpList, downList,

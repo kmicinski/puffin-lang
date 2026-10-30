@@ -273,19 +273,7 @@ export function createAssists({ editor, files, send, note, facts }) {
       },
       freeInlineCompletions() {},
     });
-    // One Tab takes the ghost text, even when it begins with the
-    // indentation Enter left short (Monaco would spend that Tab on
-    // indenting first and need a second). Nothing showing: Tab as usual.
-    monacoEditor.onKeyDown((event) => {
-      if (event.browserEvent.code !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-      const model = monacoEditor.getModel();
-      const version = model.getVersionId();
-      monacoEditor.trigger("puffin", "editor.action.inlineSuggest.commit", null);
-      if (model.getVersionId() !== version) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    });
+    // Tab takes the ghost text: paredit.js's Tab, which else re-indents.
     // Monaco asks for ghost text as one types; arriving at such a place by
     // cursor alone asks too, once the cursor rests.
     let resting = null;
