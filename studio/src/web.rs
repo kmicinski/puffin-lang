@@ -64,7 +64,7 @@ macro_rules! assets {
 }
 
 assets!(
-    "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js",
+    "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js",
 );

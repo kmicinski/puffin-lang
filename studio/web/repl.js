@@ -67,7 +67,10 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,reset               restart the session
 ,interrupt           stop the running evaluation (Ctrl-C at the prompt)
 ?? QUESTION          ask the assistant (or Tab on an empty prompt)
-⌘↵ in the editor evaluates the form at the cursor.`;
+⌘↵ in the editor evaluates the form at the cursor. The editor takes Emacs keys: C-k is
+paredit-kill (the rest of the line, within the list), kills in a row join, C-y yanks,
+M-y cycles the ring, C-SPC marks, C-w / M-w kill / copy the region, C-x C-s saves;
+C-M-f / C-M-b move over expressions, C-Right / C-Left slurp / barf.`;
 
 export function createRepl({ transcript, prompt, send, commands }) {
   const nodes = new Map(); // entry id -> { node, out }

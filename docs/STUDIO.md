@@ -517,6 +517,13 @@ transcripts can be goldens too.
   `http://127.0.0.1:7360` as it is; the WebSocket admits same-origin
   pages only, which keeps other sites out. `/mcp` has a per-run
   bearer token that only the assistant's process is given.
+- **Emacs keys** (`studio/web/emacs.js`): motion, mark, a kill ring
+  in which consecutive kills join and `M-y` cycles, `C-x C-s`, undo,
+  find. `C-k` is paredit-kill (`sexp.js` `kill`): the rest of the
+  line, extended over an expression that starts on it, stopped at
+  the enclosing list's closer -- so `C-k` on a match clause takes
+  that clause, never the ones below. Paredit's own keys (`C-M-f`,
+  slurp and barf on `C-Right` / `C-Left`, ...) stay.
 - **The page is the playground's** (`web/src/App.jsx`): the editor
   with file tabs on the left, the output and the `puffin>` prompt on
   the right, Run / Reset session in the header. Panels are the

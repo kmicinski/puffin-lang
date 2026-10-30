@@ -30,11 +30,13 @@
 //   raw                      { monaco, editor } for Monaco, else null
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
 // Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
-// puffincc can), F8 and ⇧F8 the next and previous typed hole. Tracing:
+// puffincc can), F8 and ⇧F8 the next and previous typed hole; Emacs keys
+// with a kill ring (emacs.js) and paredit's (paredit.js). Tracing:
 // ⌘-click in the gutter of a line, a click on a trace mark, or the context
 // menu's "Trace" calls onTrace({ line }) or onTrace({ pos }).
 
 import { bindMonaco, bindTextarea } from "./paredit.js";
+import { bindEmacs } from "./emacs.js";
 import { surfacePrimNames } from "./prim-names.js";
 
 export async function createEditor(element, handlers) {
@@ -209,6 +211,7 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     }
   });
   bindMonaco(monaco, editor);
+  bindEmacs(monaco, editor, { onSave });
 
   const range = (start, end) => monaco.Range.fromPositions(current().getPositionAt(start), current().getPositionAt(end));
   return {

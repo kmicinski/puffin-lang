@@ -403,30 +403,34 @@ function join(text, selection) {
   return same(text, selection);
 }
 
-// Delete from the cursor to the end of the enclosing list, string or
-// comment; at the top level, to the end of the line and of every balanced
-// S-expression that starts on it.
+// Emacs's paredit-kill: delete to the end of the line, respecting
+// delimiters. Inside a list the kill stops at the list's closer, so C-k on
+// one match clause takes that clause and never the clauses below it; an
+// S-expression that starts on the line and runs past it goes whole; in a
+// string, to the end of the line but never past the closing quote; a
+// comment, to its end. At the end of a line, the newline.
 function kill(text, selection) {
   const root = parse(text);
   // inside an escape, from its first character
   const pos = selection.start - (landing(text, root, selection.start) === "nowhere" ? 1 : 0);
   const leaf = leafAt(root, pos);
   const list = enclosing(root, pos);
-  let end;
+  const newline = text.indexOf("\n", pos);
+  let end = newline < 0 ? text.length : newline;
   if (leaf) {
-    end = leaf.kind === "comment" || leaf.open ? leaf.end : leaf.end - 1;
-  } else if (list !== root) {
-    if (!closed(list)) return same(text, selection);
-    end = list.end - 1;
+    const close = leaf.kind === "comment" || leaf.open ? leaf.end : leaf.end - 1;
+    end = Math.min(end, close);
   } else {
-    const newline = text.indexOf("\n", pos);
-    end = newline < 0 ? text.length : newline;
-    for (const child of root.children) {
+    if (list !== root) {
+      if (!closed(list)) return same(text, selection);
+      end = Math.min(end, list.end - 1);
+    }
+    for (const child of list.children) {
       const whole = child.kind === "list" ? closed(child) : !child.open;
       if (whole && child.start >= pos && child.start < end) end = Math.max(end, child.end);
     }
-    if (end === pos && text[pos] === "\n") end++;
   }
+  if (end === pos && text[pos] === "\n") end++;
   return change(text, [{ start: pos, end: Math.max(pos, end) }], cursor(pos));
 }
 
