@@ -9,6 +9,9 @@
 ;;   check FILE         {"ok":true}
 ;;   forms FILE         {"forms":[{"key":..,"start":..,"end":..,"line":..}, ...]}
 ;;   type-at FILE POS   {"type":"Expr"} | {"type":null}
+;;   rename FILE POS NEW {"edits":[...]} | {"error":..}: every occurrence of
+;;                      the name's binder, refused when the new name
+;;                      would change what any name refers to
 ;;   assists FILE POS   one JSON object per line, each an assist
 ;;                      {"id":..,"title":..,"source":..,"edits":[{"start":..,"end":..,"text":..}]},
 ;;                      then {"done":true}. A type error elsewhere in
@@ -1324,6 +1327,295 @@
 (define (for-each-node f ns)
   (when (pair? ns) (f (car ns)) (for-each-node f (cdr ns))))
 
+;; ---- scope resolution and rename ------------------------------------------------------
+
+;; resolve-names walks the entry's syntax and ties every name
+;; occurrence to its binder: a binder atom binds itself, a reference
+;; points at the binder in scope, and a name nothing in the file
+;; binds is (free NAME). Quoted data, case datums, and annotation
+;; types are not names. Result: ((atom . binder) ...) in source order.
+(define resolve-acc '())
+
+(define (resolve-names)
+  (set! resolve-acc '())
+  (let* ([tops (append-map top-binders entry-nodes)]
+         [env (map (lambda (a) (cons (atom-datum a) a)) tops)])
+    (for-each-node (lambda (a) (occ! a a)) tops)
+    (for-each-node (lambda (n) (walk-top n env)) entry-nodes))
+  (sort resolve-acc (lambda (p q) (< (syn-start (car p)) (syn-start (car q))))))
+
+(define (occ! a binder) (set! resolve-acc (cons (cons a binder) resolve-acc)))
+
+;; the name atoms a top-level form binds: a define's name, a
+;; define-type's constructors
+(define (top-binders n)
+  (let ([kids (if (lst? n) (lst-kids n) '())])
+    (cond
+      [(and (eq? (head-sym n) 'define) (pair? (cdr kids)))
+       (let ([h (car (cdr kids))])
+         (cond [(and (atom? h) (symbol? (atom-datum h))) (list h)]
+               [(and (lst? h) (pair? (lst-kids h)) (atom? (car (lst-kids h)))) (list (car (lst-kids h)))]
+               [else '()]))]
+      [(eq? (head-sym n) 'define-type)
+       (filter-map (lambda (c) (cond [(and (lst? c) (pair? (lst-kids c)) (atom? (car (lst-kids c))))
+                                      (car (lst-kids c))]
+                                     [else #f]))
+                   (cdr (cdr kids)))]
+      [else '()])))
+
+(define (name-atom? n)
+  (and (atom? n) (symbol? (atom-datum n))
+       (let ([s (symbol->string (atom-datum n))])
+         (not (or (eq? (string-byte s 0) 35)          ;; #:kw, #%internal
+                  (member (atom-datum n) '(... _ :)))))))
+
+(define (ref! a env)
+  (when (name-atom? a)
+    (let ([hit (assoc (atom-datum a) env)])
+      (occ! a (if hit (cdr hit) (list 'free (atom-datum a)))))))
+
+(define (bind a env)   ;; a binder atom: record it, extend env
+  (if (name-atom? a)
+      (begin (occ! a a) (cons (cons (atom-datum a) a) env))
+      env))
+
+(define (walk-top n env)
+  (let ([h (head-sym n)] [kids (if (lst? n) (lst-kids n) '())])
+    (cond
+      [(eq? h 'define) (walk-define-rest n env)]
+      [(member h '(define-type require define-foreign-type foreign)) (void)]
+      [(eq? h ':) (when (pair? (cdr kids)) (ref! (car (cdr kids)) env))]
+      [(eq? h 'provide) (for-each-node (lambda (k) (when (atom? k) (ref! k env))) (cdr kids))]
+      [else (walk-expr n env)])))
+
+;; formals: a list of names or [x : T], a dotted tail, or one name
+(define (bind-formals f env)
+  (cond
+    [(atom? f) (bind f env)]
+    [(lst? f)
+     (let ([env (foldl (lambda (k env)
+                         (if (and (lst? k) (pair? (lst-kids k)))
+                             (bind (car (lst-kids k)) env)
+                             (bind k env)))
+                       env (lst-kids f))])
+       (if (fifth f) (bind (fifth f) env) env))]   ;; (a b . rest)
+    [else env]))
+
+(define (walk-define-rest n env)
+  (let ([kids (lst-kids n)])
+    (when (pair? (cdr kids))
+      (let ([h (car (cdr kids))] [body (cdr (cdr kids))])
+        (if (lst? h)
+            ;; (define (f . formals) [: rt] body ...): f is bound by the
+            ;; enclosing body (or the top level); the formals here
+            (let ([env (bind-formals (list 'lst 0 0 40 (cdr (lst-kids h)) (fifth h)) env)])
+              (walk-body (strip-result-type body) env))
+            (walk-body body env))))))
+
+(define (strip-result-type body)
+  (if (and (pair? body) (atom? (car body)) (eq? (atom-datum (car body)) ':) (pair? (cdr body)))
+      (cdr (cdr body))
+      body))
+
+;; a body: its internal defines scope over all of it (letrec*)
+(define (walk-body forms env)
+  (let* ([inner (append-map (lambda (f) (if (eq? (head-sym f) 'define) (top-binders f) '())) forms)]
+         [env (foldl (lambda (a env) (bind a env)) env inner)])
+    (for-each-node (lambda (f) (if (eq? (head-sym f) 'define) (walk-define-rest f env) (walk-expr f env)))
+                   forms)))
+
+(define (walk-each ns env) (for-each-node (lambda (n) (walk-expr n env)) ns))
+
+;; a binding [x e] or [x : T e]: (name-atom . init-node)
+(define (binding-of b)
+  (let ([kids (if (lst? b) (lst-kids b) '())])
+    (and (pair? kids) (cons (car kids) (last kids)))))
+
+(define (walk-expr n env)
+  (cond
+    [(atom? n) (ref! n env)]
+    [(eq? (car n) 'sugar)
+     (cond [(eq? (fourth n) 'quote) (void)]
+           [(eq? (fourth n) 'quasiquote) (walk-template (fifth n) env)]
+           [else (walk-expr (fifth n) env)])]
+    [else
+     (let ([h (head-sym n)] [kids (lst-kids n)])
+       (cond
+         [(eq? h 'quote) (void)]
+         [(eq? h 'define) (walk-define-rest n env)]
+         [(member h '(lambda λ))
+          (ref! (car kids) env)
+          (when (pair? (cdr kids))
+            (walk-body (cdr (cdr kids)) (bind-formals (car (cdr kids)) env)))]
+         [(and (eq? h 'let) (pair? (cdr kids)) (atom? (car (cdr kids))))
+          ;; named let: inits outside, name and variables in the body
+          (ref! (car kids) env)
+          (let* ([bs (if (and (pair? (cdr (cdr kids))) (lst? (car (cdr (cdr kids)))))
+                         (filter-map binding-of (lst-kids (car (cdr (cdr kids))))) '())])
+            (for-each-node (lambda (b) (walk-expr (cdr b) env)) bs)
+            (walk-body (cdr (cdr (cdr kids)))
+                       (foldl (lambda (b env) (bind (car b) env))
+                              (bind (car (cdr kids)) env) bs)))]
+         [(and (member h '(let let* letrec)) (pair? (cdr kids)) (lst? (car (cdr kids))))
+          (ref! (car kids) env)
+          (let* ([bs (filter-map binding-of (lst-kids (car (cdr kids))))]
+                 [body-env
+                  (cond
+                    [(eq? h 'let)
+                     (for-each-node (lambda (b) (walk-expr (cdr b) env)) bs)
+                     (foldl (lambda (b e) (bind (car b) e)) env bs)]
+                    [(eq? h 'let*)
+                     (foldl (lambda (b e) (walk-expr (cdr b) e) (bind (car b) e)) env bs)]
+                    [else
+                     (let ([e (foldl (lambda (b e) (bind (car b) e)) env bs)])
+                       (for-each-node (lambda (b) (walk-expr (cdr b) e)) bs)
+                       e)])])
+            (walk-body (cdr (cdr kids)) body-env))]
+         [(eq? h 'match)
+          (ref! (car kids) env)
+          (when (pair? (cdr kids))
+            (walk-expr (car (cdr kids)) env)
+            (for-each-node
+             (lambda (cl)
+               (when (and (lst? cl) (pair? (lst-kids cl)))
+                 (let ([e (walk-pattern (car (lst-kids cl)) env env)])
+                   (walk-body (filter (lambda (k) (not (and (atom? k) (not (name-atom? k))))) (cdr (lst-kids cl)))
+                              e))))
+             (cdr (cdr kids))))]
+         [(eq? h 'case)
+          (ref! (car kids) env)
+          (when (pair? (cdr kids))
+            (walk-expr (car (cdr kids)) env)
+            (for-each-node (lambda (cl) (when (and (lst? cl) (pair? (lst-kids cl)))
+                                          (walk-each (cdr (lst-kids cl)) env)))
+                           (cdr (cdr kids))))]
+         [(eq? h 'ann) (ref! (car kids) env) (when (pair? (cdr kids)) (walk-expr (car (cdr kids)) env))]
+         [else (walk-each kids env)]))]))
+
+;; a quasiquote template in an expression: only its unquotes are code
+(define (walk-template n env)
+  (cond
+    [(eq? (car n) 'sugar)
+     (if (member (fourth n) '(unquote unquote-splicing))
+         (walk-expr (fifth n) env)
+         (walk-template (fifth n) env))]
+    [(lst? n) (for-each-node (lambda (k) (walk-template k env)) (syn-kids n))]
+    [else (void)]))
+
+;; a match pattern: binders extend `env`; predicates and constructor
+;; heads are references, resolved in `outer`. Returns the clause env.
+(define (walk-pattern p env outer)
+  (cond
+    [(atom? p)
+     (cond [(not (name-atom? p)) env]
+           [(ctor-name-in? (atom-datum p) outer) (ref! p outer) env]
+           [else (bind p env)])]
+    [(eq? (car p) 'sugar)
+     (cond [(eq? (fourth p) 'quote) env]
+           [(eq? (fourth p) 'quasiquote) (walk-qq-pattern (fifth p) env outer)]
+           [else env])]
+    [else
+     (let ([h (head-sym p)] [kids (lst-kids p)])
+       (cond
+         [(eq? h '?)
+          (when (pair? (cdr kids)) (walk-expr (car (cdr kids)) outer))
+          (if (pair? (cdr (cdr kids))) (walk-pattern (car (cdr (cdr kids))) env outer) env)]
+         [(member h '(list cons vector))
+          (foldl (lambda (k e) (walk-pattern k e outer)) env (cdr kids))]
+         [(and h (ctor-name-in? h outer))
+          (ref! (car kids) outer)
+          (foldl (lambda (k e) (walk-pattern k e outer)) env (cdr kids))]
+         [else (foldl (lambda (k e) (walk-pattern k e outer)) env kids)]))]))
+
+(define (walk-qq-pattern n env outer)
+  (cond
+    [(eq? (car n) 'sugar)
+     (if (eq? (fourth n) 'unquote)
+         (walk-pattern (fifth n) env outer)
+         env)]
+    [(lst? n) (foldl (lambda (k e) (walk-qq-pattern k e outer)) env (syn-kids n))]
+    [else env]))
+
+;; is x a constructor, by the file's own define-types or an import?
+(define (ctor-name-in? x env)
+  (or (and (ctor-by-source x) #t)
+      (let ([hit (assoc x env)])
+        (and hit (atom? (cdr hit))
+             (ormap (lambda (top) (and (eq? (head-sym top) 'define-type)
+                                       (memq-node (cdr hit) (top-binders top))))
+                    entry-nodes)))))
+
+(define (valid-name? s)
+  (and (> (string-length s) 0)
+       (not (string->number s))
+       (let loop ([i 0])
+         (or (eq? i (string-length s))
+             (let ([b (string-byte s i)])
+               (and (not (ws-byte? b)) (not (member b '(40 41 91 93 34 59 39 96 44)))
+                    (loop (+ i 1))))))
+       (not (eq? (string-byte s 0) 35))))
+
+;; occurrences as comparable binder identities: a binder's index in
+;; the occurrence list, or (free NAME)
+(define (binder-ids occs)
+  (map (lambda (o)
+         (let ([b (cdr o)])
+           (if (atom? b)
+               (index-of-node b (map car occs))
+               b)))
+       occs))
+
+(define (op-rename pos new load-entry assemble)
+  (let* ([fo (load-entry entry-path)]
+         [prog (assemble (first fo) (second fo))]
+         [forms (match prog [`(program ,fs ...) fs])])
+    (set! adt-tables (collect-adts forms))
+    (let* ([occs (resolve-names)]
+           [hit (findf (lambda (o) (and (<= (syn-start (car o)) pos) (< pos (syn-end (car o))))) occs)])
+      (cond
+        [(not hit) (println (json-obj (list (cons "error" (json-str "the cursor is not on a name")))))]
+        [(not (atom? (cdr hit)))
+         (println (json-obj (list (cons "error" (json-str (str-cat (symbol->string (atom-datum (car hit)))
+                                                                   " is not defined in this file"))))))]
+        [(not (valid-name? new))
+         (println (json-obj (list (cons "error" (json-str (str-cat new " is not a name")))))) ]
+        [else
+         (let* ([b (cdr hit)]
+                [mine (filter (lambda (o) (eq? (cdr o) b)) occs)]
+                [edits (map (lambda (o) (list (syn-start (car o)) (syn-end (car o)))) mine)]
+                [before (binder-ids occs)]
+                [renamed (map (lambda (o) (eq? (cdr o) b)) occs)]
+                [new-text (apply-edits entry-text edits new)])
+           ;; resolve again with the new name in place: every occurrence
+           ;; must keep its binder, or the rename captured something
+           (set! entry-text new-text)
+           (set! entry-nodes (read-syntax-from-string new-text))
+           (let* ([occs2 (resolve-names)]
+                  [after (binder-ids occs2)]
+                  [bad (and (eq? (length occs2) (length occs))
+                            (findf (lambda (i) (not (equal? (list-ref before i) (list-ref after i))))
+                                   (range 0 (length occs))))])
+             (if (or bad (not (eq? (length occs2) (length occs))))
+                 (println (json-obj (list (cons "error"
+                                                (json-str (str-cat "renaming " (symbol->string (atom-datum (car hit)))
+                                                                   " to " new " would change what "
+                                                                   (if bad (symbol->string (atom-datum (car (list-ref occs2 bad))))
+                                                                       "a name")
+                                                                   (if bad (str-cat " on line " (number->string (line-of (syn-start (car (list-ref occs2 bad))))))
+                                                                       "")
+                                                                   " refers to"))))))
+                 (println (json-obj (list (cons "edits"
+                                                (json-list (map (lambda (e) (edit (first e) (second e) new))
+                                                                edits)))))))))]))))
+
+;; text with each [start, end) span replaced by `new` (spans disjoint)
+(define (apply-edits text spans new)
+  (let loop ([spans (sort spans (lambda (a b) (< (first a) (first b))))] [at 0] [acc '()])
+    (if (null? spans)
+        (string-concat (reverse (cons (substring text at (string-length text)) acc)))
+        (loop (cdr spans) (second (car spans))
+              (cons new (cons (substring text at (first (car spans))) acc))))))
+
 ;; ---- check ----------------------------------------------------------------------
 
 (define (op-check load-entry assemble)
@@ -1348,6 +1640,8 @@
       [(and (string=? op "assists") pos) (op-assists pos end load-entry assemble)]
       [(and (string=? op "facts") pos) (op-facts pos load-entry assemble)]
       [(string=? op "lint") (op-lint load-entry assemble)]
+      [(and (string=? op "rename") pos (pair? (cdr args)))
+       (op-rename pos (car (cdr args)) load-entry assemble)]
       [else (error (str-cat "puffincc: unknown --assist operation or missing position: " op))])
     ;; the driver prints a non-void result: an operation's output is
     ;; only what it printed

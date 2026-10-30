@@ -1,0 +1,16 @@
+== rename @ 219 (exit 0)
+== stdout
+{"edits":[{"start":219,"end":220,"text":"lhs"},{"start":236,"end":237,"text":"lhs"}]}
+== stderr
+== apply 1: rename
+;; assist: rename @ "[(Add a b)" +6 new=lhs
+;; a match binder: its clause's guard and body, nothing else
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (size [e : Expr]) : Int
+  (match e
+    [(Num a) a]
+    [(Add lhs b) #:when (eq? lhs b) 0]
+    [(Add a b) (+ (size a) (size b))]))
+(size (Num 1))
+== check (exit 0)
+{"ok":true}

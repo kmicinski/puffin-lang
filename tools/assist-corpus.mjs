@@ -9,6 +9,7 @@
 //                                        the cursor is K bytes past
 //                                        the first NEEDLE after line 1
 //   ... [select=N]                       a selection: END is POS+N
+//   ... [new=NAME]                       rename's new name
 //   ... [observed=FILE]                  pass --observed FILE (a
 //                                        session observation record,
 //                                        docs/STUDIO.md §3.1)
@@ -41,16 +42,16 @@ function run(cmdArgs, cwd) {
 // the cursor directive on the entry's first line
 function directive(text) {
   const first = text.split('\n')[0];
-  const m = first.match(/^;; assist: (\S+)(?: @ "((?:[^"\\]|\\.)*)"(?: \+(\d+))?)?(?: select=(\d+))?(?: observed=(\S+))?\s*$/);
+  const m = first.match(/^;; assist: (\S+)(?: @ "((?:[^"\\]|\\.)*)"(?: \+(\d+))?)?(?: select=(\d+))?(?: new=(\S+))?(?: observed=(\S+))?\s*$/);
   if (!m) throw new Error(`bad directive: ${first}`);
-  const [, op, needle, k, select, observed] = m;
+  const [, op, needle, k, select, newName, observed] = m;
   if (needle === undefined) return { op, pos: null, observed };
   const bytes = Buffer.from(text, 'utf8');
   const lineEnd = bytes.indexOf(10);
   const at = bytes.indexOf(Buffer.from(JSON.parse(`"${needle}"`), 'utf8'), lineEnd);
   if (at < 0) throw new Error(`needle not found: ${needle}`);
   const pos = at + Number(k || 0);
-  return { op, pos, end: select === undefined ? null : pos + Number(select), observed };
+  return { op, pos, end: select === undefined ? null : pos + Number(select), newName, observed };
 }
 
 // apply byte-offset edits, last first so earlier offsets stay valid
@@ -69,15 +70,18 @@ function section(title, body) {
 function transcript(caseDir, entryName) {
   const entry = join(caseDir, entryName);
   const text = readFileSync(entry, 'utf8');
-  const { op, pos, end, observed } = directive(text);
+  const { op, pos, end, newName, observed } = directive(text);
   const opArgs = ['--assist', op, entryName, ...(pos === null ? [] : [String(pos)]),
                   ...(end == null ? [] : [String(end)]),
+                  ...(newName ? [newName] : []),
                   ...(observed ? ['--observed', observed] : [])];
   const r = run(opArgs, caseDir);
   let out = section(`${op}${pos === null ? '' : ' @ ' + pos} (exit ${r.status})`, '');
   out += section('stdout', r.stdout) + section('stderr', r.stderr);
-  if (op !== 'assists') return out;
-  const assists = r.stdout.split('\n').filter((l) => l.startsWith('{"id"')).map((l) => JSON.parse(l));
+  if (op !== 'assists' && op !== 'rename') return out;
+  const assists = op === 'rename'
+    ? r.stdout.split('\n').filter((l) => l.startsWith('{"edits"')).map((l) => ({ id: 'rename', ...JSON.parse(l) }))
+    : r.stdout.split('\n').filter((l) => l.startsWith('{"id"')).map((l) => JSON.parse(l));
   assists.forEach((a, i) => {
     const work = mkdtempSync(join(tmpdir(), 'assist-'));
     try {

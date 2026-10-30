@@ -1,0 +1,11 @@
+;; assist: rename @ "(define (size" +9 new=expr-size
+;; a top-level function: its signature, definition, recursive calls,
+;; provide, and every use
+(provide size)
+(define-type Expr (Num Int) (Add Expr Expr))
+(: size (-> Expr Int))
+(define (size e)
+  (match e
+    [(Num n) 1]
+    [(Add a b) (+ 1 (+ (size a) (size b)))]))
+(size (Add (Num 1) (Num 2)))

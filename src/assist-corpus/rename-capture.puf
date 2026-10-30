@@ -1,0 +1,5 @@
+;; assist: rename @ "(f x y)" +3 new=y
+;; renaming x to y would capture the parameter y: refused
+(define (f x y)
+  (+ x y))
+(f 1 2)

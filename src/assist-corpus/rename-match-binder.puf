@@ -1,0 +1,9 @@
+;; assist: rename @ "[(Add a b)" +6 new=lhs
+;; a match binder: its clause's guard and body, nothing else
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (size [e : Expr]) : Int
+  (match e
+    [(Num a) a]
+    [(Add a b) #:when (eq? a b) 0]
+    [(Add a b) (+ (size a) (size b))]))
+(size (Num 1))

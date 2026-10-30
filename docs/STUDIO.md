@@ -320,6 +320,24 @@ parameters are its free locals, in order of first mention), and
 and the surface prims, by edit distance). `facts` at a hole reports
 its `goal`; `type-at` and `facts` at an annotated binder report its
 declared type.
+
+**Rename** is its own operation, since it takes a parameter:
+
+```
+puffincc --assist rename FILE POS NEW
+  -> {"edits":[{"start","end","text"}, ...]} | {"error":"..."}
+```
+
+A scope resolver ties every name occurrence in the file to its
+binder (formals, let/let*/letrec and named let, internal defines,
+match binders and guards, quasiquote unquotes; quoted data, case
+datums, and annotation types are not names), so rename changes
+exactly the occurrences of one binder, a top-level name's `(: f ...)`
+and `provide` included. Then it resolves the renamed text again: if
+any occurrence would now refer to a different binder (a capture, or
+a name freed), the rename is refused. Names nothing in the file
+binds -- prims, imports -- are not renamed; neither are other
+modules' uses of a provided name.
 11. **Promote an s-expression language to a `define-type`** inferred
     from its quasiquote patterns.
 

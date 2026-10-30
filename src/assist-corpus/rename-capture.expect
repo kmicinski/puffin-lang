@@ -1,0 +1,4 @@
+== rename @ 108 (exit 0)
+== stdout
+{"error":"renaming x to y would change what y on line 4 refers to"}
+== stderr

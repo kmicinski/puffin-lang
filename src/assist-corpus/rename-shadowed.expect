@@ -1,0 +1,16 @@
+== rename @ 173 (exit 0)
+== stdout
+{"edits":[{"start":173,"end":174,"text":"u"},{"start":192,"end":193,"text":"u"},{"start":201,"end":202,"text":"u"}]}
+== stderr
+== apply 1: rename
+;; assist: rename @ "(f x y)" +3 new=u
+;; a parameter shadowed by a let: only the parameter's own uses change
+;; -- not the let's x, not the x inside quoted data
+(define (f u y)
+  (let ([x (+ u 1)] [z u])
+    (define (g w) (* w x))
+    (let loop ([i 0] [acc '(x y)])
+      (if (< i y) (loop (+ i 1) (cons (g i) acc)) (list x z acc)))))
+(f 1 2)
+== check (exit 0)
+{"ok":true}
