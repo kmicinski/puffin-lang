@@ -1,12 +1,16 @@
 // The compiler's assists at the cursor (docs/STUDIO.md §2.1, §5): ⌘. opens
 // a menu of every assist that applies there, each labelled with where its
-// knowledge came from (type, patterns, call-site); the lightbulb offers the
-// same as Monaco code actions; hovering shows the type at a point. Applying
-// one is an ordinary undoable edit, echoed into the transcript as the
-// command it is (`,assist fill-match main.puf:812`), which typed at the
-// prompt does the same.
+// knowledge came from (type, observed, patterns, call-site, in that order:
+// the studio sorts them); the lightbulb offers the same as Monaco code
+// actions. Applying one is an ordinary undoable edit, echoed into the
+// transcript as the command it is (`,assist fill-match main.puf:812`),
+// which typed at the prompt does the same.
 //
-//   createAssists({ editor, files, send, note }) -> { open, run, receive, setAvailable }
+// Hovering shows the facts at a point (facts.js): the type, from the
+// checker, and what the session saw a parameter receive, from runs.
+//
+//   createAssists({ editor, files, send, note, facts }) -> { open, run, receive, setAvailable }
+//   facts(file, pos, full)   the studio's facts at a point (facts.js)
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -15,9 +19,19 @@ const element = (tag, className, text) => {
   return node;
 };
 
-const SOURCES = { type: "from the type", patterns: "from patterns in the file", "call-site": "from the call site", syntax: "from the syntax" };
+const SOURCES = {
+  type: "from the type (the checker)",
+  observed: "from values this session's runs passed (seen so far, not proof)",
+  patterns: "from patterns in the file",
+  "call-site": "from the call site",
+  syntax: "from the syntax",
+};
 
-export function createAssists({ editor, files, send, note }) {
+// How a source is badged in the menu.
+const BADGES = { observed: "▶ seen" };
+export const badge = (source) => BADGES[source] ?? source;
+
+export function createAssists({ editor, files, send, note, facts }) {
   const waiting = new Map(); // seq -> resolve
   let seq = 0;
   let available = false;
@@ -61,7 +75,7 @@ export function createAssists({ editor, files, send, note }) {
     menu.append(element("div", "assist-menu-head", "Assists from the compiler"));
     shown.assists.forEach((assist, i) => {
       const item = menu.appendChild(element("button", `assist-item${i === shown.index ? " chosen" : ""}`));
-      item.append(element("span", "title", assist.title), element("span", `source source-${assist.source}`, assist.source));
+      item.append(element("span", "title", assist.title), element("span", `source source-${assist.source}`, badge(assist.source)));
       item.title = SOURCES[assist.source] ?? assist.source;
       item.addEventListener("mousedown", (event) => { event.preventDefault(); choose(i); });
     });
@@ -137,7 +151,7 @@ export function createAssists({ editor, files, send, note }) {
         const reply = await at(file, model.getOffsetAt(range.getEndPosition()));
         if (model.getVersionId() !== version) return { actions: [], dispose() {} };
         const actions = (reply.assists ?? []).map((assist) => ({
-          title: `${assist.title}  ·  ${assist.source}`,
+          title: `${assist.title}  ·  ${badge(assist.source)}`,
           kind: "quickfix",
           edit: {
             edits: assist.edits.map(({ start, end, text }) => ({
@@ -157,12 +171,12 @@ export function createAssists({ editor, files, send, note }) {
         if (!available || !file || file !== files.active() || !files.synced(file)) return null;
         const word = model.getWordAtPosition(position);
         if (!word) return null;
-        const reply = await request({ t: "type-at", file, pos: model.getOffsetAt(position) });
-        if (!reply.type) return null;
-        return {
-          range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
-          contents: [{ value: `\`${word.word} : ${reply.type}\`` }],
-        };
+        const version = model.getVersionId();
+        const reply = await facts(file, model.getOffsetAt(position), false);
+        if (model.getVersionId() !== version) return null;
+        const contents = hover(word.word, reply.facts);
+        if (!contents.length) return null;
+        return { range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn), contents };
       },
     });
   }
@@ -182,6 +196,23 @@ export function createAssists({ editor, files, send, note }) {
       },
     },
   };
+}
+
+// A hover's parts from the facts at a point, each saying where it came
+// from: the type from the checker, the shapes from runs.
+export function hover(word, facts) {
+  const contents = [];
+  if (facts?.type) contents.push({ value: `\`${word} : ${facts.type}\`\n\n*from the checker*` });
+  const seen = facts?.observed;
+  if (seen && (seen.patterns?.length || seen.shapes?.length)) {
+    const calls = `${seen.calls} call${seen.calls === 1 ? "" : "s"}`;
+    const list = seen.patterns?.length ? seen.patterns : seen.shapes;
+    const fence = "```";
+    contents.push({
+      value: `**${seen.function}**'s argument \`${seen.param}\` — seen in ${calls}:\n\n${fence}\n${list.join("\n")}\n${fence}\n\n*observed in this session${seen.patterns?.length ? "" : " (shapes)"}*`,
+    });
+  }
+  return contents;
 }
 
 // The UTF-16 offset of UTF-8 byte offset `bytes` into `text`.

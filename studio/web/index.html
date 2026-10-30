@@ -31,6 +31,7 @@
     <div class="group" role="group" aria-label="Editing">
       <button id="structured" class="icon" aria-pressed="true">( )</button>
       <button id="history" class="icon" aria-pressed="false" title="The shown file's versions">History</button>
+      <button id="facts-toggle" class="icon" aria-pressed="false" title="What each layer knows of the form at the cursor: syntax, checker, session, observed">Facts</button>
     </div>
   </div>
 </header>
@@ -47,6 +48,7 @@
     <div id="proposals" class="proposal-bar" hidden></div>
     <div id="editor-wrap">
       <div id="editor"></div>
+      <aside id="facts" hidden></aside>
       <aside id="versions" hidden></aside>
       <div id="notice" hidden></div>
     </div>
@@ -73,7 +75,7 @@
   <button id="check" class="pill"></button>
   <span id="features" class="pill"></span>
   <span id="agent" class="pill bad" hidden>no claude</span>
-  <span class="status-keys">⌘↵ eval form · ⇧⌘↵ load file · ⌘. assists · ⌘S save · Tab on the prompt: ask · Ctrl-` editor ⇄ prompt · F7 next change</span>
+  <span class="status-keys">⌘↵ eval form (and what it needs) · ⇧⌘↵ load file · ⌘. assists · ⌘S save · Tab on the prompt: ask · Ctrl-` editor ⇄ prompt · F7 next change</span>
 </footer>
 <script type="module" src="/static/main.js"></script>
 </body>

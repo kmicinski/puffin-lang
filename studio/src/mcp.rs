@@ -122,6 +122,14 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
             answer["pos"] = json!(at);
             Ok(answer)
         }
+        "facts_at" => {
+            let file = text("file")?;
+            let files = fork();
+            let at = point(arguments, &file_text(&files, &file)?)?;
+            let mut facts = studio.facts_at(&files, &file, at, true).await?;
+            facts["note"] = json!("type is the checker's; session is the author's live session; observed and function are what the session's runs passed (sampled, at most 16 shapes a parameter: evidence, not proof)");
+            Ok(facts)
+        }
         "apply_assist" => {
             let file = text("file")?;
             let at = point(arguments, &file_text(&fork(), &file)?)?;
@@ -197,7 +205,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "assists_at",
-            "description": "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function -- each with its title, source (type, patterns, call-site) and edits. Prefer these to writing such code yourself; apply_assist proposes one.",
+            "description": "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function, annotate a function from observed types -- each with its title, source and edits. source says where the knowledge came from: type (the checker; certain), observed (values the author's session passed; seen so far, not proof), patterns (other matches and templates in the file), call-site. Prefer these to writing such code yourself; apply_assist proposes one.",
             "inputSchema": object(at.clone(), &["file"]),
         },
         {
@@ -208,6 +216,11 @@ pub fn tools() -> Value {
         {
             "name": "type_at",
             "description": "The type the checker gives the expression at a point, or null.",
+            "inputSchema": object(at.clone(), &["file"]),
+        },
+        {
+            "name": "facts_at",
+            "description": "Everything known at a point, each part labelled with its layer: form (syntax: its key and lines), type and diagnostics (the checker), session (whether the author's live session has this form current, stale, or not loaded; an expression's last result), and observed/function (what the session's runs actually passed: per parameter, the call count and the shapes seen, with match patterns made from them).",
             "inputSchema": object(at, &["file"]),
         },
         {

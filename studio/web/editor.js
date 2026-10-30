@@ -12,6 +12,8 @@
 //   reveal({ line, col })    put the cursor there
 //   markers(key, list)       mark document `key`'s diagnostics, each
 //                            { line, severity, message }
+//   glyphs(key, list)        mark lines of document `key` in the gutter,
+//                            each { line, className, hover }
 //   caretBox()               the cursor's box on screen, for menus, or null
 //   focus()
 //   raw                      { monaco, editor } for Monaco, else null
@@ -127,7 +129,7 @@ function register(monaco) {
   });
 }
 
-function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist }) {
+function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor }) {
   register(monaco);
   const editor = monaco.editor.create(element, {
     language: "puffin",
@@ -140,19 +142,21 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     fontFamily: "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
     fontSize: 14,
     tabSize: 2,
-    glyphMargin: false,
+    // the session's marks on each top-level form (session.js)
+    glyphMargin: true,
     matchBrackets: "always",
     bracketPairColorization: { enabled: true },
     lightbulb: { enabled: "on" },
     padding: { top: 8 },
   });
-  const documents = new Map(); // key -> { model, view }
+  const documents = new Map(); // key -> { model, view, glyphs }
   let shown = null;
   let quiet = false;
   const current = () => editor.getModel();
   const uriOf = (key) => monaco.Uri.from({ scheme: "studio", path: `/${key}` });
 
   editor.onDidChangeModelContent(() => { if (!quiet) onChange(); });
+  editor.onDidChangeCursorPosition(() => onCursor?.());
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, onSave);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, onEvalForm);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, onLoadFile);
@@ -165,7 +169,7 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     show(key, text) {
       if (key !== shown) {
         if (documents.has(shown)) documents.get(shown).view = editor.saveViewState();
-        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null });
+        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null, glyphs: [] });
         const { model, view } = documents.get(key);
         quiet = true;
         editor.setModel(model);
@@ -223,6 +227,19 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
         };
       }));
     },
+    glyphs(key, list) {
+      const document = documents.get(key);
+      if (!document) return;
+      const lines = document.model.getLineCount();
+      document.glyphs = document.model.deltaDecorations(document.glyphs, list.map(({ line, className, hover }) => ({
+        range: new monaco.Range(Math.min(line, lines), 1, Math.min(line, lines), 1),
+        options: {
+          glyphMarginClassName: className,
+          glyphMarginHoverMessage: { value: hover },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      })));
+    },
     caretBox() {
       const at = editor.getPosition();
       const point = at && editor.getScrolledVisiblePosition(at);
@@ -237,12 +254,13 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
 
 // The fallback, when Monaco is not installed: a textarea with the same
 // keys, and no markers.
-function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onAssist }) {
+function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor }) {
   const area = document.createElement("textarea");
   area.spellcheck = false;
   area.className = "fallback-editor";
   element.append(area);
   area.addEventListener("input", onChange);
+  for (const kind of ["keyup", "click"]) area.addEventListener(kind, () => onCursor?.());
   bindTextarea(area);
   area.addEventListener("keydown", (event) => {
     if (!(event.metaKey || event.ctrlKey)) return;
@@ -285,6 +303,7 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
       area.setSelectionRange(at, at);
     },
     markers() {},
+    glyphs() {},
     caretBox() {
       const box = area.getBoundingClientRect();
       return { left: box.left + 20, top: box.top + 20, height: 18 };

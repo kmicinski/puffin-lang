@@ -25,13 +25,29 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
     dir
 }
 
-fn studio(name: &str, files: &[(&str, &str)]) -> Option<Arc<Studio>> {
+/// A test's studio over its own project directory, removed when dropped.
+struct Fixture(Arc<Studio>);
+
+impl std::ops::Deref for Fixture {
+    type Target = Arc<Studio>;
+    fn deref(&self) -> &Arc<Studio> {
+        &self.0
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0.directory);
+    }
+}
+
+fn studio(name: &str, files: &[(&str, &str)]) -> Option<Fixture> {
     let root = crate::repository_root();
     if !root.join("build/puffincc").is_file() || !root.join("bin/puffin-vm").is_file() {
         eprintln!("skipped: build/puffincc and bin/puffin-vm are not built");
         return None;
     }
-    Some(Studio::new(root, project(name, files), "test-token".into()).unwrap())
+    Some(Fixture(Studio::new(root, project(name, files), "test-token".into()).unwrap()))
 }
 
 #[tokio::test]
@@ -91,7 +107,7 @@ async fn the_live_session_keeps_definitions_and_types_and_survives_errors() {
     studio.evaluate("(area (Circle 1))".into(), Source::Prompt).await;
     assert!(output_of(&studio, "(area (Circle 1))").1.contains(&("result".to_owned(), "3".to_owned())));
     // a form from a buffer brings its module's types
-    studio.evaluate("(define (size [e : Expr]) : Int 1)".into(), Source::Buffer { file: "main.puf".into(), line: 12 }).await;
+    studio.evaluate("(define (size [e : Expr]) : Int 1)".into(), Source::buffer("main.puf", 12)).await;
     assert_eq!(output_of(&studio, "(define (size [e : Expr]) : Int 1)").0.as_deref(), Some("ok"));
     studio.evaluate("(size (Num 3))".into(), Source::Prompt).await;
     assert!(output_of(&studio, "(size (Num 3))").1.contains(&("result".to_owned(), "1".to_owned())));
@@ -133,7 +149,7 @@ async fn mcp_lists_tools_and_admits_only_its_token() {
     let bytes = axum::body::to_bytes(answer.into_body(), 1 << 20).await.unwrap();
     let listed: Value = serde_json::from_slice(&bytes).unwrap();
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc"] {
+    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "facts_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc"] {
         assert!(names.contains(&name), "{name} in {names:?}");
     }
 }
@@ -202,4 +218,145 @@ async fn the_compilers_assists_become_proposals() {
     assert!(proposed["proposed"].is_u64(), "{proposed}");
     let fork = tool(&studio, t, "get_file", json!({ "file": "main.puf" })).await.unwrap();
     assert!(fork["text"].as_str().unwrap().contains("[(Num n)"), "{fork}");
+}
+
+const EXPR: &str = "\
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (helper n) (* n 1))
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [(Num n) (helper n)]
+    [(Add a b) (+ (eval-expr a) (eval-expr b))]))
+(define example (Add (Num 2) (Num 3)))
+(define boom (car '()))
+(eval-expr example)
+";
+
+/// The session's state of the form of `file` keyed `key` (or with that text).
+fn state_of(studio: &Studio, file: &str, key: &str) -> crate::session::FormState {
+    let text = studio.text_of(file).unwrap();
+    let form = crate::sexp::forms(&text).into_iter().find(|f| f.key() == key || text[f.start..f.end] == *key).expect("the form");
+    crate::session::Session::state(&studio.session_view(), file, &text, &form)
+}
+
+/// The latest transcript entry showing `line`.
+fn entry_of(studio: &Studio, line: &str) -> crate::studio::Entry {
+    studio.recent(50).into_iter().rev().find(|entry| entry.line == line).expect("the entry")
+}
+
+#[tokio::test]
+async fn evaluating_a_form_loads_what_it_needs_and_the_session_knows_it() {
+    use crate::repl::{At, Source};
+    let Some(studio) = studio("needs", &[("expr.puf", EXPR)]) else { return };
+    let last = EXPR.lines().position(|line| line == "(eval-expr example)").unwrap() + 1;
+    studio.eval_form("expr.puf", At::Line(last)).await.unwrap();
+    let entry = entry_of(&studio, "(eval-expr example)");
+    assert_eq!(entry.status.as_deref(), Some("ok"), "{entry:?}");
+    assert_eq!(entry.command, format!(",eval expr.puf:{last}"));
+    assert_eq!(entry.also, ["helper", "eval-expr", "example"]);
+    assert!(entry.out.contains(&("result".to_owned(), "5".to_owned())), "{entry:?}");
+    for key in ["define:helper", "define:eval-expr", "define:example", "define-type:Expr"] {
+        assert_eq!(state_of(&studio, "expr.puf", key).status, "current", "{key}");
+    }
+    assert_eq!(state_of(&studio, "expr.puf", "define:boom").status, "absent");
+    let evaluated = state_of(&studio, "expr.puf", "(eval-expr example)");
+    assert_eq!((evaluated.status, evaluated.result.as_deref()), ("evaluated", Some("5")));
+
+    // an edit makes a loaded form stale; evaluating again reloads only it
+    let version = studio.version_of("expr.puf").unwrap();
+    let edited = EXPR.replace("(* n 1)", "(* n 10)");
+    studio.edit(1, "expr.puf", version, edited).unwrap();
+    assert_eq!(state_of(&studio, "expr.puf", "define:helper").status, "stale");
+    studio.eval_form("expr.puf", At::Line(last)).await.unwrap();
+    let again = studio.recent(1).pop().unwrap();
+    assert_eq!(again.also, ["helper"]);
+    assert!(again.out.contains(&("result".to_owned(), "50".to_owned())), "{again:?}");
+    assert_eq!(state_of(&studio, "expr.puf", "define:helper").status, "current");
+
+    // a failed evaluation leaves the session's forms as they were
+    let boom = EXPR.lines().position(|line| line.starts_with("(define boom")).unwrap() + 1;
+    studio.eval_form("expr.puf", At::Line(boom)).await.unwrap();
+    assert_eq!(studio.recent(1).pop().unwrap().status.as_deref(), Some("error"));
+    assert_eq!(state_of(&studio, "expr.puf", "define:boom").status, "absent");
+    assert_eq!(state_of(&studio, "expr.puf", "define:helper").status, "current");
+
+    // the prompt redefining a module's name
+    studio.evaluate("(define (helper n) n)".into(), Source::Prompt).await;
+    assert_eq!(state_of(&studio, "expr.puf", "define:helper").status, "redefined");
+
+    // what the facts say of the form at a point
+    let text = studio.text_of("expr.puf").unwrap();
+    let at = text.find("(helper n)]").unwrap() + 1;
+    let facts = studio.facts_at(&studio.files(), "expr.puf", at, true).await.unwrap();
+    assert_eq!(facts["form"]["key"], "define:eval-expr");
+    assert_eq!(facts["session"]["status"], "current");
+
+    let t = thread(&studio, Scope { kind: ScopeKind::Program, ..Scope::default() });
+    let told = tool(&studio, t, "facts_at", json!({ "file": "expr.puf", "pos": at })).await.unwrap();
+    assert_eq!(told["form"]["key"], "define:eval-expr", "{told}");
+    assert!(told["note"].as_str().unwrap().contains("not proof"));
+
+    // a reset forgets it all
+    studio.reset().await;
+    assert!(studio.session_view().files.is_empty());
+    assert_eq!(state_of(&studio, "expr.puf", "define:eval-expr").status, "absent");
+
+    // a whole module loads every form
+    studio.evaluate(studio.text_of("expr.puf").unwrap(), Source::File { file: "expr.puf".into() }).await;
+    assert_eq!(entry_of(&studio, ",load expr.puf").status.as_deref(), Some("error"), "boom fails the whole module");
+    assert_eq!(state_of(&studio, "expr.puf", "define:helper").status, "absent");
+    let version = studio.version_of("expr.puf").unwrap();
+    let text = studio.text_of("expr.puf").unwrap().replace("(define boom (car '()))\n", "");
+    studio.edit(1, "expr.puf", version, text.clone()).unwrap();
+    studio.evaluate(text, Source::File { file: "expr.puf".into() }).await;
+    let loaded = state_of(&studio, "expr.puf", "define:helper");
+    assert_eq!((loaded.status, loaded.by), ("current", Some("file")));
+    studio.lane.reset().await;
+}
+
+#[tokio::test]
+async fn a_name_used_before_its_definition_offers_to_load_it() {
+    use crate::repl::{At, Source};
+    let Some(studio) = studio("fix", &[("expr.puf", EXPR)]) else { return };
+    studio.evaluate("(define (twice-helper n) (helper (helper n)))".into(), Source::Prompt).await;
+    studio.evaluate("(twice-helper 3)".into(), Source::Prompt).await;
+    let failed = entry_of(&studio, "(twice-helper 3)");
+    assert_eq!(failed.status.as_deref(), Some("error"));
+    assert_eq!(failed.fixes, [crate::studio::Fix { name: "helper".into(), file: "expr.puf".into(), line: 2 }]);
+    // the fix is the same path as ⌘↵ on that form
+    studio.eval_form("expr.puf", At::Line(2)).await.unwrap();
+    studio.evaluate("(twice-helper 3)".into(), Source::Prompt).await;
+    assert!(entry_of(&studio, "(twice-helper 3)").out.contains(&("result".to_owned(), "3".to_owned())));
+    studio.lane.reset().await;
+}
+
+#[tokio::test]
+async fn observed_calls_come_back_as_the_record() {
+    use crate::repl::At;
+    let Some(studio) = studio("observe", &[("expr.puf", EXPR)]) else { return };
+    if !studio.toolchain.observe_available().await {
+        eprintln!("skipped: this puffincc has no --repl --observe");
+        return;
+    }
+    let last = EXPR.lines().position(|line| line == "(eval-expr example)").unwrap() + 1;
+    studio.eval_form("expr.puf", At::Line(last)).await.unwrap();
+    assert!(studio.lane.observing());
+    studio.refresh_observations().await;
+    let view = studio.session_view();
+    let eval = view.observed.iter().find(|observed| observed.function == "eval-expr").expect("eval-expr observed");
+    assert_eq!(eval.calls, 3);
+    assert!(eval.args[0].contains(&"(adt Add)".to_owned()), "{eval:?}");
+    assert!(studio.toolchain.observed.lock().unwrap().as_ref().is_some_and(|path| path.is_file()));
+    // the facts at the parameter say what it received
+    let text = studio.text_of("expr.puf").unwrap();
+    let at = text.find("[e : Expr]").unwrap() + 1;
+    let facts = studio.facts_at(&studio.files(), "expr.puf", at, true).await.unwrap();
+    assert_eq!(facts["function"]["calls"], 3, "{facts}");
+    assert_eq!(facts["observed"]["param"], "e", "{facts}");
+    // a question about the form carries one line of it
+    let line = studio.observed_line("expr.puf", at).await.expect("a line");
+    assert!(line.starts_with("eval-expr e: ") && line.ends_with("over 3 calls"), "{line}");
+    studio.reset().await;
+    assert!(studio.toolchain.observed.lock().unwrap().is_none());
+    studio.lane.reset().await;
 }

@@ -72,7 +72,11 @@ impl Studio {
         drop(review);
         self.begin(Entry { kind: "ask", line: message.clone(), thread: Some(thread), turn: Some(turn), ..Entry::default() });
         self.publish_review();
-        tokio::spawn(agent::run(self.clone(), thread, message, preamble));
+        let studio = self.clone();
+        tokio::spawn(async move {
+            let observed = studio.observed_of_focus(&context).await;
+            agent::run(studio, thread, message, format!("{preamble}{observed}The author asks:")).await;
+        });
         Ok(thread)
     }
 
@@ -114,7 +118,8 @@ impl Studio {
     }
 
     /// A question's preamble: the studio, the focus, the scope's rule, the
-    /// diagnostics, and the latest REPL lines.
+    /// diagnostics, and the latest REPL lines. The line of observations and
+    /// the question follow it.
     fn preamble(&self, context: &Context, scope: &Scope) -> String {
         let files = self.files();
         let mut out = String::from("(Puffin Studio session.)\n");
@@ -182,8 +187,19 @@ impl Studio {
                 }
             }
         }
-        out.push_str("The author asks:");
         out
+    }
+
+    /// The line of observations of the focused form a question carries,
+    /// or nothing.
+    async fn observed_of_focus(&self, context: &Context) -> String {
+        let Some(file) = context.file.clone() else { return String::new() };
+        let text = self.text_of(&file).unwrap_or_default();
+        let cursor = sexp::byte_of_utf16(&text, context.cursor.or(context.selection.map(|(start, _)| start)).unwrap_or(0));
+        match self.observed_line(&file, cursor).await {
+            Some(line) => format!("Observed in the live session (sampled shapes of real arguments; evidence, not proof): {line}\n"),
+            None => String::new(),
+        }
     }
 
     // ---- Tools (mcp.rs) ---------------------------------------------------------

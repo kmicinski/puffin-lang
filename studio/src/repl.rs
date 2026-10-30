@@ -8,10 +8,19 @@
 //! session has loaded and puts them ahead of each unit it compiles, the
 //! latest definition of a name winning; a unit that defines a type itself
 //! gets only the others.
+//!
+//! Evaluating a form of a module (⌘↵, `,eval FILE:LINE`) first loads, in
+//! the same unit, the definitions of that module it needs that the session
+//! lacks or has stale (session.rs). What each unit loaded is kept, so the
+//! editor can mark each form current, stale, or not loaded. When the
+//! session observes (lane.rs), every unit is compiled with `--observe`, and
+//! after the evaluations pause the record is read back with a `try` of
+//! `(#%observations)`.
 
 use crate::lane::{Output, Status};
-use crate::sexp;
-use crate::studio::{Entry, Studio};
+use crate::session::{self, Session};
+use crate::sexp::{self, Form};
+use crate::studio::{Entry, Fix, Studio};
 use crate::toolchain::{self, Files};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -22,10 +31,46 @@ use std::time::{Duration, Instant};
 pub enum Source {
     /// Typed at the prompt.
     Prompt,
-    /// A form of `file`, starting on `line` (eval-from-buffer).
-    Buffer { file: String, line: usize },
+    /// Forms of `file` (eval-from-buffer): pieces of the text, each
+    /// (its first line in the text, that line in the file).
+    Buffer { file: String, pieces: Vec<(usize, usize)> },
     /// The whole module `file`.
     File { file: String },
+}
+
+impl Source {
+    /// Text of `file` starting on its `line`.
+    pub fn buffer(file: impl Into<String>, line: usize) -> Self {
+        Source::Buffer { file: file.into(), pieces: vec![(1, line)] }
+    }
+}
+
+/// Where a form of a module is: a byte offset, or a line.
+#[derive(Clone, Copy, Debug)]
+pub enum At {
+    Pos(usize),
+    Line(usize),
+}
+
+/// The line in the file of line `line` of a buffer unit's text.
+pub fn file_line(pieces: &[(usize, usize)], line: usize) -> usize {
+    match pieces.iter().rev().find(|(first, _)| *first <= line) {
+        Some((first, file)) => file + (line - first),
+        None => line,
+    }
+}
+
+/// The top-level form of `text` at `at`: for a line, the form holding it,
+/// else the next one to start.
+pub fn form_at(text: &str, at: At) -> Option<Form> {
+    match at {
+        At::Pos(pos) => sexp::form_at(text, pos),
+        At::Line(line) => {
+            let all = sexp::forms(text);
+            let holding = all.iter().find(|form| form.line <= line && line <= sexp::line_of(text, form.end));
+            holding.or_else(|| all.iter().find(|form| form.line >= line)).cloned()
+        }
+    }
 }
 
 /// A unit ready to compile: where it is, and how its lines map back.
@@ -73,6 +118,24 @@ pub fn insertion_point(text: &str) -> (usize, usize) {
         }
     }
     at
+}
+
+/// What would fix a run that referenced names before their definition:
+/// each such name a module of `files` defines at its top level.
+pub fn fixes(files: &Files, errors: &str) -> Vec<Fix> {
+    let mut out = Vec::new();
+    for name in session::undefined_names(errors) {
+        for (file, text) in files {
+            let defines = sexp::forms(text)
+                .into_iter()
+                .find(|form| session::definition(form) && form.head.as_deref() != Some("define-type") && form.name.as_deref() == Some(name.as_str()));
+            if let Some(form) = defines {
+                out.push(Fix { name: name.clone(), file: file.clone(), line: form.line });
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Words an assistant's `evaluate` may not use: effects outside the
@@ -150,7 +213,9 @@ impl Studio {
     /// mapped back to the text (and, for a buffer's form, to its file).
     pub(crate) async fn compile(&self, unit: &Unit, source: &Source) -> Result<std::path::PathBuf, String> {
         let out = unit.dir.join("unit.pbc");
-        let output = self.toolchain.compile_unit(&unit.dir, &unit.path, &out).await?;
+        // a compiler swapped for one that cannot observe compiles plainly
+        let observe = self.lane.observing() && self.toolchain.observe_available().await;
+        let output = self.toolchain.compile_unit(&unit.dir, &unit.path, &out, observe).await?;
         if output.timed_out {
             return Err("the compile timed out".to_owned());
         }
@@ -176,7 +241,7 @@ impl Studio {
                 }
                 match source {
                     Source::Prompt => format!("{} [line {line}]", d.message),
-                    Source::Buffer { file, line: first } => format!("{} [{file}:{}]", d.message, first + line - 1),
+                    Source::Buffer { file, pieces } => format!("{} [{file}:{}]", d.message, file_line(pieces, line)),
                     Source::File { file } => format!("{} [{file}:{line}]", d.message),
                 }
             })
@@ -186,18 +251,55 @@ impl Studio {
 
     /// Evaluate `text` in the live session, as a transcript entry.
     pub async fn evaluate(self: &Arc<Self>, text: String, source: Source) {
+        let line = match &source {
+            Source::File { file } => format!(",load {file}"),
+            _ => text.trim().to_owned(),
+        };
+        self.evaluate_as(text, source, line, String::new(), Vec::new()).await;
+    }
+
+    /// Evaluate the form of `file` at `at`, with the definitions of the
+    /// module it needs that the session lacks or has stale loaded first,
+    /// as one unit: ⌘↵, and `,eval FILE:LINE`.
+    pub async fn eval_form(self: &Arc<Self>, file: &str, at: At) -> Result<(), String> {
+        let text = self.text_of(file).ok_or_else(|| format!("no file {file}"))?;
+        let form = form_at(&text, at).ok_or_else(|| match at {
+            At::Line(line) => format!("no form at {file}:{line}"),
+            At::Pos(_) => "no form at the cursor".to_owned(),
+        })?;
+        let view = self.session_view();
+        let lacking = |need: &Form| Session::state(&view, file, &text, need).status != "current";
+        let needs = session::needs(&text, &form, &lacking);
+        let mut body = String::new();
+        let mut pieces = Vec::new();
+        for piece in needs.iter().chain(std::iter::once(&form)) {
+            pieces.push((body.matches('\n').count() + 1, piece.line));
+            body.push_str(&text[piece.start..piece.end]);
+            body.push('\n');
+        }
+        let also = needs.iter().filter_map(|need| need.name.clone()).collect();
+        let shown = text[form.start..form.end].trim().to_owned();
+        let command = format!(",eval {file}:{}", form.line);
+        self.evaluate_as(body, Source::Buffer { file: file.to_owned(), pieces }, shown, command, also).await;
+        Ok(())
+    }
+
+    /// Evaluate `text` from `source` as a transcript entry showing `line`
+    /// (and `command`, the gesture's, and `also`, what loads first).
+    async fn evaluate_as(self: &Arc<Self>, text: String, source: Source, line: String, command: String, also: Vec<String>) {
         let (origin, file) = match &source {
             Source::Prompt => ("prompt", None),
             Source::Buffer { file, .. } => ("buffer", Some(file.clone())),
             Source::File { file } => ("file", Some(file.clone())),
         };
-        let line = match &source {
-            Source::File { file } => format!(",load {file}"),
-            _ => text.trim().to_owned(),
-        };
-        let id = self.begin(Entry { kind: "eval", origin: origin.to_owned(), line, file, ..Entry::default() });
+        let id = self.begin(Entry { kind: "eval", origin: origin.to_owned(), line, file, command, also, ..Entry::default() });
         let started = Instant::now();
         let _queue = self.eval_queue.lock().await;
+        // a session started now knows whether this unit may observe
+        if let Err(error) = self.lane.ensure().await {
+            return self.finish(id, "error", Some(format!("the session did not start: {error}")), 0);
+        }
+        let files = self.files();
         let unit = match self.unit(&text, &source) {
             Ok(unit) => unit,
             Err(error) => return self.finish(id, "error", Some(error), 0),
@@ -218,28 +320,116 @@ impl Studio {
             }
         };
         let studio = self.clone();
-        let mut sink = move |output: Output| match output {
+        let mut errors = String::new();
+        let mut last = None;
+        let mut sink = |output: Output| match output {
             Output::Out(text) => studio.output(id, "out", text),
-            Output::Err(text) => studio.output(id, "err", text),
-            Output::Result(text) => studio.output(id, "result", text),
+            Output::Err(text) => {
+                if errors.len() < 16_000 {
+                    errors.push_str(&text);
+                }
+                studio.output(id, "err", text)
+            }
+            Output::Result(text) => {
+                last = Some(text.clone());
+                studio.output(id, "result", text)
+            }
         };
         let status = self.lane.run(&pbc, true, &mut sink).await;
         let ms = started.elapsed().as_millis() as u64;
         match status {
             Status::Ok => {
                 crate::repl::remember(&mut self.types.lock().expect("types lock"), &unit.defines);
+                {
+                    let mut session = self.session.lock().expect("session lock");
+                    match &source {
+                        Source::Prompt => session.loaded_prompt(&files, &text, id),
+                        Source::Buffer { file, .. } => session.loaded_buffer(file, &text, id, last),
+                        Source::File { file } => session.loaded_file(&files, &toolchain::closure(&files, file), id),
+                    }
+                }
                 self.finish(id, "ok", None, ms);
+                self.publish_session();
+                self.observations_due.notify_one();
             }
-            Status::Err(code) => self.finish(id, "error", Some(format!("the unit failed (exit {code}); the session is as it was")), ms),
+            Status::Err(code) => {
+                let fixes = fixes(&self.files(), &errors);
+                self.finish_with(id, "error", Some(format!("the unit failed (exit {code}); the session is as it was")), ms, fixes);
+            }
             Status::Interrupted => self.finish(id, "interrupted", Some("interrupted; the session is as it was".into()), ms),
-            Status::Dead(why) => self.finish(id, "error", Some(format!("the session ended: {why}")), ms),
+            Status::Dead(why) => {
+                self.forget_session();
+                self.finish(id, "error", Some(format!("the session ended: {why}")), ms);
+            }
         }
     }
 
-    /// Restart the live lane, forgetting the session's types.
+    /// Restart the live lane, forgetting the session's types and what it
+    /// held of the program.
     pub async fn reset(&self) {
         self.lane.reset().await;
         self.types.lock().expect("types lock").clear();
+        self.forget_session();
+    }
+
+    /// Forget what the session held: it is gone.
+    fn forget_session(&self) {
+        self.session.lock().expect("session lock").clear();
+        if let Some(record) = self.toolchain.observed.lock().expect("observed lock").take() {
+            let _ = std::fs::remove_file(record);
+        }
+        self.publish_session();
+    }
+
+    /// Read the session's observation record back (`try` of
+    /// `(#%observations)`), keep it in the scratch directory for
+    /// `--observed`, and show it. Nothing when the session does not
+    /// observe, or replays (a `try` there would run every unit's effects
+    /// again).
+    pub async fn refresh_observations(&self) {
+        if !self.lane.observing() || self.lane.status().mode != "serve" {
+            return;
+        }
+        let _queue = self.eval_queue.lock().await;
+        let generation = self.lane.generation();
+        let dir = self.toolchain.fresh("observations");
+        let workspace = toolchain::Workspace { dir: dir.clone() };
+        if std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join("unit.puf"), "(#%observations)\n")).is_err() {
+            return;
+        }
+        let pbc = dir.join("unit.pbc");
+        let compiled = self.toolchain.compile_unit(&dir, "unit.puf", &pbc, false).await;
+        if !compiled.is_ok_and(|output| output.success) {
+            return;
+        }
+        let mut results = Vec::new();
+        let mut sink = |output: Output| {
+            if let Output::Result(text) = output {
+                results.push(text);
+            }
+        };
+        let status = self.lane.try_quietly(&pbc, &mut sink).await;
+        drop(workspace);
+        let (Some(Status::Ok), Some(record)) = (status, results.pop()) else { return };
+        if generation != self.lane.generation() {
+            return;
+        }
+        let path = self.toolchain.scratch.join("observed.sexp");
+        if std::fs::write(&path, format!("{record}\n")).is_err() {
+            return;
+        }
+        *self.toolchain.observed.lock().expect("observed lock") = Some(path);
+        let changed = {
+            let mut session = self.session.lock().expect("session lock");
+            let observed = session::parse_record(&record);
+            let changed = session.observed != observed;
+            session.record = Some(record);
+            session.observed = observed;
+            changed
+        };
+        if changed {
+            self.publish_session();
+        }
     }
 
     /// Run `text` against the live session and keep nothing (`try`): the
@@ -308,6 +498,26 @@ mod tests {
         remember(&mut types, &sexp::define_types("(define-type T (A Int) (C))"));
         assert_eq!(prefix(&types, &[]), "(define-type T (A Int) (C))\n(define-type U (B))\n");
         assert_eq!(prefix(&types, &["U".into()]), "(define-type T (A Int) (C))\n");
+    }
+
+    #[test]
+    fn buffer_lines_map_back_piece_by_piece() {
+        let pieces = [(1, 5), (3, 20)];
+        assert_eq!(file_line(&pieces, 1), 5);
+        assert_eq!(file_line(&pieces, 2), 6);
+        assert_eq!(file_line(&pieces, 4), 21);
+        let text = "(define a 1)\n\n(define (f x)\n  x)\n";
+        assert_eq!(form_at(text, At::Line(4)).unwrap().key(), "define:f");
+        assert_eq!(form_at(text, At::Line(2)).unwrap().key(), "define:f");
+        assert!(form_at(text, At::Line(9)).is_none());
+    }
+
+    #[test]
+    fn an_undefined_name_a_module_defines_is_a_fix() {
+        let files = Files::from([("m.puf".to_owned(), "(define x 1)\n(define (helper y) y)\n".to_owned())]);
+        let errors = "puffin runtime error: helper: undefined; cannot reference an identifier before its definition\n";
+        assert_eq!(fixes(&files, errors), [Fix { name: "helper".into(), file: "m.puf".into(), line: 2 }]);
+        assert!(fixes(&files, "puffin runtime error: nope: undefined; cannot reference an identifier before its definition").is_empty());
     }
 
     #[test]

@@ -8,6 +8,12 @@
 //! first success: the lane watches its pipes, never the pid, and interrupts
 //! with SIGINT to the process group it fixed at spawn.
 //!
+//! A session's first unit is the prelude. When the compiler can observe
+//! (`--repl --observe`, docs/STUDIO.md §3.1), the observer
+//! (`studio/observe.puf`) is the second, and the session is observing: the
+//! units compiled for it may report their arguments. Otherwise observation
+//! is silently off for that session.
+//!
 //! Until `--serve` exists the lane replays: every loaded unit runs again,
 //! in a fresh `puffin-vm --session`, before the new one; a marker unit
 //! between them says where the new unit's output starts. Effects repeat
@@ -20,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -206,6 +213,11 @@ pub struct Lane {
     group: StdMutex<Option<i32>>,
     status: StdMutex<LaneStatus>,
     on_status: Box<dyn Fn(LaneStatus) + Send + Sync>,
+    /// The session running has the observer loaded.
+    observing: AtomicBool,
+    /// Counts the sessions started, so state learned of one is not taken
+    /// for the next.
+    generation: AtomicU64,
 }
 
 impl Lane {
@@ -216,7 +228,53 @@ impl Lane {
             group: StdMutex::new(None),
             status: StdMutex::new(LaneStatus { state: "idle", mode: "serve", detail: String::new() }),
             on_status,
+            observing: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
         }
+    }
+
+    /// Whether the session running has the observer: units for it may be
+    /// compiled with `--observe`.
+    pub fn observing(&self) -> bool {
+        self.observing.load(Ordering::SeqCst)
+    }
+
+    /// Which session is running (or ran last).
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Start the session if none runs, so the next unit knows whether it
+    /// is observing.
+    pub async fn ensure(&self) -> Result<(), String> {
+        let mut session = self.session.lock().await;
+        if session.is_none() {
+            match self.start().await {
+                Ok(started) => *session = Some(started),
+                Err(error) => {
+                    self.set_status("failed", self.mode_name(None), error.clone());
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `try` unit `pbc` against the running session, quietly: no status
+    /// changes, and no session started for it. None when no session runs.
+    pub async fn try_quietly(&self, pbc: &Path, sink: Sink<'_>) -> Option<Status> {
+        let mut session = self.session.lock().await;
+        let status = match session.as_mut()? {
+            Session::Served(served) => served.command("try", pbc, sink).await,
+            Session::Replay(replay) => self.replay(replay, pbc, false, sink).await,
+        };
+        if let Status::Dead(why) = &status {
+            *session = None;
+            *self.group.lock().expect("group lock") = None;
+            self.observing.store(false, Ordering::SeqCst);
+            self.set_status("idle", self.status().mode, format!("the session ended: {why}"));
+        }
+        Some(status)
     }
 
     pub fn status(&self) -> LaneStatus {
@@ -251,6 +309,7 @@ impl Lane {
         if let Status::Dead(why) = &status {
             *session = None;
             *self.group.lock().expect("group lock") = None;
+            self.observing.store(false, Ordering::SeqCst);
             self.set_status("idle", mode, format!("the session ended: {why}"));
         } else {
             self.set_status("ready", mode, if mode == "replay" { REPLAY_NOTE } else { "" });
@@ -267,24 +326,33 @@ impl Lane {
     }
 
     /// A new session: `--serve` when the VM has it, else a replay; the
-    /// prelude is its first unit either way.
+    /// prelude is its first unit either way, and the observer its second
+    /// when the compiler can observe.
     async fn start(&self) -> Result<Session, String> {
         let serve = self.toolchain.serve_available().await;
         let mode = if serve { "serve" } else { "replay" };
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.observing.store(false, Ordering::SeqCst);
         self.set_status("starting", mode, "");
         let prelude = self.toolchain.fresh("prelude").with_extension("pbc");
         self.toolchain.compile_prelude(&prelude).await?;
+        let observer = self.compile_observer().await;
         if !serve {
             let marker_source = self.toolchain.fresh("marker").with_extension("puf");
             std::fs::write(&marker_source, format!("(display \"{REPLAY_MARK}\\n\")\n")).map_err(|error| error.to_string())?;
             let marker = marker_source.with_extension("pbc");
             let source = marker_source.to_string_lossy().into_owned();
-            let output = self.toolchain.compile_unit(&self.toolchain.scratch, &source, &marker).await?;
+            let output = self.toolchain.compile_unit(&self.toolchain.scratch, &source, &marker, false).await?;
             if !output.success {
                 return Err(format!("cannot compile the replay marker: {}", output.stdout.trim()));
             }
             self.set_status("ready", mode, REPLAY_NOTE);
-            return Ok(Session::Replay(Replay { units: vec![prelude], marker }));
+            let mut units = vec![prelude];
+            if let Some(observer) = observer {
+                units.push(observer);
+                self.observing.store(true, Ordering::SeqCst);
+            }
+            return Ok(Session::Replay(Replay { units, marker }));
         }
         let mut child = Command::new(&self.toolchain.vm)
             .arg("--serve")
@@ -317,9 +385,27 @@ impl Lane {
             }
         };
         match served.command("load", &prelude, &mut sink).await {
-            Status::Ok => Ok(Session::Served(served)),
-            other => Err(format!("the prelude did not load ({other:?}): {}", prelude_output.trim())),
+            Status::Ok => {}
+            other => return Err(format!("the prelude did not load ({other:?}): {}", prelude_output.trim())),
         }
+        // an observer that does not load leaves the session unobserved
+        if let Some(observer) = observer
+            && served.command("load", &observer, &mut |_| {}).await == Status::Ok
+        {
+            self.observing.store(true, Ordering::SeqCst);
+        }
+        Ok(Session::Served(served))
+    }
+
+    /// The observer unit, when the compiler can observe and it compiles.
+    async fn compile_observer(&self) -> Option<PathBuf> {
+        let source = self.toolchain.root.join("studio/observe.puf");
+        if !source.is_file() || !self.toolchain.observe_available().await {
+            return None;
+        }
+        let out = self.toolchain.fresh("observer").with_extension("pbc");
+        let compiled = self.toolchain.compile_unit(&self.toolchain.scratch, &source.to_string_lossy(), &out, false).await.ok()?;
+        (compiled.success && out.is_file()).then_some(out)
     }
 
     async fn replay(&self, replay: &mut Replay, pbc: &Path, keep: bool, sink: Sink<'_>) -> Status {
@@ -426,6 +512,7 @@ impl Lane {
             let _ = served.stdin.write_all(b"quit\n").await;
         }
         *self.group.lock().expect("group lock") = None;
+        self.observing.store(false, Ordering::SeqCst);
         let mode = self.status().mode;
         self.set_status("idle", mode, "reset: the next evaluation starts a fresh session");
     }

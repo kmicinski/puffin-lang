@@ -77,6 +77,7 @@ function describe(data) {
     case "assists_at": return `asked the compiler for assists at ${at}`;
     case "apply_assist": return `proposed assist ${input.id ?? ""} at ${at}${data.op ? ` (#${data.op})` : ""}`;
     case "type_at": return `asked the type at ${at}`;
+    case "facts_at": return `read the facts at ${at}`;
     case "propose_edit": return `proposed a change to ${input.file ?? ""}${data.op ? ` (#${data.op})` : ""}`;
     case "get_proposals": return "looked at its proposals";
     case "evaluate": return `evaluated ${(input.expr ?? "").split("\n")[0].slice(0, 80)}`;

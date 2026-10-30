@@ -6,9 +6,11 @@
 //! `build/puffincc` and `bin/puffin-vm` are black boxes, found by probing:
 //! `--assist` and `--serve` are used once they answer, re-probed whenever
 //! the binary changes, and until then the studio falls back (a check is a
-//! bytecode compile; assists are unavailable). A binary being replaced
-//! underneath us fails to start, or dies by a signal; such runs are tried
-//! again.
+//! bytecode compile; assists are unavailable). The same holds for the
+//! observing compile (`--repl --observe`), the `facts` operation, and
+//! `--observed`, which pass the session's observation record to the assist
+//! lane (§3.1). A binary being replaced underneath us fails to start, or
+//! dies by a signal; such runs are tried again.
 
 use crate::sexp;
 use serde::Serialize;
@@ -137,6 +139,12 @@ pub struct Toolchain {
     counter: AtomicU64,
     assist: Mutex<Probe>,
     serve: Mutex<Probe>,
+    observe: Mutex<Probe>,
+    facts: Mutex<Probe>,
+    observed_flag: Mutex<Probe>,
+    /// The live session's observation record, once there is one: what
+    /// `--observed` names.
+    pub observed: Mutex<Option<PathBuf>>,
 }
 
 /// The output of one run.
@@ -187,6 +195,10 @@ impl Toolchain {
             counter: AtomicU64::new(0),
             assist: Mutex::new(Probe::default()),
             serve: Mutex::new(Probe::default()),
+            observe: Mutex::new(Probe::default()),
+            facts: Mutex::new(Probe::default()),
+            observed_flag: Mutex::new(Probe::default()),
+            observed: Mutex::new(None),
         })
     }
 
@@ -278,18 +290,72 @@ impl Toolchain {
         std::fs::metadata(path).and_then(|meta| meta.modified()).ok()
     }
 
-    /// Whether `puffincc --assist` answers, for the binary as it is now.
-    pub async fn assist_available(&self) -> bool {
+    /// What `probe` found for the compiler as it is now, probing it again
+    /// with `run` when the binary changed.
+    async fn probed<F: std::future::Future<Output = bool>>(&self, probe: &Mutex<Probe>, run: impl FnOnce() -> F) -> bool {
         let stamp = Self::stamp(&self.puffincc);
         {
-            let probe = self.assist.lock().expect("probe lock");
-            if probe.stamp.is_some() && probe.stamp == stamp {
-                return probe.works;
+            let known = probe.lock().expect("probe lock");
+            if known.stamp.is_some() && known.stamp == stamp {
+                return known.works;
             }
         }
-        let works = self.probe_assist().await;
-        *self.assist.lock().expect("probe lock") = Probe { stamp, works };
+        let works = run().await;
+        *probe.lock().expect("probe lock") = Probe { stamp, works };
         works
+    }
+
+    /// Whether `puffincc --assist` answers, for the binary as it is now.
+    pub async fn assist_available(&self) -> bool {
+        self.probed(&self.assist, || self.probe_assist()).await
+    }
+
+    /// Whether `puffincc --repl --observe` compiles a unit.
+    pub async fn observe_available(&self) -> bool {
+        self.probed(&self.observe, || async {
+            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define (probe x) x)\n".to_owned())])) else {
+                return false;
+            };
+            let out = workspace.path("probe.pbc");
+            let args = ["--repl", "--observe", "probe.puf", "-o"].map(String::from).into_iter().chain([out.to_string_lossy().into_owned()]).collect::<Vec<_>>();
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success) && out.is_file()
+        })
+        .await
+    }
+
+    /// Whether `puffincc --assist facts` answers.
+    pub async fn facts_available(&self) -> bool {
+        if !self.assist_available().await {
+            return false;
+        }
+        self.probed(&self.facts, || async {
+            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n".to_owned())])) else {
+                return false;
+            };
+            let args = ["--assist", "facts", "probe.puf", "8"].map(String::from);
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| {
+                output.success && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.get("type").is_some())
+            })
+        })
+        .await
+    }
+
+    /// Whether `puffincc --assist assists` takes `--observed FILE`.
+    pub async fn observed_flag_available(&self) -> bool {
+        if !self.assist_available().await {
+            return false;
+        }
+        self.probed(&self.observed_flag, || async {
+            let Ok(workspace) = self.workspace(&Files::from([
+                ("probe.puf".to_owned(), "(define probe 1)\n".to_owned()),
+                ("observed.sexp".to_owned(), "()\n".to_owned()),
+            ])) else {
+                return false;
+            };
+            let args = ["--assist", "assists", "probe.puf", "8", "--observed", "observed.sexp"].map(String::from);
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success && assist_lines(&output.stdout).1)
+        })
+        .await
     }
 
     async fn probe_assist(&self) -> bool {
@@ -399,6 +465,15 @@ impl Toolchain {
         if let Some(pos) = pos {
             args.push(pos.to_string());
         }
+        // what the session saw, for the ops that read it
+        if matches!(op, "assists" | "facts") {
+            let record = self.observed.lock().expect("observed lock").clone().filter(|path| path.is_file());
+            if let Some(record) = record
+                && (op == "facts" || self.observed_flag_available().await)
+            {
+                args.extend(["--observed".to_owned(), record.to_string_lossy().into_owned()]);
+            }
+        }
         let output = self.puffincc(&args, &workspace.dir).await.map_err(Report::failure)?;
         if output.timed_out {
             return Err(Report::failure("the assist timed out"));
@@ -406,7 +481,8 @@ impl Toolchain {
         if op == "assists" {
             // one assist a line, then {"done":true}; an error may stop it
             // part way, and what was printed before it stands
-            let (assists, done) = assist_lines(&output.stdout);
+            let (mut assists, done) = assist_lines(&output.stdout);
+            assists.sort_by_key(|assist| source_rank(assist["source"].as_str().unwrap_or("")));
             let resolve = |base: &str| resolve(files, file, base);
             let stopped = Report { ok: false, diagnostics: diagnostics(done, &output.stdout, &output.stderr, &resolve) };
             if assists.is_empty() && !done {
@@ -425,9 +501,14 @@ impl Toolchain {
 
     // ---- The live and preview lanes' compiles ----------------------------------
 
-    /// Compile the REPL unit `source` (a path in `dir`) to `out`.
-    pub async fn compile_unit(&self, dir: &Path, source: &str, out: &Path) -> Result<Output, String> {
-        let args = vec!["--repl".to_owned(), source.to_owned(), "-o".to_owned(), out.to_string_lossy().into_owned()];
+    /// Compile the REPL unit `source` (a path in `dir`) to `out`; with
+    /// `observe`, its function defines report their arguments (§3.1).
+    pub async fn compile_unit(&self, dir: &Path, source: &str, out: &Path, observe: bool) -> Result<Output, String> {
+        let mut args = vec!["--repl".to_owned()];
+        if observe {
+            args.push("--observe".to_owned());
+        }
+        args.extend([source.to_owned(), "-o".to_owned(), out.to_string_lossy().into_owned()]);
         self.puffincc(&args, dir).await
     }
 
@@ -492,6 +573,12 @@ pub fn assist_lines(stdout: &str) -> (Vec<Value>, bool) {
         }
     }
     (assists, done)
+}
+
+/// Where an assist's source comes in the menu: the checker's first, then
+/// what runs observed, then the file's patterns, then the call site.
+pub fn source_rank(source: &str) -> usize {
+    ["type", "observed", "patterns", "call-site"].iter().position(|known| *known == source).unwrap_or(4)
 }
 
 /// The project file `[base:line]` names: `entry` when its base name is
@@ -616,6 +703,13 @@ mod tests {
         let stopped = "{\"id\":\"stub\",\"title\":\"Stub f\",\"source\":\"call-site\",\"edits\":[]}\nerror: typecheck: oops [a.puf:3]\n";
         let (assists, done) = assist_lines(stopped);
         assert_eq!((assists[0]["id"].as_str(), done), (Some("stub"), false));
+    }
+
+    #[test]
+    fn assists_order_by_their_source() {
+        let mut sources = ["call-site", "patterns", "observed", "syntax", "type"];
+        sources.sort_by_key(|source| source_rank(source));
+        assert_eq!(sources, ["type", "observed", "patterns", "call-site", "syntax"]);
     }
 
     #[test]

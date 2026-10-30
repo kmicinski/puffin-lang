@@ -124,4 +124,12 @@ a.assist-why { float: right; margin-left: 12px; font: 11px var(--sans); }
 .assist-item .source-type { color: var(--green); }
 .assist-item .source-patterns { color: var(--yellow); }
 .assist-item .source-call-site { color: var(--blue); }
+/* seen in this session's runs: evidence, not the checker's certainty */
+.assist-item .source-observed {
+  padding: 0 5px;
+  border: 1px solid rgba(42, 161, 152, 0.5);
+  border-radius: 999px;
+  color: var(--cyan);
+  font-family: var(--sans);
+}
 .assist-item.chosen, .assist-item:hover:not(:disabled) { background: var(--chrome); }

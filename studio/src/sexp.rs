@@ -240,6 +240,89 @@ pub fn requires(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The symbols `text` mentions: every atom outside a `'`-quoted datum.
+/// Over-approximate, as a name bound locally still counts.
+pub fn mentions(text: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let all = tokens(text);
+    let mut i = 0;
+    while i < all.len() {
+        let (kind, start, end) = all[i];
+        i += 1;
+        match kind {
+            Token::Prefix if &text[start..end] == "'" => {
+                // skip the datum it quotes: an atom, or a list to its closer
+                let mut depth = 0usize;
+                while i < all.len() {
+                    let (kind, ..) = all[i];
+                    i += 1;
+                    match kind {
+                        Token::Open => depth += 1,
+                        Token::Close => depth = depth.saturating_sub(1),
+                        Token::Comment | Token::Prefix => continue,
+                        _ => {}
+                    }
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            Token::Atom => {
+                out.insert(text[start..end].to_owned());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A function define's parameters: `f` and `a`, `b` of `(define (f a [b :
+/// T]) ...)`, each with its byte offset in `text`. None for any other form.
+pub fn params(text: &str, form: &Form) -> Option<(String, Vec<(String, usize)>)> {
+    if form.head.as_deref() != Some("define") {
+        return None;
+    }
+    let body = &text[form.start..form.end];
+    let all = tokens(body);
+    // ( define ( f params... ) ...
+    let mut at = all.iter().skip_while(|(kind, ..)| *kind == Token::Comment);
+    let (Some((Token::Open, ..)), Some((Token::Atom, ..)), Some((Token::Open, ..)), Some((Token::Atom, ns, ne))) =
+        (at.next(), at.next(), at.next(), at.next())
+    else {
+        return None;
+    };
+    let name = body[*ns..*ne].to_owned();
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    // inside a bracketed `[x : T]`, only its first atom names
+    let mut first_in_bracket = false;
+    for (kind, start, end) in at {
+        match kind {
+            Token::Open => {
+                depth += 1;
+                first_in_bracket = depth == 1;
+            }
+            Token::Close if depth == 0 => break,
+            Token::Close => depth -= 1,
+            Token::Atom if depth == 0 || first_in_bracket => {
+                first_in_bracket = false;
+                let word = &body[*start..*end];
+                if word == "." || word.starts_with("#:") {
+                    continue;
+                }
+                out.push((word.to_owned(), form.start + start));
+            }
+            _ => {}
+        }
+    }
+    Some((name, out))
+}
+
+/// The atom holding byte `pos` (or ending at it): its span.
+pub fn atom_at(text: &str, pos: usize) -> Option<(usize, usize)> {
+    tokens(text).into_iter().find(|(kind, start, end)| *kind == Token::Atom && *start <= pos && pos <= *end).map(|(_, s, e)| (s, e))
+}
+
 /// Whether the brackets of `text` balance, outside strings and comments,
 /// and every string closes.
 pub fn balanced(text: &str) -> bool {
@@ -389,6 +472,28 @@ mod tests {
         assert!(!balanced("(f \"a\\\")"));
         assert!(balanced("(f \"a\\\"\" [x]) ; (("));
         assert!(!balanced("(f))"));
+    }
+
+    #[test]
+    fn mentions_skip_quoted_data() {
+        let found = mentions("(define (f e) (g e 'helper '(example x) `(k ,y)))");
+        for name in ["define", "f", "e", "g", "k", "y"] {
+            assert!(found.contains(name), "{name} in {found:?}");
+        }
+        assert!(!found.contains("helper") && !found.contains("example") && !found.contains("x"), "{found:?}");
+    }
+
+    #[test]
+    fn a_defines_parameters_and_where_they_are() {
+        let text = "(define x 1)\n(define (eval-expr [e : Expr] k . rest) : Int e)";
+        let all = forms(text);
+        assert_eq!(params(text, &all[0]), None);
+        let (name, found) = params(text, &all[1]).unwrap();
+        assert_eq!(name, "eval-expr");
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["e", "k", "rest"]);
+        assert_eq!(&text[found[0].1..found[0].1 + 1], "e");
+        assert_eq!(atom_at(text, found[1].1), Some((found[1].1, found[1].1 + 1)));
     }
 
     #[test]

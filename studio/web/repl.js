@@ -5,6 +5,9 @@
 // line); the arrows walk the history. A line starting with `,` is a studio
 // command, the same one a gesture echoes, so a transcript is a script:
 //   ,load FILE              evaluate a whole module in the session
+//   ,eval FILE:LINE         evaluate the form on LINE, with the definitions
+//                           it needs that the session lacks (⌘↵)
+//   ,session                what the session holds of each file
 //   ,assist ID FILE:POS     apply the compiler's assist ID at byte POS
 //   ,accept #N  ,reject #N  a proposal
 //   ,restore vN             a file's version, as its text again
@@ -12,8 +15,10 @@
 //
 //   createRepl({ transcript, prompt, send, commands }) -> { receive, entries, run, insert }
 // `commands` holds the handlers for the commands the page carries out
-// itself ({ assist(id, file, pos), load(file), save() }); `renderAsk(entry,
-// node)` is set by assist.js to draw a question's block.
+// itself ({ assist(id, file, pos), load(file), save(), evalAt(file, line),
+// session() }); `renderAsk(entry, node)` is set by assist.js to draw a
+// question's block. A run that referenced a name before its definition,
+// which a module defines, offers a chip that loads it: `,eval FILE:LINE`.
 
 import { balanced } from "./lexer.js";
 import { highlight } from "./markdown.js";
@@ -27,6 +32,8 @@ const element = (tag, className, text) => {
 };
 
 const HELP = `,load FILE           evaluate a whole module in the session (⌘⇧↵ in the editor)
+,eval FILE:LINE      evaluate the form on LINE, loading first the definitions it needs (⌘↵)
+,session             what the session holds of each file: current, stale, results
 ,assist ID FILE:POS  apply the compiler's assist ID at byte POS (⌘. in the editor)
 ,accept #N  ,reject #N   decide a proposal
 ,restore vN          make a version of a file its text again (History lists them)
@@ -80,6 +87,12 @@ export function createRepl({ transcript, prompt, send, commands }) {
     const arg = rest.join(" ");
     switch (verb) {
       case "load": return commands.load(arg || null);
+      case "eval": {
+        const match = /^(.+):(\d+)$/.exec(arg);
+        if (!match) return local(text, "usage: ,eval FILE:LINE", true);
+        return commands.evalAt(match[1], Number(match[2]));
+      }
+      case "session": return local(text, commands.session());
       case "reset": return send({ t: "reset" });
       case "interrupt":
         send({ t: "echo", line: text });
@@ -159,7 +172,8 @@ export function createRepl({ transcript, prompt, send, commands }) {
     }
     const head = node.appendChild(element("div", "line"));
     if (entry.kind === "eval" && entry.origin === "buffer" && entry.file) {
-      head.append(element("span", "where", `${entry.file} `));
+      const where = head.appendChild(element("span", "where", `${entry.command || entry.file} `));
+      if (entry.command) where.title = "The command this gesture is: typed at the prompt, it does the same";
     }
     const code = head.appendChild(element("span", "code"));
     code.innerHTML = entry.kind === "eval" && !entry.line.startsWith(",") ? highlight(entry.line) : escapeText(entry.line);
@@ -167,6 +181,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       code.title = "Click to put it in the prompt";
       code.addEventListener("click", () => insert(entry.line));
     }
+    if (entry.also?.length) node.append(element("div", "also", `also loaded: ${entry.also.join(", ")}`));
     const out = node.appendChild(element("div", "out"));
     nodes.set(entry.id, { node, out, head });
     for (const [stream, text] of entry.out ?? []) output(entry.id, stream, text, false);
@@ -195,11 +210,11 @@ export function createRepl({ transcript, prompt, send, commands }) {
     scroll(was);
   }
 
-  function done({ id, status, error, ms }) {
+  function done({ id, status, error, ms, fixes = [] }) {
     const known = nodes.get(id);
     if (!known) return;
     const entry = entries.get(id);
-    if (entry) Object.assign(entry, { status, error, ms });
+    if (entry) Object.assign(entry, { status, error, ms, fixes });
     const was = atBottom();
     known.node.classList.remove("running");
     known.node.classList.toggle("failed", status !== "ok");
@@ -207,6 +222,18 @@ export function createRepl({ transcript, prompt, send, commands }) {
     if (error) {
       const box = known.node.appendChild(element("pre", `error ${status}`, error));
       hooks.error?.(entry, box);
+    }
+    if (fixes.length) {
+      const chips = known.node.appendChild(element("div", "fix-chips"));
+      for (const fix of fixes) {
+        const command = `,eval ${fix.file}:${fix.line}`;
+        const chip = chips.appendChild(element("button", "small fix-chip", `Load ${fix.name} from ${fix.file}`));
+        chip.title = `${command}: ${fix.name} is defined there and the session lacks it`;
+        chip.addEventListener("click", () => {
+          run(command);
+          chip.disabled = true;
+        });
+      }
     }
     scroll(was);
   }

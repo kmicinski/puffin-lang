@@ -11,10 +11,15 @@
 //! The program is checked about 400 ms after editing pauses (§2.1 `check`,
 //! or the bytecode compile until `--assist` exists): the edited file, and
 //! every program that requires it.
+//!
+//! What the live session holds of the program (session.rs) is shown to
+//! every tab as it changes, and its observation record is refreshed about
+//! 300 ms after the evaluations stop (repl.rs).
 
 use crate::agent::{Agent, AgentEvent};
 use crate::lane::{Lane, LaneStatus};
 use crate::review::{Acceptance, Review, ReviewView};
+use crate::session::{Session, SessionView};
 use crate::toolchain::{self, Files, Report, Toolchain};
 use crate::versions::{History, Version};
 use serde::Serialize;
@@ -26,6 +31,8 @@ use tokio::sync::{Notify, broadcast};
 
 /// How long editing pauses before the program is checked.
 pub const CHECK_PAUSE: Duration = Duration::from_millis(400);
+/// How long evaluations pause before the observation record is refreshed.
+const OBSERVE_PAUSE: Duration = Duration::from_millis(300);
 /// How often the project's directory is looked at for outside changes.
 const DISK_POLL: Duration = Duration::from_secs(2);
 /// The file extensions a project's files have.
@@ -49,6 +56,7 @@ pub struct Snapshot {
     pub review: ReviewView,
     pub diagnostics: BTreeMap<String, Report>,
     pub transcript: Vec<Entry>,
+    pub session: SessionView,
     pub features: Features,
     /// Why the assistant cannot run here, if it cannot.
     pub agent_unavailable: Option<String>,
@@ -60,6 +68,10 @@ pub struct Features {
     pub assist: bool,
     /// `puffin-vm --serve` runs.
     pub serve: bool,
+    /// `puffincc --repl --observe` compiles: sessions observe calls.
+    pub observe: bool,
+    /// `puffincc --assist facts` answers.
+    pub facts: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -83,6 +95,16 @@ pub struct Entry {
     pub origin: String,
     /// What was typed or sent, as it would be typed.
     pub line: String,
+    /// The command a gesture made it, when that is not `line`:
+    /// `,eval expr.puf:17`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub command: String,
+    /// The definitions loaded first, ahead of the form (dependency-aware eval).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
+    /// What would fix the failure: a definition to load.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<Fix>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// Output, in order, as (stream, text): "out", "err", or "result".
@@ -99,6 +121,15 @@ pub struct Entry {
     pub turn: Option<usize>,
     #[serde(skip)]
     pub kept: usize,
+}
+
+/// A definition the session lacks, found in an open module: `Load X
+/// from expr.puf`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Fix {
+    pub name: String,
+    pub file: String,
+    pub line: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -120,7 +151,16 @@ pub enum Event {
     /// More output for entry `id`.
     EntryOut { id: u64, stream: &'static str, text: String },
     /// Entry `id` finished.
-    EntryDone { id: u64, status: String, error: Option<String>, ms: u64 },
+    EntryDone {
+        id: u64,
+        status: String,
+        error: Option<String>,
+        ms: u64,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        fixes: Vec<Fix>,
+    },
+    /// What the live session holds of the program changed.
+    Session(SessionView),
     /// Progress of an assistant turn.
     Agent(AgentEvent),
     /// Threads, changesets or proposals changed.
@@ -200,6 +240,11 @@ pub struct Studio {
     pub(crate) types: Mutex<Vec<(String, String)>>,
     /// Held across a unit's compile and run, so units load in order.
     pub(crate) eval_queue: tokio::sync::Mutex<()>,
+    /// What the live session holds of the program (session.rs).
+    pub(crate) session: Mutex<Session>,
+    /// Signalled after each successful evaluation: the observation record
+    /// is due for a refresh.
+    pub(crate) observations_due: Arc<Notify>,
     pub agent: Agent,
     port: OnceLock<u16>,
 }
@@ -245,6 +290,8 @@ impl Studio {
             edited: Arc::new(Notify::new()),
             types: Mutex::new(Vec::new()),
             eval_queue: tokio::sync::Mutex::new(()),
+            session: Mutex::new(Session::default()),
+            observations_due: Arc::new(Notify::new()),
             agent: Agent::new(mcp_token),
             port: OnceLock::new(),
         });
@@ -257,6 +304,7 @@ impl Studio {
         self.watch_edits();
         self.watch_disk();
         self.watch_proposals();
+        self.watch_observations();
         let studio = self.clone();
         tokio::spawn(async move {
             let features = studio.features().await;
@@ -285,7 +333,12 @@ impl Studio {
     }
 
     pub async fn features(&self) -> Features {
-        Features { assist: self.toolchain.assist_available().await, serve: self.toolchain.serve_available().await }
+        Features {
+            assist: self.toolchain.assist_available().await,
+            serve: self.toolchain.serve_available().await,
+            observe: self.toolchain.observe_available().await,
+            facts: self.toolchain.facts_available().await,
+        }
     }
 
     pub async fn snapshot(&self) -> Snapshot {
@@ -295,6 +348,7 @@ impl Studio {
         let review = self.review_view();
         let diagnostics = self.diagnostics.lock().expect("diagnostics lock").clone();
         let transcript = self.transcript.lock().expect("transcript lock").clone();
+        let session = self.session_view();
         Snapshot {
             project: self.directory.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             directory: self.directory.display().to_string(),
@@ -303,6 +357,7 @@ impl Studio {
             review,
             diagnostics,
             transcript,
+            session,
             features,
             agent_unavailable: Agent::unavailable(),
         }
@@ -639,15 +694,53 @@ impl Studio {
     }
 
     pub fn finish(&self, id: u64, status: &str, error: Option<String>, ms: u64) {
+        self.finish_with(id, status, error, ms, Vec::new());
+    }
+
+    /// Finish entry `id` with what would fix its failure.
+    pub fn finish_with(&self, id: u64, status: &str, error: Option<String>, ms: u64, fixes: Vec<Fix>) {
         {
             let mut transcript = self.transcript.lock().expect("transcript lock");
             if let Some(entry) = transcript.iter_mut().rev().find(|entry| entry.id == id) {
                 entry.status = Some(status.to_owned());
                 entry.error = error.clone();
                 entry.ms = ms;
+                entry.fixes = fixes.clone();
             }
         }
-        self.publish(Event::EntryDone { id, status: status.to_owned(), error, ms });
+        self.publish(Event::EntryDone { id, status: status.to_owned(), error, ms, fixes });
+    }
+
+    /// The entry `id`, as kept.
+    pub fn entry(&self, id: u64) -> Option<Entry> {
+        self.transcript.lock().expect("transcript lock").iter().rev().find(|entry| entry.id == id).cloned()
+    }
+
+    // ---- The session ------------------------------------------------------------
+
+    pub fn session_view(&self) -> SessionView {
+        let files = self.files();
+        let types = self.types.lock().expect("types lock").clone();
+        self.session.lock().expect("session lock").view(&files, &types)
+    }
+
+    pub(crate) fn publish_session(&self) {
+        self.publish(Event::Session(self.session_view()));
+    }
+
+    /// Refresh the observation record about 300 ms after the evaluations
+    /// stop, and never while one is in flight.
+    fn watch_observations(self: &Arc<Self>) {
+        let studio = Arc::downgrade(self);
+        let due = self.observations_due.clone();
+        tokio::spawn(async move {
+            loop {
+                due.notified().await;
+                while tokio::time::timeout(OBSERVE_PAUSE, due.notified()).await.is_ok() {}
+                let Some(studio) = studio.upgrade() else { return };
+                studio.refresh_observations().await;
+            }
+        });
     }
 
     /// Echo a gesture as the command it is, dimmed in the transcript.

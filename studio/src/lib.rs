@@ -6,11 +6,13 @@
 
 pub mod agent;
 pub mod ask;
+pub mod facts;
 pub mod knowledge;
 pub mod lane;
 pub mod mcp;
 pub mod repl;
 pub mod review;
+pub mod session;
 pub mod sexp;
 pub mod studio;
 pub mod toolchain;

@@ -49,7 +49,15 @@ How to work -- the author is waiting:
 entries. get_file reads a file as your pending proposals leave it; list_files names them.
 - Deterministic edits beat generated ones: when the compiler can write the code (match \
 clauses from a type, missing cases, stubs), call assists_at to see what applies at a point and \
-apply_assist to propose it, rather than writing it yourself. type_at says the type at a point.
+apply_assist to propose it, rather than writing it yourself. type_at says the type at a point; \
+facts_at says everything known there, layer by layer.
+- Observations are evidence from real runs: when the author's session observes, each function \
+records the shapes of the arguments it was called with (e.g. `(list add 3)`, `(adt Num)`, \
+`Int`), and facts_at reports them, with match patterns made from them. They are sampled (at \
+most 16 shapes a parameter) and say only what was seen so far, never what cannot occur; prefer \
+the checker's types where there are any. Assists with source `observed` are built from them \
+(cases a match has seen; `annotate` inserts (: f τ) from observed argument types). Say so when \
+your answer rests on them.
 - Change code only with propose_edit: `old` is an exact piece of the file's current text, \
 occurring once (include enough context), `new` its replacement; give a one-sentence `note`. \
 An empty `old` appends to the file (or makes a new file), when the scope allows it. Every \

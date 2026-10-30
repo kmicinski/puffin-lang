@@ -20,6 +20,7 @@
   --orange-tint: #fdf1e8;
   --violet: #6c71c4;
   --violet-tint: #f1f0fa;
+  --cyan: #2aa198;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
   --radius: 6px;
@@ -238,6 +239,12 @@ main { flex: 1; display: flex; min-height: 0; }
   color: var(--red);
   white-space: pre-wrap;
 }
+.entry .also { padding-left: 14px; color: var(--muted); font: italic 11.5px var(--sans); }
+.fix-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 0 14px; }
+button.fix-chip { height: 22px; font: 11.5px var(--sans); color: var(--green-dark); border-color: rgba(133, 153, 0, 0.5); }
+button.fix-chip::before { content: "▸"; color: var(--green); }
+button.fix-chip:hover:not(:disabled) { background: var(--green); border-color: var(--green); color: white; }
+button.fix-chip:hover:not(:disabled)::before { color: white; }
 .entry .error.interrupted { border-left-color: var(--orange); background: var(--orange-tint); color: var(--orange); }
 .entry.echo { margin-bottom: 4px; }
 .entry.echo .line { color: var(--muted); }
@@ -273,6 +280,52 @@ main { flex: 1; display: flex; min-height: 0; }
 .md .code-block:hover button.copy { opacity: 1; }
 .md table { border-collapse: collapse; font-size: 12px; }
 .md th, .md td { padding: 3px 9px; border: 1px solid var(--border); text-align: left; }
+
+/* ---- The session's marks in the gutter (session.js) --------------------------- */
+
+.session-glyph { display: flex; align-items: center; justify-content: center; }
+.session-glyph::before { content: ""; display: block; width: 6px; height: 6px; border-radius: 50%; }
+.session-glyph.current::before { background: var(--green); opacity: 0.55; }
+.session-glyph.stale::before, .session-glyph.redefined::before {
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--yellow);
+  background: transparent;
+  box-sizing: border-box;
+}
+.session-glyph.evaluated::before { width: 5px; height: 5px; background: var(--blue); opacity: 0.4; }
+
+/* ---- Facts (facts.js) ------------------------------------------------------- */
+
+#facts {
+  width: 300px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.facts-layer { padding: 6px 0 8px; border-top: 1px solid var(--border); }
+.facts-layer-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 3px; }
+.facts-layer-name { font-weight: 600; color: var(--strong); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.facts-source { color: var(--muted); font-size: 10.5px; }
+.facts-row { padding: 1px 0; overflow-wrap: anywhere; }
+.facts-row.settling { opacity: 0.45; }
+#facts code { font: 11.5px var(--mono); color: var(--strong); }
+.facts-mark { font-family: var(--mono); }
+.session-current .facts-mark { color: var(--green); }
+.session-stale .facts-mark, .session-redefined .facts-mark { color: var(--yellow); }
+.session-evaluated .facts-mark { color: var(--blue); }
+.session-absent { color: var(--muted); }
+.facts-diagnostic { padding: 1px 0; font-size: 11.5px; }
+.facts-diagnostic.error { color: var(--red); }
+.facts-diagnostic.warning { color: var(--yellow); }
+.facts-param { display: flex; gap: 8px; padding: 2px 0; }
+.facts-param-name { flex-shrink: 0; color: var(--cyan) !important; }
+.facts-shapes { display: flex; flex-wrap: wrap; gap: 3px 6px; min-width: 0; }
+.facts-shapes code { padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; background: white; }
+.facts-shapes code.pattern { border-color: rgba(42, 161, 152, 0.45); }
 
 /* ---- History --------------------------------------------------------------- */
 

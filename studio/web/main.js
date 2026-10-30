@@ -9,6 +9,8 @@ import { initAssist } from "./assist.js";
 import { createAssists } from "./assists.js";
 import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
+import { createSession } from "./session.js";
+import { createFacts } from "./facts.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -31,8 +33,17 @@ function note(message) {
   noticeTimer = setTimeout(() => { box.hidden = true; }, 5000);
 }
 
+// made once the files are: the editor's events may come first
+let session = null;
+let facts = null;
+
 const editor = await createEditor($("editor"), {
-  onChange: () => files.changed(),
+  onChange: () => {
+    files.changed();
+    session?.changed();
+    facts?.cursor();
+  },
+  onCursor: () => facts?.cursor(),
   onSave: save,
   onEvalForm: evalForm,
   onLoadFile: () => load(null),
@@ -46,17 +57,24 @@ const files = createFiles({
   onOpen(path) {
     transmit({ t: "focus", file: path });
     showDiagnostics();
+    session?.refresh();
+    facts?.cursor();
     proposals?.refresh();
     versions?.opened();
   },
-  onTexts: () => proposals?.refresh(),
+  onTexts: () => {
+    proposals?.refresh();
+    session?.changed();
+  },
 });
 // every message waits behind the edits already made, so it sees them
 const send = files.send;
 
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), toggle: $("history"), files, send });
-const assists = createAssists({ editor, files, send, note });
+session = createSession({ editor, files });
+facts = createFacts({ panel: $("facts"), toggle: $("facts-toggle"), editor, files, session, send });
+const assists = createAssists({ editor, files, send, note, facts: facts.ask });
 
 const repl = createRepl({
   transcript: $("transcript"),
@@ -65,6 +83,8 @@ const repl = createRepl({
   commands: {
     load,
     save,
+    evalAt: (file, line) => evalAt(file, { line }),
+    session: () => session.listing(),
     assist: (id, file, pos) => assists.run(id, file, pos),
   },
 });
@@ -89,23 +109,28 @@ function save() {
   send({ t: "save" });
 }
 
-// ⌘↵: the selection, else the top-level form at the cursor, in the session.
+// ⌘↵: the top-level form at the cursor, with the definitions it needs
+// that the session lacks (`,eval FILE:LINE`); a selection, as it is.
 function evalForm() {
   const file = files.active();
   if (!file) return;
   const text = editor.get();
   const { start, end } = editor.selection();
-  let from = start;
-  let to = end;
   if (start === end) {
     const form = formAt(forms(text), start) ?? forms(text).findLast((f) => f.end <= start);
     if (!form) return note("no form at the cursor");
-    from = form.start;
-    to = form.end;
+    return evalAt(file, { pos: form.start });
   }
-  const line = lineIndex(text)(from).line;
+  const line = lineIndex(text)(start).line;
   files.flush();
-  send({ t: "eval", text: text.slice(from, to), source: "buffer", file, line });
+  send({ t: "eval", text: text.slice(start, end), source: "buffer", file, line });
+}
+
+// The form of `file` at { pos } (a UTF-16 offset) or { line }.
+function evalAt(file, at) {
+  if (!files.paths().includes(file)) return note(`no file ${file}`);
+  files.flush();
+  send({ t: "eval-form", file, ...at });
 }
 
 // ⇧⌘↵ or ,load: a whole module, as one unit.
@@ -195,12 +220,15 @@ function renderLane(lane) {
   $("interrupt").disabled = lane.state !== "busy";
 }
 
-function renderFeatures({ assist: hasAssist, serve }) {
+function renderFeatures(features) {
+  const { assist: hasAssist, serve, observe } = features;
   assists.setAvailable(hasAssist);
+  facts.setFeatures(features);
   const pill = $("features");
   pill.textContent = hasAssist ? "assists ✓" : "assists unavailable";
   pill.className = `pill ${hasAssist ? "good" : "quiet"}`;
-  pill.title = `${hasAssist ? "puffincc --assist answers: ⌘. at a point, and the lightbulb" : "this puffincc has no --assist: checks are bytecode compiles, and assists wait for it"}\n${serve ? "puffin-vm --serve runs the live session" : "puffin-vm has no --serve: the session replays its units on each evaluation"}`;
+  pill.title = `${hasAssist ? "puffincc --assist answers: ⌘. at a point, and the lightbulb" : "this puffincc has no --assist: checks are bytecode compiles, and assists wait for it"}\n${serve ? "puffin-vm --serve runs the live session" : "puffin-vm has no --serve: the session replays its units on each evaluation"}\n${observe ? `the session observes calls (--repl --observe)${features.facts ? "; facts from puffincc --assist facts" : ""}` : "this puffincc cannot observe calls (--repl --observe): no observations"}`;
+  if (observe) pill.textContent += " · observing";
 }
 
 function renderConnection(on) {
@@ -221,6 +249,7 @@ const handlers = {
     proposals.update(snapshot.review);
     assist.receive.review(snapshot.review);
     repl.receive.init(snapshot);
+    session.receive.init(snapshot);
     showDiagnostics();
     renderLane(snapshot.lane);
     renderFeatures(snapshot.features);
@@ -236,7 +265,13 @@ const handlers = {
   diagnostics({ reports: latest }) {
     reports = latest;
     showDiagnostics();
+    facts.refresh();
   },
+  session(view) {
+    session.receive.session(view);
+    facts.refresh();
+  },
+  facts: facts.receive.facts,
   lane: renderLane,
   features: renderFeatures,
   entry: repl.receive.entry,

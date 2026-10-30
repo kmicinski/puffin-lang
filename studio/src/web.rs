@@ -9,7 +9,7 @@
 //! binds 127.0.0.1 only.
 
 use crate::ask::Context;
-use crate::repl::Source;
+use crate::repl::{At, Source};
 use crate::sexp;
 use crate::studio::{Refused, Studio};
 use axum::Router;
@@ -68,7 +68,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js",
+    "versions.js", "session.js", "facts.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -134,8 +134,8 @@ enum Request {
     NewFile { path: String },
     /// The tab shows `file`: check it if nothing is known of it.
     Focus { file: String },
-    /// Evaluate in the live session: `source` "prompt", "buffer" (a form of
-    /// `file` starting on `line`), or "file" (the whole module).
+    /// Evaluate in the live session: `source` "prompt", "buffer" (text of
+    /// `file` starting on `line`: a selection), or "file" (the whole module).
     Eval {
         text: String,
         source: String,
@@ -144,11 +144,29 @@ enum Request {
         #[serde(default)]
         line: Option<usize>,
     },
+    /// Evaluate the form of `file` at UTF-16 offset `pos` or on `line`,
+    /// with the definitions it needs (⌘↵, `,eval FILE:LINE`).
+    EvalForm {
+        file: String,
+        #[serde(default)]
+        pos: Option<usize>,
+        #[serde(default)]
+        line: Option<usize>,
+    },
     Interrupt,
     Reset,
     /// The assists at UTF-16 offset `pos` of `file`; answered with `seq`.
     Assists { seq: u64, file: String, pos: usize },
     TypeAt { seq: u64, file: String, pos: usize },
+    /// The facts at UTF-16 offset `pos` of `file`; `full` for the Facts
+    /// panel (every parameter's patterns), else for a hover.
+    Facts {
+        seq: u64,
+        file: String,
+        pos: usize,
+        #[serde(default)]
+        full: bool,
+    },
     /// A gesture's command, for the transcript.
     Echo { line: String },
     Ask {
@@ -180,6 +198,7 @@ enum Reply<'a> {
     Notice { message: &'a str },
     Assists { seq: u64, version: u64, assists: Value, error: Option<String> },
     Type { seq: u64, r#type: Value, error: Option<String> },
+    Facts { seq: u64, version: u64, facts: Value, error: Option<String> },
     Asked { thread: Option<u32>, message: &'a str, error: Option<String> },
     Versions { file: &'a str, versions: Vec<crate::versions::Version> },
     VersionText { id: u64, file: String, text: String },
@@ -300,7 +319,7 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
         }
         Request::Eval { text, source, file, line } => {
             let source = match (source.as_str(), file) {
-                ("buffer", Some(file)) => Source::Buffer { file, line: line.unwrap_or(1) },
+                ("buffer", Some(file)) => Source::buffer(file, line.unwrap_or(1)),
                 ("file", Some(file)) => Source::File { file },
                 _ => Source::Prompt,
             };
@@ -309,6 +328,16 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
                 _ => text,
             };
             tokio::spawn(async move { studio.evaluate(text, source).await });
+        }
+        Request::EvalForm { file, pos, line } => {
+            tokio::spawn(async move {
+                let text = studio.text_of(&file).unwrap_or_default();
+                let at = match (pos, line) {
+                    (Some(pos), _) => At::Pos(sexp::byte_of_utf16(&text, pos)),
+                    (None, line) => At::Line(line.unwrap_or(1)),
+                };
+                notice(&direct, studio.eval_form(&file, at).await);
+            });
         }
         Request::Interrupt => notice(&direct, studio.lane.interrupt()),
         Request::Reset => {
@@ -333,6 +362,19 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
                     Err(report) => (Value::Null, Some(report.describe())),
                 };
                 let _ = direct.send(json(&Reply::Type { seq, r#type: kind, error }));
+            });
+        }
+        Request::Facts { seq, file, pos, full } => {
+            tokio::spawn(async move {
+                let files = studio.files();
+                let version = studio.version_of(&file).unwrap_or(0);
+                let text = files.get(&file).cloned().unwrap_or_default();
+                let at = sexp::byte_of_utf16(&text, pos);
+                let (facts, error) = match studio.facts_at(&files, &file, at, full).await {
+                    Ok(facts) => (facts, None),
+                    Err(error) => (Value::Null, Some(error)),
+                };
+                let _ = direct.send(json(&Reply::Facts { seq, version, facts, error }));
             });
         }
         Request::Echo { line } => studio.echo(&line),

@@ -107,8 +107,10 @@ without a second round trip. It prints them as it finds them: a
 type error elsewhere in the file can stop the checker part way, and
 the assists already printed stand (the error text follows; a client
 ignores stdout lines that are not JSON). `source` says where the
-knowledge came from: `type` (the checker), `patterns` (other
-matches and quasiquote templates in the file), or `call-site`.
+knowledge came from: `type` (the checker), `observed` (the live
+session, §3.1), `patterns` (other matches and quasiquote templates in
+the file), `call-site`, or `syntax`. The studio lists them in that
+order.
 
 ### 2.2 `puffin-vm --serve`
 
@@ -357,7 +359,8 @@ transcripts can be goldens too.
   eval-from-buffer, ask mode, checked proposals, versions.
 - **M3.** Observations and flow shapes; assists 6 to 9. Built:
   observations, the observation lint, assists 6, 8 (ADTs), and 9
-  (observed). Not yet: flow shapes (layer 3, `aam.puf` with a shape
+  (observed); in the studio, session awareness, observed assists and
+  hovers, and the Facts panel. Not yet: flow shapes (layer 3, `aam.puf` with a shape
   domain), the fact store's dependency invalidation.
 - **M4.** Multi-module changesets, rewind, a co-author socket.
 
@@ -368,7 +371,8 @@ transcripts can be goldens too.
   `apply_assist`, `type_at`, `propose_edit` (an empty `old` appends
   or creates a file), `get_proposals`, `evaluate` (via `try`),
   `evaluate_program` (a throwaway VM, 10 s), `read_doc`, and
-  `search_docs`. `facts_at`, `propose_changes`, and an allowlisted
+  `search_docs`, and `facts_at` (the checker's type and the session's
+  observations at a point). `propose_changes` and an allowlisted
   `repl` read are not built.
 - **`evaluate` refuses effects outside the session**: `system`,
   `write-file`, stdin reads, and the FFI forms, since `try` can
@@ -380,6 +384,22 @@ transcripts can be goldens too.
   it changed; not yet the forms-keyed graph of §4.
 - **Before `--serve`** the live lane can replay `--session` with
   every unit so far (effects repeat). It is a fallback only.
+- **Session awareness** (`studio/src/session.rs`). The studio records,
+  per file, each top-level form the session loaded and the text it
+  was loaded with, keyed like `forms`. The gutter marks forms current,
+  stale (edited since loaded), redefined from the prompt, or an
+  evaluated expression (hover: its last result). ⌘↵ is `,eval
+  FILE:LINE` and is dependency-aware: it also loads, first, the
+  module's missing or stale definitions the form mentions,
+  transitively. An `X: undefined` error offers "Load X from FILE".
+  `,session` lists what is loaded.
+- **Observations.** While the session observes, every unit compiles
+  with `--observe`, the prompt's included. The record is refreshed by
+  a quiet `try` 300 ms after evaluations pause and passed as
+  `--observed`. A failing evaluation's observations are lost with its
+  fork; replay mode never refreshes.
+- **Facts panel and hover** both come from `facts`: one section per
+  layer (syntax, checker, session, observed), each labelled.
 - **Tokens.** The launch token is kept in `~/.puffin-studio/token`
   (mode 0600) so open tabs reconnect after a restart; `/mcp` has its
   own per-run bearer token.
