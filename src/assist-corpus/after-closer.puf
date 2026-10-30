@@ -1,0 +1,8 @@
+;; assist: assists @ "(match c))" +9
+;; the cursor just past a match's closer still means that match
+(define-type Color (Red) (Green) (Blue))
+
+(define (name [c : Color])
+  (match c))
+
+(name Red)

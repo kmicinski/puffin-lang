@@ -1,0 +1,11 @@
+;; assist: assists @ "a ??)" +2
+;; a typed hole as an argument: its goal is the operator's formal, and
+;; the locals that fit it are offered (exact types first)
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Add a b) (Add (simp a ??) b)]
+    [_ e]))
+
+(simp (Num 1) 3)

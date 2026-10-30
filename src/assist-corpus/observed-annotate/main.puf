@@ -1,0 +1,9 @@
+;; assist: assists @ "(define (scale" +1 observed=observed.sexp
+;; a define with no annotations: declare its type from the argument
+;; shapes observed (constructors resolve to their type)
+(define-type Shape (Circle Int) (Sq Int))
+
+(define (scale k s) s)
+
+(define (interp e env) 0)
+(define (area s) 0)

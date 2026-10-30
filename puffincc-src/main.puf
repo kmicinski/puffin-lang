@@ -194,8 +194,13 @@
 (define opt-repl-prelude #f)
 ;; editor assists (docs/STUDIO.md §2.1; assist.puf):
 ;;   --assist OP FILE [POS]   run one assist operation, print JSON
+;;   --observed FILE          the session's observations, for assists
+;;   --observe                (with --repl) top-level functions report
+;;                            their arguments to the session's observer
+;;                            (docs/STUDIO.md §3.1)
 (define opt-assist (ann #f _))
 (define opt-assist-args '())
+(define opt-observe #f)
 
 (: parse-args (-> (List Str) Void))
 (define (parse-args args)
@@ -229,6 +234,11 @@
      (begin (set! opt-repl #t) (parse-args (cdr args)))]
     [(string=? (car args) "--repl-prelude")
      (begin (set! opt-repl #t) (set! opt-repl-prelude #t) (parse-args (cdr args)))]
+    [(string=? (car args) "--observe")
+     (begin (set! opt-observe #t) (parse-args (cdr args)))]
+    [(string=? (car args) "--observed")
+     (begin (set! observed-file (flag-arg "--observed" (cdr args)))
+            (parse-args (cdr (cdr args))))]
     [(string=? (car args) "--assist")
      (begin (set! opt-assist (flag-arg "--assist" (cdr args)))
             (parse-args (cdr (cdr args))))]
@@ -348,7 +358,8 @@
           [origins (second fo)])
      (begin
        (when opt-target-flag (set! current-target opt-target-flag))
-       (let ([result (compile-forms forms origins)])
+       (let ([result (compile-forms (if (and opt-observe repl-mode) (observe-forms forms) forms)
+                                    origins)])
          (cond
            [(eq? result 'dumped) (void)]
            ;; bytecode: result is the .pbc byte string. write-file

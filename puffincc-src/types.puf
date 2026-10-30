@@ -445,7 +445,9 @@
      ;; dispatched as function index 0 = the program entry -- calling a
      ;; typo'd name re-entered main until the stack died.
      (define (lookup env x)
-       (let ([hit (assoc x env)])
+       ;; an editor assist checks programs with holes in them: ?? is
+       ;; _ while a probe is set (system.puf), unbound otherwise
+       (let ([hit (if (and probe-hook (eq? x '??)) (cons x '_) (assoc x env))])
          (if hit
              (cdr hit)
              (let ([tv (hash-ref/default top x #f)])

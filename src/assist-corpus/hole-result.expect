@@ -1,0 +1,100 @@
+== assists @ 354 (exit 0)
+== stdout
+{"id":"fill-hole","title":"Fill ?? with x : Expr  (goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"x"}]}
+{"id":"fill-hole","title":"Fill ?? with e : Expr  (goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"e"}]}
+{"id":"fill-hole","title":"Fill ?? with (simp ?? ??)  (recursion; goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"(simp ?? ??)"}]}
+{"id":"fill-hole","title":"Fill ?? with (Num ??)  (goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"(Num ??)"}]}
+{"id":"fill-hole","title":"Fill ?? with (Add ?? ??)  (goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"(Add ?? ??)"}]}
+{"id":"fill-hole","title":"Fill ?? with (Neg ??)  (goal Expr)","source":"type","edits":[{"start":354,"end":356,"text":"(Neg ??)"}]}
+{"done":true}
+== stderr
+== apply 1: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) x]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 0)
+{"ok":true}
+== apply 2: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) e]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 0)
+{"ok":true}
+== apply 3: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) (simp ?? ??)]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 1)
+error: typecheck: unbound variable ?? [hole-result.puf:7]
+== apply 4: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) (Num ??)]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 1)
+error: typecheck: unbound variable ?? [hole-result.puf:7]
+== apply 5: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) (Add ?? ??)]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 1)
+error: typecheck: unbound variable ?? [hole-result.puf:7]
+== apply 6: fill-hole
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) (Neg ??)]
+    [_ e]))
+
+(simp (Num 1) 3)
+== check (exit 1)
+error: typecheck: unbound variable ?? [hole-result.puf:7]

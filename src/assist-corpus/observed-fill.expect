@@ -1,0 +1,40 @@
+== assists @ 339 (exit 0)
+== stdout
+{"id":"fill-match","title":"Match on observed values: add, lam, Sym, Int, app (5 calls)","source":"observed","edits":[{"start":340,"end":340,"text":"\n    [`(add ,a ,b) (error \"TODO: add\")]\n    [`(lam ,a ,b) (error \"TODO: lam\")]\n    [(? symbol? x) (error \"TODO: Sym\")]\n    [(? fixnum? n) (error \"TODO: Int\")]\n    [`(app ,a ,b) (error \"TODO: app\")]"}]}
+{"id":"annotate","title":"Annotate interp from 5 observed calls: (-> _ (List _) _)","source":"observed","edits":[{"start":307,"end":307,"text":"(: interp (-> _ (List _) _))\n"}]}
+{"done":true}
+== stderr
+== apply 1: fill-match
+;; assist: assists @ "(match e))" +7 observed=observed.sexp
+;; untyped, and no other match to learn from: the cases come from the
+;; shapes `e` actually received in the live session (observed.sexp is
+;; a real record from puffin-vm --serve and studio/observe.puf)
+(define-type Shape (Circle Int) (Sq Int))
+
+(define (interp e env)
+  (match e
+    [`(add ,a ,b) (error "TODO: add")]
+    [`(lam ,a ,b) (error "TODO: lam")]
+    [(? symbol? x) (error "TODO: Sym")]
+    [(? fixnum? n) (error "TODO: Int")]
+    [`(app ,a ,b) (error "TODO: app")]))
+
+(define (area s) 0)
+(define (scale k s) s)
+== check (exit 0)
+{"ok":true}
+== apply 2: annotate
+;; assist: assists @ "(match e))" +7 observed=observed.sexp
+;; untyped, and no other match to learn from: the cases come from the
+;; shapes `e` actually received in the live session (observed.sexp is
+;; a real record from puffin-vm --serve and studio/observe.puf)
+(define-type Shape (Circle Int) (Sq Int))
+
+(: interp (-> _ (List _) _))
+(define (interp e env)
+  (match e))
+
+(define (area s) 0)
+(define (scale k s) s)
+== check (exit 0)
+{"ok":true}

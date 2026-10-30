@@ -1,0 +1,20 @@
+== assists @ 181 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on Color","source":"type","edits":[{"start":180,"end":180,"text":"\n    [Red (error \"TODO: Red\")]\n    [Green (error \"TODO: Green\")]\n    [Blue (error \"TODO: Blue\")]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Color is not exhaustive: missing Red, Green, Blue [after-closer.puf:5]
+== apply 1: fill-match
+;; assist: assists @ "(match c))" +9
+;; the cursor just past a match's closer still means that match
+(define-type Color (Red) (Green) (Blue))
+
+(define (name [c : Color])
+  (match c
+    [Red (error "TODO: Red")]
+    [Green (error "TODO: Green")]
+    [Blue (error "TODO: Blue")]))
+
+(name Red)
+== check (exit 0)
+{"ok":true}

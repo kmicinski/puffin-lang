@@ -25,8 +25,10 @@ for working on it:
   offers, and re-checks the result (`gen` writes the `.expect`
   transcripts — read them before committing). The span reader they
   stand on is held to the compiler's reader by
-  `tools/test-syntax.sh`. Run both after touching the reader, the
-  checker, or assist.puf.
+  `tools/test-syntax.sh`, and session observations (`--repl
+  --observe` with `studio/observe.puf`) by `tools/test-observe.sh`.
+  Run all three after touching the reader, the checker, or
+  assist.puf.
 - If `puffincc-src` outgrows the committed seed (a new language
   feature the seed can't compile), refresh the seed first
   (`bin/refresh-boot` from a commit that can compile the tree; see

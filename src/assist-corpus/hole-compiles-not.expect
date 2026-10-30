@@ -1,0 +1,4 @@
+== check (exit 1)
+== stdout
+error: typecheck: unbound variable ?? [hole-compiles-not.puf:4]
+== stderr

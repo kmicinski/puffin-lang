@@ -1,0 +1,6 @@
+;; assist: facts @ "(match e" +7 observed=observed.sexp
+;; facts at a parameter reference: the checker's type and what the
+;; session saw
+(define (interp e env)
+  (match e
+    [_ 0]))

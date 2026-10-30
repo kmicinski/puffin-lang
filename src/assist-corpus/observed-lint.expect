@@ -1,0 +1,6 @@
+== lint (exit 0)
+== stdout
+{"start":237,"end":289,"line":7,"source":"observed","message":"e was seen as lam, Sym, app in this session, and no clause matches it"}
+{"start":311,"end":341,"line":12,"source":"observed","message":"s was seen as Circle in this session, and no clause matches it"}
+{"done":true}
+== stderr

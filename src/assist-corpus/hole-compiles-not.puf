@@ -1,0 +1,5 @@
+;; assist: check
+;; outside assists a hole is an unbound name: a program with one
+;; does not compile
+(define (f [x : Int]) : Int (+ x ??))
+(f 1)

@@ -1,0 +1,4 @@
+== facts @ 170 (exit 0)
+== stdout
+{"type":"_","observed":{"function":"interp","param":"e","index":0,"calls":5,"shapes":["(list add 3)","(list lam 3)","(sym x)","Int","(list app 3)"],"patterns":["`(add ,a ,b)","`(lam ,a ,b)","(? symbol? x)","(? fixnum? n)","`(app ,a ,b)"]}}
+== stderr

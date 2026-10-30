@@ -1,0 +1,17 @@
+;; assist: lint observed=observed.sexp
+;; matches with no catch-all whose parameter the session saw take a
+;; shape no clause handles; a match with a catch-all is quiet
+(define-type Shape (Circle Int) (Sq Int))
+
+(define (interp e env)
+  (match e
+    [`(add ,a ,b) 0]
+    [(? fixnum? n) n]))
+
+(define (area s)
+  (match s
+    [(Sq k) (* k k)]))
+
+(define (scale k s)
+  (match s
+    [_ s]))

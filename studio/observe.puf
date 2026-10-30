@@ -1,0 +1,94 @@
+;; Puffin Studio's observer (docs/STUDIO.md §3, layer 4): the session
+;; runtime that `puffincc --repl --observe` units report to. The
+;; studio loads it once, right after the prelude.
+;;
+;; An observed function calls (#%observe 'f (list a b ...)) on entry.
+;; For each function the observer keeps a call count and, per
+;; argument, the distinct SHAPES of the values it received (at most
+;; observe-limit each, first seen first). A shape is depth one:
+;;
+;;   Int Str Bool Void Nil Vec Hash Set Proc Pair Other
+;;   (sym S)          the symbol S
+;;   (list H N)       a proper list headed by the symbol H, N long
+;;                    (N is #f past observe-scan elements)
+;;   (adt C)          an instance of constructor C
+;;
+;; (#%observations) is the whole record, for `try` to print:
+;;   ((f CALLS ((shape ...) (shape ...) ...)) ...)
+
+(define observe-limit 16)
+(define observe-scan 16)
+
+;; name -> (mutable vector: calls, then one shape list per argument)
+(define #%observed (make-hash))
+
+(define (#%observe name args)
+  (let ([rec (if (hash-has-key? #%observed name)
+                 (hash-ref #%observed name)
+                 (let ([v (make-vector (+ 1 (length args)))])
+                   (vector-set! v 0 0)
+                   (let loop ([i 1])
+                     (when (< i (vector-length v))
+                       (vector-set! v i '())
+                       (loop (+ i 1))))
+                   (hash-set! #%observed name v)
+                   v))])
+    (vector-set! rec 0 (+ 1 (vector-ref rec 0)))
+    (let loop ([as args] [i 1])
+      (when (and (pair? as) (< i (vector-length rec)))
+        (let ([seen (vector-ref rec i)]
+              [s (#%shape (car as))])
+          (when (and (not (member s seen)) (< (length seen) observe-limit))
+            (vector-set! rec i (append seen (list s)))))
+        (loop (cdr as) (+ i 1))))))
+
+;; a proper list's length, or #f past observe-scan pairs (so a long
+;; list costs a bounded walk)
+(define (#%bounded-length v)
+  (let loop ([v v] [n 0])
+    (cond [(null? v) n]
+          [(not (pair? v)) 'improper]
+          [(< observe-scan n) #f]
+          [else (loop (cdr v) (+ n 1))])))
+
+;; the constructor of an ADT instance, from its printed form:
+;; "(Some 1)" -> Some, "None" -> None
+(define (#%adt-head v)
+  (let ([s (value->string v)])
+    (if (eq? (string-byte s 0) 40)
+        (let loop ([i 1])
+          (if (or (eq? i (string-length s))
+                  (eq? (string-byte s i) 32)
+                  (eq? (string-byte s i) 41))
+              (string->symbol (substring s 1 i))
+              (loop (+ i 1))))
+        (string->symbol s))))
+
+(define (#%shape v)
+  (cond [(fixnum? v) 'Int]
+        [(string? v) 'Str]
+        [(boolean? v) 'Bool]
+        [(void? v) 'Void]
+        [(null? v) 'Nil]
+        [(symbol? v) (list 'sym v)]
+        [(adt? v) (list 'adt (#%adt-head v))]
+        [(pair? v)
+         (let ([n (#%bounded-length v)])
+           (if (and (symbol? (car v)) (not (eq? n 'improper)))
+               (list 'list (car v) n)
+               'Pair))]
+        [(vector? v) 'Vec]
+        [(hash? v) 'Hash]
+        [(set? v) 'Set]
+        [(procedure? v) 'Proc]
+        [else 'Other]))
+
+(define (#%observations)
+  (map (lambda (name)
+         (let ([rec (hash-ref #%observed name)])
+           (list name (vector-ref rec 0)
+                 (let loop ([i 1] [acc '()])
+                   (if (< i (vector-length rec))
+                       (loop (+ i 1) (cons (vector-ref rec i) acc))
+                       (reverse acc))))))
+       (hash-keys #%observed)))

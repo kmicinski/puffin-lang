@@ -1,0 +1,12 @@
+;; assist: assists @ "(match e" +7 observed=observed.sexp
+;; observed shapes the match already handles are not offered again;
+;; a quasiquote pattern the file already uses is copied verbatim
+(define (interp e env)
+  (match e
+    [`(add ,l ,r) (+ (interp l env) (interp r env))]
+    [(? symbol? v) (cdr (assoc v env))]))
+
+(define (show e)
+  (match e
+    [`(lam (,x) ,body) (list 'fun x (show body))]
+    [_ e]))

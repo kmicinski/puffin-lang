@@ -1,0 +1,40 @@
+== assists @ 223 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add observed cases: lam, Int, app (5 calls)","source":"observed","edits":[{"start":317,"end":317,"text":"\n    [`(lam (,x) ,body) (error \"TODO: lam\")]\n    [(? fixnum? n) (error \"TODO: Int\")]\n    [`(app ,a ,b) (error \"TODO: app\")]"}]}
+{"id":"annotate","title":"Annotate interp from 5 observed calls: (-> _ (List _) _)","source":"observed","edits":[{"start":191,"end":191,"text":"(: interp (-> _ (List _) _))\n"}]}
+{"done":true}
+== stderr
+== apply 1: add-missing-cases
+;; assist: assists @ "(match e" +7 observed=observed.sexp
+;; observed shapes the match already handles are not offered again;
+;; a quasiquote pattern the file already uses is copied verbatim
+(define (interp e env)
+  (match e
+    [`(add ,l ,r) (+ (interp l env) (interp r env))]
+    [(? symbol? v) (cdr (assoc v env))]
+    [`(lam (,x) ,body) (error "TODO: lam")]
+    [(? fixnum? n) (error "TODO: Int")]
+    [`(app ,a ,b) (error "TODO: app")]))
+
+(define (show e)
+  (match e
+    [`(lam (,x) ,body) (list 'fun x (show body))]
+    [_ e]))
+== check (exit 0)
+{"ok":true}
+== apply 2: annotate
+;; assist: assists @ "(match e" +7 observed=observed.sexp
+;; observed shapes the match already handles are not offered again;
+;; a quasiquote pattern the file already uses is copied verbatim
+(: interp (-> _ (List _) _))
+(define (interp e env)
+  (match e
+    [`(add ,l ,r) (+ (interp l env) (interp r env))]
+    [(? symbol? v) (cdr (assoc v env))]))
+
+(define (show e)
+  (match e
+    [`(lam (,x) ,body) (list 'fun x (show body))]
+    [_ e]))
+== check (exit 0)
+{"ok":true}

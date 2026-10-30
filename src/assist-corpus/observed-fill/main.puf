@@ -1,0 +1,11 @@
+;; assist: assists @ "(match e))" +7 observed=observed.sexp
+;; untyped, and no other match to learn from: the cases come from the
+;; shapes `e` actually received in the live session (observed.sexp is
+;; a real record from puffin-vm --serve and studio/observe.puf)
+(define-type Shape (Circle Int) (Sq Int))
+
+(define (interp e env)
+  (match e))
+
+(define (area s) 0)
+(define (scale k s) s)

@@ -1,0 +1,12 @@
+;; assist: assists @ "x) ??]" +3
+;; a hole in tail position: its goal is the function's declared
+;; result, reached through the match clause; locals of that type,
+;; the recursive call, and the type's constructors are offered
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+
+(define (simp [e : Expr] [depth : Int]) : Expr
+  (match e
+    [(Neg x) ??]
+    [_ e]))
+
+(simp (Num 1) 3)

@@ -1,16 +1,18 @@
 # Puffin Studio: a REPL you co-develop a program with
 
-Status, 2026-10-29: the design of record, M0-M2 built. Run it with
-`bin/puffin-studio [PROJECT_DIR]` (default port 7360; it prints the
-URL to open; `studio/demo/` is a short tour). Built: the span reader
-(`puffincc-src/syntax.puf`); `puffincc --assist` with `check`,
-`forms`, `type-at`, and assists 1 to 5 and 7 (`assist.puf`); the
-assist corpus; `puffin-vm --serve`; the Emacs commands
-`puffin-assist` (C-c C-a) and `puffin-type-at-point` (C-c C-t); and
-the studio itself (`studio/`, Rust + vanilla JS): editor with
-structured editing, live checks, the assist menu, the live REPL
-lane, ask mode with checked proposals, and per-file versions. §9
-lists where the studio differs from this design.
+Status, 2026-10-29: the design of record, M0-M2 built and M3
+under way. Run it with `bin/puffin-studio [PROJECT_DIR]` (default
+port 7360; it prints the URL to open; `studio/demo/` is a short
+tour). Built: the span reader (`puffincc-src/syntax.puf`);
+`puffincc --assist` with `check`, `forms`, `type-at`, `facts`,
+`lint`, and assists 1 to 9 (`assist.puf`; 7 for layers 1 and 4);
+`--repl --observe` and the session observer (§3.1); the assist
+corpus; `puffin-vm --serve`; the Emacs commands `puffin-assist`
+(C-c C-a) and `puffin-type-at-point` (C-c C-t); and the studio
+(`studio/`, Rust + vanilla JS): editor with structured editing, live
+checks, the assist menu, the live REPL lane, ask mode with checked
+proposals, and per-file versions. §9 lists where the studio differs
+from this design.
 
 Puffin Studio replaces the console REPL (`src/repl.rkt`, the Racket
 interpreter loop) with a local web workbench: an editor over the
@@ -196,6 +198,49 @@ the server can query. That touches `--repl` compilation, which both
 compiler sources implement identically, so the Racket side moves in
 lockstep.
 
+### 3.1 Observations (layer 4)
+
+`puffincc --repl --observe IN -o OUT` compiles a REPL unit whose
+top-level fixed-arity function defines report their arguments on
+entry: `(define (f a b) body ...)` runs `(#%observe 'f (list a b))`
+first. The observer (`studio/observe.puf`, loaded once right after
+the prelude) keeps, per function, a call count and per argument the
+distinct depth-one shapes it received (at most 16):
+
+```
+Int Str Bool Void Nil Vec Hash Set Proc Pair Other
+(sym S)        the symbol S
+(list H N)     a proper list headed by the symbol H, N long (#f: long)
+(adt C)        an instance of constructor C
+```
+
+`try` of a unit holding `(#%observations)` prints the whole record
+as one result, `((f CALLS ((shape ...) ...)) ...)`. The studio keeps
+it in a file and passes `--observed FILE` to `puffincc --assist`, so
+the compiler, not the client, turns shapes into code:
+
+```
+puffincc --assist assists FILE POS --observed OBS
+  -> also fill-match / add-missing-cases with "source":"observed"
+     (cases from the shapes a parameter received), and
+     "annotate" (insert (: f τ) from the observed argument types)
+puffincc --assist lint FILE --observed OBS
+  -> one JSON object per line, then {"done":true}: each match with no
+     catch-all clause whose parameter the session saw take a shape no
+     clause handles -- {"start","end","line","source":"observed",
+     "message":"e was seen as lam, Sym in this session, and no clause
+     matches it"}
+puffincc --assist facts FILE POS [--observed OBS]
+  -> {"type":"Expr"|null,
+      "observed":null | {"function":"f","param":"e","index":0,
+                         "calls":12,"shapes":["(list add 3)", ...],
+                         "patterns":["`(add ,a ,b)", ...]}}
+```
+
+Observing costs a shape computation per call (a list walk is
+bounded at 16 elements), and observed calls are not tail calls of
+the observer, but the function body keeps its own tail position.
+
 ## 4. Edits
 
 There is one edit representation for people, assists, and the
@@ -240,7 +285,14 @@ an assistant tool. In planned order:
    body is a match with recursive calls placed on recursive fields.
 5. **Stub an unbound function** from a call site, with its arity and
    argument names taken from the call.
-6. **Typed holes.** The goal type and the in-scope names that fit it.
+6. **Typed holes.** `??` marks a missing expression. Built: at a
+   hole, the goal type comes from where it sits (an operator's
+   formal, or the function's declared result through tail
+   positions), and the assist offers the locals that fit it (exact
+   types first), the recursive call when the goal is the function's
+   own result, and, for an ADT goal, each constructor applied to new
+   holes. Outside assists `??` is an unbound name, so a program with
+   a hole does not compile.
 7. **Matches for untyped data**, from quasiquote patterns already
    used on the same value (layer 1), flow shapes (layer 3), and
    observed values (layer 4), each labelled with its source. Built
@@ -251,8 +303,12 @@ an assistant tool. In planned order:
    binder names and ellipses survive.
 8. **Identity traversal.** For an ADT or a family of quasiquote
    patterns, the pass that rebuilds every case unchanged, ready to
-   change one.
-9. **Insert `(: f τ)`** from synthesized or observed types.
+   change one. Built for ADTs (`traversal`, offered in a define-type
+   next to the template).
+9. **Insert `(: f τ)`** from synthesized or observed types. Built
+   from observations (`annotate`): each argument's type is the one
+   all its observed shapes share (constructors resolve to their
+   type), else `_`; the result stays `_`.
 10. **Pin a transcript entry as a test.**
 11. **Promote an s-expression language to a `define-type`** inferred
     from its quasiquote patterns.
@@ -299,7 +355,10 @@ transcripts can be goldens too.
 - **M1.** Assists 1 to 5, usable headless and from `puffin-mode.el`.
 - **M2.** The server and web client: live transcript,
   eval-from-buffer, ask mode, checked proposals, versions.
-- **M3.** Observations and flow shapes; assists 6 to 9.
+- **M3.** Observations and flow shapes; assists 6 to 9. Built:
+  observations, the observation lint, assists 6, 8 (ADTs), and 9
+  (observed). Not yet: flow shapes (layer 3, `aam.puf` with a shape
+  domain), the fact store's dependency invalidation.
 - **M4.** Multi-module changesets, rewind, a co-author socket.
 
 ## 9. Where the built studio differs
