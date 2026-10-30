@@ -1,0 +1,8 @@
+;; assist: assists @ "(+ (ev a env)" +0 select=25
+;; extracting a recursive call: the function's own name is global, so
+;; it is not a parameter of the extracted function
+(define (ev e env)
+  (match e
+    [`(add ,a ,b) (+ (ev a env) (ev b env))]
+    [_ 0]))
+(ev '(add 1 2) '())

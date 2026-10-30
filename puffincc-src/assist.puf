@@ -514,6 +514,16 @@
                        (and k (cons k (car (lst-kids cl)))))))
               (cdr (cdr (lst-kids m)))))
 
+;; the pattern for the shape a quasiquote template builds
+(define (template-pattern n)
+  (let ([t (fifth n)])
+    ;; `(neg ,x) is already a pattern; `(* ,(f a) ,b) is not
+    (or (and (general-qq? (syn->datum n)) (node-text n))
+        (shape-pattern (list 'list (head-sym t)
+                             (if (lst-tail t) #f (length (lst-kids t))))
+                       '())
+        (node-text n))))
+
 ;; quasiquote templates the file BUILDS, outside match patterns:
 ;; `(add ,a ,b) offers the case `(add ,a ,b)
 (define (constructed-cases)
@@ -575,7 +585,12 @@
       (when (and (pair? os) (< n 3))
         (let* ([o (car os)]
                [labels (map (lambda (kc) (case-key-label (car kc))) (cdr o))]
-               [texts (map (lambda (kc) (pattern-clause open (node-text (cdr kc)) (case-key-label (car kc))))
+               ;; another match's pattern is copied verbatim; a template
+               ;; the file builds is code, not a pattern: render its shape
+               [texts (map (lambda (kc)
+                             (pattern-clause open
+                                             (if (car o) (node-text (cdr kc)) (template-pattern (cdr kc)))
+                                             (case-key-label (car kc))))
                            (cdr o))])
           (emit-assist (if (null? my-keys) "fill-match" "add-missing-cases")
                        (str-cat (cond [(not (car o)) "Match the shapes this file builds: "]
@@ -651,9 +666,28 @@
        [`(,lam ,ps ,body ...) #:when (member lam '(lambda λ)) (append (formal-names ps) (body-defines body))]
        [`(let ,name (,bs ...) ,_ ...) #:when (symbol? name) (cons name (binding-names bs))]
        [`(,l (,bs ...) ,_ ...) #:when (member l '(let let* letrec)) (binding-names bs)]
-       [`(match ,_ ,cls ...) (append-map (lambda (cl) (if (pair? cl) (symbols-of (car cl)) '())) cls)]
+       [`(match ,_ ,cls ...) (append-map (lambda (cl) (if (pair? cl) (pattern-vars-of (car cl)) '())) cls)]
        [_ '()]))
    path))
+;; the names a match pattern binds: plain binders, constructor and
+;; list/cons/vector arguments, a ?-pattern's subpattern, a quasiquote
+;; pattern's unquotes -- not literal heads, quoted data, or the
+;; quasiquote/unquote markers themselves
+(define (pattern-vars-of d)
+  (match d
+    [(? symbol? x) (if (or (eq? x '_) (ctor-by-source x)) '() (list x))]
+    [(list 'quote _) '()]
+    [(list 'quasiquote t) (qq-vars-of t)]
+    [(cons '? (cons _ rest)) (append-map pattern-vars-of rest)]
+    [(cons h args) #:when (member h '(list cons vector)) (append-map pattern-vars-of args)]
+    [(cons h args) #:when (and (symbol? h) (ctor-by-source h)) (append-map pattern-vars-of args)]
+    [_ '()]))
+(define (qq-vars-of t)
+  (match t
+    [(list 'unquote p) (pattern-vars-of p)]
+    [(cons a b) (append (qq-vars-of a) (qq-vars-of b))]
+    [_ '()]))
+
 (define (formal-names ps)
   (cond [(symbol? ps) (list ps)]
         [(pair? ps) (cons (match (car ps) [`(,x : ,_) x] [x x]) (formal-names (cdr ps)))]
@@ -1219,7 +1253,10 @@
       (let* ([path (path-to n)]
              [top (top-of path)])
         (unless (or (eq? n top) (binder-position? path))
-          (let* ([around (local-binders (cdr path))]
+          (let* ([tops (map atom-datum (append-map top-binders entry-nodes))]
+                 ;; a function's own name (a recursive call) is global,
+                 ;; not a free local
+                 [around (filter (lambda (x) (not (member x tops))) (local-binders (cdr path)))]
                  [mentioned (dedupe-by (lambda (x) x) (symbols-of (syn->datum n)))]
                  [free (filter (lambda (x) (member x around)) mentioned)]
                  [name (fresh-top-name "extracted")]

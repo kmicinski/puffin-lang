@@ -1,0 +1,10 @@
+;; assist: assists @ "(match e))" +3
+;; a template the file builds is code, not a pattern: the offered
+;; case is its shape -- `(* ,a ,b), not `(* ,(simplify x) ,(simplify x))
+(define (simplify e)
+  (match e
+    [`(+ ,a ,b) `(+ ,(simplify a) ,(simplify b))]
+    [_ e]))
+(define (build x) `(* ,(simplify x) ,(simplify x)))
+(define (size e)
+  (match e))
