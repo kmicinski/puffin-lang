@@ -17,6 +17,7 @@
 //   facts(file, pos, full)   the studio's facts at a point (facts.js)
 
 import { LINT_SOURCE } from "./lint.js";
+import { enclosing, parse } from "./sexp.js";
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -63,6 +64,14 @@ export function createAssists({ editor, files, send, note, facts }) {
       return { error: "the text changed while the compiler looked; try again", assists: [] };
     }
     return reply;
+  }
+
+  // The clause patterns the match at UTF-16 offset `pos` still lacks
+  // (`--assist complete`): [{ pattern, clause, source }], or [].
+  async function complete(file, pos) {
+    const reply = await request({ t: "complete", file, pos });
+    if (reply.version !== files.version(file) || !files.synced(file)) return [];
+    return reply.candidates ?? [];
   }
 
   // ⌘.: the menu at the cursor.
@@ -195,6 +204,60 @@ export function createAssists({ editor, files, send, note, facts }) {
         return { actions, dispose() {} };
       },
     });
+    // Completing a match clause: at a clause's pattern (typing `[` or `(`
+    // there, or M-/), the patterns the analysis says the match still
+    // lacks -- the type's constructors not yet covered, the shapes the
+    // session saw, the shapes the file's call sites pass. Each inserts
+    // the pattern and leaves the cursor at the body.
+    monaco.languages.registerCompletionItemProvider("puffin", {
+      triggerCharacters: ["[", "("],
+      async provideCompletionItems(model, position) {
+        const file = editor.keyOf(model);
+        if (!available || !file || file !== files.active()) return { suggestions: [] };
+        const text = model.getValue();
+        const pos = model.getOffsetAt(position);
+        const slot = clauseSlot(text, pos);
+        if (!slot) return { suggestions: [] };
+        const version = model.getVersionId();
+        const found = await complete(file, pos);
+        if (model.getVersionId() !== version) return { suggestions: [] };
+        const seen = new Set();
+        const range = monaco.Range.fromPositions(model.getPositionAt(slot.start), model.getPositionAt(slot.end));
+        const suggestions = [];
+        for (const { pattern, clause, source } of found) {
+          if (seen.has(pattern)) continue;
+          seen.add(pattern);
+          const text = slot.inClause ? `${pattern} $0` : `${clause[0]}${pattern} $0${clause.at(-1)}`;
+          suggestions.push({
+            label: pattern,
+            kind: monaco.languages.CompletionItemKind.EnumMember,
+            detail: badge(source),
+            documentation: `a case the match still lacks · ${SOURCE_NOTE[source] ?? source}`,
+            insertText: text,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            filterText: pattern,
+            sortText: String(suggestions.length).padStart(3, "0"),
+            range,
+          });
+        }
+        return { suggestions };
+      },
+    });
+    // Paredit inserts a typed bracket itself (paredit.js), so Monaco sees
+    // no trigger character: a bracket that opens a clause asks here.
+    monacoEditor.onDidChangeModelContent((event) => {
+      if (event.isUndoing || event.isRedoing || event.changes.length !== 1) return;
+      const { range, text } = event.changes[0];
+      if (!["[", "[]", "(", "()"].includes(text)) return;
+      const model = monacoEditor.getModel();
+      const file = editor.keyOf(model);
+      if (!available || !file || file !== files.active()) return;
+      const inside = model.getOffsetAt(range.getStartPosition()) + 1;
+      if (!clauseSlot(model.getValue(), inside)?.inClause) return;
+      setTimeout(() => {
+        if (model.getOffsetAt(monacoEditor.getPosition()) === inside) monacoEditor.trigger("puffin", "editor.action.triggerSuggest", {});
+      }, 0);
+    });
     monaco.languages.registerHoverProvider("puffin", {
       async provideHover(model, position) {
         const file = editor.keyOf(model);
@@ -215,10 +278,15 @@ export function createAssists({ editor, files, send, note, facts }) {
     open,
     run,
     at,
+    complete,
     setAvailable(on) { available = on; },
     receive: {
       assists(reply) {
         waiting.get(reply.seq)?.({ ...reply, error: reply.error ?? null });
+        waiting.delete(reply.seq);
+      },
+      completions(reply) {
+        waiting.get(reply.seq)?.(reply);
         waiting.delete(reply.seq);
       },
       type(reply) {
@@ -227,6 +295,33 @@ export function createAssists({ editor, files, send, note, facts }) {
       },
     },
   };
+}
+
+const SOURCE_NOTE = {
+  type: "the scrutinee's type, from the checker",
+  observed: "a shape this session's runs passed",
+  "call-site": "a shape a call in this file passes",
+};
+
+// Where a clause pattern would go at `pos`, or null: inside a clause of a
+// match, at or in its first element (`inClause`: the pattern alone goes
+// there, replacing [start, end)); or directly in a match after its
+// scrutinee, where a whole clause goes.
+export function clauseSlot(text, pos) {
+  const root = parse(text);
+  const list = enclosing(root, pos);
+  const isMatch = (node) => node.kind === "list" && node.children[0]?.kind === "word" && text.slice(node.children[0].start, node.children[0].end) === "match";
+  if (isMatch(list)) {
+    const scrutinee = list.children[1];
+    return scrutinee && pos > scrutinee.end ? { start: pos, end: pos, inClause: false } : null;
+  }
+  const match = list.parent;
+  if (!match || !isMatch(match) || match.children.indexOf(list) < 2) return null;
+  const first = list.children.find((child) => child.kind !== "comment");
+  if (first && pos > first.end) return null;
+  const start = list.start + 1;
+  const end = first && pos >= first.start ? first.end : pos;
+  return { start, end: Math.max(end, pos), inClause: true };
 }
 
 // The command applying `assist` in `file` is: `,assist ID FILE:POS`, with

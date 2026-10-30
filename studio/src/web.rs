@@ -162,6 +162,13 @@ enum Request {
         #[serde(default)]
         end: Option<usize>,
     },
+    /// The clause patterns the match at UTF-16 offset `pos` of `file`
+    /// still lacks (`--assist complete`); answered with `seq`.
+    Complete {
+        seq: u64,
+        file: String,
+        pos: usize,
+    },
     /// Rename the name at UTF-16 offset `pos` of `file` to `name`.
     Rename { seq: u64, file: String, pos: usize, name: String },
     TypeAt { seq: u64, file: String, pos: usize },
@@ -208,6 +215,8 @@ enum Reply<'a> {
     Gone { file: &'a str },
     Notice { message: &'a str },
     Assists { seq: u64, version: u64, assists: Value, error: Option<String> },
+    /// Each { pattern, clause, source } the match still lacks.
+    Completions { seq: u64, version: u64, candidates: Value, error: Option<String> },
     Type { seq: u64, r#type: Value, error: Option<String> },
     Facts { seq: u64, version: u64, facts: Value, error: Option<String> },
     /// A rename's edits (UTF-16 offsets), for `version` of the file, from
@@ -318,6 +327,19 @@ async fn assists_at(studio: &Studio, file: &str, pos: usize, end: Option<usize>)
     }
 }
 
+/// The clause patterns the match at UTF-16 offset `pos` of `file` still
+/// lacks, from the type, the session and the call sites.
+async fn completions_at(studio: &Studio, file: &str, pos: usize) -> (u64, Value, Option<String>) {
+    let files = studio.files();
+    let version = studio.version_of(file).unwrap_or(0);
+    let Some(text) = files.get(file) else { return (version, json!([]), Some(format!("no file {file}"))) };
+    let at = sexp::byte_of_utf16(text, pos);
+    match studio.toolchain.assist_with(&files, "complete", file, vec![at.to_string()]).await {
+        Ok(answer) => (version, answer["candidates"].clone(), None),
+        Err(report) => (version, json!([]), Some(report.describe())),
+    }
+}
+
 /// When the name at byte `pos` of `file` is one it defines at the top
 /// level, and other modules that require it mention that name: which, as a
 /// rename edits only `file`.
@@ -411,6 +433,12 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
             tokio::spawn(async move {
                 let (version, assists, error) = assists_at(&studio, &file, pos, end).await;
                 let _ = direct.send(json(&Reply::Assists { seq, version, assists, error }));
+            });
+        }
+        Request::Complete { seq, file, pos } => {
+            tokio::spawn(async move {
+                let (version, candidates, error) = completions_at(&studio, &file, pos).await;
+                let _ = direct.send(json(&Reply::Completions { seq, version, candidates, error }));
             });
         }
         Request::Rename { seq, file, pos, name } => {

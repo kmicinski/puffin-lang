@@ -1,6 +1,6 @@
 ;; assist: assists @ "(match e" +7 observed=observed.sexp
 ;; observed shapes the match already handles are not offered again;
-;; a quasiquote pattern the file already uses is copied verbatim
+;; the new cases' binders are made up, never copied from other matches
 (define (interp e env)
   (match e
     [`(add ,l ,r) (+ (interp l env) (interp r env))]

@@ -17,6 +17,9 @@
 ;;                      then {"done":true}. A type error elsewhere in
 ;;                      the file can stop the checker part way: the
 ;;                      assists already printed stand.
+;;   complete FILE POS  the clause patterns the match at POS still lacks,
+;;                      one a line {"pattern":..,"clause":..,"source":..},
+;;                      then {"done":true} (op-complete)
 ;;
 ;; Types at a point come from a probe: the target's text is wrapped in
 ;; (#%probe ...), the program is checked, and the checker reports the
@@ -234,10 +237,43 @@
   (json-obj (list (cons "start" (json-int start)) (cons "end" (json-int end))
                   (cons "text" (json-str text)))))
 
+;; `--assist complete` (op-complete) runs the match assists for their
+;; clauses alone: emit-assist then prints each clause of a fill-match
+;; or add-missing-cases as a completion candidate, one a line --
+;;   {"pattern": "(Num n)", "clause": "[(Num n) ...]", "source": "type"}
+;; -- and nothing else. insert-clauses-edit leaves the clause texts in
+;; last-clauses for it.
+(define completing #f)
+(define last-clauses (ann '() _))
+
 (define (emit-assist id title source edits)
-  (println (json-obj (list (cons "id" (json-str id)) (cons "title" (json-str title))
-                           (cons "source" (json-str source))
-                           (cons "edits" (json-list edits))))))
+  (if completing
+      (when (or (string=? id "fill-match") (string=? id "add-missing-cases"))
+        (let loop ([cs last-clauses])
+          (when (pair? cs)
+            (println (json-obj (list (cons "pattern" (json-str (clause-pattern (car cs))))
+                                     (cons "clause" (json-str (car cs)))
+                                     (cons "source" (json-str source)))))
+            (loop (cdr cs)))))
+      (println (json-obj (list (cons "id" (json-str id)) (cons "title" (json-str title))
+                               (cons "source" (json-str source))
+                               (cons "edits" (json-list edits)))))))
+
+;; the pattern of a clause text "[PAT BODY]" or "(PAT BODY)": its
+;; first element, a bracketed form or a bare word
+(define (clause-pattern c)
+  (let loop ([i 1] [depth 0] [in-str #f])
+    (let ([b (string-byte c i)])
+      (cond [(and in-str (eq? b 92)) (loop (+ i 2) depth #t)]
+            [in-str (loop (+ i 1) depth (not (eq? b 34)))]
+            [(eq? b 34) (loop (+ i 1) depth #t)]
+            [(or (eq? b 40) (eq? b 91)) (loop (+ i 1) (+ depth 1) #f)]
+            [(or (eq? b 41) (eq? b 93))
+             (cond [(eq? depth 1) (substring c 1 (+ i 1))]
+                   [(eq? depth 0) (substring c 1 i)]
+                   [else (loop (+ i 1) (- depth 1) #f)])]
+            [(and (eq? b 32) (eq? depth 0)) (substring c 1 i)]
+            [else (loop (+ i 1) depth #f)]))))
 
 (define (lower-initial s)
   (let ([b (string-byte s 0)])
@@ -318,7 +354,13 @@
           (list (syn-end lastc) (col-of (syn-start (car clauses)))
                 (if (lst? (car clauses)) (lst-open (car clauses)) 91))))))
 
+;; the clause the cursor is in while completing it: not yet a case
+(define completing-clause (ann #f _))
+(define (match-clauses m)
+  (filter (lambda (cl) (not (eq? cl completing-clause))) (cdr (cdr (lst-kids m)))))
+
 (define (insert-clauses-edit m clause-texts)
+  (set! last-clauses clause-texts)
   (let* ([ins (clause-insertion m)]
          [indent (spaces (second ins))])
     (edit (first ins) (first ins)
@@ -355,7 +397,7 @@
 ;; cover; 'all when a clause can't be proven partial (mirrors
 ;; check-match-exhaustiveness in types.puf)
 (define (covered-ctors m owner)
-  (let loop ([cls (cdr (cdr (lst-kids m)))] [acc '()])
+  (let loop ([cls (match-clauses m)] [acc '()])
     (if (null? cls)
         (reverse acc)
         (let* ([cl (car cls)]
@@ -484,7 +526,12 @@
         [(pair? d) (append (symbols-of (car d)) (symbols-of (cdr d)))]
         [else '()]))
 
-;; ---- assist: cases from patterns already in the file (untyped data) -------------
+;; ---- clause keys and texts for untyped data -----------------------------------
+
+;; Cases for a match on untyped data come from analysis alone: the
+;; shapes the session observed and the shapes the file's own call
+;; sites pass (shape-match-assist). Nothing is borrowed from other
+;; matches or templates in the file.
 
 ;; a clause pattern's family key: what shape of value it recognizes,
 ;; independent of binder names; #f for binders, wildcards, literals,
@@ -499,116 +546,8 @@
     [(cons 'list (cons (list 'quote h) _)) #:when (symbol? h) (str-cat "qq:" (symbol->string h))]
     [_ #f]))
 
-;; every match node in the file, with its enclosing top-level form
-(define (all-matches)
-  (append-map (lambda (top) (map (lambda (m) (cons m top)) (matches-in top))) entry-nodes))
-(define (matches-in n)
-  (let ([inner (append-map matches-in (syn-kids n))])
-    (if (eq? (head-sym n) 'match) (cons n inner) inner)))
-
-;; a match's recognized cases: ((key . pattern-node) ...)
-(define (match-cases m)
-  (filter-map (lambda (cl)
-                (and (lst? cl) (pair? (lst-kids cl))
-                     (let ([k (pattern-key (syn->datum (car (lst-kids cl))))])
-                       (and k (cons k (car (lst-kids cl)))))))
-              (cdr (cdr (lst-kids m)))))
-
-;; the pattern for the shape a quasiquote template builds
-(define (template-pattern n)
-  (let ([t (fifth n)])
-    ;; `(neg ,x) is already a pattern; `(* ,(f a) ,b) is not
-    (or (and (general-qq? (syn->datum n)) (node-text n))
-        (shape-pattern (list 'list (head-sym t)
-                             (if (lst-tail t) #f (length (lst-kids t))))
-                       '())
-        (node-text n))))
-
-;; quasiquote templates the file BUILDS, outside match patterns:
-;; `(add ,a ,b) offers the case `(add ,a ,b)
-(define (constructed-cases)
-  (let walk ([ns entry-nodes] [acc '()])
-    (if (null? ns)
-        acc
-        (let ([n (car ns)])
-          (cond
-            [(eq? (head-sym n) 'match)
-             ;; the scrutinee, and each clause's guard and body -- not its pattern
-             (walk (append (list (car (cdr (lst-kids n))))
-                           (append (append-map (lambda (cl) (if (and (lst? cl) (pair? (lst-kids cl))) (cdr (lst-kids cl)) '()))
-                                               (cdr (cdr (lst-kids n))))
-                                   (cdr ns)))
-                   acc)]
-            [(and (eq? (car n) 'sugar) (eq? (fourth n) 'quasiquote))
-             (let ([k (pattern-key (syn->datum n))])
-               (walk (cdr ns) (if (and k (not (assoc k acc))) (cons (cons k n) acc) acc)))]
-            [(eq? (car n) 'sugar) (walk (cdr ns) acc)]
-            [else (walk (append (syn-kids n) (cdr ns)) acc)])))))
-
-(define (top-name top)
-  (match (syn->datum top)
-    [`(define (,f . ,_) ,_ ...) (symbol->string f)]
-    [`(define ,x ,_ ...) (value->string x)]
-    [_ "a top-level expression"]))
-
-(define (case-key-label k)   ;; "qq:add" -> "add"
-  (substring k (+ 1 (index-of-colon k)) (string-length k)))
-(define (index-of-colon k)
-  (let loop ([i 0]) (if (eq? (string-byte k i) 58) i (loop (+ i 1)))))
-
 (define (pattern-clause open pat-text label)
   (str-cat (if (eq? open 91) "[" "(") pat-text " (error \"TODO: " label "\")" (if (eq? open 91) "]" ")")))
-
-(define (pattern-assists m)
-  (let* ([mine (match-cases m)]
-         [my-keys (map car mine)]
-         [open (third (clause-insertion m))]
-         [families
-          (filter (lambda (f) (pair? (cdr f)))
-                  (map (lambda (mt) (cons (top-name (cdr mt)) (match-cases (car mt))))
-                       (filter (lambda (mt) (not (eq? (car mt) m))) (all-matches))))]
-         [built (constructed-cases)]
-         [families (if (pair? built) (append families (list (cons #f built))) families)]
-         ;; a family is relevant when it shares a case with this match
-         ;; (or this match has none yet); offer what it adds
-         [offers
-          (filter-map
-           (lambda (f)
-             (let ([new (filter (lambda (kc) (not (member (car kc) my-keys))) (cdr f))])
-               (and (pair? new)
-                    (or (null? my-keys) (ormap (lambda (kc) (member (car kc) my-keys)) (cdr f)))
-                    (cons (car f) new))))
-           families)]
-         ;; one offer per distinct set of new cases, the largest first
-         [offers (dedupe-offers (sort offers (lambda (a b) (> (length (cdr a)) (length (cdr b))))))])
-    (let loop ([os offers] [n 0])
-      (when (and (pair? os) (< n 3))
-        (let* ([o (car os)]
-               [labels (map (lambda (kc) (case-key-label (car kc))) (cdr o))]
-               ;; another match's pattern is copied verbatim; a template
-               ;; the file builds is code, not a pattern: render its shape
-               [texts (map (lambda (kc)
-                             (pattern-clause open
-                                             (if (car o) (node-text (cdr kc)) (template-pattern (cdr kc)))
-                                             (case-key-label (car kc))))
-                           (cdr o))])
-          (emit-assist (if (null? my-keys) "fill-match" "add-missing-cases")
-                       (str-cat (cond [(not (car o)) "Match the shapes this file builds: "]
-                                      [(null? my-keys) (str-cat "Match like " (str-cat (car o) ": "))]
-                                      [else (str-cat "Add cases from " (str-cat (car o) ": "))])
-                                (string-join labels ", "))
-                       "patterns"
-                       (list (insert-clauses-edit m texts)))
-          (loop (cdr os) (+ n 1)))))))
-
-(define (dedupe-offers os)
-  (let loop ([os os] [seen '()] [acc '()])
-    (if (null? os)
-        (reverse acc)
-        (let ([ks (sort (map car (cdr (car os))) string<?)])
-          (if (member ks seen)
-              (loop (cdr os) seen acc)
-              (loop (cdr os) (cons ks seen) (cons (car os) acc)))))))
 
 ;; ---- assist: structural-recursion template for a define-type ---------------------
 
@@ -828,7 +767,7 @@
                               (str-cat "ctor:" (symbol->string (car d)))]
                              [(and (symbol? d) (ctor-by-source d)) (str-cat "ctor:" (symbol->string d))]
                              [else #f]))))
-              (cdr (cdr (lst-kids m)))))
+              (match-clauses m)))
 
 ;; the first element of xs for each key
 (define (dedupe-by key xs)
@@ -839,9 +778,8 @@
 
 (define binder-letters '("a" "b" "c" "d" "e" "f" "g" "h"))
 
-;; the pattern text for a shape: a quasiquote pattern the file
-;; already uses for the same head is copied verbatim (its binder
-;; names are the author's); else binders are made up
+;; the pattern text for a shape, with made-up binders: (list add 3)
+;; gives `(add ,a ,b)
 (define (shape-pattern s avoid)
   (match s
     ['Int "(? fixnum? n)"] ['Str "(? string? s)"] ['Bool "(? boolean? b)"]
@@ -849,17 +787,12 @@
     ['Nil "'()"] ['Pair "(cons hd tl)"]
     [(list 'sym _) "(? symbol? x)"]
     [(list 'list h n)
-     (let ([known (findf (lambda (kc) (and (string=? (car kc) (str-cat "qq:" (symbol->string h)))
-                                           (general-qq? (syn->datum (cdr kc)))))
-                         (append-map (lambda (mt) (match-cases (car mt))) (all-matches)))])
-       (cond
-         [known (node-text (cdr known))]
-         [(eq? n #f) (str-cat "`(" (symbol->string h) " ,xs ...)")]
-         [else
-          (let ([names (filter (lambda (x) (not (member x avoid))) binder-letters)])
-            (str-cat "`(" (symbol->string h)
-                     (string-concat (map (lambda (x) (str-cat " ," x)) (take names (min (- n 1) (length names)))))
-                     ")"))]))]
+     (if (eq? n #f)
+         (str-cat "`(" (symbol->string h) " ,xs ...)")
+         (let ([names (filter (lambda (x) (not (member x avoid))) binder-letters)])
+           (str-cat "`(" (symbol->string h)
+                    (string-concat (map (lambda (x) (str-cat " ," x)) (take names (min (- n 1) (length names)))))
+                    ")")))]
     [(list 'adt c)
      (let ([k (ctor-by-source c)])
        (cond [(not k) #f]
@@ -867,25 +800,6 @@
              [else (str-cat "(" (symbol->string c) " "
                             (string-join (field-names (ctor-fields (hash-ref (ctors) k)) adt-name? avoid) " ")
                             ")")]))]
-    [_ #f]))
-
-;; a quasiquote pattern that matches every list with its head and
-;; shape: past the head, only unquoted binders, ellipses, and nested
-;; lists of the same -- `(add ,a ,b) is general, `(add 0 ,b) is not
-(define (general-qq? d)
-  (match d
-    [(list 'quasiquote (cons h rest)) (and (symbol? h) (general-qq-elems? rest))]
-    [_ #f]))
-(define (general-qq-elems? xs)
-  (cond [(null? xs) #t]
-        [(not (pair? xs)) #f]
-        [else (and (general-qq-elem? (car xs)) (general-qq-elems? (cdr xs)))]))
-(define (general-qq-elem? x)
-  (match x
-    [(list 'unquote v) (symbol? v)]
-    [(list 'unquote-splicing v) (symbol? v)]
-    ['... #t]
-    [(? pair? _) (general-qq-elems? x)]
     [_ #f]))
 
 (define (shape-label s)
@@ -1627,10 +1541,37 @@
           (let ([scrut (car (cdr (lst-kids m)))])
             (run-probe (syn-start scrut) (syn-end scrut)
                        (lambda (t env)
-                         (if (adt-of t)
-                             (begin (match-assists m path t)
-                                    (when cl (case-split-assist m cl path t)))
-                             (pattern-assists m)))
+                         (when (adt-of t)
+                           (match-assists m path t)
+                           (when cl (case-split-assist m cl path t))))
+                       load-entry assemble)))))
+    (println (json-obj (list (cons "done" "true"))))))
+
+;; ---- complete: the clause patterns missing at a position -----------------------
+
+;; `--assist complete FILE POS`: the cursor is in a match, writing a
+;; clause. One line per pattern the analysis says the match still
+;; lacks -- the scrutinee's type (its constructors not yet covered),
+;; what the session observed, what the file's call sites pass -- then
+;; {"done":true}. The clause the cursor is in is the one being
+;; written, so it does not count as covered, whatever it holds so far.
+(define (op-complete pos load-entry assemble)
+  (let* ([path (assist-path pos)]
+         [fo (load-entry entry-path)]
+         [prog (assemble (first fo) (second fo))]
+         [forms (match prog [`(program ,fs ...) fs])])
+    (set! adt-tables (collect-adts forms))
+    (set! completing #t)
+    (when (pair? path)
+      (let* ([m (findf (lambda (n) (eq? (head-sym n) 'match)) path)]
+             [cl (and m (findf (lambda (n) (memq-node n (cdr (cdr (lst-kids m))))) path))])
+        (set! completing-clause cl)
+        (when (and m (pair? (cdr (lst-kids m))))
+          (observed-match-assist m path)
+          (call-site-match-assist m path)
+          (let ([scrut (car (cdr (lst-kids m)))])
+            (run-probe (syn-start scrut) (syn-end scrut)
+                       (lambda (t env) (when (adt-of t) (match-assists m path t)))
                        load-entry assemble)))))
     (println (json-obj (list (cons "done" "true"))))))
 
@@ -1711,6 +1652,11 @@
     (lint-with (observed-of-in observed-record) "observed" " was seen as " " in this session")
     (lint-with (observed-of-in (call-site-record)) "call-site" " is passed " " at a call site in this file")
     (println (json-obj (list (cons "done" "true"))))))
+
+;; every match node inside n, outermost first
+(define (matches-in n)
+  (let ([inner (append-map matches-in (syn-kids n))])
+    (if (eq? (head-sym n) 'match) (cons n inner) inner)))
 
 (define (lint-with lookup source verb where)
   (begin
@@ -2061,6 +2007,7 @@
       [(string=? op "forms") (op-forms)]
       [(and (string=? op "type-at") pos) (op-type-at pos load-entry assemble)]
       [(and (string=? op "assists") pos) (op-assists pos end load-entry assemble)]
+      [(and (string=? op "complete") pos) (op-complete pos load-entry assemble)]
       [(and (string=? op "facts") pos) (op-facts pos load-entry assemble)]
       [(string=? op "lint") (op-lint load-entry assemble)]
       [(and (string=? op "rename") pos (pair? (cdr args)))

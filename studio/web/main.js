@@ -369,6 +369,7 @@ const handlers = {
     assist.receive.review(view);
   },
   assists: assists.receive.assists,
+  completions: assists.receive.completions,
   type: assists.receive.type,
   versions: versions.receive.versions,
   "version-text": versions.receive["version-text"],

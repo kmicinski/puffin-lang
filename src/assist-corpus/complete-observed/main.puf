@@ -1,0 +1,11 @@
+;; assist: complete @ "[]))" +1 observed=observed.sexp
+;; completing a clause of an untyped match: the shapes the session saw
+;; e take that no clause handles yet (observed.sexp is the record), and
+;; the shapes the file's own calls pass; the empty clause at the cursor
+;; is the one being written
+(define (interp e env)
+  (match e
+    [(? fixnum? n) n]
+    []))
+
+(println (interp '(add 1 2) '()))

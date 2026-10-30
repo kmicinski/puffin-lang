@@ -1,0 +1,9 @@
+== complete @ 359 (exit 1)
+== stdout
+{"pattern":"`(add ,a ,b)","clause":"[`(add ,a ,b) (error \"TODO: add\")]","source":"observed"}
+{"pattern":"`(lam ,a ,b)","clause":"[`(lam ,a ,b) (error \"TODO: lam\")]","source":"observed"}
+{"pattern":"(? symbol? x)","clause":"[(? symbol? x) (error \"TODO: Sym\")]","source":"observed"}
+{"pattern":"`(app ,a ,b)","clause":"[`(app ,a ,b) (error \"TODO: app\")]","source":"observed"}
+{"pattern":"`(add ,a ,b)","clause":"[`(add ,a ,b) (error \"TODO: add\")]","source":"call-site"}
+error: match-failure
+== stderr

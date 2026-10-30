@@ -1,0 +1,16 @@
+;; assist: complete @ "[(Nu) 0]" +3
+;; completing a clause of a typed match: the constructors the match
+;; does not cover yet, one a line; the clause being written, whatever
+;; it holds so far, does not count as a case
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [(Num n) 1]
+    [(Nu) 0]))
+
+(println (size (Num 3)))

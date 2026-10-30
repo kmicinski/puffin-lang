@@ -548,10 +548,10 @@ impl Toolchain {
         let mut args = vec!["--assist".to_owned(), op.to_owned(), file.to_owned()];
         args.extend(extra);
         // what the session saw, for the ops that read it
-        if matches!(op, "assists" | "facts" | "lint") {
+        if matches!(op, "assists" | "complete" | "facts" | "lint") {
             let record = self.observed.lock().expect("observed lock").clone().filter(|path| path.is_file());
             match record {
-                Some(record) if op == "facts" || (op == "assists" && self.observed_flag_available().await) || op == "lint" => {
+                Some(record) if op == "facts" || (matches!(op, "assists" | "complete") && self.observed_flag_available().await) || op == "lint" => {
                     args.extend(["--observed".to_owned(), record.to_string_lossy().into_owned()]);
                 }
                 // nothing seen: nothing to lint
@@ -583,6 +583,16 @@ impl Toolchain {
             }
             let stopped = (!done).then(|| stopped.describe());
             return Ok(serde_json::json!({ "assists": assists, "complete": done, "stopped": stopped }));
+        }
+        if op == "complete" {
+            // one candidate clause a line, then {"done":true}; the ones
+            // printed before a checker error stand
+            let (candidates, done) = json_lines(&output.stdout, "pattern");
+            if candidates.is_empty() && !done {
+                let resolve = |base: &str| resolve(files, file, base);
+                return Err(Report { ok: false, diagnostics: diagnostics(false, &output.stdout, &output.stderr, &resolve) });
+            }
+            return Ok(serde_json::json!({ "candidates": candidates, "complete": done }));
         }
         if !output.success {
             let resolve = |base: &str| resolve(files, file, base);

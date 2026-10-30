@@ -5,7 +5,7 @@
 // entry is main.puf. The entry's first line says what to run:
 //
 //   ;; assist: OP                        (check, forms)
-//   ;; assist: OP @ "NEEDLE" [+K]        (type-at, assists, facts):
+//   ;; assist: OP @ "NEEDLE" [+K]        (type-at, assists, facts, complete):
 //                                        the cursor is K bytes past
 //                                        the first NEEDLE after line 1
 //   ... [select=N]                       a selection: END is POS+N

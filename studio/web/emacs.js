@@ -9,6 +9,7 @@
 //   C-x C-x exchange point and mark   C-x h select all
 //   C-d  M-d  M-Backspace  C-k  C-w  M-w  C-y  M-y  C-t  M-u M-l
 //   C-/ C-_ C-x u undo   C-s C-r find   M-% replace   C-x C-s save
+//   M-/ complete (a match clause's missing patterns)
 // C-M-f, C-M-b, C-M-u, C-M-d, C-M-n are paredit.js's expression motions.
 // Every kill also goes to the system clipboard.
 //
@@ -224,6 +225,8 @@ export function bindEmacs(monaco, editor, { onSave }) {
     Comma: (event) => (event.shiftKey ? goTo(0) : null),
     Period: (event) => (event.shiftKey ? goTo(text().length) : null),
     Digit5: (event) => (event.shiftKey ? editor.getAction("editor.action.startFindReplaceAction")?.run() : null),
+    // M-/: complete here (a match clause's missing patterns, assists.js)
+    Slash: () => editor.trigger("emacs", "editor.action.triggerSuggest", null),
   };
   const afterX = {
     KeyS: (event) => (event.ctrlKey ? onSave?.() : null),

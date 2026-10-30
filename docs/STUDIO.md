@@ -108,9 +108,23 @@ type error elsewhere in the file can stop the checker part way, and
 the assists already printed stand (the error text follows; a client
 ignores stdout lines that are not JSON). `source` says where the
 knowledge came from: `type` (the checker), `observed` (the live
-session, §3.1), `patterns` (other matches and quasiquote templates in
-the file), `call-site`, or `syntax`. The studio lists them in that
-order.
+session, §3.1), `call-site` (the file's own literal calls, §3), or
+`syntax`. The studio lists them in that order. Every source is an
+analysis of the program or its runs; nothing is copied from other
+matches or templates in the file.
+
+```
+puffincc --assist complete FILE POS [--observed OBS]
+  -> one JSON object per line, each a clause pattern the match at
+     POS still lacks, from the same sources as its match assists:
+     {"pattern":"(Add e1 e2)","clause":"[(Add e1 e2) ...]","source":"type"}
+     ...
+     {"done":true}
+```
+
+`complete` is the match assists reduced to their clauses, for the
+editor's completion while a clause is being typed: the clause the
+cursor is in does not count as a case, whatever it holds so far.
 
 ### 2.2 `puffin-vm --serve`
 
@@ -314,14 +328,12 @@ an assistant tool. In planned order:
    own result, and, for an ADT goal, each constructor applied to new
    holes. Outside assists `??` is an unbound name, so a program with
    a hole does not compile.
-7. **Matches for untyped data**, from quasiquote patterns already
-   used on the same value (layer 1), flow shapes (layer 3), and
-   observed values (layer 4), each labelled with its source. Built
-   for layer 1: a match whose scrutinee is not an ADT is offered the
-   cases of the file's other matches that share a case with it (or
-   all of them, when it is empty), and the shapes of the quasiquote
-   templates the file builds. Clause patterns are copied verbatim, so
-   binder names and ellipses survive.
+7. **Matches for untyped data**, from flow shapes (layer 3) and
+   observed values (layer 4), each labelled with its source. Built:
+   call-site shapes (layer 3's first cut) and observations. Cases
+   are never borrowed from other matches or templates in the file:
+   a suggested case is always one the analysis says the value can
+   take. Binder names are made up (`` `(add ,a ,b) ``).
 8. **Identity traversal.** For an ADT or a family of quasiquote
    patterns, the pass that rebuilds every case unchanged, ready to
    change one. Built for ADTs (`traversal`, offered in a define-type
@@ -517,6 +529,12 @@ transcripts can be goldens too.
   `http://127.0.0.1:7360` as it is; the WebSocket admits same-origin
   pages only, which keeps other sites out. `/mcp` has a per-run
   bearer token that only the assistant's process is given.
+- **Completion in a match** (`--assist complete`; `assists.js`
+  `clauseSlot`): typing `[` or `(` at a clause's pattern, or `M-/`,
+  lists the patterns the match still lacks, each with its source;
+  accepting one inserts the pattern and leaves the cursor at the
+  body. The clause under the cursor is the one being written, so a
+  half-typed `(Nu` does not hide `(Num n)`.
 - **Emacs keys** (`studio/web/emacs.js`): motion, mark, a kill ring
   in which consecutive kills join and `M-y` cycles, `C-x C-s`, undo,
   find. `C-k` is paredit-kill (`sexp.js` `kill`): the rest of the
