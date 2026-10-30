@@ -1,0 +1,6 @@
+;; a nullary constructor is declared (Int), though referenced bare:
+;; the bare declaration is a diagnostic, not a crash in pass 2
+(define-type Expr
+  Int
+  (Plus Int Int))
+(println (Plus 1 2))

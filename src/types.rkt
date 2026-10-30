@@ -146,6 +146,14 @@
       [`(,(or 'define-type '#%extern-type) ,head ,cs ...)
        (define n (match head [`(,n ,_ ...) n] [n n]))
        (define a (hash-ref adts n))
+       ;; every constructor is (Name field-type ...): a bare Name is the
+       ;; mistake the reference syntax (None, not (None)) invites
+       (for ([c cs])
+         (match c
+           [`(,(? symbol?) ,_ ...) (void)]
+           [(? symbol? s)
+            (type-error "define-type ~a: constructor ~a is declared (~a), referenced bare" (nm n) (nm s) (nm s))]
+           [_ (type-error "define-type ~a: malformed constructor, expected (Name field-type ...)" (nm n))]))
        (hash-set! ctor-orders n (map car cs))
        (for ([c cs])
          (match c

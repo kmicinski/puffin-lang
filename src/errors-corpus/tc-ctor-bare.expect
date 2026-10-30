@@ -1,0 +1,1 @@
+error: typecheck: define-type Expr: constructor Int is declared (Int), referenced bare [tc-ctor-bare.puf:3]

@@ -131,6 +131,18 @@
        [`(define-type ,head ,cs ...)
         (let ([n (match head [`(,n ,_ ...) n] [n n])])
           (let ([ps (hash-ref adts n)])
+            ;; every constructor is (Name field-type ...): a bare Name is the
+            ;; mistake the reference syntax (None, not (None)) invites
+            (for-each
+             (lambda (c)
+               (match c
+                 [`(,cn ,_ ...) #:when (symbol? cn) (void)]
+                 [(? symbol? s)
+                  (type-error (format "define-type ~a: constructor ~a is declared (~a), referenced bare"
+                                      (nm n) (nm s) (nm s)))]
+                 [_ (type-error (format "define-type ~a: malformed constructor, expected (Name field-type ...)"
+                                        (nm n)))]))
+             cs)
             (hash-set! ctor-orders n (map (lambda (c) (car c)) cs))
             (for-each
              (lambda (c)

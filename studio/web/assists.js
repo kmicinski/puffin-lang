@@ -227,7 +227,7 @@ export function createAssists({ editor, files, send, note, facts }) {
         for (const { pattern, clause, source } of found) {
           if (seen.has(pattern)) continue;
           seen.add(pattern);
-          const text = slot.inClause ? `${pattern} $0` : `${clause[0]}${pattern} $0${clause.at(-1)}`;
+          const text = slot.inClause ? `${pattern} $0` : `${slot.touching ? " " : ""}${clause[0]}${pattern} $0${clause.at(-1)}`;
           suggestions.push({
             label: pattern,
             kind: monaco.languages.CompletionItemKind.EnumMember,
@@ -242,6 +242,51 @@ export function createAssists({ editor, files, send, note, facts }) {
         }
         return { suggestions };
       },
+    });
+    // The rest of the match, before it is written: where a whole clause
+    // could go (a fresh line in a match, or right after its scrutinee or
+    // last clause) every clause the analysis says is still missing is
+    // shown as ghost text with ?? for its body. Tab takes them all;
+    // typing on, or Escape, declines; typing `[` narrows to the list.
+    monaco.languages.registerInlineCompletionsProvider("puffin", {
+      async provideInlineCompletions(model, position) {
+        const file = editor.keyOf(model);
+        if (!available || !file || file !== files.active()) return { items: [] };
+        const text = model.getValue();
+        const pos = model.getOffsetAt(position);
+        const where = restSlot(text, pos);
+        if (!where) return { items: [] };
+        const version = model.getVersionId();
+        const found = await complete(file, pos);
+        if (model.getVersionId() !== version) return { items: [] };
+        const seen = new Set();
+        const clauses = [];
+        for (const { pattern, clause } of found) {
+          if (seen.has(pattern)) continue;
+          seen.add(pattern);
+          clauses.push(`${clause[0]}${pattern} ??${clause.at(-1)}`);
+        }
+        if (!clauses.length) return { items: [] };
+        const indent = " ".repeat(where.indent);
+        const insertText = (where.newline ? `\n${indent}` : "") + clauses.join(`\n${indent}`);
+        return { items: [{ insertText, range: monaco.Range.fromPositions(position, position) }] };
+      },
+      freeInlineCompletions() {},
+    });
+    // Monaco asks for ghost text as one types; arriving at such a place by
+    // cursor alone asks too, once the cursor rests.
+    let resting = null;
+    monacoEditor.onDidChangeCursorPosition((event) => {
+      clearTimeout(resting);
+      if (event.reason !== monaco.editor.CursorChangeReason.Explicit) return;
+      const model = monacoEditor.getModel();
+      const file = editor.keyOf(model);
+      if (!available || !file || file !== files.active()) return;
+      const pos = model.getOffsetAt(event.position);
+      if (!restSlot(model.getValue(), pos)) return;
+      resting = setTimeout(() => {
+        if (model.getOffsetAt(monacoEditor.getPosition()) === pos) monacoEditor.trigger("puffin", "editor.action.inlineSuggest.trigger", {});
+      }, 250);
     });
     // Paredit inserts a typed bracket itself (paredit.js), so Monaco sees
     // no trigger character: a bracket that opens a clause asks here.
@@ -306,14 +351,15 @@ const SOURCE_NOTE = {
 // Where a clause pattern would go at `pos`, or null: inside a clause of a
 // match, at or in its first element (`inClause`: the pattern alone goes
 // there, replacing [start, end)); or directly in a match after its
-// scrutinee, where a whole clause goes.
+// scrutinee, where a whole clause goes (`touching`: right after it,
+// with no space yet).
 export function clauseSlot(text, pos) {
   const root = parse(text);
   const list = enclosing(root, pos);
   const isMatch = (node) => node.kind === "list" && node.children[0]?.kind === "word" && text.slice(node.children[0].start, node.children[0].end) === "match";
   if (isMatch(list)) {
     const scrutinee = list.children[1];
-    return scrutinee && pos > scrutinee.end ? { start: pos, end: pos, inClause: false } : null;
+    return scrutinee && pos >= scrutinee.end ? { start: pos, end: pos, inClause: false, match: list, touching: pos === scrutinee.end } : null;
   }
   const match = list.parent;
   if (!match || !isMatch(match) || match.children.indexOf(list) < 2) return null;
@@ -322,6 +368,24 @@ export function clauseSlot(text, pos) {
   const start = list.start + 1;
   const end = first && pos >= first.start ? first.end : pos;
   return { start, end: Math.max(end, pos), inClause: true };
+}
+
+// Where the rest of a match could be shown at `pos`, or null: a whole-
+// clause slot with nothing but closing brackets after it on the line.
+// `indent` is the column the clauses go at; `newline` says they start
+// on a new line (the cursor is after the scrutinee or a clause, not on
+// a line of its own).
+export function restSlot(text, pos) {
+  const slot = clauseSlot(text, pos);
+  if (!slot || slot.inClause) return null;
+  const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
+  const lineEnd = text.indexOf("\n", pos);
+  if (!/^[ \t\])]*$/.test(text.slice(pos, lineEnd < 0 ? text.length : lineEnd))) return null;
+  if (/^[ \t]*$/.test(text.slice(lineStart, pos))) return { indent: pos - lineStart, newline: false };
+  const column = (at) => at - (text.lastIndexOf("\n", at - 1) + 1);
+  const before = slot.match.children.filter((child) => child.kind !== "comment" && child.end <= pos);
+  const indent = before.length > 2 ? column(before.at(-1).start) : column(slot.match.start) + 2;
+  return { indent, newline: true };
 }
 
 // The command applying `assist` in `file` is: `,assist ID FILE:POS`, with

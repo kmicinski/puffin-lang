@@ -535,6 +535,17 @@ transcripts can be goldens too.
   accepting one inserts the pattern and leaves the cursor at the
   body. The clause under the cursor is the one being written, so a
   half-typed `(Nu` does not hide `(Num n)`.
+- **The rest of a match, before it is written** (`assists.js`
+  `restSlot`, Monaco's inline completions): where a whole clause
+  could go -- right after `(match e`, on the fresh line after Enter
+  there, after the last clause -- every clause the match still lacks
+  is shown as ghost text, one a line at the right indentation, its
+  body a `??` hole. Tab takes them all (the holes then count at the
+  top right and `F8` walks them); typing on or Escape declines;
+  typing `[` narrows to the list above. Same sources as `complete`.
+  A bare constructor in a `define-type` (`Int` for `(Int)`) used to
+  crash both checkers in pass 2 before any of this could run; it is
+  a diagnostic now (`tc-ctor-bare` in the errors corpus).
 - **Emacs keys** (`studio/web/emacs.js`): motion, mark, a kill ring
   in which consecutive kills join and `M-y` cycles, `C-x C-s`, undo,
   find. `C-k` is paredit-kill (`sexp.js` `kill`): the rest of the

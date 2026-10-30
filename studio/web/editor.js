@@ -145,6 +145,8 @@ function register(monaco) {
       // info marks only the observation lint: cyan, as observed things are
       "editorInfo.foreground": `#${SOL.cyan}`,
       "editorHint.foreground": `#${SOL.magenta}`,
+      // the rest of a match, shown before it is written (assists.js)
+      "editorGhostText.foreground": `#${SOL.base1}`,
     },
   });
 }
@@ -160,6 +162,8 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     minimap: { enabled: false },
     folding: false,
     quickSuggestions: false,
+    // ghost text: the rest of a match (assists.js); Tab takes it
+    inlineSuggest: { enabled: true, showToolbar: "never" },
     scrollBeyondLastLine: false,
     fontFamily: "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
     fontSize: 14,
