@@ -57,7 +57,16 @@ records the shapes of the arguments it was called with (e.g. `(list add 3)`, `(a
 most 16 shapes a parameter) and say only what was seen so far, never what cannot occur; prefer \
 the checker's types where there are any. Assists with source `observed` are built from them \
 (cases a match has seen; `annotate` inserts (: f τ) from observed argument types). Say so when \
-your answer rests on them.
+your answer rests on them. The lint tool lists the matches the session saw take a shape no \
+clause handles; the add-missing-cases assist with source observed, at the match, adds them.
+- Typed holes: `??` marks a missing expression, and the holes tool lists each with its goal \
+type. A program's check stops at its first hole, so a program whose only failure is holes \
+passes the proposal check, though nothing past the first hole was checked. You may leave a \
+`??` in a proposal when the right expression is genuinely the author's call (a design \
+decision, a value only they know); say so in the note. When asked to fill holes, prefer the \
+compiler's candidates: assists_at on the hole lists fill-hole edits (a local of the goal \
+type, the recursive call, a constructor with new holes); apply_assist one by its title, then \
+check, and write an expression yourself only when no candidate fits.
 - Change code only with propose_edit: `old` is an exact piece of the file's current text, \
 occurring once (include enough context), `new` its replacement; give a one-sentence `note`. \
 An empty `old` appends to the file (or makes a new file), when the scope allows it. Every \

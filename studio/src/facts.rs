@@ -3,8 +3,8 @@
 //!
 //! - syntax: the top-level form at the point (its key and span), from the
 //!   studio's form scanner;
-//! - checker: the type at the point (`--assist facts`, else `type-at`), and
-//!   the diagnostics within the form;
+//! - checker: the type at the point (`--assist facts`, else `type-at`), a
+//!   typed hole's goal there, and the diagnostics within the form;
 //! - session: whether the live session has the form current, stale, or not
 //!   at all, and an expression's last result (session.rs);
 //! - observed: what the session saw a function receive, per parameter
@@ -31,9 +31,13 @@ impl Studio {
         let text = files.get(file).ok_or_else(|| format!("there is no file {file}"))?;
         let pos = pos.min(text.len());
         let facts = self.toolchain.facts_available().await;
+        let mut goal = Value::Null;
         let (kind, mut observed, error) = if facts {
             match self.toolchain.assist(files, "facts", file, Some(pos)).await {
-                Ok(answer) => (answer["type"].clone(), answer["observed"].clone(), None),
+                Ok(answer) => {
+                    goal = answer["goal"].clone();
+                    (answer["type"].clone(), answer["observed"].clone(), None)
+                }
                 Err(report) => (Value::Null, Value::Null, Some(report.describe())),
             }
         } else if self.toolchain.assist_available().await {
@@ -46,7 +50,7 @@ impl Studio {
         };
         let form = sexp::form_at(text, pos);
         let Some(form) = form else {
-            return Ok(json!({ "file": file, "pos": pos, "form": null, "type": kind, "observed": observed, "error": error }));
+            return Ok(json!({ "file": file, "pos": pos, "form": null, "type": kind, "goal": goal, "observed": observed, "error": error }));
         };
         let end_line = sexp::line_of(text, form.end);
         let diagnostics: Vec<Value> = self
@@ -55,6 +59,12 @@ impl Studio {
             .filter(|d| d.line >= form.line && d.line <= end_line)
             .map(|d| json!({ "severity": d.severity, "message": d.message, "line": d.line }))
             .collect();
+        // the observation lint's findings within the form, as last found
+        let lint: Vec<Value> = self
+            .lint_view()
+            .get(file)
+            .map(|marks| marks.items.iter().filter(|f| f.pos >= form.start && f.pos < form.end).map(|f| json!({ "line": f.line, "message": f.message, "source": f.source })).collect())
+            .unwrap_or_default();
         let view = self.session_view();
         let state = Session::state(&view, file, text, &form);
         let function = sexp::params(text, &form).and_then(|(name, params)| {
@@ -81,8 +91,10 @@ impl Studio {
             "pos": pos,
             "form": { "key": form.key(), "line": form.line, "end_line": end_line, "start": form.start, "end": form.end, "source": "syntax" },
             "type": kind,
+            "goal": goal,
             "type_source": "checker",
             "diagnostics": diagnostics,
+            "lint": lint,
             "session": state,
             "observed": observed,
             "function": function,

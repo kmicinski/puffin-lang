@@ -10,14 +10,24 @@
 //                            shown text) as one undoable edit
 //   selection()              { start, end } offsets of the selection
 //   reveal({ line, col })    put the cursor there
-//   markers(key, list)       mark document `key`'s diagnostics, each
-//                            { line, severity, message }
+//   markers(key, list, owner)  mark document `key`'s diagnostics, each
+//                            { line, severity, message } or with { start,
+//                            end } offsets; severity "error", "warning",
+//                            "info" (the observation lint) or "hint" (a
+//                            hole). Each owner's markers stand apart.
+//   decorations(key, name, list)  mark spans of document `key`, each
+//                            { start, end, className, hover }; each name's
+//                            stand apart
 //   glyphs(key, list)        mark lines of document `key` in the gutter,
 //                            each { line, className, hover }
+//   offset()                 the cursor's offset
+//   setRenameAvailable(on)   whether F2 renames
 //   caretBox()               the cursor's box on screen, for menus, or null
 //   focus()
 //   raw                      { monaco, editor } for Monaco, else null
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
+// Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
+// puffincc can), F8 and ⇧F8 the next and previous typed hole.
 
 import { bindMonaco, bindTextarea } from "./paredit.js";
 import { surfacePrimNames } from "./prim-names.js";
@@ -125,11 +135,16 @@ function register(monaco) {
       "editorBracketHighlight.foreground2": `#${SOL.magenta}`,
       "editorBracketHighlight.foreground3": `#${SOL.cyan}`,
       "editorBracketHighlight.foreground4": `#${SOL.violet}`,
+      // info marks only the observation lint: cyan, as observed things are
+      "editorInfo.foreground": `#${SOL.cyan}`,
+      "editorHint.foreground": `#${SOL.magenta}`,
     },
   });
 }
 
-function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor }) {
+const SEVERITY = { warning: "Warning", info: "Info", hint: "Hint" };
+
+function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole }) {
   register(monaco);
   const editor = monaco.editor.create(element, {
     language: "puffin",
@@ -161,6 +176,12 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, onEvalForm);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, onLoadFile);
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Period, onAssist);
+  // F2 is the compiler's rename only when it has one; else Monaco's own
+  const renames = editor.createContextKey("puffinRename", false);
+  editor.addAction({ id: "puffin.rename", label: "Rename (the compiler's)", keybindings: [monaco.KeyCode.F2], precondition: "puffinRename", run: () => onRename?.() });
+  // F8 walks the typed holes, not Monaco's problems: a hole is the next thing to do
+  editor.addAction({ id: "puffin.next-hole", label: "Next typed hole", keybindings: [monaco.KeyCode.F8], run: () => onHole?.(1) });
+  editor.addAction({ id: "puffin.previous-hole", label: "Previous typed hole", keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F8], run: () => onHole?.(-1) });
   bindMonaco(monaco, editor);
 
   const range = (start, end) => monaco.Range.fromPositions(current().getPositionAt(start), current().getPositionAt(end));
@@ -169,7 +190,7 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     show(key, text) {
       if (key !== shown) {
         if (documents.has(shown)) documents.get(shown).view = editor.saveViewState();
-        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null, glyphs: [] });
+        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null, glyphs: [], spans: new Map() });
         const { model, view } = documents.get(key);
         quiet = true;
         editor.setModel(model);
@@ -210,11 +231,20 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
       editor.setPosition({ lineNumber: line, column: col });
       editor.focus();
     },
-    markers(key, list) {
+    markers(key, list, owner = "check") {
       const model = documents.get(key)?.model;
       if (!model) return;
       const lines = model.getLineCount();
-      monaco.editor.setModelMarkers(model, "check", list.map(({ line, severity, message }) => {
+      monaco.editor.setModelMarkers(model, owner, list.map(({ line, start, end, severity, message, source }) => {
+        const severityOf = monaco.MarkerSeverity[SEVERITY[severity] ?? "Error"];
+        if (start !== undefined) {
+          const from = model.getPositionAt(start);
+          const to = model.getPositionAt(end ?? start);
+          return {
+            startLineNumber: from.lineNumber, startColumn: from.column, endLineNumber: to.lineNumber, endColumn: to.column,
+            message, severity: severityOf, source: source ?? "puffincc",
+          };
+        }
         const at = Math.min(Math.max(line || 1, 1), lines);
         return {
           startLineNumber: at,
@@ -222,10 +252,24 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
           endLineNumber: at,
           endColumn: model.getLineMaxColumn(at),
           message,
-          severity: severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
-          source: "puffincc",
+          severity: severityOf,
+          source: source ?? "puffincc",
         };
       }));
+    },
+    decorations(key, name, list) {
+      const document = documents.get(key);
+      if (!document) return;
+      const model = document.model;
+      const made = model.deltaDecorations(document.spans.get(name) ?? [], list.map(({ start, end, className, hover }) => ({
+        range: monaco.Range.fromPositions(model.getPositionAt(start), model.getPositionAt(end)),
+        options: {
+          inlineClassName: className,
+          hoverMessage: hover ? { value: hover } : undefined,
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      })));
+      document.spans.set(name, made);
     },
     glyphs(key, list) {
       const document = documents.get(key);
@@ -248,13 +292,23 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
       return { left: box.left + point.left, top: box.top + point.top, height: point.height };
     },
     focus: () => editor.focus(),
+    offset: () => current().getOffsetAt(editor.getPosition()),
+    // put the cursor at `offset` (and select to `end`)
+    select(offset, end = offset) {
+      const from = current().getPositionAt(offset);
+      const to = current().getPositionAt(end);
+      editor.setSelection(monaco.Selection.fromPositions(from, to));
+      editor.revealPositionInCenterIfOutsideViewport(from);
+      editor.focus();
+    },
+    setRenameAvailable: (on) => renames.set(Boolean(on)),
     keyOf: (model) => (model?.uri?.scheme === "studio" ? model.uri.path.slice(1) : null),
   };
 }
 
 // The fallback, when Monaco is not installed: a textarea with the same
 // keys, and no markers.
-function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor }) {
+function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole }) {
   const area = document.createElement("textarea");
   area.spellcheck = false;
   area.className = "fallback-editor";
@@ -262,7 +316,16 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
   area.addEventListener("input", onChange);
   for (const kind of ["keyup", "click"]) area.addEventListener(kind, () => onCursor?.());
   bindTextarea(area);
+  let renames = false;
   area.addEventListener("keydown", (event) => {
+    if (event.key === "F8") {
+      event.preventDefault();
+      return onHole?.(event.shiftKey ? -1 : 1);
+    }
+    if (event.key === "F2" && renames) {
+      event.preventDefault();
+      return onRename?.();
+    }
     if (!(event.metaKey || event.ctrlKey)) return;
     const take = (handler) => { event.preventDefault(); handler(); };
     if (event.key === "Enter" && event.shiftKey) take(onLoadFile);
@@ -303,12 +366,19 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
       area.setSelectionRange(at, at);
     },
     markers() {},
+    decorations() {},
     glyphs() {},
     caretBox() {
       const box = area.getBoundingClientRect();
       return { left: box.left + 20, top: box.top + 20, height: 18 };
     },
     focus: () => area.focus(),
+    offset: () => area.selectionEnd,
+    select(offset, end = offset) {
+      area.focus();
+      area.setSelectionRange(offset, end);
+    },
+    setRenameAvailable: (on) => { renames = Boolean(on); },
     keyOf: () => null,
   };
 }

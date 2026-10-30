@@ -2,15 +2,21 @@
 // a menu of every assist that applies there, each labelled with where its
 // knowledge came from (type, observed, patterns, call-site, in that order:
 // the studio sorts them); the lightbulb offers the same as Monaco code
-// actions. Applying one is an ordinary undoable edit, echoed into the
-// transcript as the command it is (`,assist fill-match main.puf:812`),
-// which typed at the prompt does the same.
+// actions. With a selection the compiler also offers `extract` (the
+// selection as a new top-level function). Applying one is an ordinary
+// undoable edit, echoed into the transcript as the command it is
+// (`,assist fill-match main.puf:812`, `,assist extract main.puf:812-840`
+// for a selection, `,assist fill-hole#2 main.puf:90` for the second of
+// several with one id), which typed at the prompt does the same. On an
+// observation lint marker the lightbulb leads with the observed cases.
 //
 // Hovering shows the facts at a point (facts.js): the type, from the
 // checker, and what the session saw a parameter receive, from runs.
 //
 //   createAssists({ editor, files, send, note, facts }) -> { open, run, receive, setAvailable }
 //   facts(file, pos, full)   the studio's facts at a point (facts.js)
+
+import { LINT_SOURCE } from "./lint.js";
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -49,9 +55,10 @@ export function createAssists({ editor, files, send, note, facts }) {
     });
   }
 
-  // The assists at UTF-16 offset `pos` of `file`, or { error }.
-  async function at(file, pos) {
-    const reply = await request({ t: "assists", file, pos });
+  // The assists at UTF-16 offset `pos` of `file` (for the selection [pos,
+  // end) when `end` is given), or { error }.
+  async function at(file, pos, end = null) {
+    const reply = await request({ t: "assists", file, pos, ...(end !== null && end > pos ? { end } : {}) });
     if (reply.version !== files.version(file) || !files.synced(file)) {
       return { error: "the text changed while the compiler looked; try again", assists: [] };
     }
@@ -63,8 +70,8 @@ export function createAssists({ editor, files, send, note, facts }) {
     const file = files.active();
     if (!file) return;
     if (!available) return note("assists unavailable: this puffincc has no --assist yet");
-    const pos = editor.selection().end;
-    const reply = await at(file, pos);
+    const { start, end } = editor.selection();
+    const reply = start === end ? await at(file, end) : await at(file, start, end);
     if (!reply.assists?.length) return note(reply.error ? `no assists: ${reply.error}` : "no assist applies here");
     shown = { file, assists: reply.assists, index: 0, stopped: reply.error };
     renderMenu();
@@ -97,15 +104,15 @@ export function createAssists({ editor, files, send, note, facts }) {
   function choose(i) {
     const { file, assists } = shown;
     close();
-    apply(file, assists[i]);
+    apply(file, assists[i], assists);
     editor.focus();
   }
 
   // Make `assist`'s edits in `file` (shown), and echo the command.
-  function apply(file, assist) {
+  function apply(file, assist, list = null) {
     if (files.active() !== file) files.open(file);
     editor.edits(assist.edits.map(({ start, end, text }) => ({ start, end, text })));
-    send({ t: "echo", line: `,assist ${assist.id} ${file}:${assist.pos}` });
+    send({ t: "echo", line: commandOf(file, assist, list) });
   }
 
   document.addEventListener("keydown", (event) => {
@@ -126,16 +133,17 @@ export function createAssists({ editor, files, send, note, facts }) {
   }, { capture: true });
   document.addEventListener("pointerdown", (event) => { if (shown && !menu.contains(event.target)) close(); });
 
-  // `,assist ID FILE:POS` typed at the prompt: POS is a byte offset.
-  async function run(id, file, bytes) {
+  // `,assist ID FILE:POS` (or FILE:POS-END) typed at the prompt: byte
+  // offsets; ID#N is the Nth assist with that id.
+  async function run(label, file, bytes, endBytes = null) {
     if (!files.paths().includes(file)) return note(`no file ${file}`);
     if (files.active() !== file) files.open(file);
     const text = files.texts()[file] ?? "";
-    const pos = utf16Of(text, bytes);
-    const reply = await at(file, pos);
-    const assist = reply.assists?.find((a) => a.id === id);
-    if (!assist) return note(`no assist ${id} applies at ${file}:${bytes}${reply.error ? ` (${reply.error})` : ""}`);
-    apply(file, assist);
+    const reply = await at(file, utf16Of(text, bytes), endBytes === null ? null : utf16Of(text, endBytes));
+    const [, id, nth] = /^(.*?)(?:#(\d+))?$/.exec(label);
+    const assist = (reply.assists ?? []).filter((a) => a.id === id)[(Number(nth) || 1) - 1];
+    if (!assist) return note(`no assist ${label} applies at ${file}:${bytes}${reply.error ? ` (${reply.error})` : ""}`);
+    apply(file, assist, reply.assists);
   }
 
   // ---- Monaco: the lightbulb and the hover ---------------------------------
@@ -144,15 +152,29 @@ export function createAssists({ editor, files, send, note, facts }) {
     const { monaco, editor: monacoEditor } = editor.raw;
     const echo = monacoEditor.addCommand(0, (_, line) => send({ t: "echo", line }));
     monaco.languages.registerCodeActionProvider("puffin", {
-      async provideCodeActions(model, range) {
+      async provideCodeActions(model, range, context) {
         const file = editor.keyOf(model);
         if (!available || !file || file !== files.active()) return { actions: [], dispose() {} };
         const version = model.getVersionId();
-        const reply = await at(file, model.getOffsetAt(range.getEndPosition()));
+        const from = model.getOffsetAt(range.getStartPosition());
+        const to = model.getOffsetAt(range.getEndPosition());
+        const reply = from === to ? await at(file, to) : await at(file, from, to);
+        // an observation lint marker here: the observed cases, from inside its match
+        const seen = (context?.markers ?? []).filter((marker) => marker.source === LINT_SOURCE);
+        const fixes = [];
+        for (const marker of seen) {
+          const inside = model.getOffsetAt({ lineNumber: marker.startLineNumber, column: marker.startColumn }) + 1;
+          const found = await at(file, inside);
+          for (const assist of found.assists ?? []) {
+            if (assist.source === "observed" && assist.id === "add-missing-cases") fixes.push({ assist, marker });
+          }
+        }
         if (model.getVersionId() !== version) return { actions: [], dispose() {} };
-        const actions = (reply.assists ?? []).map((assist) => ({
+        const action = (assist, list, marker = null) => ({
           title: `${assist.title}  ·  ${badge(assist.source)}`,
           kind: "quickfix",
+          isPreferred: Boolean(marker),
+          diagnostics: marker ? [marker] : undefined,
           edit: {
             edits: assist.edits.map(({ start, end, text }) => ({
               resource: model.uri,
@@ -160,8 +182,13 @@ export function createAssists({ editor, files, send, note, facts }) {
               textEdit: { range: monaco.Range.fromPositions(model.getPositionAt(start), model.getPositionAt(end)), text },
             })),
           },
-          command: { id: echo, title: "echo", arguments: [`,assist ${assist.id} ${file}:${assist.pos}`] },
-        }));
+          command: { id: echo, title: "echo", arguments: [commandOf(file, assist, list)] },
+        });
+        const listed = reply.assists ?? [];
+        const actions = [
+          ...fixes.map(({ assist, marker }) => action(assist, [assist], marker)),
+          ...listed.filter((assist) => !fixes.some(({ assist: fix }) => sameEdits(fix, assist))).map((assist) => action(assist, listed)),
+        ];
         return { actions, dispose() {} };
       },
     });
@@ -184,6 +211,7 @@ export function createAssists({ editor, files, send, note, facts }) {
   return {
     open,
     run,
+    at,
     setAvailable(on) { available = on; },
     receive: {
       assists(reply) {
@@ -198,11 +226,23 @@ export function createAssists({ editor, files, send, note, facts }) {
   };
 }
 
+// The command applying `assist` in `file` is: `,assist ID FILE:POS`, with
+// `-END` for a selection and `#N` when `list` (what the menu offered) has
+// several with its id.
+export function commandOf(file, assist, list = null) {
+  const same = (list ?? []).filter((a) => a.id === assist.id && a.pos === assist.pos);
+  const nth = same.length > 1 ? `#${same.indexOf(assist) + 1}` : "";
+  return `,assist ${assist.id}${nth} ${file}:${assist.pos}${assist.end !== undefined ? `-${assist.end}` : ""}`;
+}
+
+const sameEdits = (a, b) => a.id === b.id && JSON.stringify(a.edits) === JSON.stringify(b.edits);
+
 // A hover's parts from the facts at a point, each saying where it came
-// from: the type from the checker, the shapes from runs.
+// from: the type from the checker (a hole's goal), the shapes from runs.
 export function hover(word, facts) {
   const contents = [];
-  if (facts?.type) contents.push({ value: `\`${word} : ${facts.type}\`\n\n*from the checker*` });
+  if (facts?.goal) contents.push({ value: `\`${word}\` — a typed hole, goal \`${facts.goal}\`\n\n*from the checker · ⌘. for its candidates · F8 the next hole*` });
+  else if (facts?.type) contents.push({ value: `\`${word} : ${facts.type}\`\n\n*from the checker*` });
   const seen = facts?.observed;
   if (seen && (seen.patterns?.length || seen.shapes?.length)) {
     const calls = `${seen.calls} call${seen.calls === 1 ? "" : "s"}`;

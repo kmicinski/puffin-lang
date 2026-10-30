@@ -311,7 +311,7 @@ an assistant tool. In planned order:
    from observations (`annotate`): each argument's type is the one
    all its observed shapes share (constructors resolve to their
    type), else `_`; the result stays `_`.
-10. **Pin a transcript entry as a test.**
+10. **Pin a transcript entry as a test.** Built in the studio (§9).
 
 Built beyond the list: `extract` (with a selection, `assists FILE
 POS END`: the selection becomes a new top-level function whose
@@ -431,6 +431,33 @@ transcripts can be goldens too.
   fork; replay mode never refreshes.
 - **Facts panel and hover** both come from `facts`: one section per
   layer (syntax, checker, session, observed), each labelled.
+- **Holes.** A check that stops at `typecheck: unbound variable ??`
+  is a hole, not an error: the program passes "holes aside" when
+  nothing fails before its first hole. Every `??` is outlined as you
+  type, with its goal (from `facts`) as a hint; the status pill
+  reads "◌ N holes · checked up to the first hole"; F8 / ⇧F8 move
+  between holes (over Monaco's next-problem); ⌘. on a hole lists the
+  fill-hole candidates. The proposal and accept gates let a program
+  through when its only failures are holes, so the assistant may
+  leave a hole for the author.
+- **Lint.** `lint` runs after each check and each change to the
+  observation record; findings are cyan Info markers (cyan is
+  "observed"), whose quick fix leads with the add-missing-cases
+  assist, and they show under Observed in the Facts panel.
+- **Pinned tests.** A successful one-expression evaluation can be
+  pinned: `tests.puf` (created on first use, maintained by the studio
+  but ordinary Puffin) gains `(check-printed 'E E "printed")` and a
+  `require` for each module the expression uses. `,test` compiles
+  and runs it on a throwaway VM (30 s) and reports passed, failed,
+  and not run, with failures linked to their line. A check whose
+  expression fails at run time ends the run (Puffin cannot catch
+  errors).
+- **Rename** is F2 (bound only when the operation is detected),
+  echoed as `,rename FILE:POS NEW`; renaming a provided top-level
+  name notes the other modules that still use the old name.
+- **Commands.** `,assist ID#N FILE:POS-END` names one of several
+  same-id assists and a selection. MCP adds `holes` and `lint`, and
+  `end` and `title` on the assist tools.
 - **Tokens.** The launch token is kept in `~/.puffin-studio/token`
   (mode 0600) so open tabs reconnect after a restart; `/mcp` has its
   own per-run bearer token.

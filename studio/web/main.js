@@ -11,6 +11,9 @@ import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
 import { createSession } from "./session.js";
 import { createFacts } from "./facts.js";
+import { createHoles } from "./holes.js";
+import { createLint } from "./lint.js";
+import { createRename } from "./rename.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -36,13 +39,18 @@ function note(message) {
 // made once the files are: the editor's events may come first
 let session = null;
 let facts = null;
+let holes = null;
+let rename = null;
 
 const editor = await createEditor($("editor"), {
   onChange: () => {
     files.changed();
     session?.changed();
+    holes?.changed();
     facts?.cursor();
   },
+  onRename: () => rename?.open(),
+  onHole: (dir) => holes?.next(dir),
   onCursor: () => facts?.cursor(),
   onSave: save,
   onEvalForm: evalForm,
@@ -58,6 +66,8 @@ const files = createFiles({
     transmit({ t: "focus", file: path });
     showDiagnostics();
     session?.refresh();
+    holes?.refresh();
+    lint?.refresh();
     facts?.cursor();
     proposals?.refresh();
     versions?.opened();
@@ -73,8 +83,11 @@ const send = files.send;
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), toggle: $("history"), files, send });
 session = createSession({ editor, files });
-facts = createFacts({ panel: $("facts"), toggle: $("facts-toggle"), editor, files, session, send });
+const lint = createLint({ editor, files });
+facts = createFacts({ panel: $("facts"), toggle: $("facts-toggle"), editor, files, session, send, lint });
+holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: facts.ask });
+rename = createRename({ editor, files, send, note });
 
 const repl = createRepl({
   transcript: $("transcript"),
@@ -85,7 +98,13 @@ const repl = createRepl({
     save,
     evalAt: (file, line) => evalAt(file, { line }),
     session: () => session.listing(),
-    assist: (id, file, pos) => assists.run(id, file, pos),
+    assist: (id, file, pos, end) => assists.run(id, file, pos, end),
+    rename: (file, pos, name) => rename.run(file, pos, name),
+    reveal(file, line) {
+      if (!files.paths().includes(file)) return note(`no file ${file}`);
+      if (files.active() !== file) files.open(file);
+      editor.reveal({ line });
+    },
   },
 });
 
@@ -176,9 +195,13 @@ $("divider").addEventListener("pointerdown", (event) => {
 
 // ---- Diagnostics ------------------------------------------------------------
 
+// A check that stops at a typed hole reports it as a hole, not an error
+// (studio/src/toolchain.rs): the holes are outlined where they are
+// (holes.js), and the pill says that the check went only that far.
 let reports = {};
+let byFile = new Map();
 function showDiagnostics() {
-  const byFile = new Map();
+  byFile = new Map();
   for (const report of Object.values(reports)) {
     for (const d of report.diagnostics) {
       const list = byFile.get(d.file) ?? [];
@@ -188,25 +211,45 @@ function showDiagnostics() {
   }
   const counts = new Map();
   for (const path of files.paths()) {
-    const list = byFile.get(path) ?? [];
+    const list = (byFile.get(path) ?? []).filter((d) => d.severity !== "hole");
     editor.markers(path, list);
     counts.set(path, { errors: list.filter((d) => d.severity === "error").length, warnings: list.filter((d) => d.severity === "warning").length });
   }
   files.setCounts(counts);
+  renderCheck();
+}
+
+function renderCheck() {
   const active = files.active();
-  const here = byFile.get(active) ?? [];
+  const here = (byFile.get(active) ?? []).filter((d) => d.severity !== "hole");
+  const stopped = [...byFile.values()].flat().some((d) => d.severity === "hole");
+  const holeCounts = holes?.count() ?? new Map();
+  const holeTotal = [...holeCounts.values()].reduce((a, b) => a + b, 0);
   const errors = here.filter((d) => d.severity === "error");
   const status = $("check");
-  status.className = `pill ${errors.length ? "bad" : here.length ? "warn" : "good"}`;
-  status.textContent = errors.length ? `✗ ${errors.length} error${errors.length === 1 ? "" : "s"}` : here.length ? `⚠ ${here.length} warning${here.length === 1 ? "" : "s"}` : "✓ checks";
-  status.title = here.map((d) => `${d.severity}: ${d.message}${d.line ? ` [line ${d.line}]` : ""}`).join("\n") || `${active ?? ""} passes the check`;
+  const holed = holeTotal ? `◌ ${holeTotal} hole${holeTotal === 1 ? "" : "s"}` : "";
+  status.className = `pill ${errors.length ? "bad" : holeTotal ? "hole" : here.length ? "warn" : "good"}`;
+  const head = errors.length ? `✗ ${errors.length} error${errors.length === 1 ? "" : "s"}` : here.length ? `⚠ ${here.length} warning${here.length === 1 ? "" : "s"}` : holeTotal ? "" : "✓ checks";
+  status.replaceChildren(document.createTextNode([head, holed].filter(Boolean).join(" · ")));
+  if (stopped && !errors.length) {
+    const quiet = status.appendChild(document.createElement("span"));
+    quiet.className = "pill-quiet";
+    quiet.textContent = " · checked up to the first hole";
+  }
+  const lines = here.map((d) => `${d.severity}: ${d.message}${d.line ? ` [line ${d.line}]` : ""}`);
+  if (holeTotal) {
+    lines.push(`typed holes (??): ${[...holeCounts].map(([path, n]) => `${path} ${n}`).join(", ")} · F8 goes to the next`);
+    if (stopped) lines.push("the checker stops at the first hole, so nothing after it is checked");
+  }
+  status.title = lines.join("\n") || `${active ?? ""} passes the check`;
   // an error with no line in the shown file still shows
   const loose = (byFile.get("") ?? []).map((d) => d.message);
   if (loose.length) status.title += `\n${loose.join("\n")}`;
 }
 $("check").addEventListener("click", () => {
-  const first = Object.values(reports).flatMap((r) => r.diagnostics).find((d) => d.file === files.active() && d.line);
+  const first = Object.values(reports).flatMap((r) => r.diagnostics).find((d) => d.file === files.active() && d.line && d.severity !== "hole");
   if (first) editor.reveal({ line: first.line });
+  else if (holes.count().size) holes.next(1);
 });
 
 // ---- The status strip -----------------------------------------------------------
@@ -223,6 +266,8 @@ function renderLane(lane) {
 function renderFeatures(features) {
   const { assist: hasAssist, serve, observe } = features;
   assists.setAvailable(hasAssist);
+  rename.setAvailable(features.rename);
+  $("rename-key").hidden = !features.rename;
   facts.setFeatures(features);
   const pill = $("features");
   pill.textContent = hasAssist ? "assists ✓" : "assists unavailable";
@@ -250,6 +295,8 @@ const handlers = {
     assist.receive.review(snapshot.review);
     repl.receive.init(snapshot);
     session.receive.init(snapshot);
+    holes.receive.init(snapshot);
+    lint.receive.init(snapshot);
     showDiagnostics();
     renderLane(snapshot.lane);
     renderFeatures(snapshot.features);
@@ -272,6 +319,15 @@ const handlers = {
     facts.refresh();
   },
   facts: facts.receive.facts,
+  holes(message) {
+    holes.receive.holes(message);
+    facts.refresh();
+  },
+  lint(message) {
+    lint.receive.lint(message);
+    facts.refresh();
+  },
+  renamed: rename.receive.renamed,
   lane: renderLane,
   features: renderFeatures,
   entry: repl.receive.entry,

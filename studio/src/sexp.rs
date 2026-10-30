@@ -323,6 +323,54 @@ pub fn atom_at(text: &str, pos: usize) -> Option<(usize, usize)> {
     tokens(text).into_iter().find(|(kind, start, end)| *kind == Token::Atom && *start <= pos && pos <= *end).map(|(_, s, e)| (s, e))
 }
 
+/// The typed holes of `text`: every `??` atom outside strings and
+/// comments, as byte spans.
+pub fn holes(text: &str) -> Vec<(usize, usize)> {
+    tokens(text).into_iter().filter(|(kind, start, end)| *kind == Token::Atom && &text[*start..*end] == "??").map(|(_, s, e)| (s, e)).collect()
+}
+
+/// The constructors the `define-type` forms of `text` declare: `Num` and
+/// `Add` of `(define-type Expr (Num Int) (Add Expr Expr))`, and a bare
+/// atom variant such as `None`.
+pub fn constructors(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for form in forms(text).iter().filter(|form| form.head.as_deref() == Some("define-type")) {
+        let body = &text[form.start..form.end];
+        // ( define-type NAME variant... ): the variants are the children
+        // from the third on, each a list headed by its constructor or an atom
+        let mut depth = 0usize;
+        let mut child = 0usize;
+        let mut head_next = false;
+        for (kind, start, end) in tokens(body) {
+            match kind {
+                Token::Open => {
+                    depth += 1;
+                    if depth == 2 {
+                        child += 1;
+                        head_next = child >= 3;
+                    }
+                }
+                Token::Close => {
+                    depth = depth.saturating_sub(1);
+                    head_next = false;
+                }
+                Token::Atom if depth == 1 => {
+                    child += 1;
+                    if child >= 3 {
+                        out.push(body[start..end].to_owned());
+                    }
+                }
+                Token::Atom if depth == 2 && head_next => {
+                    head_next = false;
+                    out.push(body[start..end].to_owned());
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Whether the brackets of `text` balance, outside strings and comments,
 /// and every string closes.
 pub fn balanced(text: &str) -> bool {
@@ -494,6 +542,17 @@ mod tests {
         assert_eq!(names, ["e", "k", "rest"]);
         assert_eq!(&text[found[0].1..found[0].1 + 1], "e");
         assert_eq!(atom_at(text, found[1].1), Some((found[1].1, found[1].1 + 1)));
+    }
+
+    #[test]
+    fn holes_and_constructors() {
+        let text = "(define-type (Option a) (Some a) None)\n(define (f x) (+ ?? 1)) ; ?? here is a comment\n\"??\" '(??)";
+        assert_eq!(constructors(text), ["Some", "None"]);
+        assert_eq!(constructors(PROGRAM), ["Num", "Add", "None", "Some"]);
+        let found = holes(text);
+        assert_eq!(found.len(), 2);
+        assert_eq!(&text[found[0].0..found[0].1], "??");
+        assert_eq!(line_of(text, found[0].0), 2);
     }
 
     #[test]

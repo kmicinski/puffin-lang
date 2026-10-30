@@ -2,15 +2,17 @@
 // cursor (docs/STUDIO.md §3; studio/src/facts.rs), each labelled with the
 // layer it came from:
 //   Syntax    the form's key and lines (the form scanner)
-//   Checker   the type at the cursor and the form's diagnostics
+//   Checker   the type at the cursor (a typed hole's goal) and the form's
+//             diagnostics
 //   Session   whether the live session has the form as shown, and an
 //             expression's last result
 //   Observed  what the session's runs passed the function: per parameter,
-//             the shapes seen and the compiler's patterns from them
+//             the shapes seen and the compiler's patterns from them; and
+//             the observation lint's findings in the form
 // Syntax and Session are this tab's, so they follow typing at once; the
 // rest come from the studio a moment after the cursor settles.
 //
-//   createFacts({ panel, toggle, editor, files, session, send })
+//   createFacts({ panel, toggle, editor, files, session, send, lint })
 //     -> { ask, cursor, refresh, receive, setFeatures }
 //   ask(file, pos, full)   the studio's facts at UTF-16 offset `pos`
 
@@ -27,7 +29,7 @@ const element = (tag, className, text) => {
 const SETTLE = 250;
 const MARKS = { current: "●", stale: "○", redefined: "○", evaluated: "⇒", absent: "·" };
 
-export function createFacts({ panel, toggle, editor, files, session, send }) {
+export function createFacts({ panel, toggle, editor, files, session, send, lint }) {
   const waiting = new Map(); // seq -> resolve
   let seq = 0;
   let open = false;
@@ -125,10 +127,15 @@ export function createFacts({ panel, toggle, editor, files, session, send }) {
     else {
       const word = wordAt(text, pos);
       const type = element("div", `facts-row${settling ? " settling" : ""}`);
-      if (facts.type) type.append(element("code", "", `${word ? `${word} : ` : ""}${facts.type}`));
+      if (facts.goal) type.append(element("code", "typed-hole", word || "??"), element("span", "", ` a typed hole, goal `), element("code", "", facts.goal));
+      else if (facts.type) type.append(element("code", "", `${word ? `${word} : ` : ""}${facts.type}`));
       else type.append(element("span", "hint", word ? `no type for ${word}` : "no type here"));
       checker.push(type);
       for (const d of facts.diagnostics ?? []) {
+        if (d.severity === "hole") {
+          checker.push(element("div", "facts-diagnostic hole", "◌ the check stops at the first hole: nothing after it is checked"));
+          continue;
+        }
         checker.push(element("div", `facts-diagnostic ${d.severity}`, `${d.severity === "error" ? "✗" : "⚠"} ${d.message}  line ${d.line}`));
       }
       if (known.error && !facts.type) checker.push(element("div", "facts-diagnostic error", known.error));
@@ -159,6 +166,12 @@ export function createFacts({ panel, toggle, editor, files, session, send }) {
         for (const shape of patterns ?? param.shapes) list.append(element("code", patterns ? "pattern" : "shape", shape));
         if (!param.shapes.length) list.append(element("span", "hint", "nothing yet"));
       }
+    }
+    for (const finding of lint?.within(file, form.start, form.end) ?? []) {
+      const row = element("div", "facts-lint");
+      row.append(element("span", "facts-mark", "▶"), element("span", "", ` ${finding.message}`), element("span", "hint", `  line ${finding.line}`));
+      row.title = "The observation lint: a shape this session's runs passed that no clause handles. The lightbulb on the match adds the cases.";
+      observed.push(row);
     }
     panel.append(section("Observed", "runs in this session · sampled", ...observed));
   }

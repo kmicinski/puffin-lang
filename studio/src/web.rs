@@ -68,7 +68,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "facts.js",
+    "versions.js", "session.js", "facts.js", "holes.js", "lint.js", "rename.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -155,8 +155,17 @@ enum Request {
     },
     Interrupt,
     Reset,
-    /// The assists at UTF-16 offset `pos` of `file`; answered with `seq`.
-    Assists { seq: u64, file: String, pos: usize },
+    /// The assists at UTF-16 offset `pos` of `file`, or for the selection
+    /// [pos, end); answered with `seq`.
+    Assists {
+        seq: u64,
+        file: String,
+        pos: usize,
+        #[serde(default)]
+        end: Option<usize>,
+    },
+    /// Rename the name at UTF-16 offset `pos` of `file` to `name`.
+    Rename { seq: u64, file: String, pos: usize, name: String },
     TypeAt { seq: u64, file: String, pos: usize },
     /// The facts at UTF-16 offset `pos` of `file`; `full` for the Facts
     /// panel (every parameter's patterns), else for a hover.
@@ -169,6 +178,10 @@ enum Request {
     },
     /// A gesture's command, for the transcript.
     Echo { line: String },
+    /// Pin transcript entry `entry` as a check in tests.puf (`,pin N`).
+    Pin { entry: u64 },
+    /// Run tests.puf (`,test`).
+    Test,
     Ask {
         thread: Option<u32>,
         message: String,
@@ -199,6 +212,11 @@ enum Reply<'a> {
     Assists { seq: u64, version: u64, assists: Value, error: Option<String> },
     Type { seq: u64, r#type: Value, error: Option<String> },
     Facts { seq: u64, version: u64, facts: Value, error: Option<String> },
+    /// A rename's edits (UTF-16 offsets), for `version` of the file, from
+    /// byte `pos`; or why there are none.
+    /// `note` says which other modules still use the old name: a rename
+    /// edits one file.
+    Renamed { seq: u64, version: u64, pos: usize, edits: Value, error: Option<String>, note: Option<String> },
     Asked { thread: Option<u32>, message: &'a str, error: Option<String> },
     Versions { file: &'a str, versions: Vec<crate::versions::Version> },
     VersionText { id: u64, file: String, text: String },
@@ -265,30 +283,67 @@ fn notice(direct: &mpsc::UnboundedSender<String>, outcome: Result<(), String>) {
     }
 }
 
-/// The UTF-16 offset `pos` of `file` as a byte offset; the assists there,
-/// their edits back in UTF-16 offsets; and the version they are for.
-async fn assists_at(studio: &Studio, file: &str, pos: usize) -> (u64, Value, Option<String>) {
+/// Edits' byte offsets into `text` as UTF-16 offsets.
+fn edits_in_utf16(text: &str, edits: &mut Value) {
+    for edit in edits.as_array_mut().into_iter().flatten() {
+        for key in ["start", "end"] {
+            let byte = edit[key].as_u64().unwrap_or(0) as usize;
+            edit[key] = json!(sexp::utf16_of_byte(text, byte));
+        }
+    }
+}
+
+/// The UTF-16 offset `pos` (and `end`, for a selection) of `file` as byte
+/// offsets; the assists there, their edits back in UTF-16 offsets, each
+/// with the byte `pos` (and `end`) it was asked at; and the version they
+/// are for.
+async fn assists_at(studio: &Studio, file: &str, pos: usize, end: Option<usize>) -> (u64, Value, Option<String>) {
     let files = studio.files();
     let version = studio.version_of(file).unwrap_or(0);
     let Some(text) = files.get(file) else { return (version, json!([]), Some(format!("no file {file}"))) };
     let at = sexp::byte_of_utf16(text, pos);
-    match studio.toolchain.assist(&files, "assists", file, Some(at)).await {
+    let until = end.map(|end| sexp::byte_of_utf16(text, end)).filter(|until| *until > at);
+    let args = [Some(at), until].into_iter().flatten().map(|n| n.to_string()).collect();
+    match studio.toolchain.assist_with(&files, "assists", file, args).await {
         Ok(answer) => {
             let mut assists = answer["assists"].clone();
             for assist in assists.as_array_mut().into_iter().flatten() {
-                for edit in assist["edits"].as_array_mut().into_iter().flatten() {
-                    for key in ["start", "end"] {
-                        let byte = edit[key].as_u64().unwrap_or(0) as usize;
-                        edit[key] = json!(sexp::utf16_of_byte(text, byte));
-                    }
-                }
+                edits_in_utf16(text, &mut assist["edits"]);
                 assist["pos"] = json!(at);
+                if let Some(until) = until {
+                    assist["end"] = json!(until);
+                }
             }
             let stopped = answer["stopped"].as_str().map(str::to_owned);
             (version, assists, stopped)
         }
         Err(report) => (version, json!([]), Some(report.describe())),
     }
+}
+
+/// When the name at byte `pos` of `file` is one it defines at the top
+/// level, and other modules that require it mention that name: which, as a
+/// rename edits only `file`.
+pub fn importers_note(files: &crate::toolchain::Files, file: &str, pos: usize) -> Option<String> {
+    let text = files.get(file)?;
+    let (start, end) = sexp::atom_at(text, pos)?;
+    let name = &text[start..end];
+    let defines = sexp::forms(text).iter().any(|form| crate::session::definition(form) && form.name.as_deref() == Some(name))
+        || sexp::constructors(text).iter().any(|c| c == name);
+    if !defines {
+        return None;
+    }
+    let users: Vec<&String> = files
+        .iter()
+        .filter(|(path, other)| {
+            *path != file && crate::toolchain::closure(files, path).iter().any(|f| f == file) && sexp::mentions(other).contains(name)
+        })
+        .map(|(path, _)| path)
+        .collect();
+    (!users.is_empty()).then(|| {
+        let list = users.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", ");
+        format!("renamed in {file} only: {list} still say{} {name}", if users.len() == 1 { "s" } else { "" })
+    })
 }
 
 /// Edits are answered at once; everything that runs a process runs as its
@@ -346,10 +401,27 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
                 studio.echo(",reset");
             });
         }
-        Request::Assists { seq, file, pos } => {
+        Request::Assists { seq, file, pos, end } => {
             tokio::spawn(async move {
-                let (version, assists, error) = assists_at(&studio, &file, pos).await;
+                let (version, assists, error) = assists_at(&studio, &file, pos, end).await;
                 let _ = direct.send(json(&Reply::Assists { seq, version, assists, error }));
+            });
+        }
+        Request::Rename { seq, file, pos, name } => {
+            tokio::spawn(async move {
+                let files = studio.files();
+                let version = studio.version_of(&file).unwrap_or(0);
+                let text = files.get(&file).cloned().unwrap_or_default();
+                let at = sexp::byte_of_utf16(&text, pos);
+                let (edits, error) = match studio.toolchain.rename(&files, &file, at, &name).await {
+                    Ok(mut edits) => {
+                        edits_in_utf16(&text, &mut edits);
+                        (edits, None)
+                    }
+                    Err(error) => (json!([]), Some(error)),
+                };
+                let note = error.is_none().then(|| importers_note(&files, &file, at)).flatten();
+                let _ = direct.send(json(&Reply::Renamed { seq, version, pos: at, edits, error, note }));
             });
         }
         Request::TypeAt { seq, file, pos } => {
@@ -378,6 +450,15 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
             });
         }
         Request::Echo { line } => studio.echo(&line),
+        Request::Pin { entry } => match studio.pin(entry) {
+            Ok(message) => reply(json(&Reply::Notice { message: &message })),
+            Err(error) => notice(&direct, Err(format!("cannot pin: {error}"))),
+        },
+        Request::Test => {
+            tokio::spawn(async move {
+                studio.run_tests().await;
+            });
+        }
         Request::Ask { thread, message, context } => {
             let (thread, error) = match studio.ask(thread, message.clone(), context) {
                 Ok(thread) => (Some(thread), None),

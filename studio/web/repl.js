@@ -9,18 +9,25 @@
 //                           it needs that the session lacks (⌘↵)
 //   ,session                what the session holds of each file
 //   ,assist ID FILE:POS     apply the compiler's assist ID at byte POS
+//                           (FILE:POS-END for a selection; ID#N the Nth)
+//   ,rename FILE:POS NEW    rename the name at byte POS (F2)
+//   ,pin N                  keep entry N's result as a check in tests.puf
+//   ,test                   run tests.puf
 //   ,accept #N  ,reject #N  a proposal
 //   ,restore vN             a file's version, as its text again
 //   ,save  ,reset  ,interrupt  ,help
 //
 //   createRepl({ transcript, prompt, send, commands }) -> { receive, entries, run, insert }
 // `commands` holds the handlers for the commands the page carries out
-// itself ({ assist(id, file, pos), load(file), save(), evalAt(file, line),
-// session() }); `renderAsk(entry, node)` is set by assist.js to draw a
-// question's block. A run that referenced a name before its definition,
-// which a module defines, offers a chip that loads it: `,eval FILE:LINE`.
+// itself ({ assist(id, file, pos, end), rename(file, pos, name), load(file),
+// save(), evalAt(file, line), session(), reveal(file, line) });
+// `renderAsk(entry, node)` is set by assist.js to draw a question's block.
+// A run that referenced a name before its definition, which a module
+// defines, offers a chip that loads it: `,eval FILE:LINE`. An evaluation of
+// one expression that printed a result offers to pin it (`,pin N`); a
+// `,test` entry lists its checks, each failure linked to its line.
 
-import { balanced } from "./lexer.js";
+import { balanced, forms } from "./lexer.js";
 import { highlight } from "./markdown.js";
 import { bindTextarea } from "./paredit.js";
 
@@ -34,7 +41,11 @@ const element = (tag, className, text) => {
 const HELP = `,load FILE           evaluate a whole module in the session (⌘⇧↵ in the editor)
 ,eval FILE:LINE      evaluate the form on LINE, loading first the definitions it needs (⌘↵)
 ,session             what the session holds of each file: current, stale, results
-,assist ID FILE:POS  apply the compiler's assist ID at byte POS (⌘. in the editor)
+,assist ID FILE:POS  apply the compiler's assist ID at byte POS (⌘. in the editor);
+                     FILE:POS-END for a selection (extract), ID#N for the Nth of one id
+,rename FILE:POS NEW rename the name at byte POS (F2 in the editor)
+,pin N               keep entry N's printed result as a check in tests.puf (pin)
+,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
 ,restore vN          make a version of a file its text again (History lists them)
 ,save                write the edited files (⌘S)
@@ -109,10 +120,21 @@ export function createRepl({ transcript, prompt, send, commands }) {
       case "accept": return send({ t: "accept", ops: rest.map((id) => Number(id.replace("#", ""))).filter(Boolean) });
       case "reject": return rest.forEach((id) => send({ t: "reject", op: Number(id.replace("#", "")) }));
       case "assist": {
-        const match = /^(\S+)\s+(.+):(\d+)$/.exec(arg);
-        if (!match) return local(text, "usage: ,assist ID FILE:POS", true);
-        return commands.assist(match[1], match[2], Number(match[3]));
+        const match = /^(\S+)\s+(.+):(\d+)(?:-(\d+))?$/.exec(arg);
+        if (!match) return local(text, "usage: ,assist ID FILE:POS (or FILE:POS-END)", true);
+        return commands.assist(match[1], match[2], Number(match[3]), match[4] === undefined ? null : Number(match[4]));
       }
+      case "rename": {
+        const match = /^(.+):(\d+)\s+(\S+)$/.exec(arg);
+        if (!match) return local(text, "usage: ,rename FILE:POS NEW", true);
+        return commands.rename(match[1], Number(match[2]), match[3]);
+      }
+      case "pin": {
+        const id = Number(arg.replace(/^#/, ""));
+        if (!id) return local(text, "usage: ,pin N (the transcript entry's number: hover an evaluation for its pin)", true);
+        return send({ t: "pin", entry: id });
+      }
+      case "test": return send({ t: "test" });
       case "help": return local(text, HELP);
       default: return local(text, `unknown command ,${verb}: ,help lists them`, true);
     }
@@ -195,6 +217,8 @@ export function createRepl({ transcript, prompt, send, commands }) {
   function output(id, stream, text, follow = true) {
     const known = nodes.get(id);
     if (!known?.out) return;
+    const entry = entries.get(id);
+    if (follow && entry) (entry.out ??= []).push([stream, text]);
     const was = follow && atBottom();
     if (stream === "result") {
       const result = known.out.appendChild(element("div", "result"));
@@ -210,11 +234,11 @@ export function createRepl({ transcript, prompt, send, commands }) {
     scroll(was);
   }
 
-  function done({ id, status, error, ms, fixes = [] }) {
+  function done({ id, status, error, ms, fixes = [], tests = null }) {
     const known = nodes.get(id);
     if (!known) return;
     const entry = entries.get(id);
-    if (entry) Object.assign(entry, { status, error, ms, fixes });
+    if (entry) Object.assign(entry, { status, error, ms, fixes, tests: tests ?? entry.tests ?? null });
     const was = atBottom();
     known.node.classList.remove("running");
     known.node.classList.toggle("failed", status !== "ok");
@@ -223,6 +247,8 @@ export function createRepl({ transcript, prompt, send, commands }) {
       const box = known.node.appendChild(element("pre", `error ${status}`, error));
       hooks.error?.(entry, box);
     }
+    if (entry?.kind === "eval" && status === "ok") offerPin(entry, known);
+    if (entry?.kind === "test" && entry.tests) showTests(entry.tests, known.node);
     if (fixes.length) {
       const chips = known.node.appendChild(element("div", "fix-chips"));
       for (const fix of fixes) {
@@ -236,6 +262,47 @@ export function createRepl({ transcript, prompt, send, commands }) {
       }
     }
     scroll(was);
+  }
+
+  // An evaluation of one expression that printed a result can be pinned.
+  function offerPin(entry, known) {
+    if (!["prompt", "buffer"].includes(entry.origin) || !(entry.out ?? []).some(([stream]) => stream === "result")) return;
+    const found = forms(entry.line.trim());
+    if (found.length !== 1 || found[0].head?.startsWith("define")) return;
+    const pin = known.head.appendChild(element("button", "pin-action", "pin"));
+    pin.title = `,pin ${entry.id}: keep this result as a check in tests.puf (,test runs them)`;
+    pin.addEventListener("click", () => {
+      run(`,pin ${entry.id}`);
+      pin.disabled = true;
+      pin.textContent = "pinned";
+    });
+  }
+
+  // A ,test run: its counts, and each failure linked to its line.
+  function showTests(run, node) {
+    const box = node.appendChild(element("div", "test-run"));
+    const counts = box.appendChild(element("div", "test-counts"));
+    counts.append(element("span", "passed", `${run.passed} passed`));
+    if (run.failed) counts.append(element("span", "failed", ` · ${run.failed} failed`));
+    if (run.not_run) counts.append(element("span", "not-run", ` · ${run.not_run} not run`));
+    if (run.stopped) {
+      counts.append(element("span", "not-run", " · stopped in "));
+      const where = counts.appendChild(element("a", "test-line", `tests.puf:${run.stopped}`));
+      where.title = "Show the check the run stopped in: its expression failed, which ends the program";
+      where.addEventListener("click", () => commands.reveal("tests.puf", run.stopped));
+    }
+    for (const result of run.results) {
+      const row = box.appendChild(element("div", `test-result ${result.ok ? "ok" : "fail"}`));
+      row.append(element("span", "mark", result.ok ? "✓" : "✗"));
+      const code = row.appendChild(element("code", "", result.expression));
+      if (result.line) {
+        const where = row.appendChild(element("a", "test-line", `tests.puf:${result.line}`));
+        where.title = "Show the check in tests.puf";
+        where.addEventListener("click", () => commands.reveal("tests.puf", result.line));
+      }
+      if (result.detail) row.append(element("pre", "test-detail", result.detail));
+      code.title = result.ok ? "prints as pinned" : "prints otherwise than pinned";
+    }
   }
 
   function insert(text) {

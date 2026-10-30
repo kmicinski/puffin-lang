@@ -7,9 +7,11 @@
 pub mod agent;
 pub mod ask;
 pub mod facts;
+pub mod holes;
 pub mod knowledge;
 pub mod lane;
 pub mod mcp;
+pub mod pin;
 pub mod repl;
 pub mod review;
 pub mod session;

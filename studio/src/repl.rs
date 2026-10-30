@@ -224,10 +224,14 @@ impl Studio {
         }
         let base = unit.path.rsplit('/').next().unwrap_or(&unit.path).to_owned();
         let resolve = |name: &str| name.to_owned();
-        let found = toolchain::diagnostics(false, &output.stdout, &output.stderr, &resolve);
+        let mut found = toolchain::diagnostics(false, &output.stdout, &output.stderr, &resolve);
+        for d in found.iter_mut().filter(|d| d.severity == "hole") {
+            d.message = format!("{} (a typed hole: fill it to evaluate; ⌘. on it lists candidates)", d.message);
+        }
         let lines: Vec<String> = found
             .iter()
-            .filter(|d| d.severity == "error")
+            // a typed hole stops a unit like any error: it cannot run
+            .filter(|d| d.severity != "warning")
             .map(|d| {
                 if d.line == 0 || d.file != base {
                     return match (d.file.as_str(), d.line) {
@@ -311,7 +315,7 @@ impl Studio {
                 let error = match &source {
                     Source::File { file } => {
                         let report = self.toolchain.check(&self.files(), file).await;
-                        let located = report.diagnostics.iter().any(|d| d.severity == "error" && d.line > 0);
+                        let located = report.diagnostics.iter().any(|d| d.severity != "warning" && d.line > 0);
                         if located { report.describe() } else { error }
                     }
                     _ => error,
@@ -354,7 +358,13 @@ impl Studio {
             }
             Status::Err(code) => {
                 let fixes = fixes(&self.files(), &errors);
-                self.finish_with(id, "error", Some(format!("the unit failed (exit {code}); the session is as it was")), ms, fixes);
+                // a REPL unit looks unbound names up at run time, so a hole fails when reached
+                let hole = if session::undefined_names(&errors).iter().any(|name| name == "??") {
+                    "; it reached a typed hole (??): fill it first (⌘. on the hole lists candidates)"
+                } else {
+                    ""
+                };
+                self.finish_with(id, "error", Some(format!("the unit failed (exit {code}){hole}; the session is as it was")), ms, fixes);
             }
             Status::Interrupted => self.finish(id, "interrupted", Some("interrupted; the session is as it was".into()), ms),
             Status::Dead(why) => {
@@ -378,6 +388,7 @@ impl Studio {
         if let Some(record) = self.toolchain.observed.lock().expect("observed lock").take() {
             let _ = std::fs::remove_file(record);
         }
+        self.clear_lint();
         self.publish_session();
     }
 
@@ -428,7 +439,9 @@ impl Studio {
             changed
         };
         if changed {
+            drop(_queue);
             self.publish_session();
+            self.refresh_lint(None).await;
         }
     }
 

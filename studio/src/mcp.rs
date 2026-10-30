@@ -82,6 +82,11 @@ fn point(arguments: &Value, text: &str) -> Result<usize, String> {
     }
 }
 
+/// A selection's end, `end` (a byte offset), past `at`.
+fn selection_end(arguments: &Value, text: &str, at: usize) -> Option<usize> {
+    arguments["end"].as_u64().map(|end| (end as usize).min(text.len())).filter(|end| *end > at)
+}
+
 pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, arguments: &Value) -> Result<Value, String> {
     let thread = thread.ok_or("this MCP session names no thread; the studio's assistant runs set one")?;
     let text = |key: &str| arguments[key].as_str().map(str::to_owned).ok_or_else(|| format!("missing string argument `{key}`"));
@@ -111,16 +116,61 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
             let files = fork();
             let entries = toolchain::entries(&files);
             let report = studio.toolchain.check_all(&files, &entries).await;
-            Ok(json!({ "ok": report.ok, "checked": entries, "diagnostics": report.describe() }))
+            let mut answer = json!({ "ok": report.ok, "checked": entries, "diagnostics": report.describe() });
+            if report.holed() {
+                let holes: usize = files.values().map(|text| sexp::holes(text).len()).sum();
+                answer["passes"] = json!(report.passes());
+                answer["holes"] = json!(holes);
+                answer["note"] = json!("the check stopped at the first typed hole (??): nothing past it was checked; `holes` lists them with their goals");
+            }
+            Ok(answer)
         }
-        "assists_at" | "type_at" => {
+        "assists_at" => {
+            let file = text("file")?;
+            let files = fork();
+            let body = file_text(&files, &file)?;
+            let at = point(arguments, &body)?;
+            let mut args = vec![at.to_string()];
+            if let Some(end) = selection_end(arguments, &body, at) {
+                args.push(end.to_string());
+            }
+            let mut answer = studio.toolchain.assist_with(&files, "assists", &file, args).await.map_err(|report| report.describe())?;
+            answer["pos"] = json!(at);
+            Ok(answer)
+        }
+        "type_at" => {
             let file = text("file")?;
             let files = fork();
             let at = point(arguments, &file_text(&files, &file)?)?;
-            let op = if name == "type_at" { "type-at" } else { "assists" };
-            let mut answer = studio.toolchain.assist(&files, op, &file, Some(at)).await.map_err(|report| report.describe())?;
+            let mut answer = studio.toolchain.assist(&files, "type-at", &file, Some(at)).await.map_err(|report| report.describe())?;
             answer["pos"] = json!(at);
             Ok(answer)
+        }
+        "holes" => {
+            let files = fork();
+            let holes: Vec<Value> = studio
+                .all_holes(&files)
+                .await
+                .into_iter()
+                .map(|(file, hole)| json!({ "file": file, "line": hole.line, "pos": hole.pos, "goal": hole.goal }))
+                .collect();
+            Ok(json!({ "holes": holes, "note": "pos is a byte offset; assists_at there lists the compiler's fill-hole candidates" }))
+        }
+        "lint" => {
+            let files = fork();
+            if studio.toolchain.observed.lock().expect("observed lock").as_ref().is_none_or(|path| !path.is_file()) {
+                return Ok(json!({ "findings": [], "note": "the author's session has observed nothing yet: evaluate some calls first" }));
+            }
+            let mut findings = Vec::new();
+            for file in files.keys().filter(|file| crate::studio::checkable(file)) {
+                for finding in studio.lint_of(&files, file).await {
+                    findings.push(json!({ "file": file, "line": finding.line, "pos": finding.pos, "message": finding.message, "source": finding.source }));
+                }
+            }
+            Ok(json!({
+                "findings": findings,
+                "note": "matches the session saw take a shape no clause handles (seen so far, not proof); the add-missing-cases assist with source observed at pos adds them",
+            }))
         }
         "facts_at" => {
             let file = text("file")?;
@@ -132,8 +182,11 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
         }
         "apply_assist" => {
             let file = text("file")?;
-            let at = point(arguments, &file_text(&fork(), &file)?)?;
-            studio.propose_assist(thread, &file, at, &text("id")?, note).await
+            let body = file_text(&fork(), &file)?;
+            let at = point(arguments, &body)?;
+            let end = selection_end(arguments, &body, at);
+            let title = arguments["title"].as_str();
+            studio.propose_assist(thread, &file, (at, end), &text("id")?, title, note).await
         }
         "propose_edit" => {
             let change = Change { file: text("file")?, old: text("old")?, new: text("new")? };
@@ -184,8 +237,11 @@ pub fn tools() -> Value {
         "line": { "type": "integer", "description": "1-based line, instead of pos." },
         "column": { "type": "integer", "description": "1-based column, with line." },
     });
-    let mut with_id = at.clone();
-    with_id["id"] = json!({ "type": "string", "description": "The assist's id, as assists_at lists it (fill-match, add-missing-cases, case-split, template, stub)." });
+    let mut selected = at.clone();
+    selected["end"] = json!({ "type": "integer", "description": "With pos, a selection [pos, end) (byte offsets): offers extract (the selection as a new top-level function)." });
+    let mut with_id = selected.clone();
+    with_id["id"] = json!({ "type": "string", "description": "The assist's id, as assists_at lists it (fill-match, add-missing-cases, case-split, template, stub, fill-hole, extract, ...)." });
+    with_id["title"] = json!({ "type": "string", "description": "The assist's exact title, when several share its id (each fill-hole candidate is one)." });
     with_id["note"] = note.clone();
     json!([
         {
@@ -205,13 +261,23 @@ pub fn tools() -> Value {
         },
         {
             "name": "assists_at",
-            "description": "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function, annotate a function from observed types -- each with its title, source and edits. source says where the knowledge came from: type (the checker; certain), observed (values the author's session passed; seen so far, not proof), patterns (other matches and templates in the file), call-site. Prefer these to writing such code yourself; apply_assist proposes one.",
-            "inputSchema": object(at.clone(), &["file"]),
+            "description": "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function, annotate a function from observed types, fill a typed hole ?? (fill-hole: the locals of the goal type, the recursive call, constructors with new holes), and with `end` extract the selection into a function -- each with its title, source and edits. source says where the knowledge came from: type (the checker; certain), observed (values the author's session passed; seen so far, not proof), patterns (other matches and templates in the file), call-site, syntax. Prefer these to writing such code yourself; apply_assist proposes one.",
+            "inputSchema": object(selected, &["file"]),
         },
         {
             "name": "apply_assist",
             "description": "Propose the edit of assist `id` at a point (see assists_at), as a proposal like propose_edit's: checked, scoped, and waiting for the author.",
             "inputSchema": object(with_id, &["file", "id"]),
+        },
+        {
+            "name": "holes",
+            "description": "Every typed hole (??) in the program as your proposals leave it: file, line, byte pos, and its goal type (the type the expression there must have). A program with holes fails to compile; its check stops at the first hole.",
+            "inputSchema": object(json!({}), &[]),
+        },
+        {
+            "name": "lint",
+            "description": "The observation lint: each match with no catch-all whose parameter the author's live session saw take a shape no clause handles (file, line, byte pos of the match, message). Evidence from real runs, not proof. The add-missing-cases assist with source observed at the match adds the cases.",
+            "inputSchema": object(json!({}), &[]),
         },
         {
             "name": "type_at",

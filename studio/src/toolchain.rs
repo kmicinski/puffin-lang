@@ -9,8 +9,14 @@
 //! bytecode compile; assists are unavailable). The same holds for the
 //! observing compile (`--repl --observe`), the `facts` operation, and
 //! `--observed`, which pass the session's observation record to the assist
-//! lane (§3.1). A binary being replaced underneath us fails to start, or
-//! dies by a signal; such runs are tried again.
+//! lane (§3.1), the observation lint, and `rename`. A binary being replaced
+//! underneath us fails to start, or dies by a signal; such runs are tried
+//! again.
+//!
+//! A typed hole (`??`, §5 item 6) is an unbound name outside assists, so a
+//! program with one fails the check at its first hole. That diagnostic is
+//! a hole, not an error: the program passes, holes aside, though nothing
+//! past the first hole was checked.
 
 use crate::sexp;
 use serde::Serialize;
@@ -31,6 +37,8 @@ pub type Files = BTreeMap<String, String>;
 const COMPILE_LIMIT: Duration = Duration::from_secs(60);
 /// Tries for a run that fails to start or dies by a signal.
 const TRIES: u32 = 3;
+/// What the checker says at a typed hole: `??` is unbound outside assists.
+pub const HOLE_MESSAGE: &str = "typecheck: unbound variable ??";
 
 /// One located message: an error from stdout, a warning from stderr.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -39,7 +47,7 @@ pub struct Diagnostic {
     pub file: String,
     /// 1-based; 0 when unlocated.
     pub line: usize,
-    /// "error" or "warning".
+    /// "error", "warning", or "hole" (the checker stopped at a `??`).
     pub severity: &'static str,
     pub message: String,
 }
@@ -62,6 +70,18 @@ impl Report {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Whether the checker stopped at a typed hole.
+    pub fn holed(&self) -> bool {
+        self.diagnostics.iter().any(|d| d.severity == "hole")
+    }
+
+    /// Whether the program passes the check, holes aside: it checks, or the
+    /// checker stopped at a hole with no error before it. Nothing past the
+    /// first hole was checked.
+    pub fn passes(&self) -> bool {
+        self.ok || (self.holed() && !self.diagnostics.iter().any(|d| d.severity == "error"))
     }
 
     pub fn failure(message: impl Into<String>) -> Self {
@@ -98,6 +118,7 @@ pub fn diagnostics(succeeded: bool, stdout: &str, stderr: &str, resolve: &dyn Fn
     let make = |severity: &'static str, text: &str| {
         let (message, at) = located(text);
         let (file, line) = at.map(|(file, line)| (resolve(&file), line)).unwrap_or_default();
+        let severity = if message == HOLE_MESSAGE { "hole" } else { severity };
         Diagnostic { file, line, severity, message }
     };
     for line in stderr.lines() {
@@ -142,6 +163,8 @@ pub struct Toolchain {
     observe: Mutex<Probe>,
     facts: Mutex<Probe>,
     observed_flag: Mutex<Probe>,
+    lint: Mutex<Probe>,
+    rename: Mutex<Probe>,
     /// The live session's observation record, once there is one: what
     /// `--observed` names.
     pub observed: Mutex<Option<PathBuf>>,
@@ -198,6 +221,8 @@ impl Toolchain {
             observe: Mutex::new(Probe::default()),
             facts: Mutex::new(Probe::default()),
             observed_flag: Mutex::new(Probe::default()),
+            lint: Mutex::new(Probe::default()),
+            rename: Mutex::new(Probe::default()),
             observed: Mutex::new(None),
         })
     }
@@ -358,6 +383,43 @@ impl Toolchain {
         .await
     }
 
+    /// Whether `puffincc --assist lint FILE --observed OBS` answers.
+    pub async fn lint_available(&self) -> bool {
+        if !self.assist_available().await {
+            return false;
+        }
+        self.probed(&self.lint, || async {
+            let Ok(workspace) = self.workspace(&Files::from([
+                ("probe.puf".to_owned(), "(define probe 1)\n".to_owned()),
+                ("observed.sexp".to_owned(), "()\n".to_owned()),
+            ])) else {
+                return false;
+            };
+            let args = ["--assist", "lint", "probe.puf", "--observed", "observed.sexp"].map(String::from);
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success && json_lines(&output.stdout, "message").1)
+        })
+        .await
+    }
+
+    /// Whether `puffincc --assist rename FILE POS NEW` is an operation this
+    /// puffincc knows.
+    pub async fn rename_available(&self) -> bool {
+        if !self.assist_available().await {
+            return false;
+        }
+        self.probed(&self.rename, || async {
+            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n(+ probe 1)\n".to_owned())])) else {
+                return false;
+            };
+            let args = ["--assist", "rename", "probe.puf", "8", "renamed"].map(String::from);
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| {
+                !format!("{}{}", output.stdout, output.stderr).contains("unknown --assist operation")
+                    && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.is_object())
+            })
+        })
+        .await
+    }
+
     async fn probe_assist(&self) -> bool {
         let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n".to_owned())])) else {
             return false;
@@ -457,26 +519,42 @@ impl Toolchain {
     /// One `--assist OP FILE [POS]` answer as JSON, or the report of why
     /// there is none (the program does not read or check; or no assist).
     pub async fn assist(&self, files: &Files, op: &str, file: &str, pos: Option<usize>) -> Result<Value, Report> {
+        self.assist_with(files, op, file, pos.map(|pos| pos.to_string()).into_iter().collect()).await
+    }
+
+    /// One `--assist OP FILE ARGS...` answer: `assists FILE POS END` for a
+    /// selection, `rename FILE POS NEW`. `assists` answers
+    /// `{assists, complete, stopped}` and `lint` `{findings, complete}`.
+    pub async fn assist_with(&self, files: &Files, op: &str, file: &str, extra: Vec<String>) -> Result<Value, Report> {
         if !self.assist_available().await {
             return Err(Report::failure("assists unavailable: this puffincc has no --assist"));
         }
         let workspace = self.workspace(files).map_err(Report::failure)?;
         let mut args = vec!["--assist".to_owned(), op.to_owned(), file.to_owned()];
-        if let Some(pos) = pos {
-            args.push(pos.to_string());
-        }
+        args.extend(extra);
         // what the session saw, for the ops that read it
-        if matches!(op, "assists" | "facts") {
+        if matches!(op, "assists" | "facts" | "lint") {
             let record = self.observed.lock().expect("observed lock").clone().filter(|path| path.is_file());
-            if let Some(record) = record
-                && (op == "facts" || self.observed_flag_available().await)
-            {
-                args.extend(["--observed".to_owned(), record.to_string_lossy().into_owned()]);
+            match record {
+                Some(record) if op == "facts" || (op == "assists" && self.observed_flag_available().await) || op == "lint" => {
+                    args.extend(["--observed".to_owned(), record.to_string_lossy().into_owned()]);
+                }
+                // nothing seen: nothing to lint
+                _ if op == "lint" => return Ok(serde_json::json!({ "findings": [], "complete": true })),
+                _ => {}
             }
         }
         let output = self.puffincc(&args, &workspace.dir).await.map_err(Report::failure)?;
         if output.timed_out {
             return Err(Report::failure("the assist timed out"));
+        }
+        if op == "lint" {
+            let (findings, done) = json_lines(&output.stdout, "message");
+            if findings.is_empty() && !done {
+                let resolve = |base: &str| resolve(files, file, base);
+                return Err(Report { ok: false, diagnostics: diagnostics(false, &output.stdout, &output.stderr, &resolve) });
+            }
+            return Ok(serde_json::json!({ "findings": findings, "complete": done }));
         }
         if op == "assists" {
             // one assist a line, then {"done":true}; an error may stop it
@@ -497,6 +575,25 @@ impl Toolchain {
         }
         serde_json::from_str(output.stdout.trim())
             .map_err(|error| Report::failure(format!("puffincc --assist {op} answered no JSON ({error}): {}", output.stdout.trim())))
+    }
+
+    /// The edits renaming the name at byte `pos` of `file` to `name`
+    /// (`--assist rename`), byte offsets into `file`; or why it cannot be
+    /// renamed: the new name would capture another binding, or there is no
+    /// name at `pos`.
+    pub async fn rename(&self, files: &Files, file: &str, pos: usize, name: &str) -> Result<Value, String> {
+        let name = name.trim();
+        if name.is_empty() || name.contains(|c: char| c.is_whitespace() || "()[]\";'`,".contains(c)) {
+            return Err(format!("`{name}` is not a name"));
+        }
+        let answer = self.assist_with(files, "rename", file, vec![pos.to_string(), name.to_owned()]).await.map_err(|report| report.describe())?;
+        if let Some(error) = answer["error"].as_str() {
+            return Err(error.to_owned());
+        }
+        match &answer["edits"] {
+            Value::Array(_) => Ok(answer["edits"].clone()),
+            _ => Err(format!("puffincc --assist rename answered no edits: {answer}")),
+        }
     }
 
     // ---- The live and preview lanes' compiles ----------------------------------
@@ -526,28 +623,10 @@ impl Toolchain {
     /// Compile `entry` of `files` as a whole program and run it on a
     /// throwaway VM within `limit`: the preview lane.
     pub async fn run_program(&self, files: &Files, entry: &str, limit: Duration) -> Value {
-        let workspace = match self.workspace(files) {
-            Ok(workspace) => workspace,
-            Err(error) => return serde_json::json!({ "ok": false, "error": error }),
-        };
-        let pbc = workspace.path("studio-run.pbc");
-        let args = vec!["-t".into(), "bytecode".into(), entry.to_owned(), "-o".into(), pbc.to_string_lossy().into_owned()];
-        let compiled = match self.puffincc(&args, &workspace.dir).await {
-            Ok(output) => output,
-            Err(error) => return serde_json::json!({ "ok": false, "error": error }),
-        };
-        if !compiled.success {
-            let resolve = |base: &str| resolve(files, entry, base);
-            let report = Report { ok: false, diagnostics: diagnostics(false, &compiled.stdout, &compiled.stderr, &resolve) };
-            return serde_json::json!({ "ok": false, "phase": "compile", "errors": report.describe() });
-        }
-        let ran = self.run(&self.vm, &[pbc.to_string_lossy().into_owned()], &workspace.dir, limit).await;
-        match ran {
-            Err(error) => serde_json::json!({ "ok": false, "phase": "run", "error": error }),
-            Ok(output) if output.timed_out => {
-                serde_json::json!({ "ok": false, "phase": "run", "error": format!("no answer within {} s", limit.as_secs()) })
-            }
-            Ok(output) => serde_json::json!({
+        match self.build_and_run(files, entry, limit).await {
+            Ran::Unbuilt(report) => serde_json::json!({ "ok": false, "phase": "compile", "errors": report.describe() }),
+            Ran::Failed(error) => serde_json::json!({ "ok": false, "phase": "run", "error": error }),
+            Ran::Ran(output) => serde_json::json!({
                 "ok": output.success,
                 "phase": "run",
                 "exit": output.code,
@@ -556,23 +635,62 @@ impl Toolchain {
             }),
         }
     }
+
+    /// Compile `entry` of `files` with `-t bytecode` and run it on a
+    /// throwaway VM within `limit`, keeping all it printed.
+    pub async fn build_and_run(&self, files: &Files, entry: &str, limit: Duration) -> Ran {
+        let workspace = match self.workspace(files) {
+            Ok(workspace) => workspace,
+            Err(error) => return Ran::Failed(error),
+        };
+        let pbc = workspace.path("studio-run.pbc");
+        let args = vec!["-t".into(), "bytecode".into(), entry.to_owned(), "-o".into(), pbc.to_string_lossy().into_owned()];
+        let compiled = match self.puffincc(&args, &workspace.dir).await {
+            Ok(output) => output,
+            Err(error) => return Ran::Failed(error),
+        };
+        if !compiled.success {
+            let resolve = |base: &str| resolve(files, entry, base);
+            return Ran::Unbuilt(Report { ok: false, diagnostics: diagnostics(false, &compiled.stdout, &compiled.stderr, &resolve) });
+        }
+        match self.run(&self.vm, &[pbc.to_string_lossy().into_owned()], &workspace.dir, limit).await {
+            Err(error) => Ran::Failed(error),
+            Ok(output) if output.timed_out => Ran::Failed(format!("no answer within {} s", limit.as_secs())),
+            Ok(output) => Ran::Ran(output),
+        }
+    }
+}
+
+/// How a whole-program run went.
+pub enum Ran {
+    /// It did not compile.
+    Unbuilt(Report),
+    /// It could not run, or ran out of time.
+    Failed(String),
+    Ran(Output),
 }
 
 /// `--assist assists` output: the assists, one JSON object a line, and
 /// whether the final `{"done":true}` came. Lines that are not JSON (an
 /// error that stopped the checker) are skipped.
 pub fn assist_lines(stdout: &str) -> (Vec<Value>, bool) {
-    let mut assists = Vec::new();
+    json_lines(stdout, "id")
+}
+
+/// Output of one JSON object a line ended by `{"done":true}`: the objects
+/// with a string `key`, and whether the end came.
+pub fn json_lines(stdout: &str, key: &str) -> (Vec<Value>, bool) {
+    let mut found = Vec::new();
     let mut done = false;
     for line in stdout.lines() {
         let Ok(value) = serde_json::from_str::<Value>(line.trim()) else { continue };
         if value["done"] == Value::Bool(true) {
             done = true;
-        } else if value["id"].is_string() {
-            assists.push(value);
+        } else if value[key].is_string() {
+            found.push(value);
         }
     }
-    (assists, done)
+    (found, done)
 }
 
 /// Where an assist's source comes in the menu: the checker's first, then

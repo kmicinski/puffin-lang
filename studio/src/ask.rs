@@ -3,7 +3,8 @@
 //! makes, and the author's accept and reject.
 //!
 //! No assistant-written code reaches the author without passing the check,
-//! at two gates:
+//! at two gates (typed holes aside: a program whose check stops at a `??`
+//! passes, as the assistant may leave a hole for the author to fill):
 //! - a proposal is refused, with the located errors as the tool's answer,
 //!   unless the thread's program as it would leave it checks, and unless it
 //!   stays inside the turn's scope;
@@ -227,19 +228,25 @@ impl Studio {
         }
         let after = apply(&fork, &change)?;
         let report = self.check_program(&after, std::slice::from_ref(&change.file)).await;
-        if !report.ok {
+        if !report.passes() {
             let before = self.check_program(&fork, std::slice::from_ref(&change.file)).await;
-            let also = if before.ok { "" } else { "\nThe program fails the check without this change too: fix those errors as well." };
+            let also = if before.passes() { "" } else { "\nThe program fails the check without this change too: fix those errors as well." };
             return Err(format!(
                 "Refused: the program as this would leave it fails the check, so nothing was proposed. Fix it and propose again:\n{}{also}",
                 report.describe()
             ));
         }
+        let holes: usize = after.values().map(|text| sexp::holes(text).len()).sum();
         let id = self.review.lock().expect("review lock").propose(&files, thread, change, note)?;
         self.publish_review();
+        let checks = if report.holed() {
+            format!("the program as your proposals leave it has {holes} typed hole(s) (??); it passes the check up to the first hole, and nothing past that hole was checked")
+        } else {
+            "the program as your proposals leave it passes the check".to_owned()
+        };
         Ok(json!({
             "proposed": id,
-            "checks": "the program as your proposals leave it passes the check",
+            "checks": checks,
             "warnings": report.diagnostics.iter().filter(|d| d.severity == "warning").map(|d| format!("{} [{}:{}]", d.message, d.file, d.line)).collect::<Vec<_>>(),
             "message": "queued for the author to accept or reject; nothing changed yet",
         }))
@@ -270,7 +277,7 @@ impl Studio {
             }
         }
         let report = self.check_program(&files, &changed).await;
-        if !report.ok {
+        if !report.passes() {
             return Err(format!("accepting leaves the program failing the check:\n{}", report.describe()));
         }
         {
@@ -335,14 +342,14 @@ impl Studio {
         let mut failure = None;
         if let Some(alone) = made(&[]) {
             let report = self.check_program(&alone, &touched(&[])).await;
-            if report.ok {
+            if report.passes() {
                 return Acceptance { ok: true, ..Acceptance::default() };
             }
             failure = Some(report.describe());
         }
         if !before.is_empty()
             && let Some(all) = made(&before)
-            && self.check_program(&all, &touched(&before)).await.ok
+            && self.check_program(&all, &touched(&before)).await.passes()
         {
             return Acceptance { ok: true, with: before.iter().map(|(id, _)| *id).collect(), reason: String::new() };
         }
@@ -392,16 +399,27 @@ impl Studio {
         checked
     }
 
-    /// Apply `pos`'s assist `id` (computed on the thread's fork) as a
-    /// proposal: the forms the edits touch, before and after.
-    pub(crate) async fn propose_assist(&self, thread: u32, file: &str, pos: usize, id: &str, note: String) -> Result<Value, String> {
+    /// Apply the assist `id` at byte `pos` (or for the selection [pos,
+    /// end)), computed on the thread's fork, as a proposal: the forms the
+    /// edits touch, before and after. `title` picks among assists that
+    /// share the id.
+    pub(crate) async fn propose_assist(
+        &self,
+        thread: u32,
+        file: &str,
+        (pos, end): (usize, Option<usize>),
+        id: &str,
+        title: Option<&str>,
+        note: String,
+    ) -> Result<Value, String> {
         let fork = self.fork_of(thread);
         let text = fork.get(file).ok_or_else(|| format!("there is no file {file}"))?.clone();
-        let answer = self.toolchain.assist(&fork, "assists", file, Some(pos)).await.map_err(|report| report.describe())?;
+        let args = [Some(pos), end].into_iter().flatten().map(|n| n.to_string()).collect();
+        let answer = self.toolchain.assist_with(&fork, "assists", file, args).await.map_err(|report| report.describe())?;
         let assist = answer["assists"]
             .as_array()
-            .and_then(|list| list.iter().find(|assist| assist["id"] == id))
-            .ok_or_else(|| format!("no assist `{id}` applies at {file}:{pos}"))?;
+            .and_then(|list| list.iter().find(|assist| assist["id"] == id && title.is_none_or(|title| assist["title"] == title)))
+            .ok_or_else(|| format!("no assist `{id}`{} applies at {file}:{pos}", title.map(|t| format!(" titled `{t}`")).unwrap_or_default()))?;
         let edits = edits_of(assist)?;
         let (old, new) = anchored(&text, &edits)?;
         let note = if note.is_empty() { assist["title"].as_str().unwrap_or(id).to_owned() } else { note };

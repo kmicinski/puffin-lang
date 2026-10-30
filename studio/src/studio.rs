@@ -14,9 +14,13 @@
 //!
 //! What the live session holds of the program (session.rs) is shown to
 //! every tab as it changes, and its observation record is refreshed about
-//! 300 ms after the evaluations stop (repl.rs).
+//! 300 ms after the evaluations stop (repl.rs). Each check also finds the
+//! program's typed holes and lints the edited modules against the
+//! observations (holes.rs).
 
 use crate::agent::{Agent, AgentEvent};
+use crate::holes::{Finding, Hole, Marks};
+use crate::pin::TestRun;
 use crate::lane::{Lane, LaneStatus};
 use crate::review::{Acceptance, Review, ReviewView};
 use crate::session::{Session, SessionView};
@@ -57,6 +61,9 @@ pub struct Snapshot {
     pub diagnostics: BTreeMap<String, Report>,
     pub transcript: Vec<Entry>,
     pub session: SessionView,
+    /// Each file's typed holes, and its observation lint findings.
+    pub holes: BTreeMap<String, Marks<Hole>>,
+    pub lint: BTreeMap<String, Marks<Finding>>,
     pub features: Features,
     /// Why the assistant cannot run here, if it cannot.
     pub agent_unavailable: Option<String>,
@@ -72,6 +79,10 @@ pub struct Features {
     pub observe: bool,
     /// `puffincc --assist facts` answers.
     pub facts: bool,
+    /// `puffincc --assist lint` answers.
+    pub lint: bool,
+    /// `puffincc --assist rename` is an operation.
+    pub rename: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -88,7 +99,7 @@ pub struct FileView {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Entry {
     pub id: u64,
-    /// "eval", "echo", "ask", or "notice".
+    /// "eval", "echo", "ask", "test", or "notice".
     pub kind: &'static str,
     /// For an eval: "prompt", "buffer", or "file".
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -119,6 +130,9 @@ pub struct Entry {
     pub thread: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<usize>,
+    /// A `,test` run's checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tests: Option<TestRun>,
     #[serde(skip)]
     pub kept: usize,
 }
@@ -158,7 +172,13 @@ pub enum Event {
         ms: u64,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         fixes: Vec<Fix>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tests: Option<TestRun>,
     },
+    /// The typed holes of `file` (none: it has no holes now).
+    Holes { file: String, holes: Marks<Hole> },
+    /// The observation lint's findings in `file`.
+    Lint { file: String, lint: Marks<Finding> },
     /// What the live session holds of the program changed.
     Session(SessionView),
     /// Progress of an assistant turn.
@@ -242,6 +262,9 @@ pub struct Studio {
     pub(crate) eval_queue: tokio::sync::Mutex<()>,
     /// What the live session holds of the program (session.rs).
     pub(crate) session: Mutex<Session>,
+    /// Each file's typed holes and lint findings (holes.rs).
+    pub(crate) holes: Mutex<BTreeMap<String, Marks<Hole>>>,
+    pub(crate) lint: Mutex<BTreeMap<String, Marks<Finding>>>,
     /// Signalled after each successful evaluation: the observation record
     /// is due for a refresh.
     pub(crate) observations_due: Arc<Notify>,
@@ -291,6 +314,8 @@ impl Studio {
             types: Mutex::new(Vec::new()),
             eval_queue: tokio::sync::Mutex::new(()),
             session: Mutex::new(Session::default()),
+            holes: Mutex::new(BTreeMap::new()),
+            lint: Mutex::new(BTreeMap::new()),
             observations_due: Arc::new(Notify::new()),
             agent: Agent::new(mcp_token),
             port: OnceLock::new(),
@@ -338,6 +363,8 @@ impl Studio {
             serve: self.toolchain.serve_available().await,
             observe: self.toolchain.observe_available().await,
             facts: self.toolchain.facts_available().await,
+            lint: self.toolchain.lint_available().await,
+            rename: self.toolchain.rename_available().await,
         }
     }
 
@@ -349,6 +376,8 @@ impl Studio {
         let diagnostics = self.diagnostics.lock().expect("diagnostics lock").clone();
         let transcript = self.transcript.lock().expect("transcript lock").clone();
         let session = self.session_view();
+        let holes = self.holes_view();
+        let lint = self.lint_view();
         Snapshot {
             project: self.directory.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             directory: self.directory.display().to_string(),
@@ -358,6 +387,8 @@ impl Studio {
             diagnostics,
             transcript,
             session,
+            holes,
+            lint,
             features,
             agent_unavailable: Agent::unavailable(),
         }
@@ -587,7 +618,8 @@ impl Studio {
         });
     }
 
-    /// Check the programs `files` belong to, and publish what they report.
+    /// Check the programs `files` belong to, and publish what they report;
+    /// then find the program's holes, and lint `files`.
     pub async fn check_files(&self, files: &[String]) {
         let program = self.files();
         let mut targets: BTreeSet<String> = BTreeSet::new();
@@ -610,6 +642,8 @@ impl Studio {
         }
         let reports = self.diagnostics.lock().expect("diagnostics lock").clone();
         self.publish(Event::Diagnostics { reports });
+        self.refresh_holes(&program).await;
+        self.refresh_lint(Some(files)).await;
     }
 
     /// Check `file` unless a report for it is known.
@@ -699,6 +733,12 @@ impl Studio {
 
     /// Finish entry `id` with what would fix its failure.
     pub fn finish_with(&self, id: u64, status: &str, error: Option<String>, ms: u64, fixes: Vec<Fix>) {
+        self.finish_entry(id, status, error, ms, fixes, None);
+    }
+
+    /// Finish entry `id`, with what would fix its failure, or a test run's
+    /// checks.
+    pub fn finish_entry(&self, id: u64, status: &str, error: Option<String>, ms: u64, fixes: Vec<Fix>, tests: Option<TestRun>) {
         {
             let mut transcript = self.transcript.lock().expect("transcript lock");
             if let Some(entry) = transcript.iter_mut().rev().find(|entry| entry.id == id) {
@@ -706,9 +746,10 @@ impl Studio {
                 entry.error = error.clone();
                 entry.ms = ms;
                 entry.fixes = fixes.clone();
+                entry.tests = tests.clone();
             }
         }
-        self.publish(Event::EntryDone { id, status: status.to_owned(), error, ms, fixes });
+        self.publish(Event::EntryDone { id, status: status.to_owned(), error, ms, fixes, tests });
     }
 
     /// The entry `id`, as kept.

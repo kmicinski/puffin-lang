@@ -1,8 +1,9 @@
 //! The studio end to end, over the real compiler and VM of the repository
 //! (`build/puffincc`, `bin/puffin-vm`): edits and saves, checks, REPL
 //! evaluation with the session's types carried between units, and the
-//! assistant's MCP tools with a proposal's round trip -- everything but
-//! spawning claude. Tests that need a binary that is not built say so and
+//! assistant's MCP tools with a proposal's round trip, typed holes, the
+//! observation lint, extract and rename, and pinned tests -- everything
+//! but spawning claude. Tests that need a binary that is not built say so and
 //! pass.
 
 use crate::review::{Scope, ScopeKind, Status};
@@ -149,7 +150,7 @@ async fn mcp_lists_tools_and_admits_only_its_token() {
     let bytes = axum::body::to_bytes(answer.into_body(), 1 << 20).await.unwrap();
     let listed: Value = serde_json::from_slice(&bytes).unwrap();
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "facts_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc"] {
+    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "facts_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc", "holes", "lint"] {
         assert!(names.contains(&name), "{name} in {names:?}");
     }
 }
@@ -358,5 +359,174 @@ async fn observed_calls_come_back_as_the_record() {
     assert!(line.starts_with("eval-expr e: ") && line.ends_with("over 3 calls"), "{line}");
     studio.reset().await;
     assert!(studio.toolchain.observed.lock().unwrap().is_none());
+    studio.lane.reset().await;
+}
+
+const HOLES: &str = "\
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (depth [e : Expr]) : Int
+  (match e
+    [(Num n) ??]
+    [(Add a b) (+ 1 (depth a))]))
+(define (size [e : Expr]) : Int
+  (+ 1 ??))
+";
+
+#[tokio::test]
+async fn holes_are_not_errors_and_have_goals() {
+    let Some(studio) = studio("holes", &[("h.puf", HOLES)]) else { return };
+    if !studio.toolchain.facts_available().await {
+        eprintln!("skipped: this puffincc has no --assist facts");
+        return;
+    }
+    let report = studio.toolchain.check(&studio.files(), "h.puf").await;
+    assert!(!report.ok && report.holed() && report.passes(), "{report:?}");
+    assert!(report.diagnostics.iter().all(|d| d.severity != "error"), "{report:?}");
+    studio.check_files(&["h.puf".to_owned()]).await;
+    let holes = studio.holes_view();
+    let marks = &holes["h.puf"];
+    assert_eq!(marks.items.len(), 2);
+    assert_eq!(marks.items[0].goal.as_deref(), Some("Int"), "{marks:?}");
+    assert_eq!((marks.items[0].line, marks.items[1].line), (4, 7));
+
+    // the assistant sees them, and the compiler's candidates for one
+    let t = thread(&studio, Scope { kind: ScopeKind::Program, ..Scope::default() });
+    let listed = tool(&studio, t, "holes", json!({})).await.unwrap();
+    assert_eq!(listed["holes"].as_array().unwrap().len(), 2, "{listed}");
+    assert_eq!(listed["holes"][0]["goal"], "Int");
+    let pos = listed["holes"][0]["pos"].as_u64().unwrap();
+    let found = tool(&studio, t, "assists_at", json!({ "file": "h.puf", "pos": pos })).await.unwrap();
+    let fills: Vec<&str> = found["assists"].as_array().unwrap().iter().filter(|a| a["id"] == "fill-hole").filter_map(|a| a["title"].as_str()).collect();
+    assert!(fills.len() >= 2, "{found}");
+    // a fill picked by title; the program keeps its other hole and still passes
+    let title = fills.iter().find(|title| title.contains(" n ")).expect("a fill with n");
+    let proposed = tool(&studio, t, "apply_assist", json!({ "file": "h.puf", "pos": pos, "id": "fill-hole", "title": title })).await.unwrap();
+    assert!(proposed["checks"].as_str().unwrap().contains("hole"), "{proposed}");
+    let fork = tool(&studio, t, "get_file", json!({ "file": "h.puf" })).await.unwrap();
+    assert!(fork["text"].as_str().unwrap().contains("[(Num n) n]"), "{fork}");
+    // the assistant may leave a hole of its own
+    let left = tool(&studio, t, "propose_edit", json!({ "file": "h.puf", "old": "(+ 1 (depth a))", "new": "(+ 1 (max ?? ??))", "note": "which branch counts is your call" })).await;
+    assert!(left.is_ok(), "{left:?}");
+    // and filling them all leaves a program that checks
+    studio.accept(&[proposed["proposed"].as_u64().unwrap() as u32]).await.unwrap();
+    assert!(studio.text_of("h.puf").unwrap().contains("[(Num n) n]"));
+}
+
+#[tokio::test]
+async fn a_selection_extracts_and_a_name_renames() {
+    let text = "(define (g a b c d)\n  (+ a (* b (- c d))))\n";
+    let Some(studio) = studio("extract", &[("g.puf", text), ("user.puf", "(require \"g.puf\")\n(g 1 2 3 4)\n")]) else { return };
+    if !studio.toolchain.assist_available().await {
+        return;
+    }
+    let start = text.find("(* b").unwrap();
+    let end = start + "(* b (- c d))".len();
+    let t = thread(&studio, Scope { kind: ScopeKind::Program, ..Scope::default() });
+    let found = tool(&studio, t, "assists_at", json!({ "file": "g.puf", "pos": start, "end": end })).await.unwrap();
+    let extract = found["assists"].as_array().unwrap().iter().find(|a| a["id"] == "extract").expect("extract offered").clone();
+    assert!(extract["title"].as_str().unwrap().contains("(extracted b c d)"), "{extract}");
+    let proposed = tool(&studio, t, "apply_assist", json!({ "file": "g.puf", "pos": start, "end": end, "id": "extract" })).await.unwrap();
+    assert!(proposed["proposed"].is_u64(), "{proposed}");
+
+    if !studio.toolchain.rename_available().await {
+        eprintln!("skipped: this puffincc has no --assist rename");
+        return;
+    }
+    let at = text.find("a b c d").unwrap();
+    let edits = studio.toolchain.rename(&studio.files(), "g.puf", at, "x").await.unwrap();
+    assert_eq!(edits.as_array().unwrap().len(), 2, "{edits}");
+    assert!(studio.toolchain.rename(&studio.files(), "g.puf", 0, "x").await.is_err());
+    assert!(studio.toolchain.rename(&studio.files(), "g.puf", at, "two words").await.is_err());
+    // a top-level name other modules use: the rename says they still do
+    let note = crate::web::importers_note(&studio.files(), "g.puf", text.find("g a").unwrap()).expect("a note");
+    assert!(note.contains("user.puf"), "{note}");
+    assert!(crate::web::importers_note(&studio.files(), "g.puf", at).is_none());
+}
+
+const SHAPES: &str = "\
+(define (ev e)
+  (match e
+    [`(num ,n) n]
+    [`(add ,a ,b) (+ (ev a) (ev b))]))
+";
+
+#[tokio::test]
+async fn shapes_no_clause_handles_are_linted() {
+    use crate::repl::Source;
+    let Some(studio) = studio("lint", &[("s.puf", SHAPES)]) else { return };
+    if !studio.toolchain.observe_available().await || !studio.toolchain.lint_available().await {
+        eprintln!("skipped: this puffincc cannot observe or lint");
+        return;
+    }
+    // the session runs a version of ev with a catch-all; the module's has none
+    studio.evaluate("(define (ev e) (match e [`(num ,n) n] [`(add ,a ,b) (+ (ev a) (ev b))] [_ 0]))".into(), Source::Prompt).await;
+    studio.evaluate("(ev '(add (num 1) (neg 2)))".into(), Source::Prompt).await;
+    assert_eq!(entry_of(&studio, "(ev '(add (num 1) (neg 2)))").status.as_deref(), Some("ok"));
+    // the refresh lints every module
+    studio.refresh_observations().await;
+    let lint = studio.lint_view();
+    let findings = &lint["s.puf"].items;
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].message.contains("neg"), "{findings:?}");
+    assert_eq!((findings[0].line, findings[0].source.as_str()), (2, "observed"));
+    let t = thread(&studio, Scope { kind: ScopeKind::Program, ..Scope::default() });
+    let told = tool(&studio, t, "lint", json!({})).await.unwrap();
+    assert_eq!(told["findings"][0]["file"], "s.puf", "{told}");
+    // the facts of the form list it; the fix is the observed add-missing-cases
+    let facts = studio.facts_at(&studio.files(), "s.puf", 20, false).await.unwrap();
+    assert_eq!(facts["lint"].as_array().unwrap().len(), 1, "{facts}");
+    let fix = studio.toolchain.assist(&studio.files(), "assists", "s.puf", Some(findings[0].pos + 1)).await.unwrap();
+    assert!(fix["assists"].as_array().unwrap().iter().any(|a| a["id"] == "add-missing-cases" && a["source"] == "observed"), "{fix}");
+    // a reset forgets the record, and with it the findings
+    studio.reset().await;
+    assert!(studio.lint_view().is_empty());
+    studio.lane.reset().await;
+}
+
+const PINNED: &str = "\
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (eval-expr [e : Expr]) : Int
+  (match e [(Num n) n] [(Add a b) (+ (eval-expr a) (eval-expr b))]))
+(define example (Add (Num 2) (Num 12)))
+(println \"expr.puf loaded\")
+";
+
+#[tokio::test]
+async fn results_pin_as_checks_and_test_runs_them() {
+    use crate::repl::Source;
+    let Some(studio) = studio("pin", &[("expr.puf", PINNED)]) else { return };
+    studio.evaluate(PINNED.into(), Source::File { file: "expr.puf".into() }).await;
+    for line in ["(eval-expr example)", "(Add (Num 1) (Num 2))", "\"a \\\"quoted\\\" string\"", "(define z 1)"] {
+        studio.evaluate(line.into(), Source::Prompt).await;
+    }
+    for line in ["(eval-expr example)", "(Add (Num 1) (Num 2))"] {
+        let entry = entry_of(&studio, line);
+        assert_eq!(entry.status.as_deref(), Some("ok"), "{entry:?}");
+    }
+    let id = |line: &str| entry_of(&studio, line).id;
+    studio.pin(id("(eval-expr example)")).unwrap();
+    studio.pin(id("(Add (Num 1) (Num 2))")).unwrap();
+    studio.pin(id("\"a \\\"quoted\\\" string\"")).unwrap();
+    assert!(studio.pin(id("(eval-expr example)")).unwrap_err().contains("already"));
+    assert!(studio.pin(id("(define z 1)")).is_err());
+    let tests = studio.text_of("tests.puf").unwrap();
+    assert_eq!(crate::sexp::requires(&tests), ["expr.puf"]);
+    assert!(tests.contains("(check-printed '(eval-expr example) (eval-expr example) \"14\")"), "{tests}");
+    assert_eq!(studio.recent(1).pop().unwrap().line, ",pin 7".replace('7', &id("\"a \\\"quoted\\\" string\"").to_string()));
+
+    // the author breaks one check; ,test says which, by line
+    let version = studio.version_of("tests.puf").unwrap();
+    studio.edit(1, "tests.puf", version, tests.replace("\"14\")", "\"15\")")).unwrap();
+    let ran = studio.entry(studio.run_tests().await).expect("a test entry");
+    let run = ran.tests.clone().unwrap_or_else(|| panic!("checks: {ran:?}\n{}", studio.text_of("tests.puf").unwrap()));
+    assert_eq!((run.passed, run.failed, run.not_run), (2, 1, 0), "{ran:?}");
+    let failed = run.results.iter().find(|result| !result.ok).unwrap();
+    assert_eq!(failed.expression, "(eval-expr example)");
+    let text = studio.text_of("tests.puf").unwrap();
+    assert!(crate::sexp::line_of(&text, text.find("\"15\"").unwrap()) == failed.line, "{run:?}");
+    assert!(failed.detail.contains("got      14"), "{failed:?}");
+    // the module's own top-level effect ran once, ahead of the checks
+    assert!(ran.out.iter().any(|(stream, text)| stream == "out" && text == "expr.puf loaded\n"), "{:?}", ran.out);
+    assert_eq!(ran.status.as_deref(), Some("failed"));
     studio.lane.reset().await;
 }
