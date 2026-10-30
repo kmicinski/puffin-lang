@@ -1506,6 +1506,46 @@
 (define (assoc-node n pairs)
   (findf (lambda (p) (eq? (car p) n)) pairs))
 
+;; ---- assist: annotate a parameter from its constructor patterns ------------------------
+
+;; a match on an unannotated parameter whose clauses are constructor
+;; patterns of one ADT (or catch-alls): the parameter is that type.
+;; Annotating it turns on the type's assists (exhaustiveness, fill)
+;; and a cast with blame at the function's entry.
+(define (annotate-param-assist m path)
+  (let ([sp (scrutinee-param m path)])
+    (when (and sp (not (param-annotated? path (second sp))))
+      (let* ([owners (filter-map (lambda (cl)
+                                   (and (lst? cl) (pair? (lst-kids cl))
+                                        (let* ([d (syn->datum (car (lst-kids cl)))]
+                                               [c (cond [(and (pair? d) (symbol? (car d))) (ctor-by-source (car d))]
+                                                        [(symbol? d) (ctor-by-source d)]
+                                                        [else #f])])
+                                          (if c (ctor-owner (hash-ref (ctors) c)) (if (symbol? d) 'any 'other)))))
+                                 (cdr (cdr (lst-kids m))))]
+             [types (dedupe-by (lambda (t) t) (filter (lambda (t) (not (eq? t 'any))) owners))])
+        (when (and (eq? (length types) 1) (not (eq? (car types) 'other)))
+          (let* ([t (car types)]
+                 [params (hash-ref (adts) t)]
+                 [tname (if (null? params)
+                            (symbol->string (nm t))
+                            (str-cat "(" (symbol->string (nm t)) (string-concat (map (lambda (p) " _") params)) ")"))]
+                 [binder (param-binder-node path (second sp))])
+            (when binder
+              (emit-assist "annotate-param"
+                           (str-cat "Annotate " (symbol->string (third sp)) " : " tname " (its patterns are " tname "'s)")
+                           "type"
+                           (list (edit (syn-start binder) (syn-end binder)
+                                       (str-cat "[" (symbol->string (third sp)) " : " tname "]")))))))))))
+
+;; the atom of the enclosing define's i-th formal
+(define (param-binder-node path i)
+  (let* ([top (top-of path)]
+         [kids (lst-kids top)])
+    (and (pair? (cdr kids)) (lst? (car (cdr kids)))
+         (let ([formals (cdr (lst-kids (car (cdr kids))))])
+           (and (< i (length formals)) (atom? (list-ref formals i)) (list-ref formals i))))))
+
 ;; ---- the assists operation --------------------------------------------------------
 
 ;; a cursor just past a closer belongs, for assists, to the form it
@@ -1543,7 +1583,8 @@
         (when (and m (pair? (cdr (lst-kids m))))
           (observed-match-assist m path)
           (call-site-match-assist m path)
-          (promote-assist m path forms))
+          (promote-assist m path forms)
+          (annotate-param-assist m path))
         (when (and (not on-hole) (eq? (head-sym top) 'define)) (annotate-assist top))
         (when (and m (pair? (cdr (lst-kids m))))
           (let ([scrut (car (cdr (lst-kids m)))])

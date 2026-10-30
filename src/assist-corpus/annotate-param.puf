@@ -1,0 +1,25 @@
+;; assist: assists @ "(match e" +3
+;; after promote: a match whose clauses are all one type's constructors
+;; offers to annotate its parameter with that type
+;; an untyped arithmetic language
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+(define (ev e)
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (ev a) (ev b))]
+    [(Mul a b) (* (ev a) (ev b))]))
+
+(define (simp e)
+  (match e
+    [(Add a b) (Add (simp a) (simp b))]
+    [(Mul a b) (Mul (simp a) (simp b))]
+    [_ e]))
+
+(define (double x) (Mul (Num 2) x))
+
+(println (ev (simp (Add (Num 1) (Mul (Num 2) (Num 3))))))
+(println (ev (double (Num 21))))
