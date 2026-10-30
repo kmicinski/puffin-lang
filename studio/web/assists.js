@@ -268,10 +268,23 @@ export function createAssists({ editor, files, send, note, facts }) {
         }
         if (!clauses.length) return { items: [] };
         const indent = " ".repeat(where.indent);
-        const insertText = (where.newline ? `\n${indent}` : "") + clauses.join(`\n${indent}`);
+        const insertText = (where.newline ? `\n${indent}` : " ".repeat(where.pad)) + clauses.join(`\n${indent}`);
         return { items: [{ insertText, range: monaco.Range.fromPositions(position, position) }] };
       },
       freeInlineCompletions() {},
+    });
+    // One Tab takes the ghost text, even when it begins with the
+    // indentation Enter left short (Monaco would spend that Tab on
+    // indenting first and need a second). Nothing showing: Tab as usual.
+    monacoEditor.onKeyDown((event) => {
+      if (event.browserEvent.code !== "Tab" || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+      const model = monacoEditor.getModel();
+      const version = model.getVersionId();
+      monacoEditor.trigger("puffin", "editor.action.inlineSuggest.commit", null);
+      if (model.getVersionId() !== version) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     });
     // Monaco asks for ghost text as one types; arriving at such a place by
     // cursor alone asks too, once the cursor rests.
@@ -374,18 +387,23 @@ export function clauseSlot(text, pos) {
 // clause slot with nothing but closing brackets after it on the line.
 // `indent` is the column the clauses go at; `newline` says they start
 // on a new line (the cursor is after the scrutinee or a clause, not on
-// a line of its own).
+// a line of its own); else `pad` is the spaces the first clause needs
+// to reach that column from the cursor.
 export function restSlot(text, pos) {
   const slot = clauseSlot(text, pos);
   if (!slot || slot.inClause) return null;
   const lineStart = text.lastIndexOf("\n", pos - 1) + 1;
   const lineEnd = text.indexOf("\n", pos);
   if (!/^[ \t\])]*$/.test(text.slice(pos, lineEnd < 0 ? text.length : lineEnd))) return null;
-  if (/^[ \t]*$/.test(text.slice(lineStart, pos))) return { indent: pos - lineStart, newline: false };
   const column = (at) => at - (text.lastIndexOf("\n", at - 1) + 1);
   const before = slot.match.children.filter((child) => child.kind !== "comment" && child.end <= pos);
   const indent = before.length > 2 ? column(before.at(-1).start) : column(slot.match.start) + 2;
-  return { indent, newline: true };
+  if (!/^[ \t]*$/.test(text.slice(lineStart, pos))) return { indent, newline: true, pad: 0 };
+  // on a line of its own: Enter only copied the line above's indent, so
+  // the first clause is padded out to the structural one (or kept where
+  // a deeper indent was typed on purpose)
+  const here = pos - lineStart;
+  return { indent: Math.max(indent, here), newline: false, pad: Math.max(0, indent - here) };
 }
 
 // The command applying `assist` in `file` is: `,assist ID FILE:POS`, with
