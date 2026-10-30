@@ -1,0 +1,23 @@
+[package]
+name = "puffin-studio"
+version = "0.1.0"
+edition = "2024"
+description = "Puffin Studio: a local web workbench for Puffin programs (docs/STUDIO.md)"
+license = "MIT"
+
+[[bin]]
+name = "puffin-studio"
+path = "src/main.rs"
+
+[lib]
+name = "puffin_studio"
+path = "src/lib.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws"] }
+# Signals to the live session's process group (interrupt, reset). Already
+# in the tree through tokio.
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time", "fs"] }

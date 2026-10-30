@@ -1,0 +1,127 @@
+/* The assistant (assist.js): ask mode at the prompt and its answers in the
+   transcript, ported from Slog Studio; and the compiler's assists menu
+   (assists.js). Violet marks the assistant, as green marks Puffin. */
+
+/* ---- The prompt ---------------------------------------------------------- */
+
+.prompt-row { position: relative; }
+.prompt-row.ask { background: var(--violet-tint); box-shadow: inset 3px 0 0 var(--violet); }
+.prompt-row.ask .caret { color: var(--violet); }
+/* Ask mode was chosen: how to ask, and how to leave, show without hints. */
+#repl .prompt-row.ask #prompt::placeholder { color: var(--muted); }
+.assist-tag {
+  height: 20px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: white;
+  color: var(--violet);
+  font: 11px var(--sans);
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+.assist-tag:hover:not(:disabled) { background: white; color: var(--strong); }
+
+/* ---- Answers in the transcript --------------------------------------------- */
+
+#transcript .entry { position: relative; }
+.entry.assist .line { color: var(--violet); }
+.entry.assist .line::before { content: "✦ "; color: var(--violet); }
+.entry.assist.follow .line::before { content: "↳ "; }
+.assist-body { font: 13px/1.5 var(--sans); color: var(--text); padding: 2px 0 0 14px; max-width: 80ch; }
+.assist-body .error { margin-top: 4px; }
+.assist-activity { color: var(--muted); padding-left: 14px; font: italic 12px var(--sans); }
+.assist-foot { display: flex; gap: 12px; padding: 2px 0 0 14px; color: var(--muted); font: 11px var(--sans); }
+.assist-foot a, .assist-actions a, a.assist-why { color: var(--muted); cursor: pointer; }
+.assist-foot a:hover, .assist-actions a:hover, a.assist-why:hover { color: var(--violet); text-decoration: underline; }
+
+/* A suggested command, or a plan's steps. */
+.assist-chips, .assist-plan { margin: 4px 0 8px; }
+.assist-plan-head { display: flex; gap: 12px; color: var(--muted); font: 11px var(--sans); margin-bottom: 2px; }
+.assist-plan-head a { color: var(--violet); cursor: pointer; }
+.assist-step {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+}
+.assist-step:hover { background: var(--chrome); }
+.assist-step code {
+  font: 12px/1.5 var(--mono);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+  color: var(--strong);
+  white-space: pre-wrap;
+  cursor: text;
+}
+.assist-step button.small { height: 20px; padding: 0 7px; font-size: 11px; }
+.assist-step .note { flex-basis: 100%; padding-left: 22px; color: var(--muted); font: 12px var(--sans); }
+.assist-step .mark { width: 14px; color: var(--green); text-align: center; }
+.assist-chips .mark { display: none; }
+.assist-plan .assist-step .mark::before { content: "○"; color: var(--muted); }
+.assist-plan .assist-step.done .mark::before { content: "✓"; color: var(--green); }
+
+/* "explain" and "next?" on any entry, while the pointer is over it. */
+.assist-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: none;
+  gap: 10px;
+  padding: 0 4px;
+  background: var(--surface);
+  font: 11px var(--sans);
+}
+.entry:hover > .assist-actions { display: flex; }
+a.assist-why { float: right; margin-left: 12px; font: 11px var(--sans); }
+
+.assist-step.done code { border-color: var(--green); }
+.entry.assist .line { color: var(--violet); font-weight: 600; }
+.assist-body .note { padding-left: 0; }
+
+/* The steps an answer took: one quiet line, open for each call. */
+.assist-calls { margin: 0 0 6px; color: var(--muted); font: 11.5px var(--sans); }
+.assist-calls summary { cursor: pointer; }
+.assist-calls summary:hover { color: var(--violet); }
+.assist-call { padding-left: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assist-call .mark { display: inline-block; width: 14px; color: var(--green); }
+.assist-call.error .mark { color: var(--orange); }
+.assist-call.running .mark { color: var(--muted); }
+
+/* ---- The compiler's assists at the cursor (⌘.) ------------------------------ */
+
+.assist-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 260px;
+  max-width: 480px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(7, 54, 66, 0.18);
+}
+.assist-menu-head, .assist-menu-foot { padding: 2px 8px 4px; color: var(--muted); font: 11px var(--sans); }
+.assist-item {
+  display: flex;
+  width: 100%;
+  height: 26px;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  font: 12.5px var(--sans);
+  text-align: left;
+}
+.assist-item .title { flex: 1; color: var(--strong); }
+.assist-item .source { font: 10.5px var(--mono); color: var(--muted); }
+.assist-item .source-type { color: var(--green); }
+.assist-item .source-patterns { color: var(--yellow); }
+.assist-item .source-call-site { color: var(--blue); }
+.assist-item.chosen, .assist-item:hover:not(:disabled) { background: var(--chrome); }

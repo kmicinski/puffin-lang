@@ -1,0 +1,329 @@
+//! Evaluation in the live lane (docs/STUDIO.md §2.2): text from the prompt,
+//! a form from a buffer, or a whole module, compiled as one `--repl` unit
+//! and loaded into the session. A unit that does not compile never reaches
+//! the session.
+//!
+//! Each unit is checked alone, so a later unit does not know an earlier
+//! unit's `define-type`. The studio keeps every type declaration the
+//! session has loaded and puts them ahead of each unit it compiles, the
+//! latest definition of a name winning; a unit that defines a type itself
+//! gets only the others.
+
+use crate::lane::{Output, Status};
+use crate::sexp;
+use crate::studio::{Entry, Studio};
+use crate::toolchain::{self, Files};
+use serde_json::{Value, json};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Where a unit's text came from.
+#[derive(Clone, Debug)]
+pub enum Source {
+    /// Typed at the prompt.
+    Prompt,
+    /// A form of `file`, starting on `line` (eval-from-buffer).
+    Buffer { file: String, line: usize },
+    /// The whole module `file`.
+    File { file: String },
+}
+
+/// A unit ready to compile: where it is, and how its lines map back.
+pub struct Unit {
+    /// The directory to compile in, and the unit's path within it.
+    pub dir: std::path::PathBuf,
+    pub path: String,
+    /// The lines the session's types took ahead of the text, and the line
+    /// after which they were put (0: at the very start).
+    pub prefix_lines: usize,
+    pub inserted_after: usize,
+    /// The type names the unit's own text defines.
+    pub defines: Vec<(String, String)>,
+    /// Kept alive until the unit has run.
+    _workspace: Option<toolchain::Workspace>,
+}
+
+/// The session's types `text` does not define itself, as one block.
+pub fn prefix(types: &[(String, String)], defined: &[String]) -> String {
+    types
+        .iter()
+        .filter(|(name, _)| !defined.contains(name))
+        .map(|(_, form)| format!("{form}\n"))
+        .collect()
+}
+
+/// Keep `defines` as the session's newest type declarations.
+pub fn remember(types: &mut Vec<(String, String)>, defines: &[(String, String)]) {
+    for (name, form) in defines {
+        match types.iter_mut().find(|(known, _)| known == name) {
+            Some(kept) => kept.1 = form.clone(),
+            None => types.push((name.clone(), form.clone())),
+        }
+    }
+}
+
+/// Where in a module the session's types go: after its leading `require`
+/// and `provide` forms, which must come first. (byte offset, line)
+pub fn insertion_point(text: &str) -> (usize, usize) {
+    let mut at = (0, 0);
+    for form in sexp::forms(text) {
+        match form.head.as_deref() {
+            Some("require" | "provide") => at = (form.end, sexp::line_of(text, form.end)),
+            _ => break,
+        }
+    }
+    at
+}
+
+/// Words an assistant's `evaluate` may not use: effects outside the
+/// session, and reads of stdin (which is the session's command pipe).
+const EFFECTS: [&str; 7] = ["system", "write-file", "read", "read-all", "read-line", "foreign", "define-foreign-type"];
+
+pub fn effectful(text: &str) -> Option<&'static str> {
+    let words: Vec<&str> = text.split(|c: char| c.is_whitespace() || "()[]'`,\"".contains(c)).collect();
+    EFFECTS.into_iter().find(|effect| words.contains(effect))
+}
+
+impl Studio {
+    /// Lay out `text` from `source` as a unit, with the session's types.
+    pub(crate) fn unit(&self, text: &str, source: &Source) -> Result<Unit, String> {
+        let types = self.types.lock().expect("types lock").clone();
+        match source {
+            Source::Prompt | Source::Buffer { .. } => {
+                let mut defines = sexp::define_types(text);
+                let mut names: Vec<String> = defines.iter().map(|(name, _)| name.clone()).collect();
+                // a form from a buffer means its module's types, as the
+                // module now declares them
+                if let Source::Buffer { file, .. } = source {
+                    let files = self.files();
+                    let mut declared = Vec::new();
+                    for path in toolchain::closure(&files, file) {
+                        if let Some(module) = files.get(&path) {
+                            declared.extend(sexp::define_types(module).into_iter().filter(|(name, _)| !names.contains(name)));
+                        }
+                    }
+                    names.extend(declared.iter().map(|(name, _)| name.clone()));
+                    let head = prefix(&types, &names);
+                    let own = declared.iter().map(|(_, form)| format!("{form}\n")).collect::<String>();
+                    defines.extend(declared);
+                    let head = format!("{head}{own}");
+                    let dir = self.toolchain.fresh("unit");
+                    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+                    std::fs::write(dir.join("unit.puf"), format!("{head}{text}\n")).map_err(|error| error.to_string())?;
+                    return Ok(Unit { dir, path: "unit.puf".into(), prefix_lines: head.matches('\n').count(), inserted_after: 0, defines, _workspace: None });
+                }
+                let head = prefix(&types, &names);
+                let dir = self.toolchain.fresh("unit");
+                std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+                std::fs::write(dir.join("unit.puf"), format!("{head}{text}\n")).map_err(|error| error.to_string())?;
+                Ok(Unit { dir, path: "unit.puf".into(), prefix_lines: head.matches('\n').count(), inserted_after: 0, defines, _workspace: None })
+            }
+            Source::File { file } => {
+                let files = self.files();
+                let mut defines = Vec::new();
+                for path in toolchain::closure(&files, file) {
+                    if let Some(text) = files.get(&path) {
+                        defines.extend(sexp::define_types(text));
+                    }
+                }
+                let names: Vec<String> = defines.iter().map(|(name, _)| name.clone()).collect();
+                let head = prefix(&types, &names);
+                let (at, line) = insertion_point(text);
+                let mut with_types = files.clone();
+                let joined = if head.is_empty() { text.to_owned() } else { format!("{}\n{head}{}", &text[..at], &text[at..]) };
+                with_types.insert(file.clone(), joined);
+                let workspace = self.toolchain.workspace(&with_types)?;
+                let prefix_lines = if head.is_empty() { 0 } else { head.matches('\n').count() + 1 };
+                Ok(Unit {
+                    dir: workspace.dir.clone(),
+                    path: file.clone(),
+                    prefix_lines,
+                    inserted_after: line,
+                    defines,
+                    _workspace: Some(workspace),
+                })
+            }
+        }
+    }
+
+    /// Compile `unit`; the .pbc, or the compiler's message with its lines
+    /// mapped back to the text (and, for a buffer's form, to its file).
+    pub(crate) async fn compile(&self, unit: &Unit, source: &Source) -> Result<std::path::PathBuf, String> {
+        let out = unit.dir.join("unit.pbc");
+        let output = self.toolchain.compile_unit(&unit.dir, &unit.path, &out).await?;
+        if output.timed_out {
+            return Err("the compile timed out".to_owned());
+        }
+        if output.success && out.is_file() {
+            return Ok(out);
+        }
+        let base = unit.path.rsplit('/').next().unwrap_or(&unit.path).to_owned();
+        let resolve = |name: &str| name.to_owned();
+        let found = toolchain::diagnostics(false, &output.stdout, &output.stderr, &resolve);
+        let lines: Vec<String> = found
+            .iter()
+            .filter(|d| d.severity == "error")
+            .map(|d| {
+                if d.line == 0 || d.file != base {
+                    return match (d.file.as_str(), d.line) {
+                        ("", _) | (_, 0) => d.message.clone(),
+                        (file, line) => format!("{} [{file}:{line}]", d.message),
+                    };
+                }
+                let line = if d.line > unit.inserted_after { d.line.saturating_sub(unit.prefix_lines) } else { d.line };
+                if line <= unit.inserted_after && unit.prefix_lines > 0 && d.line > unit.inserted_after {
+                    return format!("{} (in a type the session declared earlier)", d.message);
+                }
+                match source {
+                    Source::Prompt => format!("{} [line {line}]", d.message),
+                    Source::Buffer { file, line: first } => format!("{} [{file}:{}]", d.message, first + line - 1),
+                    Source::File { file } => format!("{} [{file}:{line}]", d.message),
+                }
+            })
+            .collect();
+        Err(if lines.is_empty() { "the unit does not compile".to_owned() } else { lines.join("\n") })
+    }
+
+    /// Evaluate `text` in the live session, as a transcript entry.
+    pub async fn evaluate(self: &Arc<Self>, text: String, source: Source) {
+        let (origin, file) = match &source {
+            Source::Prompt => ("prompt", None),
+            Source::Buffer { file, .. } => ("buffer", Some(file.clone())),
+            Source::File { file } => ("file", Some(file.clone())),
+        };
+        let line = match &source {
+            Source::File { file } => format!(",load {file}"),
+            _ => text.trim().to_owned(),
+        };
+        let id = self.begin(Entry { kind: "eval", origin: origin.to_owned(), line, file, ..Entry::default() });
+        let started = Instant::now();
+        let _queue = self.eval_queue.lock().await;
+        let unit = match self.unit(&text, &source) {
+            Ok(unit) => unit,
+            Err(error) => return self.finish(id, "error", Some(error), 0),
+        };
+        let pbc = match self.compile(&unit, &source).await {
+            Ok(pbc) => pbc,
+            Err(error) => {
+                // REPL units carry no positions; the check of the module does
+                let error = match &source {
+                    Source::File { file } => {
+                        let report = self.toolchain.check(&self.files(), file).await;
+                        let located = report.diagnostics.iter().any(|d| d.severity == "error" && d.line > 0);
+                        if located { report.describe() } else { error }
+                    }
+                    _ => error,
+                };
+                return self.finish(id, "compile-error", Some(error), started.elapsed().as_millis() as u64);
+            }
+        };
+        let studio = self.clone();
+        let mut sink = move |output: Output| match output {
+            Output::Out(text) => studio.output(id, "out", text),
+            Output::Err(text) => studio.output(id, "err", text),
+            Output::Result(text) => studio.output(id, "result", text),
+        };
+        let status = self.lane.run(&pbc, true, &mut sink).await;
+        let ms = started.elapsed().as_millis() as u64;
+        match status {
+            Status::Ok => {
+                crate::repl::remember(&mut self.types.lock().expect("types lock"), &unit.defines);
+                self.finish(id, "ok", None, ms);
+            }
+            Status::Err(code) => self.finish(id, "error", Some(format!("the unit failed (exit {code}); the session is as it was")), ms),
+            Status::Interrupted => self.finish(id, "interrupted", Some("interrupted; the session is as it was".into()), ms),
+            Status::Dead(why) => self.finish(id, "error", Some(format!("the session ended: {why}")), ms),
+        }
+    }
+
+    /// Restart the live lane, forgetting the session's types.
+    pub async fn reset(&self) {
+        self.lane.reset().await;
+        self.types.lock().expect("types lock").clear();
+    }
+
+    /// Run `text` against the live session and keep nothing (`try`): the
+    /// assistant's `evaluate`. Effects outside the session are refused.
+    pub async fn try_expression(&self, text: &str) -> Result<Value, String> {
+        if let Some(word) = effectful(text) {
+            return Err(format!("`{word}` reaches outside the session; evaluate refuses it. Suggest it to the author in a ```repl block instead."));
+        }
+        let Ok(_queue) = tokio::time::timeout(Duration::from_secs(30), self.eval_queue.lock()).await else {
+            return Err("the session is busy with the author's evaluation; try again shortly".to_owned());
+        };
+        let source = Source::Prompt;
+        let unit = self.unit(text, &source)?;
+        let pbc = match self.compile(&unit, &source).await {
+            Ok(pbc) => pbc,
+            Err(error) => return Ok(json!({ "ok": false, "phase": "compile", "error": error })),
+        };
+        let mut out = String::new();
+        let mut results = Vec::new();
+        let mut sink = |output: Output| match output {
+            Output::Out(text) | Output::Err(text) => {
+                if out.len() < 8000 {
+                    out.push_str(&text);
+                }
+            }
+            Output::Result(text) => results.push(text),
+        };
+        let status = tokio::time::timeout(Duration::from_secs(20), self.lane.run(&pbc, false, &mut sink)).await;
+        let status = match status {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = self.lane.interrupt();
+                Status::Interrupted
+            }
+        };
+        let (ok, status) = match &status {
+            Status::Ok => (true, "ok".to_owned()),
+            Status::Err(code) => (false, format!("error (status {code})")),
+            Status::Interrupted => (false, "interrupted (took over 20 s)".to_owned()),
+            Status::Dead(why) => (false, format!("the session ended: {why}")),
+        };
+        Ok(json!({
+            "ok": ok,
+            "status": status,
+            "output": toolchain::clip(&out, 6000),
+            "results": results,
+            "note": "run against the author's live session with try: nothing it defined was kept",
+        }))
+    }
+
+    /// The forked program's `entry` compiled whole and run on a throwaway
+    /// VM: the preview lane.
+    pub async fn run_fork(&self, files: &Files, entry: &str) -> Value {
+        self.toolchain.run_program(files, entry, Duration::from_secs(10)).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn types_go_ahead_of_units_latest_first_and_never_twice() {
+        let mut types = Vec::new();
+        remember(&mut types, &sexp::define_types("(define-type T (A Int))\n(define-type U (B))"));
+        remember(&mut types, &sexp::define_types("(define-type T (A Int) (C))"));
+        assert_eq!(prefix(&types, &[]), "(define-type T (A Int) (C))\n(define-type U (B))\n");
+        assert_eq!(prefix(&types, &["U".into()]), "(define-type T (A Int) (C))\n");
+    }
+
+    #[test]
+    fn module_units_take_types_after_their_requires() {
+        let text = "(require \"a.puf\")\n(provide f)\n(define (f x) x)\n";
+        let (at, line) = insertion_point(text);
+        assert_eq!(&text[..at], "(require \"a.puf\")\n(provide f)");
+        assert_eq!(line, 2);
+        assert_eq!(insertion_point("(define x 1)"), (0, 0));
+    }
+
+    #[test]
+    fn the_assistant_may_not_reach_outside_the_session() {
+        assert_eq!(effectful("(system \"rm -rf /\")"), Some("system"));
+        assert_eq!(effectful("(begin (read) 1)"), Some("read"));
+        assert_eq!(effectful("(read-file \"x\")"), None);
+        assert_eq!(effectful("(map car '((1 2)))"), None);
+    }
+}

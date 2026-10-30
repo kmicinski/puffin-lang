@@ -1,0 +1,16 @@
+;; Untyped data works too: no define-type here, so Cmd-. in the empty
+;; match below takes its cases from the other match in this file and
+;; from the quasiquote templates the file builds.
+
+(define (simplify e)
+  (match e
+    [`(add 0 ,b) (simplify b)]
+    [`(add ,a ,b) `(add ,(simplify a) ,(simplify b))]
+    [`(mul 1 ,b) (simplify b)]
+    [`(mul ,a ,b) `(mul ,(simplify a) ,(simplify b))]
+    [_ e]))
+
+(define (size e)
+  (match e))
+
+(simplify '(add 0 (mul 1 x)))

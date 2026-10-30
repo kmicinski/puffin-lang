@@ -1,0 +1,17 @@
+;; A tour of Puffin Studio. Try:
+;;   - put the cursor in (match e) below and press Cmd-. : the
+;;     compiler fills in every case of Expr
+;;   - Cmd-Enter on a form evaluates it in the live session below
+;;   - Tab on the empty REPL prompt (or start a line with ??) to ask
+;;     the assistant; its edits arrive as hunks you accept or reject
+
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e))
+
+(define example (Add (Num 2) (Mul (Num 3) (Num 4))))

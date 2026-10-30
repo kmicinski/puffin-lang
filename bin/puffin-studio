@@ -1,0 +1,25 @@
+#!/bin/sh
+# Puffin Studio: a local web workbench for Puffin (docs/STUDIO.md).
+#
+#   bin/puffin-studio [PROJECT_DIR] [--port N] [--no-open]
+#
+# Builds studio/ (cargo, release) when its binary is missing or older than
+# its sources, then serves PROJECT_DIR (default: the current directory) on
+# 127.0.0.1 and prints the address to open. Needs build/puffincc and
+# bin/puffin-vm (bin/bootstrap builds them).
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+crate="$root/studio"
+binary="$crate/target/release/puffin-studio"
+stale=
+if [ ! -x "$binary" ]; then
+  stale=yes
+elif [ -n "$(find "$crate/src" "$crate/web" "$crate/Cargo.toml" "$root/web/src/engine/prim-names.js" -newer "$binary" 2>/dev/null | head -n 1)" ]; then
+  stale=yes
+fi
+if [ -n "$stale" ]; then
+  command -v cargo >/dev/null 2>&1 || { echo "puffin-studio: cargo is needed to build studio/ (https://rustup.rs)" >&2; exit 1; }
+  echo "puffin-studio: building studio/ ..." >&2
+  (cd "$crate" && cargo build --release --quiet) || (cd "$crate" && cargo build --release --offline --quiet)
+fi
+PUFFIN_ROOT="$root" exec "$binary" "$@"

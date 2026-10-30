@@ -1,11 +1,16 @@
 # Puffin Studio: a REPL you co-develop a program with
 
-Status, 2026-10-29: the design of record, partly built. Built so far:
-the span reader (`puffincc-src/syntax.puf`), `puffincc --assist`
-with `check`, `forms`, `type-at`, and assists 1 to 5 and 7
-(`puffincc-src/assist.puf`), the assist corpus, and the Emacs
-commands `puffin-assist` (C-c C-a) and `puffin-type-at-point`
-(C-c C-t). §8 tracks the rest.
+Status, 2026-10-29: the design of record, M0-M2 built. Run it with
+`bin/puffin-studio [PROJECT_DIR]` (default port 7360; it prints the
+URL to open; `studio/demo/` is a short tour). Built: the span reader
+(`puffincc-src/syntax.puf`); `puffincc --assist` with `check`,
+`forms`, `type-at`, and assists 1 to 5 and 7 (`assist.puf`); the
+assist corpus; `puffin-vm --serve`; the Emacs commands
+`puffin-assist` (C-c C-a) and `puffin-type-at-point` (C-c C-t); and
+the studio itself (`studio/`, Rust + vanilla JS): editor with
+structured editing, live checks, the assist menu, the live REPL
+lane, ask mode with checked proposals, and per-file versions. §9
+lists where the studio differs from this design.
 
 Puffin Studio replaces the console REPL (`src/repl.rkt`, the Racket
 interpreter loop) with a local web workbench: an editor over the
@@ -296,3 +301,26 @@ transcripts can be goldens too.
   eval-from-buffer, ask mode, checked proposals, versions.
 - **M3.** Observations and flow shapes; assists 6 to 9.
 - **M4.** Multi-module changesets, rewind, a co-author socket.
+
+## 9. Where the built studio differs
+
+- **Tool names.** The assistant's tools are `list_files`, `get_file`
+  (this thread's pending proposals applied), `check`, `assists_at`,
+  `apply_assist`, `type_at`, `propose_edit` (an empty `old` appends
+  or creates a file), `get_proposals`, `evaluate` (via `try`),
+  `evaluate_program` (a throwaway VM, 10 s), `read_doc`, and
+  `search_docs`. `facts_at`, `propose_changes`, and an allowlisted
+  `repl` read are not built.
+- **`evaluate` refuses effects outside the session**: `system`,
+  `write-file`, stdin reads, and the FFI forms, since `try` can
+  discard session state but not a written file.
+- **Buffer forms bring their module's types.** Evaluating a form from
+  a buffer also sends the `define-type` forms of its module and the
+  modules it requires, on top of the session's own (§2.2).
+- **Versions are per file and in memory**, each recording the forms
+  it changed; not yet the forms-keyed graph of §4.
+- **Before `--serve`** the live lane can replay `--session` with
+  every unit so far (effects repeat). It is a fallback only.
+- **Tokens.** The launch token is kept in `~/.puffin-studio/token`
+  (mode 0600) so open tabs reconnect after a restart; `/mcp` has its
+  own per-run bearer token.

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Puffin Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext x='1' y='13' font-size='13' fill='%236c71c4'%3E%CE%BB%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/studio.css">
+<link rel="stylesheet" href="/static/diff.css">
+<link rel="stylesheet" href="/static/assist.css">
+<link rel="stylesheet" data-name="vs/editor/editor.main" href="/vs/editor/editor.main.css">
+<script src="/vs/loader.js"></script>
+</head>
+<body>
+<header>
+  <div class="identity">
+    <span class="brand">Puffin Studio</span>
+    <span id="project" class="project"></span>
+    <span id="saved" class="badge"></span>
+  </div>
+  <div class="controls">
+    <div class="group" role="group" aria-label="Session">
+      <button id="load" class="primary" title="Evaluate the shown module in the session, as one unit (⇧⌘↵ · ,load)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>
+        Load file
+      </button>
+      <button id="interrupt" class="icon danger" title="Interrupt the running evaluation (Ctrl-C at the prompt · ,interrupt)" aria-label="Interrupt" disabled>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>
+      </button>
+      <button id="reset" class="secondary" title="Restart the session: everything evaluated is forgotten (,reset)">Reset session</button>
+    </div>
+    <div class="group" role="group" aria-label="Editing">
+      <button id="structured" class="icon" aria-pressed="true">( )</button>
+      <button id="history" class="icon" aria-pressed="false" title="The shown file's versions">History</button>
+    </div>
+  </div>
+</header>
+<main>
+  <nav id="files" aria-label="Files">
+    <div class="files-head">
+      <span>Files</span>
+      <button id="new-file" class="small secondary" title="Add a file to the project">New</button>
+    </div>
+    <div id="file-list"></div>
+  </nav>
+  <div id="work">
+    <div id="tabbar"><div id="tabs"></div></div>
+    <div id="proposals" class="proposal-bar" hidden></div>
+    <div id="editor-wrap">
+      <div id="editor"></div>
+      <aside id="versions" hidden></aside>
+      <div id="notice" hidden></div>
+    </div>
+    <div id="divider" title="Drag to resize"></div>
+    <section id="repl">
+      <div id="transcript"></div>
+      <div class="prompt-row">
+        <span class="caret">›</span>
+        <textarea id="prompt" rows="1" spellcheck="false" autocomplete="off"
+          placeholder="(+ 1 2)   ,load main.puf   ,help   ?? ask the assistant (or Tab)      Enter runs once brackets balance · Shift+Enter for a new line"></textarea>
+        <select id="scope" hidden title="What the assistant's answer may change">
+          <option value="form">this form</option>
+          <option value="selection">the selection</option>
+          <option value="module">this module</option>
+          <option value="program">the program</option>
+        </select>
+      </div>
+    </section>
+  </div>
+</main>
+<footer id="status">
+  <span id="connection" class="pill"></span>
+  <span id="lane" class="pill"></span>
+  <button id="check" class="pill"></button>
+  <span id="features" class="pill"></span>
+  <span id="agent" class="pill bad" hidden>no claude</span>
+  <span class="status-keys">⌘↵ eval form · ⇧⌘↵ load file · ⌘. assists · ⌘S save · Tab on the prompt: ask · Ctrl-` editor ⇄ prompt · F7 next change</span>
+</footer>
+<script type="module" src="/static/main.js"></script>
+</body>
+</html>
