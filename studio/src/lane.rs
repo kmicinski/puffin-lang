@@ -11,8 +11,9 @@
 //! A session's first unit is the prelude. When the compiler can observe
 //! (`--repl --observe`, docs/STUDIO.md §3.1), the observer
 //! (`studio/observe.puf`) is the second, and the session is observing: the
-//! units compiled for it may report their arguments. Otherwise observation
-//! is silently off for that session.
+//! units compiled for it may report their arguments, and traced functions
+//! print their calls (its runtime does both). Otherwise observation and
+//! tracing are off for that session.
 //!
 //! Until `--serve` exists the lane replays: every loaded unit runs again,
 //! in a fresh `puffin-vm --session`, before the new one; a marker unit

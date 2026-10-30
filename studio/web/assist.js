@@ -18,6 +18,7 @@
 
 import { markdown } from "./markdown.js";
 import { balanced } from "./lexer.js";
+import { renderOutput } from "./trace.js";
 
 // The question, when `text` asks for ask mode: `??` and what follows.
 export function asking(text) {
@@ -82,6 +83,12 @@ function describe(data) {
     case "get_proposals": return "looked at its proposals";
     case "evaluate": return `evaluated ${(input.expr ?? "").split("\n")[0].slice(0, 80)}`;
     case "evaluate_program": return `ran ${input.file ?? "the program"}`;
+    case "trace": {
+      const names = Array.isArray(input.names) ? input.names.join(", ") : input.names ?? "";
+      return `traced ${names} on ${(input.expr ?? "").split("\n")[0].slice(0, 80)}`;
+    }
+    case "holes": return "listed the typed holes";
+    case "lint": return "read the observation lint";
     case "search_docs": return `searched the docs for “${input.query ?? ""}”`;
     case "read_doc": return `read ${input.path ?? ""}`;
     default: return data.name ?? "tool";
@@ -257,6 +264,9 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
         const item = list.appendChild(element("div", `assist-call ${call.status ?? ""}`));
         item.append(element("span", "mark", call.status === "error" ? "✗" : call.status === "running" ? "…" : "✓"), element("span", "", describe(call)));
         if (call.result) item.title = call.result;
+        // what a trace saw, as the transcript draws the author's
+        const tree = call.trace && renderOutput(call.trace);
+        if (tree) list.append(tree);
       }
       block.body.prepend(list);
     }

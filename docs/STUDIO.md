@@ -2,8 +2,8 @@
 
 Status, 2026-10-29: the design of record, M0-M2 built and M3
 under way. Run it with `bin/puffin-studio [PROJECT_DIR]` (default
-port 7360; it prints the URL to open; `studio/demo/` is a short
-tour). Built: the span reader (`puffincc-src/syntax.puf`);
+port 7360; it prints the URL to open; `studio/demo/expr.puf` opens
+with a guided tour). Built: the span reader (`puffincc-src/syntax.puf`);
 `puffincc --assist` with `check`, `forms`, `type-at`, `facts`,
 `lint`, and assists 1 to 9 (`assist.puf`; 7 for layers 1 and 4);
 `--repl --observe` and the session observer (§3.1); the assist
@@ -250,7 +250,8 @@ it prints each call on entry and its value on return, nested by
 depth, as Racket's `trace` does; the printing is in the session
 runtime (`studio/observe.puf`). A traced body loses its tail
 position, so a trace shows every return. Because REPL redefinition is
-retroactive, evaluating a traced define traces every caller.
+retroactive, evaluating a traced define traces every caller. The
+studio's `,trace` and the assistant's `trace` tool drive it (§9).
 
 ```
 > (fact 2)
@@ -429,7 +430,7 @@ transcripts can be goldens too.
   `apply_assist`, `type_at`, `propose_edit` (an empty `old` appends
   or creates a file), `get_proposals`, `evaluate` (via `try`),
   `evaluate_program` (a throwaway VM, 10 s), `read_doc`, and
-  `search_docs`, and `facts_at` (the checker's type and the session's
+  `search_docs`, `trace`, `holes`, `lint`, and `facts_at` (the checker's type and the session's
   observations at a point). `propose_changes` and an allowlisted
   `repl` read are not built.
 - **`evaluate` refuses effects outside the session**: `system`,
@@ -486,6 +487,26 @@ transcripts can be goldens too.
 - **Rename** is F2 (bound only when the operation is detected),
   echoed as `,rename FILE:POS NEW`; renaming a provided top-level
   name notes the other modules that still use the old name.
+- **Tracing.** `,trace NAME ...` adds names to a traced set; every
+  live unit compiles with `--trace` for each, so a traced name's next
+  definition -- from ⌘↵, a load, or the prompt -- traces. `,trace f`
+  evaluates f's definition again at once (the session's own text when
+  the prompt made it last, else its module's define by ⌘↵'s path);
+  `,untrace f` does so untraced; `,untrace` alone stops all, `,trace`
+  alone lists them. The set survives a reset. A cyan `>` in the gutter
+  marks a traced define (click, ⌘-click, or the context menu toggles
+  it, echoed as the command). A finished evaluation's trace is drawn
+  as a call tree: each call with its arguments and value, deep or long
+  subtrees closed with their call counts, a call that never returned
+  marked so, and "as text" for the printed layout.
+- **The assistant traces** with `trace {names, expr}`: `expr` runs by
+  `try`, each named define (as the thread's proposals leave it, or the
+  prompt's text) traced, with what they need that the session lacks.
+  It returns the first 200 lines and the counts, keeps nothing, and
+  refuses what `evaluate` refuses. After any `try` the observer's
+  spill file is removed, so a discarded run's shapes never merge.
+- **Lint markers** join a match's observed and call-site findings in
+  one marker whose quick fix offers either source's cases.
 - **Commands.** `,assist ID#N FILE:POS-END` names one of several
   same-id assists and a selection. MCP adds `holes` and `lint`, and
   `end` and `title` on the assist tools.

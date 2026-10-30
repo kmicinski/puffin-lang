@@ -1,16 +1,36 @@
-;; Untyped data works too: no define-type here, so Cmd-. in the empty
-;; match below takes its cases from the other match in this file and
-;; from the quasiquote templates the file builds.
+;; sexp.puf -- the same over untyped data: s-expressions matched with
+;; quasiquote patterns, and no define-type. What the editor knows here
+;; comes from the file's own patterns and from what the session sees run.
+;;
+;;  1. Cmd-Enter on (calc '(+ 1 (* 2 3))) below: 7.
+;;  2. Cmd-Enter on (calc '(- 10 (* 2 3))): it fails, since no clause
+;;     matches a (- ...). The session saw that shape all the same: calc's
+;;     match is now marked in cyan (cyan is what runs observed), and Cmd-.
+;;     on the match, or its lightbulb, adds the missing case.
+;;  3. Facts, cursor on calc's e: each shape e was called with, as a
+;;     pattern.
+;;  4. ,trace calc, then Cmd-Enter on the first call again: the tree shows
+;;     the value of every subexpression.
+;;  5. Cmd-. in the empty (match e) of size: cases from the file's other
+;;     matches, each labelled with where it came from.
+
+(define (calc e)
+  (match e
+    [(? fixnum? n) n]
+    [`(+ ,a ,b) (+ (calc a) (calc b))]
+    [`(* ,a ,b) (* (calc a) (calc b))]))
 
 (define (simplify e)
   (match e
-    [`(add 0 ,b) (simplify b)]
-    [`(add ,a ,b) `(add ,(simplify a) ,(simplify b))]
-    [`(mul 1 ,b) (simplify b)]
-    [`(mul ,a ,b) `(mul ,(simplify a) ,(simplify b))]
+    [`(+ 0 ,b) (simplify b)]
+    [`(+ ,a ,b) `(+ ,(simplify a) ,(simplify b))]
+    [`(* 1 ,b) (simplify b)]
+    [`(* ,a ,b) `(* ,(simplify a) ,(simplify b))]
     [_ e]))
 
 (define (size e)
   (match e))
 
-(simplify '(add 0 (mul 1 x)))
+(calc '(+ 1 (* 2 3)))
+(calc '(- 10 (* 2 3)))
+(simplify '(+ 0 (* 1 x)))

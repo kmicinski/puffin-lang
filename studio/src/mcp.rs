@@ -209,6 +209,14 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
             Ok(json!({ "proposals": mine }))
         }
         "evaluate" => studio.try_expression(&text("expr")?).await,
+        "trace" => {
+            let names: Vec<String> = match &arguments["names"] {
+                Value::Array(names) => names.iter().filter_map(|name| name.as_str().map(str::to_owned)).collect(),
+                Value::String(name) => name.split_whitespace().map(str::to_owned).collect(),
+                _ => return Err("missing `names`: the functions to trace, e.g. [\"eval-expr\"]".to_owned()),
+            };
+            studio.trace_try(&fork(), &names, &text("expr")?).await
+        }
         "evaluate_program" => {
             let files = fork();
             let file = match arguments["file"].as_str() {
@@ -308,6 +316,14 @@ pub fn tools() -> Value {
             "name": "evaluate",
             "description": "Evaluate Puffin forms against the author's live REPL session (what they evaluated is defined there) and keep nothing. Returns printed output and results, or the error. Effects outside the session (system, write-file, reading stdin, foreign) are refused.",
             "inputSchema": object(json!({ "expr": { "type": "string", "description": "One or more forms, e.g. `(eval-expr (Add (Num 1) (Num 2)))`." } }), &["expr"]),
+        },
+        {
+            "name": "trace",
+            "description": "See what a function actually does: run `expr` against the author's live session with each function of `names` traced, as Racket's trace does -- `> (f args)` on each call, `< value` on its return, one `| ` per level of depth -- and keep nothing (try). Each named define is taken from the files as your proposals leave them (or, for a function the author defined only at the prompt, the session's own text), with the definitions it and `expr` need that the session lacks, so a proposed fix can be traced before the author accepts it. Returns the first 200 lines of the trace, the counts of lines and calls, and the results; a failing or runaway run still returns the trace up to where it stopped. Effects outside the session are refused, as in evaluate.",
+            "inputSchema": object(json!({
+                "names": { "type": "array", "items": { "type": "string" }, "description": "Functions to trace, each defined at the top level of a file: (define (f a ...) ...)." },
+                "expr": { "type": "string", "description": "What to run, e.g. `(interp '(app (lam x x) 1) '())`." },
+            }), &["names", "expr"]),
         },
         {
             "name": "evaluate_program",

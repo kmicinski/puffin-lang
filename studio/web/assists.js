@@ -71,7 +71,9 @@ export function createAssists({ editor, files, send, note, facts }) {
     if (!file) return;
     if (!available) return note("assists unavailable: this puffincc has no --assist yet");
     const { start, end } = editor.selection();
-    const reply = start === end ? await at(file, end) : await at(file, start, end);
+    // F8 selects a hole: that is a point to fill, not a selection to extract
+    const point = start === end || editor.get().slice(start, end).trim() === "??";
+    const reply = point ? await at(file, start === end ? end : start) : await at(file, start, end);
     if (!reply.assists?.length) return note(reply.error ? `no assists: ${reply.error}` : "no assist applies here");
     shown = { file, assists: reply.assists, index: 0, stopped: reply.error };
     renderMenu();
@@ -158,7 +160,8 @@ export function createAssists({ editor, files, send, note, facts }) {
         const version = model.getVersionId();
         const from = model.getOffsetAt(range.getStartPosition());
         const to = model.getOffsetAt(range.getEndPosition());
-        const reply = from === to ? await at(file, to) : await at(file, from, to);
+        const point = from === to || model.getValue().slice(from, to).trim() === "??";
+        const reply = point ? await at(file, from) : await at(file, from, to);
         // an observation lint marker here: the observed cases, from inside its match
         const seen = (context?.markers ?? []).filter((marker) => marker.source === LINT_SOURCE);
         const fixes = [];
@@ -166,7 +169,7 @@ export function createAssists({ editor, files, send, note, facts }) {
           const inside = model.getOffsetAt({ lineNumber: marker.startLineNumber, column: marker.startColumn }) + 1;
           const found = await at(file, inside);
           for (const assist of found.assists ?? []) {
-            if (assist.source === "observed" && assist.id === "add-missing-cases") fixes.push({ assist, marker });
+            if (["observed", "call-site"].includes(assist.source) && assist.id === "add-missing-cases") fixes.push({ assist, marker });
           }
         }
         if (model.getVersionId() !== version) return { actions: [], dispose() {} };

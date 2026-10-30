@@ -9,9 +9,9 @@
 //! bytecode compile; assists are unavailable). The same holds for the
 //! observing compile (`--repl --observe`), the `facts` operation, and
 //! `--observed`, which pass the session's observation record to the assist
-//! lane (§3.1), the observation lint, and `rename`. A binary being replaced
-//! underneath us fails to start, or dies by a signal; such runs are tried
-//! again.
+//! lane (§3.1), the observation lint, `rename`, and tracing (`--repl
+//! --trace NAME`, §3.2). A binary being replaced underneath us fails to
+//! start, or dies by a signal; such runs are tried again.
 //!
 //! A typed hole (`??`, §5 item 6) is an unbound name outside assists, so a
 //! program with one fails the check at its first hole. That diagnostic is
@@ -165,6 +165,7 @@ pub struct Toolchain {
     observed_flag: Mutex<Probe>,
     lint: Mutex<Probe>,
     rename: Mutex<Probe>,
+    trace: Mutex<Probe>,
     /// The live session's observation record, once there is one: what
     /// `--observed` names.
     pub observed: Mutex<Option<PathBuf>>,
@@ -223,6 +224,7 @@ impl Toolchain {
             observed_flag: Mutex::new(Probe::default()),
             lint: Mutex::new(Probe::default()),
             rename: Mutex::new(Probe::default()),
+            trace: Mutex::new(Probe::default()),
             observed: Mutex::new(None),
         })
     }
@@ -343,6 +345,19 @@ impl Toolchain {
             };
             let out = workspace.path("probe.pbc");
             let args = ["--repl", "--observe", "probe.puf", "-o"].map(String::from).into_iter().chain([out.to_string_lossy().into_owned()]).collect::<Vec<_>>();
+            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success) && out.is_file()
+        })
+        .await
+    }
+
+    /// Whether `puffincc --repl --trace NAME` compiles a unit (§3.2).
+    pub async fn trace_available(&self) -> bool {
+        self.probed(&self.trace, || async {
+            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define (probe x) x)\n".to_owned())])) else {
+                return false;
+            };
+            let out = workspace.path("probe.pbc");
+            let args = ["--repl", "--trace", "probe", "probe.puf", "-o"].map(String::from).into_iter().chain([out.to_string_lossy().into_owned()]).collect::<Vec<_>>();
             self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success) && out.is_file()
         })
         .await
@@ -601,9 +616,18 @@ impl Toolchain {
     /// Compile the REPL unit `source` (a path in `dir`) to `out`; with
     /// `observe`, its function defines report their arguments (§3.1).
     pub async fn compile_unit(&self, dir: &Path, source: &str, out: &Path, observe: bool) -> Result<Output, String> {
+        self.compile_traced(dir, source, out, observe, &[]).await
+    }
+
+    /// Compile a REPL unit as `compile_unit` does, with each define of
+    /// `trace` printing its calls and returns (§3.2).
+    pub async fn compile_traced(&self, dir: &Path, source: &str, out: &Path, observe: bool, trace: &[String]) -> Result<Output, String> {
         let mut args = vec!["--repl".to_owned()];
         if observe {
             args.push("--observe".to_owned());
+        }
+        for name in trace {
+            args.extend(["--trace".to_owned(), name.clone()]);
         }
         args.extend([source.to_owned(), "-o".to_owned(), out.to_string_lossy().into_owned()]);
         self.puffincc(&args, dir).await

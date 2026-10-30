@@ -321,7 +321,19 @@ impl Studio {
         let ran = self.toolchain.build_and_run(&files, TESTS, TEST_LIMIT).await;
         let ms = || started.elapsed().as_millis() as u64;
         match ran {
-            Ran::Unbuilt(report) => self.finish(id, "compile-error", Some(report.describe()), ms()),
+            Ran::Unbuilt(report) => {
+                // a program with a typed hole does not compile: say which, and what to do
+                let hole = report.diagnostics.iter().find(|d| d.severity == "hole" && !report.diagnostics.iter().any(|e| e.severity == "error"));
+                let error = match hole {
+                    Some(d) => format!(
+                        "{} has a typed hole (??) on line {}: {TESTS} cannot compile until it is filled (F8 goes to it; ⌘. lists what fits)",
+                        if d.file.is_empty() { TESTS } else { d.file.as_str() },
+                        d.line
+                    ),
+                    None => report.describe(),
+                };
+                self.finish(id, "compile-error", Some(error), ms())
+            }
             Ran::Failed(error) => self.finish(id, "error", Some(error), ms()),
             Ran::Ran(output) => {
                 let (mut run, rest) = results(&output.stdout, &tests);

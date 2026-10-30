@@ -411,3 +411,44 @@ code.typed-hole { padding: 0 3px; }
 .rename-input { width: 220px; height: 24px; padding: 0 6px; border: 1px solid var(--blue); border-radius: 4px; font: 13px var(--mono); color: var(--strong); background: white; }
 .rename-error { max-width: 320px; padding: 2px 2px 0; font: 11.5px var(--sans); color: var(--red); white-space: pre-wrap; }
 .rename-error:empty { display: none; }
+
+/* ---- Traces (trace.js): a traced function's calls as a tree ---------------- */
+
+/* Cyan, as everything seen in runs is: the mark beside a traced define's
+   line number, and the tree its calls make in the transcript. */
+.trace-mark { cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.trace-mark::before { content: ">"; font: 700 11px var(--mono); color: var(--cyan); opacity: 0; }
+.trace-mark:hover::before { opacity: 0.4; }
+.trace-mark.on::before { opacity: 1; }
+.facts-traced { color: var(--cyan); }
+
+.trace { margin: 2px 0 4px; padding-left: 8px; border-left: 2px solid rgba(42, 161, 152, 0.35); }
+.trace-head { display: flex; align-items: center; gap: 8px; color: var(--cyan); font: 11px var(--sans); }
+.trace-raw { height: 16px; padding: 0 6px; font: 10.5px var(--sans); color: var(--muted); border-color: var(--border); visibility: hidden; }
+.trace:hover .trace-raw { visibility: visible; }
+.trace-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; cursor: pointer; border-radius: 3px; }
+.trace-row:hover { background: var(--chrome); }
+.trace-toggle { flex-shrink: 0; width: 10px; color: var(--muted); }
+.trace-toggle::before { content: "▸"; }
+.trace-call.open > .trace-row > .trace-toggle::before { content: "▾"; }
+.trace-call.leaf > .trace-row > .trace-toggle::before { content: "·"; }
+.trace-call.leaf > .trace-row { cursor: default; }
+.trace-args { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--strong); }
+.trace-value { flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--blue); }
+.trace-value::before { content: "⇒ "; color: var(--muted); }
+.trace-value.none { color: var(--orange); font: italic 11.5px var(--sans); }
+.trace-count { flex-shrink: 0; color: var(--muted); font: 11px var(--sans); }
+.trace-call.open > .trace-row > .trace-count { display: none; }
+.trace-children { display: none; margin-left: 4px; padding-left: 10px; border-left: 1px dotted var(--border-strong); }
+.trace-call.open > .trace-children { display: block; }
+.trace-out { margin: 0 0 0 18px; color: var(--text); }
+button.trace-more { height: 18px; margin: 1px 0 1px 18px; padding: 0 7px; font: 11px var(--sans); color: var(--cyan); border-color: rgba(42, 161, 152, 0.4); }
+.trace-text-view { margin: 2px 0 0; color: var(--text); }
+/* inside an answer (assist.js) a trace keeps the transcript's look */
+.md .trace code { padding: 0; border-radius: 0; background: none; font: 12px var(--mono); }
+.md .trace pre { font: 12px var(--mono); }
+
+/* An empty transcript's first words (repl.js). */
+.welcome { margin: 2px 0 12px; padding: 6px 10px; border-left: 2px solid var(--border-strong); color: var(--muted); font: 12px/1.6 var(--sans); }
+.welcome-head { color: var(--text); }
+.welcome kbd { display: inline-block; min-width: 44px; font: 11.5px var(--mono); color: var(--strong); }

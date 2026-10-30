@@ -1,7 +1,8 @@
 //! What the live session holds of the program: for each file, the
 //! top-level forms it loaded and the text each was loaded with, the last
-//! result of each expression evaluated from a buffer, and the observation
-//! record (docs/STUDIO.md §3.1, layer 4). A form is current when its text
+//! result of each expression evaluated from a buffer, the text of each name
+//! the prompt defined last (what `,trace` evaluates again), and the
+//! observation record (docs/STUDIO.md §3.1, layer 4). A form is current when its text
 //! now is the text it was loaded with, stale when it was edited since, and
 //! redefined when the prompt gave its name another definition.
 //!
@@ -43,6 +44,9 @@ pub struct Session {
     forms: BTreeMap<String, BTreeMap<String, Loaded>>,
     /// file -> an expression's text -> what it evaluated to last
     results: BTreeMap<String, BTreeMap<String, String>>,
+    /// name -> the text of its latest definition at the prompt, while no
+    /// module's has replaced it: what `,trace` evaluates again.
+    prompt: BTreeMap<String, String>,
     /// The observation record as the observer printed it, and parsed.
     pub record: Option<String>,
     pub observed: Vec<Observed>,
@@ -94,6 +98,9 @@ impl Session {
         for form in &found {
             if definition(form) && form.head.as_deref() != Some("define-type") {
                 forms.insert(form.key(), Loaded { text: text[form.start..form.end].to_owned(), by: "buffer", entry });
+                if let Some(name) = &form.name {
+                    self.prompt.remove(name);
+                }
             }
         }
         // the target is last: an expression's value is its result
@@ -112,6 +119,9 @@ impl Session {
             let forms = self.forms.entry(path.clone()).or_default();
             for form in sexp::forms(text).iter().filter(|form| definition(form) && form.head.as_deref() != Some("define-type")) {
                 forms.insert(form.key(), Loaded { text: text[form.start..form.end].to_owned(), by: "file", entry });
+                if let Some(name) = &form.name {
+                    self.prompt.remove(name);
+                }
             }
         }
     }
@@ -120,6 +130,9 @@ impl Session {
     /// its name, in every file that defines that name.
     pub fn loaded_prompt(&mut self, files: &Files, text: &str, entry: u64) {
         for form in sexp::forms(text).iter().filter(|form| definition(form) && form.head.as_deref() != Some("define-type")) {
+            if let Some(name) = &form.name {
+                self.prompt.insert(name.clone(), text[form.start..form.end].to_owned());
+            }
             let key = form.key();
             for (path, module) in files {
                 if sexp::forms(module).iter().any(|f| f.key() == key) {
@@ -164,6 +177,12 @@ impl Session {
             };
         }
         state
+    }
+
+    /// The text of `name`'s definition at the prompt, when that is the
+    /// session's latest.
+    pub fn prompt_definition(&self, name: &str) -> Option<String> {
+        self.prompt.get(name).cloned()
     }
 
     /// What one function's observations are, if any.

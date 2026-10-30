@@ -9,7 +9,7 @@ import { initAssist } from "./assist.js";
 import { createAssists } from "./assists.js";
 import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
-import { createSession } from "./session.js";
+import { createSession, functionDefine } from "./session.js";
 import { createFacts } from "./facts.js";
 import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
@@ -41,6 +41,9 @@ let session = null;
 let facts = null;
 let holes = null;
 let rename = null;
+// the traced function names, and what the toolchain can do (the studio's)
+let traced = [];
+let features = {};
 
 const editor = await createEditor($("editor"), {
   onChange: () => {
@@ -56,6 +59,7 @@ const editor = await createEditor($("editor"), {
   onEvalForm: evalForm,
   onLoadFile: () => load(null),
   onAssist: () => assists.open(),
+  onTrace: toggleTrace,
 });
 
 const files = createFiles({
@@ -82,7 +86,7 @@ const send = files.send;
 
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), toggle: $("history"), files, send });
-session = createSession({ editor, files });
+session = createSession({ editor, files, traced: () => traced, canTrace: () => Boolean(features.trace && features.observe) });
 const lint = createLint({ editor, files });
 facts = createFacts({ panel: $("facts"), toggle: $("facts-toggle"), editor, files, session, send, lint });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
@@ -98,6 +102,7 @@ const repl = createRepl({
     save,
     evalAt: (file, line) => evalAt(file, { line }),
     session: () => session.listing(),
+    traced: () => traced,
     assist: (id, file, pos, end) => assists.run(id, file, pos, end),
     rename: (file, pos, name) => rename.run(file, pos, name),
     reveal(file, line) {
@@ -152,6 +157,19 @@ function evalAt(file, at) {
   send({ t: "eval-form", file, ...at });
 }
 
+// The function define at { line } or { pos } of the shown file, traced or
+// untraced by the command a person would type: `,trace f`.
+function toggleTrace(at) {
+  const file = files.active();
+  if (!file) return;
+  if (!(features.trace && features.observe)) return note("this puffincc cannot trace (--repl --trace): bin/bootstrap builds one that can");
+  const text = editor.get();
+  const all = forms(text);
+  const form = at.pos !== undefined ? formAt(all, at.pos) : all.find((f) => f.line <= at.line && at.line <= f.endLine);
+  if (!form || !functionDefine(text, form)) return note("tracing is for function defines: (define (f a ...) ...)");
+  repl.run(`${traced.includes(form.name) ? ",untrace" : ",trace"} ${form.name}`);
+}
+
 // ⇧⌘↵ or ,load: a whole module, as one unit.
 function load(file) {
   const target = file ?? files.active();
@@ -162,7 +180,10 @@ function load(file) {
 }
 
 $("load").addEventListener("click", () => load(null));
-$("interrupt").addEventListener("click", () => send({ t: "interrupt" }));
+$("interrupt").addEventListener("click", () => {
+  send({ t: "echo", line: ",interrupt" });
+  send({ t: "interrupt" });
+});
 $("reset").addEventListener("click", () => send({ t: "reset" }));
 const structuredButton = $("structured");
 const renderStructured = () => {
@@ -227,11 +248,14 @@ function renderCheck() {
   const holeTotal = [...holeCounts.values()].reduce((a, b) => a + b, 0);
   const errors = here.filter((d) => d.severity === "error");
   const status = $("check");
-  const holed = holeTotal ? `◌ ${holeTotal} hole${holeTotal === 1 ? "" : "s"}` : "";
-  status.className = `pill ${errors.length ? "bad" : holeTotal ? "hole" : here.length ? "warn" : "good"}`;
-  const head = errors.length ? `✗ ${errors.length} error${errors.length === 1 ? "" : "s"}` : here.length ? `⚠ ${here.length} warning${here.length === 1 ? "" : "s"}` : holeTotal ? "" : "✓ checks";
+  // holes only elsewhere: this file checks, and the pill says where they are
+  const holesHere = holeCounts.get(active) ?? 0;
+  const elsewhere = [...holeCounts.keys()].filter((path) => path !== active);
+  const holed = holeTotal ? `◌ ${holeTotal} hole${holeTotal === 1 ? "" : "s"}${holesHere ? "" : ` in ${elsewhere.join(", ")}`}` : "";
+  status.className = `pill ${errors.length ? "bad" : holesHere ? "hole" : here.length ? "warn" : "good"}`;
+  const head = errors.length ? `✗ ${errors.length} error${errors.length === 1 ? "" : "s"}` : here.length ? `⚠ ${here.length} warning${here.length === 1 ? "" : "s"}` : holesHere ? "" : "✓ checks";
   status.replaceChildren(document.createTextNode([head, holed].filter(Boolean).join(" · ")));
-  if (stopped && !errors.length) {
+  if (stopped && holesHere && !errors.length) {
     const quiet = status.appendChild(document.createElement("span"));
     quiet.className = "pill-quiet";
     quiet.textContent = " · checked up to the first hole";
@@ -263,7 +287,8 @@ function renderLane(lane) {
   $("interrupt").disabled = lane.state !== "busy";
 }
 
-function renderFeatures(features) {
+function renderFeatures(next) {
+  features = next;
   const { assist: hasAssist, serve, observe } = features;
   assists.setAvailable(hasAssist);
   rename.setAvailable(features.rename);
@@ -274,6 +299,8 @@ function renderFeatures(features) {
   pill.className = `pill ${hasAssist ? "good" : "quiet"}`;
   pill.title = `${hasAssist ? "puffincc --assist answers: ⌘. at a point, and the lightbulb" : "this puffincc has no --assist: checks are bytecode compiles, and assists wait for it"}\n${serve ? "puffin-vm --serve runs the live session" : "puffin-vm has no --serve: the session replays its units on each evaluation"}\n${observe ? `the session observes calls (--repl --observe)${features.facts ? "; facts from puffincc --assist facts" : ""}` : "this puffincc cannot observe calls (--repl --observe): no observations"}`;
   if (observe) pill.textContent += " · observing";
+  if (features.trace && observe) pill.title += "\n,trace NAME prints a function's calls (--repl --trace)";
+  session.refresh();
 }
 
 function renderConnection(on) {
@@ -294,6 +321,7 @@ const handlers = {
     proposals.update(snapshot.review);
     assist.receive.review(snapshot.review);
     repl.receive.init(snapshot);
+    traced = snapshot.traced ?? [];
     session.receive.init(snapshot);
     holes.receive.init(snapshot);
     lint.receive.init(snapshot);
@@ -328,6 +356,11 @@ const handlers = {
     facts.refresh();
   },
   renamed: rename.receive.renamed,
+  traced({ names }) {
+    traced = names;
+    session.refresh();
+    facts.refresh();
+  },
   lane: renderLane,
   features: renderFeatures,
   entry: repl.receive.entry,

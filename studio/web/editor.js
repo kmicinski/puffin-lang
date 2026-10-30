@@ -20,6 +20,9 @@
 //                            stand apart
 //   glyphs(key, list)        mark lines of document `key` in the gutter,
 //                            each { line, className, hover }
+//   lineMarks(key, name, list)  mark lines of document `key` in the lane
+//                            beside the line numbers, each { line,
+//                            className, hover }; each name's stand apart
 //   offset()                 the cursor's offset
 //   setRenameAvailable(on)   whether F2 renames
 //   caretBox()               the cursor's box on screen, for menus, or null
@@ -27,7 +30,9 @@
 //   raw                      { monaco, editor } for Monaco, else null
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
 // Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
-// puffincc can), F8 and ⇧F8 the next and previous typed hole.
+// puffincc can), F8 and ⇧F8 the next and previous typed hole. Tracing:
+// ⌘-click in the gutter of a line, a click on a trace mark, or the context
+// menu's "Trace" calls onTrace({ line }) or onTrace({ pos }).
 
 import { bindMonaco, bindTextarea } from "./paredit.js";
 import { surfacePrimNames } from "./prim-names.js";
@@ -144,7 +149,7 @@ function register(monaco) {
 
 const SEVERITY = { warning: "Warning", info: "Info", hint: "Hint" };
 
-function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole }) {
+function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole, onTrace }) {
   register(monaco);
   const editor = monaco.editor.create(element, {
     language: "puffin",
@@ -159,6 +164,8 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     tabSize: 2,
     // the session's marks on each top-level form (session.js)
     glyphMargin: true,
+    // the trace marks beside the line numbers (session.js)
+    lineDecorationsWidth: 14,
     matchBrackets: "always",
     bracketPairColorization: { enabled: true },
     lightbulb: { enabled: "on" },
@@ -182,6 +189,25 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
   // F8 walks the typed holes, not Monaco's problems: a hole is the next thing to do
   editor.addAction({ id: "puffin.next-hole", label: "Next typed hole", keybindings: [monaco.KeyCode.F8], run: () => onHole?.(1) });
   editor.addAction({ id: "puffin.previous-hole", label: "Previous typed hole", keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F8], run: () => onHole?.(-1) });
+  // tracing a function: the context menu, ⌘-click in the gutter, or a click on its mark
+  editor.addAction({
+    id: "puffin.trace",
+    label: "Trace or untrace this function (,trace)",
+    contextMenuGroupId: "navigation",
+    contextMenuOrder: 0,
+    run: () => onTrace?.({ pos: current().getOffsetAt(editor.getPosition()) }),
+  });
+  const { MouseTargetType } = monaco.editor;
+  editor.onMouseDown((event) => {
+    const { type, position, element: target } = event.target;
+    const gutter = [MouseTargetType.GUTTER_GLYPH_MARGIN, MouseTargetType.GUTTER_LINE_NUMBERS, MouseTargetType.GUTTER_LINE_DECORATIONS].includes(type);
+    if (!gutter || !position) return;
+    const mark = type === MouseTargetType.GUTTER_LINE_DECORATIONS && target?.classList.contains("trace-mark");
+    if (mark || event.event.metaKey || event.event.ctrlKey) {
+      event.event.preventDefault();
+      onTrace?.({ line: position.lineNumber });
+    }
+  });
   bindMonaco(monaco, editor);
 
   const range = (start, end) => monaco.Range.fromPositions(current().getPositionAt(start), current().getPositionAt(end));
@@ -284,6 +310,20 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
         },
       })));
     },
+    lineMarks(key, name, list) {
+      const document = documents.get(key);
+      if (!document) return;
+      const lines = document.model.getLineCount();
+      const made = document.model.deltaDecorations(document.spans.get(`lines:${name}`) ?? [], list.map(({ line, className, hover }) => ({
+        range: new monaco.Range(Math.min(line, lines), 1, Math.min(line, lines), 1),
+        options: {
+          linesDecorationsClassName: className,
+          linesDecorationsTooltip: hover,
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      })));
+      document.spans.set(`lines:${name}`, made);
+    },
     caretBox() {
       const at = editor.getPosition();
       const point = at && editor.getScrolledVisiblePosition(at);
@@ -368,6 +408,7 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
     markers() {},
     decorations() {},
     glyphs() {},
+    lineMarks() {},
     caretBox() {
       const box = area.getBoundingClientRect();
       return { left: box.left + 20, top: box.top + 20, height: 18 };

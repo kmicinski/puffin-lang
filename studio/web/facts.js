@@ -4,8 +4,8 @@
 //   Syntax    the form's key and lines (the form scanner)
 //   Checker   the type at the cursor (a typed hole's goal) and the form's
 //             diagnostics
-//   Session   whether the live session has the form as shown, and an
-//             expression's last result
+//   Session   whether the live session has the form as shown, an
+//             expression's last result, and whether a function is traced
 //   Observed  what the session's runs passed the function: per parameter,
 //             the shapes seen and the compiler's patterns from them; and
 //             the observation lint's findings in the form
@@ -17,7 +17,7 @@
 //   ask(file, pos, full)   the studio's facts at UTF-16 offset `pos`
 
 import { formAt, forms } from "./lexer.js";
-import { describeState, keyOf } from "./session.js";
+import { describeState, functionDefine, keyOf } from "./session.js";
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -117,7 +117,9 @@ export function createFacts({ panel, toggle, editor, files, session, send, lint 
 
     // Syntax
     const where = element("div", "facts-row");
-    where.append(element("code", "", keyOf(form, index)), element("span", "hint", ` lines ${form.line}–${form.endLine}`));
+    const key = keyOf(form, index);
+    const lines = form.line === form.endLine ? ` line ${form.line}` : ` lines ${form.line}–${form.endLine}`;
+    where.append(key.startsWith("expr:") ? element("span", "", "an expression") : element("code", "", key), element("span", "hint", lines));
     panel.append(section("Syntax", "the form scanner", where));
 
     // Checker
@@ -146,7 +148,10 @@ export function createFacts({ panel, toggle, editor, files, session, send, lint 
     const state = session.stateOf(file, text, form, index);
     const live = element("div", `facts-row session-${state.status}`);
     live.append(element("span", "facts-mark", MARKS[state.status]), element("span", "", ` ${describeState(state)}`));
-    panel.append(section("Session", "the live session", live));
+    const tracing = functionDefine(text, form) && session.isTraced(form.name)
+      ? element("div", "facts-row facts-traced", `> traced: its calls print in the transcript (,untrace ${form.name})`)
+      : null;
+    panel.append(section("Session", "the live session", live, tracing));
 
     // Observed
     const observed = [];

@@ -15,7 +15,8 @@
 //! editor can mark each form current, stale, or not loaded. When the
 //! session observes (lane.rs), every unit is compiled with `--observe`, and
 //! after the evaluations pause the record is read back with a `try` of
-//! `(#%observations)`.
+//! `(#%observations)`; and every unit is compiled with `--trace` for each
+//! traced name (trace.rs).
 
 use crate::lane::{Output, Status};
 use crate::session::{self, Session};
@@ -209,13 +210,21 @@ impl Studio {
         }
     }
 
-    /// Compile `unit`; the .pbc, or the compiler's message with its lines
-    /// mapped back to the text (and, for a buffer's form, to its file).
+    /// Compile `unit` for the live session: observing when it observes, and
+    /// tracing the traced names when it can (trace.rs). The .pbc, or the
+    /// compiler's message with its lines mapped back to the text (and, for
+    /// a buffer's form, to its file).
     pub(crate) async fn compile(&self, unit: &Unit, source: &Source) -> Result<std::path::PathBuf, String> {
-        let out = unit.dir.join("unit.pbc");
         // a compiler swapped for one that cannot observe compiles plainly
         let observe = self.lane.observing() && self.toolchain.observe_available().await;
-        let output = self.toolchain.compile_unit(&unit.dir, &unit.path, &out, observe).await?;
+        let trace = if self.can_trace().await { self.traced_names() } else { Vec::new() };
+        self.compile_with(unit, source, observe, &trace).await
+    }
+
+    /// Compile `unit`, observing or not, with the defines of `trace` traced.
+    pub(crate) async fn compile_with(&self, unit: &Unit, source: &Source, observe: bool, trace: &[String]) -> Result<std::path::PathBuf, String> {
+        let out = unit.dir.join("unit.pbc");
+        let output = self.toolchain.compile_traced(&unit.dir, &unit.path, &out, observe, trace).await?;
         if output.timed_out {
             return Err("the compile timed out".to_owned());
         }
@@ -266,6 +275,12 @@ impl Studio {
     /// module it needs that the session lacks or has stale loaded first,
     /// as one unit: ⌘↵, and `,eval FILE:LINE`.
     pub async fn eval_form(self: &Arc<Self>, file: &str, at: At) -> Result<(), String> {
+        self.eval_form_as(file, at, None).await
+    }
+
+    /// Evaluate the form of `file` at `at` as `eval_form` does, the entry
+    /// showing `command` (`,trace f`) instead of `,eval FILE:LINE`.
+    pub async fn eval_form_as(self: &Arc<Self>, file: &str, at: At, command: Option<String>) -> Result<(), String> {
         let text = self.text_of(file).ok_or_else(|| format!("no file {file}"))?;
         let form = form_at(&text, at).ok_or_else(|| match at {
             At::Line(line) => format!("no form at {file}:{line}"),
@@ -282,15 +297,20 @@ impl Studio {
             body.push('\n');
         }
         let also = needs.iter().filter_map(|need| need.name.clone()).collect();
-        let shown = text[form.start..form.end].trim().to_owned();
-        let command = format!(",eval {file}:{}", form.line);
+        let whole = text[form.start..form.end].trim();
+        // a command's entry names the define by its first line: the command says the rest
+        let shown = match (&command, whole.split_once('\n')) {
+            (Some(_), Some((head, _))) => format!("{} …", head.trim_end()),
+            _ => whole.to_owned(),
+        };
+        let command = command.unwrap_or_else(|| format!(",eval {file}:{}", form.line));
         self.evaluate_as(body, Source::Buffer { file: file.to_owned(), pieces }, shown, command, also).await;
         Ok(())
     }
 
     /// Evaluate `text` from `source` as a transcript entry showing `line`
     /// (and `command`, the gesture's, and `also`, what loads first).
-    async fn evaluate_as(self: &Arc<Self>, text: String, source: Source, line: String, command: String, also: Vec<String>) {
+    pub(crate) async fn evaluate_as(self: &Arc<Self>, text: String, source: Source, line: String, command: String, also: Vec<String>) {
         let (origin, file) = match &source {
             Source::Prompt => ("prompt", None),
             Source::Buffer { file, .. } => ("buffer", Some(file.clone())),
@@ -517,6 +537,8 @@ impl Studio {
                 Status::Interrupted
             }
         };
+        // the observer's spill is of the discarded state: a later failure must not merge it
+        let _ = std::fs::remove_file(self.lane.spill_path());
         let (ok, status) = match &status {
             Status::Ok => (true, "ok".to_owned()),
             Status::Err(code) => (false, format!("error (status {code})")),

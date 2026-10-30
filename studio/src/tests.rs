@@ -2,7 +2,8 @@
 //! (`build/puffincc`, `bin/puffin-vm`): edits and saves, checks, REPL
 //! evaluation with the session's types carried between units, and the
 //! assistant's MCP tools with a proposal's round trip, typed holes, the
-//! observation lint, extract and rename, and pinned tests -- everything
+//! observation lint, extract and rename, pinned tests, and tracing --
+//! the author's `,trace` and the assistant's `trace` -- everything
 //! but spawning claude. Tests that need a binary that is not built say so and
 //! pass.
 
@@ -150,7 +151,7 @@ async fn mcp_lists_tools_and_admits_only_its_token() {
     let bytes = axum::body::to_bytes(answer.into_body(), 1 << 20).await.unwrap();
     let listed: Value = serde_json::from_slice(&bytes).unwrap();
     let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "facts_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc", "holes", "lint"] {
+    for name in ["list_files", "get_file", "check", "assists_at", "apply_assist", "type_at", "facts_at", "propose_edit", "evaluate", "evaluate_program", "search_docs", "read_doc", "holes", "lint", "trace"] {
         assert!(names.contains(&name), "{name} in {names:?}");
     }
 }
@@ -549,5 +550,127 @@ async fn results_pin_as_checks_and_test_runs_them() {
     // the module's own top-level effect ran once, ahead of the checks
     assert!(ran.out.iter().any(|(stream, text)| stream == "out" && text == "expr.puf loaded\n"), "{:?}", ran.out);
     assert_eq!(ran.status.as_deref(), Some("failed"));
+    studio.lane.reset().await;
+}
+
+const TRACED: &str = "\
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (eval-expr [e : Expr]) : Int
+  (match e [(Num n) n] [(Add a b) (+ (eval-expr a) (eval-expr b))]))
+(define example (Add (Num 2) (Add (Num 3) (Num 4))))
+(define (count-down n) (if (eq? n 0) 'done (count-down (- n 1))))
+";
+
+/// What entry `entry` printed on stdout.
+fn printed(entry: &crate::studio::Entry) -> String {
+    entry.out.iter().filter(|(stream, _)| stream == "out").map(|(_, text)| text.as_str()).collect()
+}
+
+async fn can_trace(studio: &Studio) -> bool {
+    let can = studio.toolchain.trace_available().await && studio.toolchain.observe_available().await;
+    if !can {
+        eprintln!("skipped: this puffincc cannot trace (--repl --trace) or observe");
+    }
+    can
+}
+
+#[tokio::test]
+async fn traced_calls_print_nested_and_untrace_stops_them() {
+    use crate::repl::{At, Source};
+    let Some(studio) = studio("trace", &[("expr.puf", TRACED)]) else { return };
+    if !can_trace(&studio).await {
+        return;
+    }
+    // ,trace evaluates the define again at once, by ⌘↵'s path
+    studio.trace(vec!["eval-expr".into()], true).await;
+    let traced = studio.recent(1).pop().unwrap();
+    assert_eq!((traced.command.as_str(), traced.status.as_deref()), (",trace eval-expr", Some("ok")), "{traced:?}");
+    assert_eq!(studio.traced_names(), ["eval-expr"]);
+    assert_eq!(state_of(&studio, "expr.puf", "define:eval-expr").status, "current");
+    studio.eval_form("expr.puf", At::Line(4)).await.unwrap();
+    studio.evaluate("(eval-expr example)".into(), Source::Prompt).await;
+    let entry = entry_of(&studio, "(eval-expr example)");
+    let out = printed(&entry);
+    assert!(out.starts_with("> (eval-expr (Add (Num 2) (Add (Num 3) (Num 4))))\n| > (eval-expr (Num 2))\n| < 2\n"), "{out}");
+    assert!(out.contains("| | > (eval-expr (Num 3))\n"), "{out}");
+    assert!(out.ends_with("< 9\n"), "{out}");
+    assert!(entry.out.contains(&("result".to_owned(), "9".to_owned())));
+
+    // a name nothing defines yet is traced from its next definition
+    studio.trace(vec!["twice".into()], true).await;
+    assert!(printed(&studio.recent(1).pop().unwrap()).contains("its next definition is traced"));
+    studio.evaluate("(define (twice x) (* 2 x))".into(), Source::Prompt).await;
+    studio.evaluate("(twice 4)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(twice 4)")), "> (twice 4)\n< 8\n");
+    // one the prompt defined is evaluated again from its text, traced or not
+    studio.evaluate("(define (thrice x) (* 3 x))".into(), Source::Prompt).await;
+    studio.trace(vec!["thrice".into()], true).await;
+    assert_eq!(studio.recent(1).pop().unwrap().command, ",trace thrice");
+    studio.evaluate("(thrice 2)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(thrice 2)")), "> (thrice 2)\n< 6\n");
+    studio.trace(vec!["thrice".into()], false).await;
+    studio.evaluate("(thrice 2)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(thrice 2)")), "");
+
+    // ,untrace evaluates it again untraced
+    studio.trace(vec!["eval-expr".into()], false).await;
+    assert_eq!(studio.recent(1).pop().unwrap().command, ",untrace eval-expr");
+    studio.evaluate("(eval-expr example)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(eval-expr example)")), "");
+
+    // only a function define traces
+    studio.trace(vec!["example".into()], true).await;
+    let refused = studio.recent(1).pop().unwrap();
+    assert_eq!(refused.status.as_deref(), Some("error"));
+    assert!(refused.error.unwrap().contains("not a function define"));
+    // a reset keeps the set: the next load traces again
+    studio.reset().await;
+    assert_eq!(studio.traced_names(), ["twice"]);
+    studio.evaluate("(define (twice x) (+ x x))".into(), Source::Prompt).await;
+    studio.evaluate("(twice 5)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(twice 5)")), "> (twice 5)\n< 10\n");
+    studio.lane.reset().await;
+}
+
+#[tokio::test]
+async fn the_assistant_traces_without_touching_the_session() {
+    use crate::repl::Source;
+    let Some(studio) = studio("trace-tool", &[("expr.puf", TRACED)]) else { return };
+    if !can_trace(&studio).await {
+        return;
+    }
+    let t = thread(&studio, Scope { kind: ScopeKind::Program, ..Scope::default() });
+    let traced = tool(&studio, t, "trace", json!({ "names": ["eval-expr"], "expr": "(eval-expr example)" })).await.unwrap();
+    assert_eq!((traced["ok"].as_bool(), traced["calls"].as_u64()), (Some(true), Some(5)), "{traced}");
+    assert!(traced["trace"].as_str().unwrap().starts_with("> (eval-expr (Add (Num 2)"), "{traced}");
+    assert_eq!(traced["results"], json!(["9"]));
+    // nothing was kept: not the definitions, not the traced set
+    assert_eq!(state_of(&studio, "expr.puf", "define:eval-expr").status, "absent");
+    assert!(studio.traced_names().is_empty());
+    studio.evaluate("(eval-expr (Num 1))".into(), Source::Prompt).await;
+    assert_eq!(entry_of(&studio, "(eval-expr (Num 1))").status.as_deref(), Some("error"));
+
+    // a proposal is traced before the author accepts it
+    let proposed = tool(&studio, t, "propose_edit", json!({ "file": "expr.puf", "old": "[(Num n) n]", "new": "[(Num n) (* 10 n)]", "note": "tens" })).await;
+    assert!(proposed.is_ok(), "{proposed:?}");
+    let fixed = tool(&studio, t, "trace", json!({ "names": ["eval-expr"], "expr": "(eval-expr example)" })).await.unwrap();
+    assert_eq!(fixed["results"], json!(["90"]), "{fixed}");
+
+    // a long trace comes back cut, and counted
+    let long = tool(&studio, t, "trace", json!({ "names": "count-down", "expr": "(count-down 300)" })).await.unwrap();
+    assert_eq!((long["lines"].as_u64(), long["calls"].as_u64()), (Some(602), Some(301)), "{long}");
+    assert_eq!(long["trace"].as_str().unwrap().lines().count(), crate::trace::TRACE_LINES);
+    assert!(long["cut"].as_str().unwrap().contains("402 more lines"), "{long}");
+
+    // a function the prompt defined is traced from the session's text, and stays untraced there
+    studio.evaluate("(define (sq x) (* x x))".into(), Source::Prompt).await;
+    let squared = tool(&studio, t, "trace", json!({ "names": ["sq"], "expr": "(sq 3)" })).await.unwrap();
+    assert_eq!(squared["trace"], "> (sq 3)\n< 9\n", "{squared}");
+    studio.evaluate("(sq 3)".into(), Source::Prompt).await;
+    assert_eq!(printed(&entry_of(&studio, "(sq 3)")), "");
+
+    // what evaluate refuses, trace refuses
+    assert!(tool(&studio, t, "trace", json!({ "names": ["count-down"], "expr": "(system \"ls\")" })).await.unwrap_err().contains("refuses"));
+    assert!(tool(&studio, t, "trace", json!({ "names": ["nope"], "expr": "1" })).await.unwrap_err().contains("nothing defines nope"));
     studio.lane.reset().await;
 }

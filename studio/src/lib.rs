@@ -18,6 +18,7 @@ pub mod session;
 pub mod sexp;
 pub mod studio;
 pub mod toolchain;
+pub mod trace;
 pub mod versions;
 pub mod web;
 

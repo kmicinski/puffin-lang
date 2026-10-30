@@ -4,9 +4,13 @@
 // The editor marks each form in the gutter as this tab types: a quiet dot
 // when the session has it as shown, a hollow amber one when it was edited
 // since it was loaded (or the prompt redefined it), nothing when the
-// session lacks it.
+// session lacks it. Beside the line numbers, each function define has a
+// trace mark: a cyan `>` when it is traced (its calls print in the
+// transcript), and a faint one on hover otherwise; a click toggles it.
 //
-//   createSession({ editor, files }) -> { receive, refresh, stateOf, statesOf, listing, observedOf, view }
+//   createSession({ editor, files, traced, canTrace })
+//     -> { receive, refresh, stateOf, statesOf, listing, observedOf, view, isTraced }
+//   traced()    the traced names;  canTrace()  whether the session can trace
 //   stateOf(file, text, form)  { key, status, by, result }; status one of
 //                              "current", "stale", "redefined", "evaluated", "absent"
 
@@ -20,6 +24,8 @@ export function keyOf(form, index) {
 }
 
 const definition = (form) => Boolean(form.name && form.head?.startsWith("define"));
+// `(define (f ...) ...)`: what a trace can be put on
+export const functionDefine = (text, form) => form.head === "define" && Boolean(form.name) && /^\(\s*define\s*\(/.test(text.slice(form.start, form.end));
 const expression = (form) => !definition(form) && !["require", "provide", ":"].includes(form.head);
 
 const BY = { buffer: "⌘↵ / ,eval", file: ",load", prompt: "the prompt", types: "a unit's types" };
@@ -35,7 +41,7 @@ export function describeState(state) {
   }
 }
 
-export function createSession({ editor, files }) {
+export function createSession({ editor, files, traced = () => [], canTrace = () => false }) {
   let view = { files: {}, results: {}, observed: [] };
   let timer = 0;
 
@@ -66,6 +72,16 @@ export function createSession({ editor, files }) {
       .filter(({ state }) => state.status !== "absent")
       .map(({ form, state }) => ({ line: form.line, className: `session-glyph ${state.status}`, hover: describeState(state) }));
     editor.glyphs(file, marks);
+    editor.lineMarks(file, "trace", traceMarks(editor.get()));
+  }
+
+  // Each function define's trace mark.
+  function traceMarks(text) {
+    if (!canTrace()) return [];
+    const on = new Set(traced());
+    return forms(text).filter((form) => functionDefine(text, form)).map((form) => on.has(form.name)
+      ? { line: form.line, className: "trace-mark on", hover: `traced: its calls print in the transcript; ,untrace ${form.name} (click)` }
+      : { line: form.line, className: "trace-mark", hover: `,trace ${form.name} (click): print its calls and returns in the transcript` });
   }
 
   // Typing: the gutter follows shortly after.
@@ -88,6 +104,7 @@ export function createSession({ editor, files }) {
         lines.push(`  ${mark} ${what}${state.status === "current" || state.status === "evaluated" ? "" : `  (${state.status})`}  line ${form.line}`);
       }
     }
+    if (traced().length) lines.push(`traced: ${traced().join(", ")}`);
     for (const observed of view.observed) {
       if (lines.length && !lines.includes("observed")) lines.push("observed");
       lines.push(`  ${observed.function}: ${observed.calls} call${observed.calls === 1 ? "" : "s"}`);
@@ -102,6 +119,7 @@ export function createSession({ editor, files }) {
     statesOf,
     listing,
     observedOf: (name) => view.observed.find((observed) => observed.function === name) ?? null,
+    isTraced: (name) => traced().includes(name),
     view: () => view,
     receive: {
       init(snapshot) {

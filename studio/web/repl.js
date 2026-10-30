@@ -11,6 +11,9 @@
 //   ,assist ID FILE:POS     apply the compiler's assist ID at byte POS
 //                           (FILE:POS-END for a selection; ID#N the Nth)
 //   ,rename FILE:POS NEW    rename the name at byte POS (F2)
+//   ,trace NAME ...         print NAME's calls and returns (its define is
+//                           evaluated again, traced); alone, list them
+//   ,untrace [NAME ...]     stop tracing NAME (every name, without one)
 //   ,pin N                  keep entry N's result as a check in tests.puf
 //   ,test                   run tests.puf
 //   ,accept #N  ,reject #N  a proposal
@@ -25,11 +28,14 @@
 // A run that referenced a name before its definition, which a module
 // defines, offers a chip that loads it: `,eval FILE:LINE`. An evaluation of
 // one expression that printed a result offers to pin it (`,pin N`); a
-// `,test` entry lists its checks, each failure linked to its line.
+// `,test` entry lists its checks, each failure linked to its line. A
+// traced call's output (`> (f args)` ... `< value`) is drawn as a call
+// tree once its evaluation ends (trace.js).
 
 import { balanced, forms } from "./lexer.js";
 import { highlight } from "./markdown.js";
 import { bindTextarea } from "./paredit.js";
+import { renderOutput } from "./trace.js";
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -44,6 +50,10 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,assist ID FILE:POS  apply the compiler's assist ID at byte POS (⌘. in the editor);
                      FILE:POS-END for a selection (extract), ID#N for the Nth of one id
 ,rename FILE:POS NEW rename the name at byte POS (F2 in the editor)
+,trace NAME          print NAME's calls and returns here, as a call tree; its define is
+                     evaluated again, traced (⌘-click a define's gutter, or right-click)
+,trace               list what is traced
+,untrace [NAME]      stop tracing NAME (every name, without one)
 ,pin N               keep entry N's printed result as a check in tests.puf (pin)
 ,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
@@ -135,6 +145,15 @@ export function createRepl({ transcript, prompt, send, commands }) {
         return send({ t: "pin", entry: id });
       }
       case "test": return send({ t: "test" });
+      case "trace": {
+        const names = rest.filter(Boolean);
+        if (names.length) return send({ t: "trace", names, on: true });
+        const traced = commands.traced();
+        return local(text, traced.length
+          ? `traced: ${traced.join(", ")} (,untrace NAME to stop)`
+          : "nothing is traced: ,trace NAME prints NAME's calls and returns here");
+      }
+      case "untrace": return send({ t: "trace", names: rest.filter(Boolean), on: false });
       case "help": return local(text, HELP);
       default: return local(text, `unknown command ,${verb}: ,help lists them`, true);
     }
@@ -158,7 +177,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       fit();
     } else if (event.key === "c" && event.ctrlKey && prompt.selectionStart === prompt.selectionEnd) {
       event.preventDefault();
-      send({ t: "interrupt" });
+      command(",interrupt");
     } else if (event.key === "ArrowUp" && !text.slice(0, prompt.selectionStart).includes("\n")) {
       if (history.index === 0) return;
       event.preventDefault();
@@ -193,7 +212,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       return scroll(true);
     }
     const head = node.appendChild(element("div", "line"));
-    if (entry.kind === "eval" && entry.origin === "buffer" && entry.file) {
+    if (entry.kind === "eval" && (entry.command || (entry.origin === "buffer" && entry.file))) {
       const where = head.appendChild(element("span", "where", `${entry.command || entry.file} `));
       if (entry.command) where.title = "The command this gesture is: typed at the prompt, it does the same";
     }
@@ -247,6 +266,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       const box = known.node.appendChild(element("pre", `error ${status}`, error));
       hooks.error?.(entry, box);
     }
+    if (known.out) treeify(known.out);
     if (entry?.kind === "eval" && status === "ok") offerPin(entry, known);
     if (entry?.kind === "test" && entry.tests) showTests(entry.tests, known.node);
     if (fixes.length) {
@@ -262,6 +282,14 @@ export function createRepl({ transcript, prompt, send, commands }) {
       }
     }
     scroll(was);
+  }
+
+  // A finished entry's traces, as call trees.
+  function treeify(out) {
+    for (const pre of [...out.querySelectorAll(":scope > pre.stream.out")]) {
+      const tree = renderOutput(pre.textContent);
+      if (tree) pre.replaceWith(tree);
+    }
   }
 
   // An evaluation of one expression that printed a result can be pinned.
@@ -305,6 +333,21 @@ export function createRepl({ transcript, prompt, send, commands }) {
     }
   }
 
+  // What an empty transcript says: where to start.
+  function welcome() {
+    const box = transcript.appendChild(element("div", "welcome"));
+    box.append(element("div", "welcome-head", "The editor above and this live session share one program."));
+    const keys = [
+      ["⌘↵", "evaluates the form at the cursor, loading what it needs first"],
+      [",help", "lists the commands; ,trace f prints f's calls as a tree"],
+      ["Tab", "on the empty prompt asks the assistant"],
+    ];
+    for (const [key, what] of keys) {
+      const row = box.appendChild(element("div", "welcome-row"));
+      row.append(element("kbd", "", key), document.createTextNode(` ${what}`));
+    }
+  }
+
   function insert(text) {
     prompt.value = text;
     fit();
@@ -325,6 +368,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
         transcript.replaceChildren();
         nodes.clear();
         entries.clear();
+        if (!list.length) welcome();
         for (const entry of list) show(entry);
         scroll(true);
       },

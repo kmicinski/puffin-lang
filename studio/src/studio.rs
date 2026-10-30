@@ -64,6 +64,8 @@ pub struct Snapshot {
     /// Each file's typed holes, and its observation lint findings.
     pub holes: BTreeMap<String, Marks<Hole>>,
     pub lint: BTreeMap<String, Marks<Finding>>,
+    /// The traced function names (trace.rs).
+    pub traced: Vec<String>,
     pub features: Features,
     /// Why the assistant cannot run here, if it cannot.
     pub agent_unavailable: Option<String>,
@@ -83,6 +85,8 @@ pub struct Features {
     pub lint: bool,
     /// `puffincc --assist rename` is an operation.
     pub rename: bool,
+    /// `puffincc --repl --trace NAME` compiles: `,trace` works.
+    pub trace: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -179,6 +183,8 @@ pub enum Event {
     Holes { file: String, holes: Marks<Hole> },
     /// The observation lint's findings in `file`.
     Lint { file: String, lint: Marks<Finding> },
+    /// The traced function names changed.
+    Traced { names: Vec<String> },
     /// What the live session holds of the program changed.
     Session(SessionView),
     /// Progress of an assistant turn.
@@ -268,6 +274,9 @@ pub struct Studio {
     /// Signalled after each successful evaluation: the observation record
     /// is due for a refresh.
     pub(crate) observations_due: Arc<Notify>,
+    /// The function names `,trace` named: every unit defining one compiles
+    /// with `--trace` for it (trace.rs).
+    pub(crate) traced: Mutex<BTreeSet<String>>,
     pub agent: Agent,
     port: OnceLock<u16>,
 }
@@ -317,6 +326,7 @@ impl Studio {
             holes: Mutex::new(BTreeMap::new()),
             lint: Mutex::new(BTreeMap::new()),
             observations_due: Arc::new(Notify::new()),
+            traced: Mutex::new(BTreeSet::new()),
             agent: Agent::new(mcp_token),
             port: OnceLock::new(),
         });
@@ -365,6 +375,7 @@ impl Studio {
             facts: self.toolchain.facts_available().await,
             lint: self.toolchain.lint_available().await,
             rename: self.toolchain.rename_available().await,
+            trace: self.toolchain.trace_available().await,
         }
     }
 
@@ -378,6 +389,7 @@ impl Studio {
         let session = self.session_view();
         let holes = self.holes_view();
         let lint = self.lint_view();
+        let traced = self.traced_names();
         Snapshot {
             project: self.directory.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             directory: self.directory.display().to_string(),
@@ -389,6 +401,7 @@ impl Studio {
             session,
             holes,
             lint,
+            traced,
             features,
             agent_unavailable: Agent::unavailable(),
         }
@@ -788,6 +801,18 @@ impl Studio {
     pub fn echo(&self, line: &str) {
         let id = self.begin(Entry { kind: "echo", line: line.to_owned(), ..Entry::default() });
         self.finish(id, "ok", None, 0);
+    }
+
+    /// Echo a command with a line saying what it did, or (`failed`) why
+    /// it could not.
+    pub fn echo_note(&self, line: &str, note: &str, failed: bool) {
+        let id = self.begin(Entry { kind: "echo", line: line.to_owned(), ..Entry::default() });
+        if failed {
+            self.finish(id, "error", Some(note.to_owned()), 0);
+        } else {
+            self.output(id, "out", format!("{note}\n"));
+            self.finish(id, "ok", None, 0);
+        }
     }
 
     /// The latest REPL lines, oldest first, briefly: what a question carries.

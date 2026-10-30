@@ -68,7 +68,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "facts.js", "holes.js", "lint.js", "rename.js",
+    "versions.js", "session.js", "facts.js", "holes.js", "lint.js", "rename.js", "trace.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -155,6 +155,11 @@ enum Request {
     },
     Interrupt,
     Reset,
+    /// `,trace NAMES` (`on`) or `,untrace NAMES` (trace.rs).
+    Trace {
+        names: Vec<String>,
+        on: bool,
+    },
     /// The assists at UTF-16 offset `pos` of `file`, or for the selection
     /// [pos, end); answered with `seq`.
     Assists {
@@ -398,8 +403,17 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
         Request::Reset => {
             tokio::spawn(async move {
                 studio.reset().await;
-                studio.echo(",reset");
+                let traced = studio.traced_names();
+                if traced.is_empty() {
+                    studio.echo(",reset");
+                } else {
+                    let note = format!("still traced: {} (traced again when next loaded; ,untrace to stop)", traced.join(", "));
+                    studio.echo_note(",reset", &note, false);
+                }
             });
+        }
+        Request::Trace { names, on } => {
+            tokio::spawn(async move { studio.trace(names, on).await });
         }
         Request::Assists { seq, file, pos, end } => {
             tokio::spawn(async move {

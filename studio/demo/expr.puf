@@ -1,17 +1,79 @@
-;; A tour of Puffin Studio. Try:
-;;   - put the cursor in (match e) below and press Cmd-. : the
-;;     compiler fills in every case of Expr
-;;   - Cmd-Enter on a form evaluates it in the live session below
-;;   - Tab on the empty REPL prompt (or start a line with ??) to ask
-;;     the assistant; its edits arrive as hunks you accept or reject
+;; expr.puf -- a small interpreter, and a tour of Puffin Studio.
+;;
+;; The editor and the live session below share one program. Every gesture
+;; is a command: the transcript shows the one it made, and typing it at the
+;; prompt does the same. ,help lists them all. In order:
+;;
+;;  1. Evaluate. Put the cursor on (run example) and press Cmd-Enter. The
+;;     studio loads what the form needs first; the gutter dots then say what
+;;     the session holds (green: as shown; amber: edited since).
+;;  2. Trace. Type ,trace eval-expr at the prompt (or click the faint > by
+;;     eval-expr's line number). Cmd-Enter on (run example) again: each call
+;;     and what it returned, as a tree. ,untrace eval-expr stops it.
+;;  3. Facts. Press Facts (top right) and put the cursor on [e : Expr]: the
+;;     checker's type, and the shapes e was called with in the session.
+;;  4. Extract. Select (cons (cons x v) env) in the Let case, press Cmd-.
+;;     and pick Extract: it becomes a function of its free variables. Then
+;;     F2 on its name renames it (try extend), the binder and every use.
+;;  5. Fill a match. Cursor in the (match e) of size, Cmd-.: the checker
+;;     knows Expr, so it writes one clause per constructor.
+;;  6. Holes. count-vars, last in the file, is an exercise: its ?? is a typed
+;;     hole. F8 jumps to it, hovering shows its goal (Int), and Cmd-. lists
+;;     what fits. Fill it a piece at a time; the status pill counts holes.
+;;  7. Pin. Hover a result in the transcript and click pin: tests.puf gains
+;;     a check. ,test runs them all.
+;;  8. Ask. Tab on the empty prompt asks the assistant (Esc returns), e.g.
+;;     "trace eval-expr on example and explain the Let case". What it
+;;     proposes arrives as hunks to accept or reject.
+;;  9. Untyped data: sexp.puf does the same over s-expressions, where what
+;;     the session sees teaches the editor.
 
 (define-type Expr
   (Num Int)
+  (Var Sym)
   (Add Expr Expr)
   (Mul Expr Expr)
-  (Neg Expr))
+  (Let Sym Expr Expr))
 
-(define (eval-expr [e : Expr]) : Int
+;; An environment: (name . value) pairs, the innermost binding first.
+(define (lookup [env : (List (Pairof Sym Int))] [x : Sym]) : Int
+  (cond [(null? env) (error (string-append "unbound variable " (symbol->string x)))]
+        [(eq? (car (car env)) x) (cdr (car env))]
+        [else (lookup (cdr env) x)]))
+
+(define (eval-expr [e : Expr] [env : (List (Pairof Sym Int))]) : Int
+  (match e
+    [(Num n) n]
+    [(Var x) (lookup env x)]
+    [(Add a b) (+ (eval-expr a env) (eval-expr b env))]
+    [(Mul a b) (* (eval-expr a env) (eval-expr b env))]
+    [(Let x rhs body)
+     (let ([v (eval-expr rhs env)])
+       (eval-expr body (cons (cons x v) env)))]))
+
+(define (run [e : Expr]) : Int
+  (eval-expr e '()))
+
+;; let x = 2 + 3 in x * (let y = 4 in x + y)
+(define example
+  (Let 'x (Add (Num 2) (Num 3))
+       (Mul (Var 'x) (Let 'y (Num 4) (Add (Var 'x) (Var 'y))))))
+
+(run example)
+
+;; ---- Exercises ---------------------------------------------------------
+
+;; Step 5: Cmd-. in the match fills it.
+(define (size [e : Expr]) : Int
   (match e))
 
-(define example (Add (Num 2) (Mul (Num 3) (Num 4))))
+;; Step 6: a typed hole, ??, to fill. Until it is filled this file does not
+;; compile: the check stops at the hole (Cmd-Enter still evaluates the forms
+;; above it).
+(define (count-vars [e : Expr]) : Int
+  (match e
+    [(Num n) 0]
+    [(Var x) 1]
+    [(Add a b) (+ (count-vars a) (count-vars b))]
+    [(Mul a b) ??]
+    [(Let x rhs body) (+ (count-vars rhs) (count-vars body))]))

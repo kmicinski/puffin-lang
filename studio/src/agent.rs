@@ -78,6 +78,14 @@ accepts.
 session (definitions they evaluated are there) and keeps nothing; evaluate_program compiles \
 and runs a whole file of the program as your proposals leave it, on a throwaway VM. Cite \
 what you saw.
+- Trace before you fix a recursive function: trace runs an expression with the functions you \
+name traced -- each call `> (f args)` and its return `< value`, nested by depth -- against the \
+author's session, and keeps nothing. It shows what an interpreter or a recursive pass actually \
+does on an input: which case each call took, which call returned the wrong value, where a \
+recursion ran away. Trace a small failing input before proposing a fix, cite the lines that \
+show the bug, and trace again after proposing (your pending proposals apply) to confirm it. \
+Keep inputs small: the trace is cut at 200 lines. The author traces with `,trace f` (it makes \
+f's calls print in their transcript); suggest it in a ```repl block when it would help them see.
 - Answer briefly: a sentence or two, then any code. No preamble, no headings. Put \
 expressions you suggest the author run in a ```repl block, one per line (a form may span \
 lines); each becomes a chip that runs it at the prompt. Show other Puffin in ```puffin \
@@ -91,6 +99,8 @@ const MAX_TURNS: u32 = 24;
 const HIDDEN_TOOLS: [&str; 1] = ["ToolSearch"];
 /// How much of a tool's input string or result a transcript keeps.
 const CLIP: usize = 4000;
+/// How much of a `trace` result's trace a transcript keeps, for its tree.
+const TRACE_KEPT: usize = 64_000;
 
 pub struct Agent {
     /// The bearer token `/mcp` requires; it never leaves this machine except
@@ -472,8 +482,15 @@ impl Stream {
             out.update(*index, |entry| {
                 entry.data["status"] = json!(if error { "error" } else { "ok" });
                 // a proposal's id, for its chip
-                if let Some(op) = serde_json::from_str::<Value>(&text).ok().and_then(|value| value["proposed"].as_u64()) {
+                let value = serde_json::from_str::<Value>(&text).ok();
+                if let Some(op) = value.as_ref().and_then(|value| value["proposed"].as_u64()) {
                     entry.data["op"] = json!(op);
+                }
+                // a trace, whole (it is bounded), for the tree its step shows
+                if entry.data["name"] == "trace"
+                    && let Some(trace) = value.as_ref().and_then(|value| value["trace"].as_str())
+                {
+                    entry.data["trace"] = json!(crate::toolchain::clip(trace, TRACE_KEPT));
                 }
                 entry.data["result"] = json!(clip_text(&text));
             });
