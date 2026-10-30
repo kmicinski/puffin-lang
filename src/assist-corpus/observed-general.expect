@@ -1,0 +1,4 @@
+== facts @ 198 (exit 0)
+== stdout
+{"type":"_","observed":{"function":"simp","param":"e","index":0,"calls":2,"shapes":["(list add 3)"],"patterns":["`(add ,a ,b)"]}}
+== stderr

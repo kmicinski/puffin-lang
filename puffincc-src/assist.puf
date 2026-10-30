@@ -27,6 +27,7 @@
 ;; included.
 
 (require "system.puf")
+(require "tables.puf")     ;; prim-table (did-you-mean candidates)
 (require "reader.puf")
 (require "syntax.puf")
 (require "modules.puf")   ;; str-cat
@@ -201,10 +202,20 @@
 (define (memq-node n ns)
   (cond [(null? ns) #f] [(eq? (car ns) n) #t] [else (memq-node n (cdr ns))]))
 
+;; at a binder, the type it is declared with: [x : T] in a define's
+;; or lambda's formals gives T's text; else #f
+(define (declared-binder-type path)
+  (and (pair? path) (pair? (cdr path))
+       (let* ([n (car path)] [p (car (cdr path))] [kids (if (lst? p) (lst-kids p) '())])
+         (and (atom? n) (eq? (length kids) 3) (eq? (car kids) n)
+              (atom? (second kids)) (eq? (atom-datum (second kids)) ':)
+              (node-text (third kids))))))
+
 (define (op-type-at pos load-entry assemble)
   (let* ([path (syn-path-at entry-nodes pos)])
     (if (or (null? path) (binder-position? path))
-        (println (json-obj (list (cons "type" "null"))))
+        (println (json-obj (list (cons "type" (let ([t (declared-binder-type path)])
+                                                (if t (json-str t) "null"))))))
         (let* ([n (car path)]
                [fired (run-probe (syn-start n) (syn-end n)
                                  (lambda (t env)
@@ -797,7 +808,8 @@
     ['Nil "'()"] ['Pair "(cons hd tl)"]
     [(list 'sym _) "(? symbol? x)"]
     [(list 'list h n)
-     (let ([known (findf (lambda (kc) (string=? (car kc) (str-cat "qq:" (symbol->string h))))
+     (let ([known (findf (lambda (kc) (and (string=? (car kc) (str-cat "qq:" (symbol->string h)))
+                                           (general-qq? (syn->datum (cdr kc)))))
                          (append-map (lambda (mt) (match-cases (car mt))) (all-matches)))])
        (cond
          [known (node-text (cdr known))]
@@ -814,6 +826,25 @@
              [else (str-cat "(" (symbol->string c) " "
                             (string-join (field-names (ctor-fields (hash-ref (ctors) k)) adt-name? avoid) " ")
                             ")")]))]
+    [_ #f]))
+
+;; a quasiquote pattern that matches every list with its head and
+;; shape: past the head, only unquoted binders, ellipses, and nested
+;; lists of the same -- `(add ,a ,b) is general, `(add 0 ,b) is not
+(define (general-qq? d)
+  (match d
+    [(list 'quasiquote (cons h rest)) (and (symbol? h) (general-qq-elems? rest))]
+    [_ #f]))
+(define (general-qq-elems? xs)
+  (cond [(null? xs) #t]
+        [(not (pair? xs)) #f]
+        [else (and (general-qq-elem? (car xs)) (general-qq-elems? (cdr xs)))]))
+(define (general-qq-elem? x)
+  (match x
+    [(list 'unquote v) (symbol? v)]
+    [(list 'unquote-splicing v) (symbol? v)]
+    ['... #t]
+    [(? pair? _) (general-qq-elems? x)]
     [_ #f]))
 
 (define (shape-label s)
@@ -1004,6 +1035,143 @@
               (hash-ref/default (ctor-orders) (car ad) '()))))))
      load-entry assemble)))
 
+;; ---- assist: extract a selection into a function ------------------------------------
+
+;; the node a selection [s, e) means: the one spanning it exactly
+;; (whitespace trimmed), else the smallest node containing it
+(define (selection-node s e)
+  (let* ([s2 (skip-space-forward s e)]
+         [e2 (skip-space-backward s2 e)]
+         [path (syn-path-at entry-nodes s2)])
+    (findf (lambda (n) (and (<= (syn-start n) s2) (<= e2 (syn-end n)))) path)))
+
+(define (space-byte? b) (if (member b '(32 9 10 13)) #t #f))
+(define (skip-space-forward s e)
+  (if (and (< s e) (space-byte? (string-byte entry-text s))) (skip-space-forward (+ s 1) e) s))
+(define (skip-space-backward s e)
+  (if (and (< s e) (space-byte? (string-byte entry-text (- e 1)))) (skip-space-backward s (- e 1)) e))
+
+;; the path from a node up to its top-level form, node first
+(define (path-to n)
+  (let loop ([p (syn-path-at entry-nodes (syn-start n))])
+    (cond [(null? p) '()]
+          [(eq? (car p) n) p]
+          [else (loop (cdr p))])))
+
+;; a node's text re-indented for column `col`: continuation lines lose
+;; the node's own column and gain col
+(define (reindent n col)
+  (let ([from (col-of (syn-start n))])
+    (string-join
+     (let loop ([lines (split-lines (node-text n))] [first #t] [acc '()])
+       (if (null? lines)
+           (reverse acc)
+           (loop (cdr lines) #f
+                 (cons (if first (car lines) (str-cat (spaces col) (drop-spaces (car lines) from)))
+                       acc))))
+     "\n")))
+
+(define (split-lines s)
+  (let loop ([i 0] [start 0] [acc '()])
+    (cond [(eq? i (string-length s)) (reverse (cons (substring s start i) acc))]
+          [(eq? (string-byte s i) 10) (loop (+ i 1) (+ i 1) (cons (substring s start i) acc))]
+          [else (loop (+ i 1) start acc)])))
+
+(define (drop-spaces line k)
+  (let loop ([i 0])
+    (if (and (< i k) (< i (string-length line)) (eq? (string-byte line i) 32))
+        (loop (+ i 1))
+        (substring line i (string-length line)))))
+
+;; a top-level name no form defines yet
+(define (fresh-top-name base)
+  (let ([taken (filter-map (lambda (n) (match (syn->datum n)
+                                         [`(define (,f . ,_) ,_ ...) f]
+                                         [`(define ,x ,_ ...) x]
+                                         [_ #f]))
+                           entry-nodes)])
+    (let loop ([i 1])
+      (let ([name (if (eq? i 1) base (str-cat base "-" (number->string i)))])
+        (if (member (string->symbol name) taken) (loop (+ i 1)) name)))))
+
+;; Extract the selected expression into a new top-level function. Its
+;; parameters are the selection's free locals: the names it mentions
+;; that the forms around it bind, in order of first mention.
+(define (extract-assist s e)
+  (let ([n (selection-node s e)])
+    (when (and n (not (eq? (car n) 'sugar)))
+      (let* ([path (path-to n)]
+             [top (top-of path)])
+        (unless (or (eq? n top) (binder-position? path))
+          (let* ([around (local-binders (cdr path))]
+                 [mentioned (dedupe-by (lambda (x) x) (symbols-of (syn->datum n)))]
+                 [free (filter (lambda (x) (member x around)) mentioned)]
+                 [name (fresh-top-name "extracted")]
+                 [params (map symbol->string free)]
+                 [call (str-cat "(" name (if (null? params) "" " ") (string-join params " ") ")")])
+            (emit-assist "extract"
+                         (str-cat "Extract into a function: " call)
+                         "syntax"
+                         (list (edit (syn-start top) (syn-start top)
+                                     (str-cat "(define (" name (if (null? params) "" " ")
+                                              (string-join params " ") ")\n  "
+                                              (reindent n 2) ")\n\n"))
+                               (edit (syn-start n) (syn-end n) call)))))))))
+
+;; ---- assist: did you mean --------------------------------------------------------------
+
+;; Levenshtein distance, two rows
+(define (edit-distance a b)
+  (let* ([n (string-length a)] [m (string-length b)]
+         [first-row (make-vector (+ m 1))])
+    (let init ([j 0]) (when (<= j m) (vector-set! first-row j j) (init (+ j 1))))
+    (let row ([i 1] [prev first-row])
+      (if (> i n)
+          (vector-ref prev m)
+          (let ([cur (make-vector (+ m 1))])
+            (vector-set! cur 0 i)
+            (let col ([j 1])
+              (when (<= j m)
+                (vector-set! cur j
+                             (min (+ 1 (vector-ref prev j))
+                                  (min (+ 1 (vector-ref cur (- j 1)))
+                                       (+ (vector-ref prev (- j 1))
+                                          (if (eq? (string-byte a (- i 1)) (string-byte b (- j 1))) 0 1)))))
+                (col (+ j 1))))
+            (row (+ i 1) cur))))))
+
+;; the surface prims, by name
+(define (prim-names)
+  (filter-map (lambda (row) (and (pair? row) (symbol? (car row)) (eq? (fourth row) #t) (car row)))
+              prim-table))
+
+;; on a name nothing binds: the bound names closest to it
+(define (did-you-mean-assist path forms)
+  (let ([a (car path)])
+    (when (and (atom? a) (symbol? (atom-datum a))
+               (not (binder-position? path))
+               (not (ormap (lambda (n) (eq? (car n) 'sugar)) path)))
+      (let* ([x (atom-datum a)]
+             [xs (symbol->string x)]
+             [bound (append (local-binders path) (program-names forms))])
+        (unless (or (prim? x) (member x special-forms) (member x bound)
+                    (eq? x '??) (eq? (string-byte xs 0) 35))
+          (let* ([limit (if (< (string-length xs) 5) 1 2)]
+                 [scored (filter-map (lambda (b)
+                                       (and (symbol? b)
+                                            (let ([d (edit-distance xs (symbol->string b))])
+                                              (and (<= d limit) (cons d b)))))
+                                     (dedupe-by (lambda (b) b)
+                                                (append bound (append (prim-names) special-forms))))]
+                 [best (sort scored (lambda (p q) (< (car p) (car q))))])
+            (for-each-node
+             (lambda (p)
+               (emit-assist "did-you-mean"
+                            (str-cat "Replace " xs " with " (symbol->string (cdr p)) " (did you mean?)")
+                            "syntax"
+                            (list (edit (syn-start a) (syn-end a) (symbol->string (cdr p))))))
+             (take best (min 3 (length best))))))))))
+
 ;; ---- the assists operation --------------------------------------------------------
 
 ;; a cursor just past a closer belongs, for assists, to the form it
@@ -1016,12 +1184,14 @@
         (syn-path-at entry-nodes (- pos 1))
         path)))
 
-(define (op-assists pos load-entry assemble)
+(define (op-assists pos end load-entry assemble)
   (let* ([path (assist-path pos)]
          [fo (load-entry entry-path)]
          [prog (assemble (first fo) (second fo))]
          [forms (match prog [`(program ,fs ...) fs])])
     (set! adt-tables (collect-adts forms))
+    ;; a selection [pos, end): extract it
+    (when (and end (< pos end)) (extract-assist pos end))
     (when (pair? path)
       (let* ([top (top-of path)]
              [on-hole (and (atom? (car path)) (eq? (atom-datum (car path)) '??))]
@@ -1033,7 +1203,8 @@
           (traversal-assist top))
         (if on-hole
             (hole-assists path load-entry assemble)
-            (stub-assist path forms))
+            (begin (stub-assist path forms)
+                   (did-you-mean-assist path forms)))
         ;; observed shapes need no checker run, so they come first
         (when (and m (pair? (cdr (lst-kids m)))) (observed-match-assist m path))
         (when (and (not on-hole) (eq? (head-sym top) 'define)) (annotate-assist top))
@@ -1084,15 +1255,27 @@
          [forms (match prog [`(program ,fs ...) fs])])
     (set! adt-tables (collect-adts forms))
     (let ([obs (observed-json path)])
-      (if (or (null? path) (binder-position? path))
-          (println (json-obj (list (cons "type" "null") (cons "observed" obs))))
+      (cond
+        [(and (pair? path) (atom? (car path)) (eq? (atom-datum (car path)) '??))
+         ;; a hole: its goal
+         (hole-goal path
+                    (lambda (goal env)
+                      (println (json-obj (list (cons "type" (json-str "_"))
+                                               (cons "goal" (json-str (render-type goal)))
+                                               (cons "observed" obs)))))
+                    load-entry assemble)]
+        [(or (null? path) (binder-position? path))
+         (println (json-obj (list (cons "type" (let ([t (declared-binder-type path)])
+                                                 (if t (json-str t) "null")))
+                                  (cons "observed" obs))))]
+        [else
           (let* ([n (car path)]
                  [fired (run-probe (syn-start n) (syn-end n)
                                    (lambda (t env)
                                      (println (json-obj (list (cons "type" (json-str (render-type t)))
                                                               (cons "observed" obs)))))
                                    load-entry assemble)])
-            (unless fired (println (json-obj (list (cons "type" "null") (cons "observed" obs))))))))))
+            (unless fired (println (json-obj (list (cons "type" "null") (cons "observed" obs))))))]))))
 
 ;; ---- lint: facts that warrant a marker ----------------------------------------------
 
@@ -1155,15 +1338,20 @@
   (set! entry-path path)
   (set! entry-text (read-source path))
   (set! entry-nodes (read-syntax-from-string entry-text))
-  (let ([pos (if (pair? args) (string->number (car args)) #f)])
+  (let ([pos (if (pair? args) (string->number (car args)) #f)]
+        ;; assists FILE POS END: a selection
+        [end (if (and (pair? args) (pair? (cdr args))) (string->number (car (cdr args))) #f)])
     (cond
       [(string=? op "check") (op-check load-entry assemble)]
       [(string=? op "forms") (op-forms)]
       [(and (string=? op "type-at") pos) (op-type-at pos load-entry assemble)]
-      [(and (string=? op "assists") pos) (op-assists pos load-entry assemble)]
+      [(and (string=? op "assists") pos) (op-assists pos end load-entry assemble)]
       [(and (string=? op "facts") pos) (op-facts pos load-entry assemble)]
       [(string=? op "lint") (op-lint load-entry assemble)]
-      [else (error (str-cat "puffincc: unknown --assist operation or missing position: " op))])))
+      [else (error (str-cat "puffincc: unknown --assist operation or missing position: " op))])
+    ;; the driver prints a non-void result: an operation's output is
+    ;; only what it printed
+    (void)))
 
 ;; ---- --repl --observe: report arguments to the session's observer ---------------
 

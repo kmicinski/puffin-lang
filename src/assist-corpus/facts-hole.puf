@@ -1,0 +1,3 @@
+;; assist: facts @ "??" +0
+;; facts at a hole report its goal
+(define (f [x : Int]) : Int (+ x ??))

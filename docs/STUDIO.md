@@ -312,6 +312,14 @@ an assistant tool. In planned order:
    all its observed shapes share (constructors resolve to their
    type), else `_`; the result stays `_`.
 10. **Pin a transcript entry as a test.**
+
+Built beyond the list: `extract` (with a selection, `assists FILE
+POS END`: the selection becomes a new top-level function whose
+parameters are its free locals, in order of first mention), and
+`did-you-mean` (on a name nothing binds: the closest names in scope
+and the surface prims, by edit distance). `facts` at a hole reports
+its `goal`; `type-at` and `facts` at an annotated binder report its
+declared type.
 11. **Promote an s-expression language to a `define-type`** inferred
     from its quasiquote patterns.
 

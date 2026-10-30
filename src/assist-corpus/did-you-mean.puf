@@ -1,0 +1,11 @@
+;; assist: assists @ "scor a" +1
+;; a name nothing binds: the closest names in scope, by edit distance
+;; (and, since it is called, a stub)
+(define-type Expr (Num Int) (Add Expr Expr))
+
+(define (score [e : Expr] [w : Int]) : Int
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (scor a w) (score b w))]))
+
+(score (Num 1) 2)

@@ -1,4 +1,4 @@
-== type-at @ 104 (exit 0)
+== type-at @ 157 (exit 0)
 == stdout
-{"type":null}
+{"type":"Str"}
 == stderr

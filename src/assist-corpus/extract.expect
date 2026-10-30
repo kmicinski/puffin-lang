@@ -1,0 +1,22 @@
+== assists @ 299 (exit 0)
+== stdout
+{"id":"extract","title":"Extract into a function: (extracted w n)","source":"syntax","edits":[{"start":232,"end":232,"text":"(define (extracted w n)\n  (* w (+ n 1)))\n\n"},{"start":299,"end":312,"text":"(extracted w n)"}]}
+{"done":true}
+== stderr
+== apply 1: extract
+;; assist: assists @ "(* w (+ n 1))" +0 select=13
+;; a selection becomes a new function; its free locals (w, n) become
+;; parameters, in order of first mention, and the selection a call
+(define-type Expr (Num Int) (Add Expr Expr))
+
+(define (extracted w n)
+  (* w (+ n 1)))
+
+(define (score [e : Expr] [w : Int]) : Int
+  (match e
+    [(Num n) (extracted w n)]
+    [(Add a b) (+ (score a w) (score b w))]))
+
+(score (Num 1) 2)
+== check (exit 0)
+{"ok":true}

@@ -1,5 +1,6 @@
 ;; assist: type-at @ "[s : Str]" +1
-;; a binder is not an expression: no probe, no type
+;; a binder is not an expression, so nothing is probed: an annotated
+;; binder reports its declared type
 (define (greet [s : Str]) : Str
   (string-append s "!"))
 

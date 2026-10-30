@@ -1,0 +1,7 @@
+;; assist: facts @ "(match e" +7 observed=observed.sexp
+;; an observed shape borrows only a GENERAL pattern from the file:
+;; `(add ,a ,b), never the literal-0 `(add 0 ,b)
+(define (simp e)
+  (match e
+    [`(add 0 ,b) b]
+    [`(add ,a ,b) e]))
