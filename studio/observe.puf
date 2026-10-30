@@ -134,3 +134,27 @@
                        (loop (+ i 1) (cons (vector-ref rec i) acc))
                        (reverse acc))))))
        (hash-keys #%observed)))
+
+;; ---- tracing (puffincc --repl --trace NAME) ---------------------------------------
+
+;; A traced function prints each call on entry and its value on return,
+;; nested by depth, the way Racket's trace does:
+;;   > (fact 2)
+;;   | > (fact 1)
+;;   | < 1
+;;   < 2
+(define #%trace-depth 0)
+
+(define (#%trace-bars n)
+  (if (< n 1) "" (string-append "| " (#%trace-bars (- n 1)))))
+
+(define (#%trace-enter name args)
+  (displayln (string-append (#%trace-bars #%trace-depth)
+                            (string-append "> " (value->string (cons name args)))))
+  (set! #%trace-depth (+ #%trace-depth 1)))
+
+(define (#%trace-exit name v)
+  (set! #%trace-depth (- #%trace-depth 1))
+  (displayln (string-append (#%trace-bars #%trace-depth)
+                            (string-append "< " (value->string v))))
+  v)

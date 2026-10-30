@@ -9,7 +9,8 @@
 # Checks the record's shapes, that an observed function keeps its own
 # tail calls (a million-iteration observed loop runs in constant
 # space), that annotated and internal-define bodies survive the
-# rewrite, and that variadic defines are left alone.
+# rewrite, that variadic defines are left alone, and that `--trace
+# NAME` prints nested calls and returns (from the same runtime).
 #
 # Needs: build/puffincc (bin/bootstrap), bin/puffin-vm (make -C src/vm).
 
@@ -45,17 +46,23 @@ cat > "$tmp/calls.puf" <<'PUF'
 (sum 1 2 3)
 PUF
 echo '(#%observations)' > "$tmp/dump.puf"
+cat > "$tmp/traced.puf" <<'PUF'
+(define (fact n) (if (eq? n 0) 1 (* n (fact (- n 1)))))
+PUF
+echo '(fact 2)' > "$tmp/trace-call.puf"
 
 "$CC" --repl-prelude -o "$tmp/prelude.pbc" &&
 "$CC" --repl studio/observe.puf -o "$tmp/observer.pbc" &&
 "$CC" --repl "$tmp/types.puf" -o "$tmp/types.pbc" &&
 "$CC" --repl --observe "$tmp/defs.puf" -o "$tmp/defs.pbc" &&
 "$CC" --repl "$tmp/calls.puf" -o "$tmp/calls.pbc" &&
-"$CC" --repl "$tmp/dump.puf" -o "$tmp/dump.pbc" || { echo "FAIL: compile"; exit 1; }
+"$CC" --repl "$tmp/dump.puf" -o "$tmp/dump.pbc" &&
+"$CC" --repl --trace fact "$tmp/traced.puf" -o "$tmp/traced.pbc" &&
+"$CC" --repl "$tmp/trace-call.puf" -o "$tmp/trace-call.pbc" || { echo "FAIL: compile"; exit 1; }
 
-printf 'load %s\nload %s\nload %s\nload %s\nload %s\ntry %s\nquit\n' \
+printf 'load %s\nload %s\nload %s\nload %s\nload %s\ntry %s\nload %s\nload %s\nquit\n' \
   "$tmp/prelude.pbc" "$tmp/observer.pbc" "$tmp/types.pbc" "$tmp/defs.pbc" \
-  "$tmp/calls.pbc" "$tmp/dump.pbc" | bin/puffin-vm --serve 2>&1 | cat > "$tmp/out"
+  "$tmp/calls.pbc" "$tmp/dump.pbc" "$tmp/traced.pbc" "$tmp/trace-call.pbc" | bin/puffin-vm --serve 2>&1 | cat > "$tmp/out"
 # (through cat: the process the shell waits on exits after the first
 # successful load -- its child carries on as the session -- so only
 # the pipe's last writer closing means the session is done)
@@ -69,6 +76,9 @@ check "variadic define still runs" "R6"
 check "interp shapes" "(interp 4 (((list add 3) (sym x) Int Str) (Nil Pair)))"
 check "constructor shapes" "(area 2 (((adt Circle) (adt Sq))))"
 check "a tail-recursive observed loop" "(count-down 1000001 ((Int)))"
+check "trace: a call" "> (fact 2)"
+check "trace: nested" "| | > (fact 0)"
+check "trace: returns" "< 2"
 if grep -q "(sum " "$tmp/out"; then echo "FAIL variadic define was observed"; fail=1; else echo "ok   variadic define not observed"; fi
 if grep -q "ERR" "$tmp/out"; then echo "FAIL an evaluation failed:"; cat "$tmp/out"; fail=1; fi
 

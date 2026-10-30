@@ -1798,3 +1798,28 @@
 (define (observe-body g ps body)
   `(begin (#%observe (quote ,g) (list ,@(map (lambda (p) (match p [`(,x : ,_) x] [x x])) ps)))
           (let () ,@body)))
+
+;; ---- --repl --trace NAME: print a function's calls and returns ------------------
+
+;; (define (f a b) body ...) ->
+;;   (define (f a b)
+;;     (#%trace-enter 'f (list a b))
+;;     (#%trace-exit 'f (let () body ...)))
+;; The body loses its tail position -- a trace shows every return, as
+;; Racket's does. The printing lives in the session runtime
+;; (studio/observe.puf).
+(define (trace-forms names forms)
+  (map (lambda (f)
+         (match f
+           [`(define (,g ,ps ...) : ,rt ,body ...)
+            #:when (and (member g names) (observable? g ps))
+            `(define (,g ,@ps) : ,rt ,(trace-body g ps body))]
+           [`(define (,g ,ps ...) ,body ...)
+            #:when (and (member g names) (observable? g ps))
+            `(define (,g ,@ps) ,(trace-body g ps body))]
+           [_ f]))
+       forms))
+
+(define (trace-body g ps body)
+  `(begin (#%trace-enter (quote ,g) (list ,@(map (lambda (p) (match p [`(,x : ,_) x] [x x])) ps)))
+          (#%trace-exit (quote ,g) (let () ,@body))))

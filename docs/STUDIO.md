@@ -243,6 +243,24 @@ Observing costs a shape computation per call (a list walk is
 bounded at 16 elements), and observed calls are not tail calls of
 the observer, but the function body keeps its own tail position.
 
+### 3.2 Tracing
+
+`puffincc --repl --trace NAME` (repeatable) compiles NAME's define so
+it prints each call on entry and its value on return, nested by
+depth, as Racket's `trace` does; the printing is in the session
+runtime (`studio/observe.puf`). A traced body loses its tail
+position, so a trace shows every return. Because REPL redefinition is
+retroactive, evaluating a traced define traces every caller.
+
+```
+> (fact 2)
+| > (fact 1)
+| | > (fact 0)
+| | < 1
+| < 1
+< 2
+```
+
 ## 4. Edits
 
 There is one edit representation for people, assists, and the

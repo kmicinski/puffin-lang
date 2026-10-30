@@ -198,7 +198,10 @@
 ;;   --observe                (with --repl) top-level functions report
 ;;                            their arguments to the session's observer
 ;;                            (docs/STUDIO.md §3.1)
+;;   --trace NAME             (with --repl, repeatable) NAME's define
+;;                            prints its calls and returns
 (define opt-assist (ann #f _))
+(define opt-trace '())
 (define opt-assist-args '())
 (define opt-observe #f)
 
@@ -234,6 +237,9 @@
      (begin (set! opt-repl #t) (parse-args (cdr args)))]
     [(string=? (car args) "--repl-prelude")
      (begin (set! opt-repl #t) (set! opt-repl-prelude #t) (parse-args (cdr args)))]
+    [(string=? (car args) "--trace")
+     (begin (set! opt-trace (cons (string->symbol (flag-arg "--trace" (cdr args))) opt-trace))
+            (parse-args (cdr (cdr args))))]
     [(string=? (car args) "--observe")
      (begin (set! opt-observe #t) (parse-args (cdr args)))]
     [(string=? (car args) "--observed")
@@ -358,7 +364,10 @@
           [origins (second fo)])
      (begin
        (when opt-target-flag (set! current-target opt-target-flag))
-       (let ([result (compile-forms (if (and opt-observe repl-mode) (observe-forms forms) forms)
+       (let ([result (compile-forms (let* ([fs (if (and opt-observe repl-mode) (observe-forms forms) forms)])
+                                      ;; tracing wraps outside observing: the trace
+                                      ;; shows the call as made
+                                      (if (and (pair? opt-trace) repl-mode) (trace-forms opt-trace fs) fs))
                                     origins)])
          (cond
            [(eq? result 'dumped) (void)]
