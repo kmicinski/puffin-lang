@@ -15,32 +15,74 @@
 ;;
 ;; (#%observations) is the whole record, for `try` to print:
 ;;   ((f CALLS ((shape ...) (shape ...) ...)) ...)
+;;
+;; An evaluation that fails dies with its fork, and its observations
+;; with it -- yet the shape that broke a match is the one most worth
+;; keeping. So after (#%observe-spill-to! PATH), every new shape or
+;; function rewrites the whole record to PATH as it happens; after a
+;; failed evaluation the studio loads (#%observe-merge! 'RECORD) with
+;; what was spilled, folding it into the surviving session.
 
 (define observe-limit 16)
 (define observe-scan 16)
 
 ;; name -> (mutable vector: calls, then one shape list per argument)
 (define #%observed (make-hash))
+(define observe-spill (ann #f _))
+
+(define (#%observe-spill-to! path) (set! observe-spill path))
+
+(define (observe-spill!)
+  (when observe-spill
+    (write-file observe-spill (value->string (#%observations)))))
+
+(define (observe-record name arity)
+  (if (hash-has-key? #%observed name)
+      (hash-ref #%observed name)
+      (let ([v (make-vector (+ 1 arity))])
+        (vector-set! v 0 0)
+        (let loop ([i 1])
+          (when (< i (vector-length v))
+            (vector-set! v i '())
+            (loop (+ i 1))))
+        (hash-set! #%observed name v)
+        v)))
+
+;; add shape s to argument i's list; #t when it was new
+(define (observe-shape! rec i s)
+  (let ([seen (vector-ref rec i)])
+    (if (and (not (member s seen)) (< (length seen) observe-limit))
+        (begin (vector-set! rec i (append seen (list s))) #t)
+        #f)))
 
 (define (#%observe name args)
-  (let ([rec (if (hash-has-key? #%observed name)
-                 (hash-ref #%observed name)
-                 (let ([v (make-vector (+ 1 (length args)))])
-                   (vector-set! v 0 0)
-                   (let loop ([i 1])
-                     (when (< i (vector-length v))
-                       (vector-set! v i '())
-                       (loop (+ i 1))))
-                   (hash-set! #%observed name v)
-                   v))])
+  (let* ([fresh (not (hash-has-key? #%observed name))]
+         [rec (observe-record name (length args))])
     (vector-set! rec 0 (+ 1 (vector-ref rec 0)))
-    (let loop ([as args] [i 1])
-      (when (and (pair? as) (< i (vector-length rec)))
-        (let ([seen (vector-ref rec i)]
-              [s (#%shape (car as))])
-          (when (and (not (member s seen)) (< (length seen) observe-limit))
-            (vector-set! rec i (append seen (list s)))))
-        (loop (cdr as) (+ i 1))))))
+    (let loop ([as args] [i 1] [new fresh])
+      (if (and (pair? as) (< i (vector-length rec)))
+          (loop (cdr as) (+ i 1) (or (observe-shape! rec i (#%shape (car as))) new))
+          (when new (observe-spill!))))))
+
+;; fold a spilled record into this session's: call counts take the
+;; larger, shapes the union (first seen first, still bounded)
+(define (#%observe-merge! record)
+  (for-each-entry
+   (lambda (entry)
+     (let* ([name (car entry)]
+            [calls (car (cdr entry))]
+            [args (car (cdr (cdr entry)))]
+            [rec (observe-record name (length args))])
+       (when (< (vector-ref rec 0) calls) (vector-set! rec 0 calls))
+       (let loop ([as args] [i 1])
+         (when (and (pair? as) (< i (vector-length rec)))
+           (for-each-entry (lambda (s) (observe-shape! rec i s)) (car as))
+           (loop (cdr as) (+ i 1))))))
+   record)
+  (void))
+
+(define (for-each-entry f xs)
+  (when (pair? xs) (f (car xs)) (for-each-entry f (cdr xs))))
 
 ;; a proper list's length, or #f past observe-scan pairs (so a long
 ;; list costs a bounded walk)

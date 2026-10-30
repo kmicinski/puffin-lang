@@ -362,6 +362,27 @@ async fn observed_calls_come_back_as_the_record() {
     studio.lane.reset().await;
 }
 
+#[tokio::test]
+async fn a_failed_evaluations_shapes_survive_its_fork() {
+    use crate::repl::Source;
+    let Some(studio) = studio("spill", &[("calc.puf", "(define (interp e)\n  (match e\n    [`(add ,a ,b) 0]))\n")]) else { return };
+    if !studio.toolchain.observe_available().await {
+        eprintln!("skipped: this puffincc has no --repl --observe");
+        return;
+    }
+    studio.eval_form("calc.puf", crate::repl::At::Line(1)).await.unwrap();
+    studio.evaluate("(interp '(add 1 2))".into(), Source::Prompt).await;
+    // no clause matches a mul: the evaluation fails, its fork with it
+    studio.evaluate("(interp '(mul 1 2))".into(), Source::Prompt).await;
+    assert_eq!(entry_of(&studio, "(interp '(mul 1 2))").status.as_deref(), Some("error"));
+    studio.refresh_observations().await;
+    let view = studio.session_view();
+    let interp = view.observed.iter().find(|observed| observed.function == "interp").expect("interp observed");
+    assert!(interp.args[0].contains(&"(list mul 3)".to_owned()), "the failed call's shape was kept: {interp:?}");
+    assert!(interp.args[0].contains(&"(list add 3)".to_owned()), "{interp:?}");
+    studio.lane.reset().await;
+}
+
 const HOLES: &str = "\
 (define-type Expr (Num Int) (Add Expr Expr))
 (define (depth [e : Expr]) : Int

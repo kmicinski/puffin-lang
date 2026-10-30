@@ -427,8 +427,12 @@ transcripts can be goldens too.
 - **Observations.** While the session observes, every unit compiles
   with `--observe`, the prompt's included. The record is refreshed by
   a quiet `try` 300 ms after evaluations pause and passed as
-  `--observed`. A failing evaluation's observations are lost with its
-  fork; replay mode never refreshes.
+  `--observed`. A failing evaluation dies with its fork, so the
+  observer also spills its record to a file whenever it sees a new
+  shape (`#%observe-spill-to!`), and after a failure or interrupt the
+  studio loads `(#%observe-merge! 'RECORD)` to fold the spilled
+  shapes into the session -- the shape that broke a match is the one
+  most worth keeping. Replay mode never refreshes.
 - **Facts panel and hover** both come from `facts`: one section per
   layer (syntax, checker, session, observed), each labelled.
 - **Holes.** A check that stops at `typecheck: unbound variable ??`

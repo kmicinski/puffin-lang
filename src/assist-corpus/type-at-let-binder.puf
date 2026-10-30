@@ -1,0 +1,6 @@
+;; assist: type-at @ "[y : Int" +1
+;; an annotated let binder reports its declared type
+(define (f x)
+  (let ([y : Int (+ x 1)])
+    (* y y)))
+(f 2)

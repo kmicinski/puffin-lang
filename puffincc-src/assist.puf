@@ -210,7 +210,8 @@
 (define (declared-binder-type path)
   (and (pair? path) (pair? (cdr path))
        (let* ([n (car path)] [p (car (cdr path))] [kids (if (lst? p) (lst-kids p) '())])
-         (and (atom? n) (eq? (length kids) 3) (eq? (car kids) n)
+         ;; [x : T] in formals, [x : T e] in a let
+         (and (atom? n) (>= (length kids) 3) (eq? (car kids) n)
               (atom? (second kids)) (eq? (atom-datum (second kids)) ':)
               (node-text (third kids))))))
 
@@ -1697,6 +1698,12 @@
                                                                    " is not defined in this file"))))))]
         [(not (valid-name? new))
          (println (json-obj (list (cons "error" (json-str (str-cat new " is not a name")))))) ]
+        ;; the top level is one scope that resolution cannot see
+        ;; doubled: two defines of one name would both bind it
+        [(and (memq-node (cdr hit) (append-map top-binders entry-nodes))
+              (ormap (lambda (a) (and (not (eq? a (cdr hit))) (eq? (atom-datum a) (string->symbol new))))
+                     (append-map top-binders entry-nodes)))
+         (println (json-obj (list (cons "error" (json-str (str-cat new " is already defined at the top level"))))))]
         [else
          (let* ([b (cdr hit)]
                 [mine (filter (lambda (o) (eq? (cdr o) b)) occs)]

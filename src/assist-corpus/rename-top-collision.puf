@@ -1,0 +1,6 @@
+;; assist: rename @ "(define (ev" +9 new=g
+;; renaming a top-level function to a name another top-level form
+;; already defines: refused
+(define (g x) (* x 2))
+(define (ev x) (+ x 1))
+(ev (g 1))

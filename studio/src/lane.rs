@@ -393,8 +393,30 @@ impl Lane {
             && served.command("load", &observer, &mut |_| {}).await == Status::Ok
         {
             self.observing.store(true, Ordering::SeqCst);
+            // a failed evaluation's observations die with its fork: the
+            // observer spills new shapes to a file as it sees them
+            if let Some(spill) = self.compile_spill_to().await {
+                let _ = served.command("load", &spill, &mut |_| {}).await;
+            }
         }
         Ok(Session::Served(served))
+    }
+
+    /// Where the observer spills its record as new shapes arrive.
+    pub fn spill_path(&self) -> PathBuf {
+        self.toolchain.scratch.join("spill.sexp")
+    }
+
+    /// The unit `(#%observe-spill-to! "SPILL")`.
+    async fn compile_spill_to(&self) -> Option<PathBuf> {
+        let spill = self.spill_path();
+        let _ = std::fs::remove_file(&spill);
+        let source = self.toolchain.fresh("spill-to").with_extension("puf");
+        let path = spill.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+        std::fs::write(&source, format!("(#%observe-spill-to! \"{path}\")\n")).ok()?;
+        let out = source.with_extension("pbc");
+        let compiled = self.toolchain.compile_unit(&self.toolchain.scratch, &source.to_string_lossy(), &out, false).await.ok()?;
+        (compiled.success && out.is_file()).then_some(out)
     }
 
     /// The observer unit, when the compiler can observe and it compiles.

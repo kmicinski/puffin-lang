@@ -1,0 +1,4 @@
+== rename @ 169 (exit 0)
+== stdout
+{"error":"g is already defined at the top level"}
+== stderr

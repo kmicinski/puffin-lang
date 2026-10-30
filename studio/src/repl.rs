@@ -365,8 +365,12 @@ impl Studio {
                     ""
                 };
                 self.finish_with(id, "error", Some(format!("the unit failed (exit {code}){hole}; the session is as it was")), ms, fixes);
+                self.merge_spill().await;
             }
-            Status::Interrupted => self.finish(id, "interrupted", Some("interrupted; the session is as it was".into()), ms),
+            Status::Interrupted => {
+                self.finish(id, "interrupted", Some("interrupted; the session is as it was".into()), ms);
+                self.merge_spill().await;
+            }
             Status::Dead(why) => {
                 self.forget_session();
                 self.finish(id, "error", Some(format!("the session ended: {why}")), ms);
@@ -390,6 +394,41 @@ impl Studio {
         }
         self.clear_lint();
         self.publish_session();
+    }
+
+    /// After a failed evaluation, fold what it observed before it
+    /// failed back into the session: the observer spilled its record as
+    /// new shapes arrived (studio/observe.puf), and the shape that broke
+    /// a match is the one most worth keeping. The merge is a `load` of
+    /// `(#%observe-merge! 'RECORD)`.
+    async fn merge_spill(&self) {
+        if !self.lane.observing() || self.lane.status().mode != "serve" {
+            return;
+        }
+        let spill = self.lane.spill_path();
+        let Ok(record) = std::fs::read_to_string(&spill) else { return };
+        let _ = std::fs::remove_file(&spill);
+        let record = record.trim();
+        if record.is_empty() || record == "()" {
+            return;
+        }
+        let dir = self.toolchain.fresh("merge");
+        let workspace = toolchain::Workspace { dir: dir.clone() };
+        if std::fs::create_dir_all(&dir)
+            .and_then(|()| std::fs::write(dir.join("unit.puf"), format!("(#%observe-merge! (quote {record}))\n")))
+            .is_err()
+        {
+            return;
+        }
+        let pbc = dir.join("unit.pbc");
+        if !self.toolchain.compile_unit(&dir, "unit.puf", &pbc, false).await.is_ok_and(|output| output.success) {
+            return;
+        }
+        let merged = self.lane.run(&pbc, true, &mut |_| {}).await == Status::Ok;
+        drop(workspace);
+        if merged {
+            self.observations_due.notify_one();
+        }
     }
 
     /// Read the session's observation record back (`try` of
