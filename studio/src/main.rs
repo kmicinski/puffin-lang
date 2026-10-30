@@ -2,7 +2,7 @@
 //! for the project in PROJECT_DIR (default: the current directory) on
 //! 127.0.0.1, and print the address to open.
 
-use puffin_studio::{launch_token, private_token, repository_root, studio::Studio, web};
+use puffin_studio::{private_token, repository_root, studio::Studio, web};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -10,14 +10,12 @@ const USAGE: &str = "usage: puffin-studio [PROJECT_DIR] [--port N] [--no-open]
 
 Edit, check and evaluate the Puffin files of PROJECT_DIR (default: the
 current directory) in the browser. The studio listens on 127.0.0.1:N
-(default 7360) and prints its address, which carries this run's token.
+(default 7360) and opens http://127.0.0.1:N.
 --no-open    print the address without opening a browser
 
 PUFFIN_ROOT names the Puffin repository (default: the one this binary was
 built in); PUFFIN_STUDIO_PUFFINCC and PUFFIN_STUDIO_VM name the compiler and
-VM (default build/puffincc and bin/puffin-vm there). The launch token is
-kept in PUFFIN_STUDIO_HOME (default ~/.puffin-studio), so the address
-stays the same across restarts. The assistant runs
+VM (default build/puffincc and bin/puffin-vm there). The assistant runs
 `claude -p`; PUFFIN_STUDIO_MODEL and PUFFIN_STUDIO_EFFORT pick its model and
 effort.";
 
@@ -65,7 +63,6 @@ async fn run() -> Result<(), String> {
         return Err(format!("{} is not a directory", directory.display()));
     }
     let root = repository_root();
-    let token = launch_token().map_err(|error| format!("cannot make a token: {error}"))?;
     let mcp_token = private_token().map_err(|error| format!("cannot make a token: {error}"))?;
     let studio = Studio::new(root.clone(), directory.clone(), mcp_token).map_err(|error| error.to_string())?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", options.port))
@@ -74,7 +71,7 @@ async fn run() -> Result<(), String> {
     let port = listener.local_addr().map_err(|error| error.to_string())?.port();
     studio.set_port(port);
     studio.start();
-    let url = format!("http://127.0.0.1:{port}/#{token}");
+    let url = format!("http://127.0.0.1:{port}/");
     println!("Puffin Studio: {}", directory.display());
     println!("  {url}");
     for (what, path) in [("compiler", &studio.toolchain.puffincc), ("VM", &studio.toolchain.vm)] {
@@ -89,7 +86,7 @@ async fn run() -> Result<(), String> {
         let _ = std::process::Command::new("open").arg(&url).spawn();
     }
     let scratch = studio.toolchain.scratch.clone();
-    let app = web::router(studio, token);
+    let app = web::router(studio);
     // Ctrl-C or SIGTERM: stop, and take the scratch directory along
     let shutdown = async {
         let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();

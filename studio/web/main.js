@@ -1,6 +1,7 @@
-// Puffin Studio in the browser: the project's files and editor, the REPL
-// transcript and prompt, the assistant, and the status strip, all fed by
-// one WebSocket to the studio (studio/src/web.rs).
+// Puffin Studio in the browser: the playground's layout (web/src/App.jsx)
+// -- the program's files in the editor, the REPL beside it -- fed by one
+// WebSocket to the studio (studio/src/web.rs), with the assistant a Tab
+// away at the prompt.
 
 import { createEditor } from "./editor.js";
 import { createFiles } from "./files.js";
@@ -10,7 +11,6 @@ import { createAssists } from "./assists.js";
 import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
 import { createSession, functionDefine } from "./session.js";
-import { createFacts } from "./facts.js";
 import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
 import { createRename } from "./rename.js";
@@ -18,8 +18,6 @@ import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
 const $ = (id) => document.getElementById(id);
-// the launch token, carried in the page's fragment
-const token = location.hash.slice(1);
 
 let socket = null;
 const transmit = (message) => {
@@ -38,7 +36,6 @@ function note(message) {
 
 // made once the files are: the editor's events may come first
 let session = null;
-let facts = null;
 let holes = null;
 let rename = null;
 // the traced function names, and what the toolchain can do (the studio's)
@@ -50,11 +47,10 @@ const editor = await createEditor($("editor"), {
     files.changed();
     session?.changed();
     holes?.changed();
-    facts?.cursor();
   },
   onRename: () => rename?.open(),
   onHole: (dir) => holes?.next(dir),
-  onCursor: () => facts?.cursor(),
+  onCursor: () => {},
   onSave: save,
   onEvalForm: evalForm,
   onLoadFile: () => load(null),
@@ -72,7 +68,6 @@ const files = createFiles({
     session?.refresh();
     holes?.refresh();
     lint?.refresh();
-    facts?.cursor();
     proposals?.refresh();
     versions?.opened();
   },
@@ -84,13 +79,26 @@ const files = createFiles({
 // every message waits behind the edits already made, so it sees them
 const send = files.send;
 
+// The studio's facts at UTF-16 offset `pos` of `file` (studio/src/facts.rs):
+// the type there (a hole's goal) and what runs passed a parameter. The
+// hover shows them (assists.js).
+const factsWaiting = new Map(); // seq -> resolve
+let factsSeq = 0;
+function askFacts(file, pos, full = false) {
+  files.flush();
+  const id = ++factsSeq;
+  return new Promise((resolve) => {
+    factsWaiting.set(id, resolve);
+    send({ t: "facts", seq: id, file, pos, full });
+  });
+}
+
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
-const versions = createVersions({ panel: $("versions"), toggle: $("history"), files, send });
+const versions = createVersions({ panel: $("versions"), files, send });
 session = createSession({ editor, files, traced: () => traced, canTrace: () => Boolean(features.trace && features.observe) });
 const lint = createLint({ editor, files });
-facts = createFacts({ panel: $("facts"), toggle: $("facts-toggle"), editor, files, session, send, lint });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
-const assists = createAssists({ editor, files, send, note, facts: facts.ask });
+const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 
 const repl = createRepl({
@@ -105,6 +113,11 @@ const repl = createRepl({
     traced: () => traced,
     assist: (id, file, pos, end) => assists.run(id, file, pos, end),
     rename: (file, pos, name) => rename.run(file, pos, name),
+    history: () => versions.toggle(),
+    structured(word) {
+      if (word === "on" || word === "off") structured.set(word === "on");
+      return `structured editing is ${structured.on ? "on: brackets stay balanced (,structured off to type freely)" : "off (,structured on keeps brackets balanced)"}`;
+    },
     reveal(file, line) {
       if (!files.paths().includes(file)) return note(`no file ${file}`);
       if (files.active() !== file) files.open(file);
@@ -170,7 +183,7 @@ function toggleTrace(at) {
   repl.run(`${traced.includes(form.name) ? ",untrace" : ",trace"} ${form.name}`);
 }
 
-// ⇧⌘↵ or ,load: a whole module, as one unit.
+// Run, or ⇧⌘↵, or ,load: a whole module, as one unit.
 function load(file) {
   const target = file ?? files.active();
   if (!target) return;
@@ -185,15 +198,6 @@ $("interrupt").addEventListener("click", () => {
   send({ t: "interrupt" });
 });
 $("reset").addEventListener("click", () => send({ t: "reset" }));
-const structuredButton = $("structured");
-const renderStructured = () => {
-  structuredButton.setAttribute("aria-pressed", String(structured.on));
-  structuredButton.title = structured.on
-    ? "Structured editing is on: brackets stay balanced. Click to type freely."
-    : "Structured editing is off. Click to keep brackets balanced.";
-};
-structuredButton.addEventListener("click", () => { structured.set(!structured.on); renderStructured(); });
-renderStructured();
 
 // Ctrl-` moves between the editor and the prompt.
 document.addEventListener("keydown", (event) => {
@@ -206,8 +210,13 @@ document.addEventListener("keydown", (event) => {
 
 // The divider resizes the editor against the REPL.
 $("divider").addEventListener("pointerdown", (event) => {
-  const top = $("editor").getBoundingClientRect().top;
-  const move = (e) => document.documentElement.style.setProperty("--editor-height", `${Math.max(80, e.clientY - top)}px`);
+  const main = document.querySelector("main");
+  const pane = document.querySelector(".editor-pane");
+  const move = (e) => {
+    const box = main.getBoundingClientRect();
+    const width = Math.min(box.width - 320, Math.max(240, e.clientX - box.left));
+    pane.style.flex = `0 0 ${width}px`;
+  };
   const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
   addEventListener("pointermove", move);
   addEventListener("pointerup", up);
@@ -218,7 +227,7 @@ $("divider").addEventListener("pointerdown", (event) => {
 
 // A check that stops at a typed hole reports it as a hole, not an error
 // (studio/src/toolchain.rs): the holes are outlined where they are
-// (holes.js), and the pill says that the check went only that far.
+// (holes.js), and the check's word says that the check went only that far.
 let reports = {};
 let byFile = new Map();
 function showDiagnostics() {
@@ -248,11 +257,11 @@ function renderCheck() {
   const holeTotal = [...holeCounts.values()].reduce((a, b) => a + b, 0);
   const errors = here.filter((d) => d.severity === "error");
   const status = $("check");
-  // holes only elsewhere: this file checks, and the pill says where they are
+  // holes only elsewhere: this file checks, and the word says where they are
   const holesHere = holeCounts.get(active) ?? 0;
   const elsewhere = [...holeCounts.keys()].filter((path) => path !== active);
   const holed = holeTotal ? `◌ ${holeTotal} hole${holeTotal === 1 ? "" : "s"}${holesHere ? "" : ` in ${elsewhere.join(", ")}`}` : "";
-  status.className = `pill ${errors.length ? "bad" : holesHere ? "hole" : here.length ? "warn" : "good"}`;
+  status.className = `check ${errors.length ? "bad" : holesHere ? "hole" : here.length ? "warn" : "good"}`;
   const head = errors.length ? `✗ ${errors.length} error${errors.length === 1 ? "" : "s"}` : here.length ? `⚠ ${here.length} warning${here.length === 1 ? "" : "s"}` : holesHere ? "" : "✓ checks";
   status.replaceChildren(document.createTextNode([head, holed].filter(Boolean).join(" · ")));
   if (stopped && holesHere && !errors.length) {
@@ -276,44 +285,39 @@ $("check").addEventListener("click", () => {
   else if (holes.count().size) holes.next(1);
 });
 
-// ---- The status strip -----------------------------------------------------------
+// ---- The header's right side -------------------------------------------------
 
 function renderLane(lane) {
-  const pill = $("lane");
-  const words = { idle: "session: not started", starting: "session: starting…", ready: "session: ready", busy: "session: running…", failed: "session: failed" };
-  pill.textContent = `${words[lane.state] ?? lane.state}${lane.mode === "replay" ? " (replay)" : ""}`;
-  pill.className = `pill lane-${lane.state}`;
-  pill.title = lane.detail || (lane.mode === "serve" ? "puffin-vm --serve: one live session" : "");
-  $("interrupt").disabled = lane.state !== "busy";
+  const indicator = $("lane");
+  const words = { starting: "starting the session…", busy: "running…", failed: "the session failed" };
+  const word = words[lane.state];
+  indicator.hidden = !word;
+  indicator.className = `running-indicator${lane.state === "failed" ? " failed" : ""}`;
+  indicator.querySelector(".text").textContent = word ?? "";
+  indicator.title = lane.detail || "";
+  $("interrupt").hidden = lane.state !== "busy";
 }
 
 function renderFeatures(next) {
+  const before = features;
   features = next;
-  const { assist: hasAssist, serve, observe } = features;
-  assists.setAvailable(hasAssist);
+  assists.setAvailable(features.assist);
   rename.setAvailable(features.rename);
-  $("rename-key").hidden = !features.rename;
-  facts.setFeatures(features);
-  const pill = $("features");
-  pill.textContent = hasAssist ? "assists ✓" : "assists unavailable";
-  pill.className = `pill ${hasAssist ? "good" : "quiet"}`;
-  pill.title = `${hasAssist ? "puffincc --assist answers: ⌘. at a point, and the lightbulb" : "this puffincc has no --assist: checks are bytecode compiles, and assists wait for it"}\n${serve ? "puffin-vm --serve runs the live session" : "puffin-vm has no --serve: the session replays its units on each evaluation"}\n${observe ? `the session observes calls (--repl --observe)${features.facts ? "; facts from puffincc --assist facts" : ""}` : "this puffincc cannot observe calls (--repl --observe): no observations"}`;
-  if (observe) pill.textContent += " · observing";
-  if (features.trace && observe) pill.title += "\n,trace NAME prints a function's calls (--repl --trace)";
+  if (before.assist !== features.assist && !features.assist) {
+    note("this puffincc has no --assist: no types, holes or assists (bin/bootstrap builds one that has)");
+  }
   session.refresh();
 }
 
 function renderConnection(on) {
-  const pill = $("connection");
-  pill.textContent = on ? "connected" : "reconnecting…";
-  pill.className = `pill ${on ? "good" : "bad"}`;
+  $("connection").hidden = on;
 }
 
 // ---- The socket -------------------------------------------------------------------
 
 const handlers = {
   init(snapshot) {
-    document.title = `${snapshot.project} — Puffin Studio`;
+    document.title = `${snapshot.project} — Puffin`;
     $("project").textContent = snapshot.project;
     $("project").title = snapshot.directory;
     files.receive.init(snapshot);
@@ -328,8 +332,7 @@ const handlers = {
     showDiagnostics();
     renderLane(snapshot.lane);
     renderFeatures(snapshot.features);
-    $("agent").hidden = !snapshot.agent_unavailable;
-    $("agent").title = snapshot.agent_unavailable ?? "";
+    if (snapshot.agent_unavailable) note(`the assistant is unavailable: ${snapshot.agent_unavailable}`);
   },
   ack: files.receive.ack,
   stale: files.receive.stale,
@@ -340,26 +343,18 @@ const handlers = {
   diagnostics({ reports: latest }) {
     reports = latest;
     showDiagnostics();
-    facts.refresh();
   },
-  session(view) {
-    session.receive.session(view);
-    facts.refresh();
+  session: session.receive.session,
+  facts(reply) {
+    factsWaiting.get(reply.seq)?.(reply);
+    factsWaiting.delete(reply.seq);
   },
-  facts: facts.receive.facts,
-  holes(message) {
-    holes.receive.holes(message);
-    facts.refresh();
-  },
-  lint(message) {
-    lint.receive.lint(message);
-    facts.refresh();
-  },
+  holes: holes.receive.holes,
+  lint: lint.receive.lint,
   renamed: rename.receive.renamed,
   traced({ names }) {
     traced = names;
     session.refresh();
-    facts.refresh();
   },
   lane: renderLane,
   features: renderFeatures,
@@ -382,7 +377,7 @@ const handlers = {
 };
 
 function connect() {
-  socket = new WebSocket(`ws://${location.host}/ws?token=${encodeURIComponent(token)}`);
+  socket = new WebSocket(`ws://${location.host}/ws`);
   socket.addEventListener("open", () => renderConnection(true));
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
@@ -394,8 +389,5 @@ function connect() {
   });
 }
 
-if (!token) {
-  note("This page needs the address puffin-studio printed (it carries the launch token).");
-}
 connect();
 $("prompt").focus();

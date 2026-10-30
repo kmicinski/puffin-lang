@@ -419,7 +419,7 @@ transcripts can be goldens too.
   call-site, apply only to unannotated parameters. Built:
   observations, the observation lint, assists 6, 8 (ADTs), and 9
   (observed); in the studio, session awareness, observed assists and
-  hovers, and the Facts panel. Not yet: flow shapes (layer 3, `aam.puf` with a shape
+  hovers. Not yet: flow shapes (layer 3, `aam.puf` with a shape
   domain), the fact store's dependency invalidation.
 - **M4.** Multi-module changesets, rewind, a co-author socket.
 
@@ -461,13 +461,16 @@ transcripts can be goldens too.
   studio loads `(#%observe-merge! 'RECORD)` to fold the spilled
   shapes into the session -- the shape that broke a match is the one
   most worth keeping. Replay mode never refreshes.
-- **Facts panel and hover** both come from `facts`: one section per
-  layer (syntax, checker, session, observed), each labelled.
+- **The hover** comes from `facts`: the type at the point (a hole's
+  goal), and what runs passed a parameter, each saying where it came
+  from. There is no facts panel: the layers' knowledge shows where it
+  applies -- the hover, the gutter marks, the lint markers, the
+  lightbulb -- never as a listing.
 - **Holes.** A check that stops at `typecheck: unbound variable ??`
   is a hole, not an error: the program passes "holes aside" when
   nothing fails before its first hole. Every `??` is outlined as you
-  type, with its goal (from `facts`) as a hint; the status pill
-  reads "◌ N holes · checked up to the first hole"; F8 / ⇧F8 move
+  type, with its goal (from `facts`) as a hint; the check's word (top
+  right) reads "◌ N holes · checked up to the first hole"; F8 / ⇧F8 move
   between holes (over Monaco's next-problem); ⌘. on a hole lists the
   fill-hole candidates. The proposal and accept gates let a program
   through when its only failures are holes, so the assistant may
@@ -475,7 +478,7 @@ transcripts can be goldens too.
 - **Lint.** `lint` runs after each check and each change to the
   observation record; findings are cyan Info markers (cyan is
   "observed"), whose quick fix leads with the add-missing-cases
-  assist, and they show under Observed in the Facts panel.
+  assist.
 - **Pinned tests.** A successful one-expression evaluation can be
   pinned: `tests.puf` (created on first use, maintained by the studio
   but ordinary Puffin) gains `(check-printed 'E E "printed")` and a
@@ -510,6 +513,11 @@ transcripts can be goldens too.
 - **Commands.** `,assist ID#N FILE:POS-END` names one of several
   same-id assists and a selection. MCP adds `holes` and `lint`, and
   `end` and `title` on the assist tools.
-- **Tokens.** The launch token is kept in `~/.puffin-studio/token`
-  (mode 0600) so open tabs reconnect after a restart; `/mcp` has its
-  own per-run bearer token.
+- **No launch token.** The studio binds 127.0.0.1 and opens
+  `http://127.0.0.1:7360` as it is; the WebSocket admits same-origin
+  pages only, which keeps other sites out. `/mcp` has a per-run
+  bearer token that only the assistant's process is given.
+- **The page is the playground's** (`web/src/App.jsx`): the editor
+  with file tabs on the left, the output and the `puffin>` prompt on
+  the right, Run / Reset session in the header. Panels are the
+  exception: History (`,history`) is the only one.

@@ -10,7 +10,7 @@
 ;;  2. Trace. Type ,trace eval-expr at the prompt (or click the faint > by
 ;;     eval-expr's line number). Cmd-Enter on (run example) again: each call
 ;;     and what it returned, as a tree. ,untrace eval-expr stops it.
-;;  3. Facts. Press Facts (top right) and put the cursor on [e : Expr]: the
+;;  3. Hover. Rest the mouse on the e of [e : Expr] in eval-expr: the
 ;;     checker's type, and the shapes e was called with in the session.
 ;;  4. Extract. Select (cons (cons x v) env) in the Let case, press Cmd-.
 ;;     and pick Extract: it becomes a function of its free variables. Then
@@ -19,7 +19,7 @@
 ;;     knows Expr, so it writes one clause per constructor.
 ;;  6. Holes. count-vars, last in the file, is an exercise: its ?? is a typed
 ;;     hole. F8 jumps to it, hovering shows its goal (Int), and Cmd-. lists
-;;     what fits. Fill it a piece at a time; the status pill counts holes.
+;;     what fits. Fill it a piece at a time; the top right counts holes.
 ;;  7. Pin. Hover a result in the transcript and click pin: tests.puf gains
 ;;     a check. ,test runs them all.
 ;;  8. Ask. Tab on the empty prompt asks the assistant (Esc returns), e.g.

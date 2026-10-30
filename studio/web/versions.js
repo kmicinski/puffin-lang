@@ -1,7 +1,7 @@
-// A file's versions (studio/src/versions.rs): the History panel lists the
-// shown file's, newest first, with the forms each changed. Compare shows a
-// version's difference to the text now; Restore makes it the text again, as
-// a new version.
+// A file's versions (studio/src/versions.rs): the History panel (,history)
+// lists the shown file's, newest first, with the forms each changed.
+// Compare shows a version's difference to the text now; Restore makes it
+// the text again, as a new version.
 
 import { lineDiff } from "./hunks.js";
 
@@ -14,17 +14,15 @@ const element = (tag, className, text) => {
 
 const ORIGINS = { open: "opened", save: "saved", accept: "accepted", disk: "changed on disk", restore: "restored" };
 
-export function createVersions({ panel, toggle, files, send }) {
+export function createVersions({ panel, files, send }) {
   let open = false;
   let compare = null; // { id, file, text }
 
   function show(on) {
     open = on;
     panel.hidden = !on;
-    toggle.setAttribute("aria-pressed", String(on));
     if (on) request();
   }
-  toggle.addEventListener("click", () => show(!open));
 
   function request() {
     const file = files.active();
@@ -78,6 +76,11 @@ export function createVersions({ panel, toggle, files, send }) {
   return {
     opened: request,
     changed: request,
+    // ,history: the panel, shown or hidden; what it says in the transcript
+    toggle() {
+      show(!open);
+      return open ? `the History panel lists ${files.active()}'s versions (,history again hides it)` : "History hidden";
+    },
     receive: {
       versions({ file, versions }) {
         if (open && file === files.active()) render(file, versions);

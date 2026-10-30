@@ -1,5 +1,5 @@
-// The project's files: the file list, the editor tabs, and the edits each
-// file sends to the studio. Ported from Slog Studio's files.js.
+// The project's files: the editor's file tabs (as the playground's), and
+// the edits each file sends to the studio.
 //
 // The studio owns every file's text. This tab sends a file's whole text with
 // the version it was edited from, and the studio takes it or refuses it with
@@ -17,7 +17,6 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
     // path -> { text, version, local, saved }: `text` is the studio's at
     // `version`; `local` is this tab's, which runs ahead while edits are unsent.
     files: new Map(),
-    tabs: [],
     active: null,
     editTimer: null,
     inFlight: null, // { path, text } of the unanswered edit
@@ -72,18 +71,10 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
     const file = state.files.get(path);
     if (!file) return;
     flush();
-    if (!state.tabs.includes(path)) state.tabs.push(path);
     state.active = path;
     editor.show(path, file.local);
     onOpen(path);
     render();
-  }
-
-  function close(path) {
-    if (state.tabs.length === 1) return;
-    state.tabs = state.tabs.filter((tab) => tab !== path);
-    if (state.active === path) open(state.tabs.at(-1));
-    else render();
   }
 
   // Take the studio's files. A file the studio still has as this tab last
@@ -97,12 +88,8 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
     state.files = new Map(files.map(({ path, text, version, saved }) =>
       [path, { text, version, local: carried(known.get(path), text), saved }]));
     for (const path of known.keys()) if (!state.files.has(path)) editor.forget(path);
-    state.tabs = state.tabs.filter((path) => state.files.has(path));
-    if (!state.tabs.length && state.files.size) {
-      const first = state.files.has("main.puf") ? "main.puf" : [...state.files.keys()][0];
-      state.tabs = [first];
-    }
-    const active = state.files.has(state.active) ? state.active : state.tabs[0];
+    const first = state.files.has("main.puf") ? "main.puf" : [...state.files.keys()][0];
+    const active = state.files.has(state.active) ? state.active : first;
     state.active = null;
     if (active) open(active);
     pump();
@@ -112,40 +99,24 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
   const unsaved = (path, file) =>
     !file.saved || file.local !== file.text || (path === state.active && state.editTimer !== null);
 
-  function render() {
-    renderTabs();
-    renderList();
-  }
+  const render = renderTabs;
 
+  // One tab per file of the project, main.puf first; the shown one is
+  // active, an unsaved one carries a dot, one with errors its count.
   function renderTabs() {
-    const dirty = [...state.files].some(([path, file]) => unsaved(path, file));
-    const badge = $("saved");
-    badge.textContent = dirty ? "unsaved" : "saved";
-    badge.className = `badge${dirty ? " dirty" : ""}`;
-    $("tabs").replaceChildren(...state.tabs.map((path) => {
+    const paths = [...state.files.keys()].sort((a, b) => (a === "main.puf" ? -1 : b === "main.puf" ? 1 : a.localeCompare(b)));
+    $("tabs").replaceChildren(...paths.map((path) => {
       const tab = button(`file-tab${path === state.active ? " active" : ""}`, path, () => open(path));
+      tab.title = path === state.active && unsaved(path, state.files.get(path)) ? "unsaved (⌘S saves)" : path;
       if (unsaved(path, state.files.get(path))) tab.append(span("unsaved-dot", "●"));
-      if (state.tabs.length > 1) {
-        const x = tab.appendChild(span("close", "×"));
-        x.title = "Close";
-        x.addEventListener("click", (event) => { event.stopPropagation(); close(path); });
-      }
+      const diagnostics = counts.get(path);
+      if (diagnostics?.errors) tab.append(span("count error", String(diagnostics.errors)));
+      else if (diagnostics?.warnings) tab.append(span("count warning", String(diagnostics.warnings)));
       return tab;
     }));
   }
 
-  function renderList() {
-    $("file-list").replaceChildren(...[...state.files.keys()].map((path) => {
-      const row = button(`file-row${path === state.active ? " active" : ""}`, "", () => open(path));
-      row.append(span("name", path));
-      const diagnostics = counts.get(path);
-      if (diagnostics?.errors) row.append(span("count error", String(diagnostics.errors)));
-      else if (diagnostics?.warnings) row.append(span("count warning", String(diagnostics.warnings)));
-      return row;
-    }));
-  }
-
-  // Errors and warnings per file, for the list.
+  // Errors and warnings per file, for the tabs.
   const counts = new Map();
 
   $("new-file").addEventListener("click", () => {
@@ -218,7 +189,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts }) {
     setCounts(map) {
       counts.clear();
       for (const [path, value] of map) counts.set(path, value);
-      renderList();
+      renderTabs();
     },
   };
 }

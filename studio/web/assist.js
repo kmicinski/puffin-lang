@@ -100,6 +100,7 @@ const PHASES = { thinking: "Thinking…", replying: "Writing…" };
 export function initAssist({ prompt, scopeSelect, send, repl, context, proposalChip }) {
   const row = prompt.closest(".prompt-row");
   const caret = row.querySelector(".caret");
+  const plainCaret = caret.textContent;
   const plainPlaceholder = prompt.placeholder;
   const tag = row.appendChild(element("button", "assist-tag"));
   tag.type = "button";
@@ -121,7 +122,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     state.mode = mode;
     prompt.dataset.mode = mode === "ask" ? "ask" : "";
     row.classList.toggle("ask", mode === "ask");
-    caret.textContent = mode === "ask" ? "✦" : "›";
+    caret.textContent = mode === "ask" ? "ask✦" : plainCaret;
     scopeSelect.hidden = mode !== "ask";
     prompt.placeholder = mode === "ask"
       ? "Ask about the program, an error, what to write next. Enter asks · Esc back to Puffin"

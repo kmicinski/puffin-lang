@@ -28,7 +28,7 @@ mod tests;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-/// 32 random bytes as hex: the launch token and the MCP bearer token.
+/// 32 random bytes as hex: the MCP bearer token.
 pub fn private_token() -> std::io::Result<String> {
     let mut random = [0_u8; 32];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
@@ -43,33 +43,4 @@ pub fn repository_root() -> PathBuf {
     }
     let built = Path::new(env!("CARGO_MANIFEST_DIR")).parent().map(Path::to_path_buf).unwrap_or_default();
     std::fs::canonicalize(&built).unwrap_or(built)
-}
-
-/// The token that admits a browser tab, kept (readable only by this user)
-/// in PUFFIN_STUDIO_HOME (default ~/.puffin-studio) and reused, so a
-/// restarted studio keeps its address and an open tab simply reconnects.
-pub fn launch_token() -> std::io::Result<String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let home = std::env::var_os("PUFFIN_STUDIO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".puffin-studio")));
-    let Some(home) = home else { return private_token() };
-    std::fs::create_dir_all(&home)?;
-    let path = home.join("token");
-    if let Ok(token) = std::fs::read_to_string(&path)
-        && token.len() == 64
-        && token.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Ok(token);
-    }
-    let token = private_token()?;
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)?
-        .write_all(token.as_bytes())?;
-    Ok(token)
 }

@@ -18,12 +18,15 @@
 //   ,test                   run tests.puf
 //   ,accept #N  ,reject #N  a proposal
 //   ,restore vN             a file's version, as its text again
+//   ,history                show or hide the shown file's versions
+//   ,structured [on|off]    whether typing keeps brackets balanced
 //   ,save  ,reset  ,interrupt  ,help
 //
 //   createRepl({ transcript, prompt, send, commands }) -> { receive, entries, run, insert }
 // `commands` holds the handlers for the commands the page carries out
 // itself ({ assist(id, file, pos, end), rename(file, pos, name), load(file),
-// save(), evalAt(file, line), session(), reveal(file, line) });
+// save(), evalAt(file, line), session(), history(), structured(word),
+// reveal(file, line) });
 // `renderAsk(entry, node)` is set by assist.js to draw a question's block.
 // A run that referenced a name before its definition, which a module
 // defines, offers a chip that loads it: `,eval FILE:LINE`. An evaluation of
@@ -57,7 +60,9 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,pin N               keep entry N's printed result as a check in tests.puf (pin)
 ,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
-,restore vN          make a version of a file its text again (History lists them)
+,history             show or hide the shown file's versions (,restore vN brings one back)
+,restore vN          make a version of a file its text again
+,structured [on|off] whether typing keeps brackets balanced (on, unless turned off)
 ,save                write the edited files (⌘S)
 ,reset               restart the session
 ,interrupt           stop the running evaluation (Ctrl-C at the prompt)
@@ -123,7 +128,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
         return commands.save();
       case "restore": {
         const id = Number(arg.replace(/^v/, ""));
-        if (!id) return local(text, "usage: ,restore vN (the History panel lists them)", true);
+        if (!id) return local(text, "usage: ,restore vN (,history lists them)", true);
         send({ t: "restore", id });
         return send({ t: "echo", line: `,restore v${id}` });
       }
@@ -154,6 +159,8 @@ export function createRepl({ transcript, prompt, send, commands }) {
           : "nothing is traced: ,trace NAME prints NAME's calls and returns here");
       }
       case "untrace": return send({ t: "trace", names: rest.filter(Boolean), on: false });
+      case "history": return local(text, commands.history());
+      case "structured": return local(text, commands.structured(arg));
       case "help": return local(text, HELP);
       default: return local(text, `unknown command ,${verb}: ,help lists them`, true);
     }
@@ -335,17 +342,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
 
   // What an empty transcript says: where to start.
   function welcome() {
-    const box = transcript.appendChild(element("div", "welcome"));
-    box.append(element("div", "welcome-head", "The editor above and this live session share one program."));
-    const keys = [
-      ["⌘↵", "evaluates the form at the cursor, loading what it needs first"],
-      [",help", "lists the commands; ,trace f prints f's calls as a tree"],
-      ["Tab", "on the empty prompt asks the assistant"],
-    ];
-    for (const [key, what] of keys) {
-      const row = box.appendChild(element("div", "welcome-row"));
-      row.append(element("kbd", "", key), document.createTextNode(` ${what}`));
-    }
+    transcript.append(element("div", "welcome", "Welcome to Puffin — press Run, or type a form here. ⌘↵ in the editor evaluates the form at the cursor; ,help lists the commands."));
   }
 
   function insert(text) {

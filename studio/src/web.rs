@@ -3,10 +3,9 @@
 //! commands in and events out, and `/mcp` for the assistant.
 //!
 //! Only the WebSocket and `/mcp` can read or change anything, so only they
-//! are guarded: the WebSocket by the launch token (carried in the page's
-//! fragment, sent in the handshake) and a same-origin `Origin`; `/mcp` by
-//! its bearer token. The page and its assets hold no data. The server
-//! binds 127.0.0.1 only.
+//! are guarded: the WebSocket by a same-origin `Origin` (a page from another
+//! site cannot open it); `/mcp` by its bearer token. The page and its assets
+//! hold no data. The server binds 127.0.0.1 only.
 
 use crate::ask::Context;
 use crate::repl::{At, Source};
@@ -15,7 +14,7 @@ use crate::studio::{Refused, Studio};
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, Uri, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
@@ -26,12 +25,11 @@ use tokio::sync::{broadcast, mpsc};
 
 struct Web {
     studio: Arc<Studio>,
-    token: String,
     next_connection: AtomicU64,
 }
 
-pub fn router(studio: Arc<Studio>, token: String) -> Router {
-    let web = Arc::new(Web { studio, token, next_connection: AtomicU64::new(1) });
+pub fn router(studio: Arc<Studio>) -> Router {
+    let web = Arc::new(Web { studio, next_connection: AtomicU64::new(1) });
     Router::new()
         .route("/", get(|| async { page(asset_text("index.html")) }))
         .route("/static/{name}", get(|Path(name): Path<String>| async move { asset(&name) }))
@@ -68,7 +66,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "facts.js", "holes.js", "lint.js", "rename.js", "trace.js",
+    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -117,11 +115,6 @@ pub fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else { return true };
     let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("");
     origin.strip_prefix("http://").is_some_and(|rest| rest == host)
-}
-
-/// The value of `key` in `a=1&b=2`, undecoded (tokens are hex).
-fn field<'a>(query: &'a str, key: &str) -> Option<&'a str> {
-    query.split('&').find_map(|pair| pair.split_once('=').filter(|(name, _)| *name == key).map(|(_, value)| value))
 }
 
 /// What a tab asks of the studio.
@@ -231,9 +224,8 @@ fn json<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("studio messages serialize")
 }
 
-async fn socket(State(web): State<Arc<Web>>, uri: Uri, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    let admitted = uri.query().and_then(|query| field(query, "token")).is_some_and(|given| same_secret(given, &web.token));
-    if !admitted || !same_origin(&headers) {
+async fn socket(State(web): State<Arc<Web>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if !same_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let connection = web.next_connection.fetch_add(1, Ordering::SeqCst);
