@@ -1,0 +1,12 @@
+;; assist: assists @ "(match e" +3
+;; a constructor name the promotion would need is taken: no promote
+;; (Add is already a constructor here)
+(define-type Op (Add) (Sub))
+
+(define (ev e)
+  (match e
+    [`(add ,a ,b) (+ (ev a) (ev b))]
+    [`(mul ,a ,b) (* (ev a) (ev b))]
+    [_ e]))
+
+(ev '(add 1 2))

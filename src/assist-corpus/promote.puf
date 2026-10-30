@@ -1,0 +1,21 @@
+;; assist: assists @ "(match e" +3
+;; promote an untyped s-expression language to a define-type: field
+;; types come from the data the file builds; patterns, templates,
+;; and quoted data are rewritten, and the program means the same
+;; an untyped arithmetic language
+(define (ev e)
+  (match e
+    [`(num ,n) n]
+    [`(add ,a ,b) (+ (ev a) (ev b))]
+    [`(mul ,a ,b) (* (ev a) (ev b))]))
+
+(define (simp e)
+  (match e
+    [`(add ,a ,b) `(add ,(simp a) ,(simp b))]
+    [`(mul ,a ,b) `(mul ,(simp a) ,(simp b))]
+    [_ e]))
+
+(define (double x) `(mul (num 2) ,x))
+
+(println (ev (simp '(add (num 1) (mul (num 2) (num 3))))))
+(println (ev (double '(num 21))))

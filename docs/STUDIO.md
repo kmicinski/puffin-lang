@@ -357,7 +357,16 @@ a name freed), the rename is refused. Names nothing in the file
 binds -- prims, imports -- are not renamed; neither are other
 modules' uses of a provided name.
 11. **Promote an s-expression language to a `define-type`** inferred
-    from its quasiquote patterns.
+    from its quasiquote patterns. Built (`promote`): at a match with
+    two or more quasiquote cases `(h ,x ...)`, declare
+    `(define-type Expr (H τ ...) ...)` and rewrite the whole file --
+    each match clause over those shapes becomes a constructor
+    pattern, each quasiquote template and quoted datum that builds
+    them a constructor call. A field's type is what all the file's
+    literal data agrees it holds (Int, Str, Bool, or the new type for
+    a nested shape), else `_`. Code that takes the data apart by hand
+    (`car`, `cadr`) is left alone; the check after applying shows
+    where it breaks. Refused when a constructor name is taken.
 
 ## 6. The assistant
 

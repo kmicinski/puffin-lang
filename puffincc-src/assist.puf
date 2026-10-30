@@ -79,6 +79,7 @@
 (define (atom? n) (eq? (car n) 'atom))
 (define (lst-open n) (fourth n))
 (define (lst-kids n) (fifth n))
+(define (lst-tail n) (car (cdr (cdr (cdr (cdr (cdr n)))))))   ;; a dotted tail's node, or #f
 (define (atom-datum n) (fourth n))
 (define (fourth xs) (car (cdr (cdr (cdr xs)))))
 (define (fifth xs) (car (cdr (cdr (cdr (cdr xs))))))
@@ -1287,6 +1288,224 @@
                             (list (edit (syn-start a) (syn-end a) (symbol->string (cdr p))))))
              (take best (min 3 (length best))))))))))
 
+
+;; ---- assist: promote an s-expression language to a define-type -----------------------
+
+;; A match whose cases are quasiquote patterns like `(add ,a ,b) is an
+;; untyped language. Promote it: declare (define-type Expr (Add _ _)
+;; ...) from the cases' heads and arities, and rewrite the file to use
+;; it -- every match clause over those shapes becomes a constructor
+;; pattern, every quasiquote template and quoted datum that builds them
+;; a constructor call. Fields start as _ (gradual), to tighten later.
+;; Code that takes such data apart by hand ((car e), (cadr e)) is not
+;; rewritten; the check after applying shows where it breaks.
+
+;; `(h ,x ...) with only unquoted binders past the head: (h . names)
+(define (simple-qq d)
+  (match d
+    [(list 'quasiquote (cons h rest))
+     (and (symbol? h) (list? rest)
+          (andmap (lambda (x) (match x [(list 'unquote v) (symbol? v)] [_ #f])) rest)
+          (cons h (map (lambda (x) (second x)) rest)))]
+    [_ #f]))
+
+(define (capitalize s)
+  (let ([b (string-byte s 0)])
+    (if (and (< 96 b) (< b 123))
+        (str-cat (substring "ABCDEFGHIJKLMNOPQRSTUVWXYZ" (- b 97) (- b 96)) (substring s 1 (string-length s)))
+        s)))
+
+;; family: ((head arity ctor-name) ...)
+(define promote-family '())
+(define (family-ctor h n)
+  (let ([hit (findf (lambda (f) (and (eq? (first f) h) (eq? (second f) n))) promote-family)])
+    (and hit (third hit))))
+
+;; the text of node n with every promotable use rewritten; `pattern?`
+;; says n sits where a match pattern does
+(define (promote-text n pattern?)
+  (cond
+    [(atom? n) (node-text n)]
+    [(eq? (car n) 'sugar)
+     (let ([head (fourth n)])
+       (cond
+         [(and pattern? (eq? head 'quasiquote))
+          (let ([sq (simple-qq (syn->datum n))])
+            (let ([c (and sq (family-ctor (car sq) (length (cdr sq))))])
+              (if c
+                  (if (null? (cdr sq)) c (str-cat "(" c " " (string-join (map symbol->string (cdr sq)) " ") ")"))
+                  (node-text n))))]
+         [(eq? head 'quasiquote) (or (promote-template (fifth n)) (node-text n))]
+         [(eq? head 'quote) (or (promote-quoted (syn->datum (fifth n))) (node-text n))]
+         [else (str-cat (substring entry-text (syn-start n) (syn-start (fifth n)))
+                        (promote-text (fifth n) pattern?))]))]
+    [(and (not pattern?) (eq? (head-sym n) 'match) (pair? (cdr (lst-kids n))))
+     (rebuild n (lambda (k i)
+                  (cond [(< i 2) (promote-text k #f)]
+                        [(and (lst? k) (pair? (lst-kids k)))
+                         (rebuild k (lambda (k2 j) (promote-text k2 (eq? j 0))))]
+                        [else (node-text k)])))]
+    [else (rebuild n (lambda (k i) (promote-text k pattern?)))]))
+
+;; n's text with each kid replaced by (f kid index); the gaps between
+;; kids (whitespace, comments, brackets) are kept verbatim
+(define (rebuild n f)
+  (let loop ([kids (syn-kids n)] [i 0] [at (syn-start n)] [acc '()])
+    (if (null? kids)
+        (string-concat (reverse (cons (substring entry-text at (syn-end n)) acc)))
+        (let ([k (car kids)])
+          (loop (cdr kids) (+ i 1) (syn-end k)
+                (cons (f k i) (cons (substring entry-text at (syn-start k)) acc)))))))
+
+;; a quasiquote template building a family shape: its constructor call
+(define (promote-template t)
+  (and (lst? t) (head-sym t) (not (lst-tail t))
+       (let* ([h (head-sym t)] [args (cdr (lst-kids t))]
+              [c (family-ctor h (length args))])
+         (and c
+              (let ([parts (map (lambda (a)
+                                  (cond
+                                    [(and (eq? (car a) 'sugar) (eq? (fourth a) 'unquote))
+                                     (promote-text (fifth a) #f)]
+                                    [(atom? a)
+                                     (let ([d (atom-datum a)])
+                                       (if (symbol? d) (str-cat "'" (node-text a)) (node-text a)))]
+                                    [(lst? a) (promote-template a)]
+                                    [else #f]))
+                                args)])
+                (and (andmap (lambda (p) p) parts)
+                     (if (null? parts) c (str-cat "(" c " " (string-join parts " ") ")"))))))))
+
+;; quoted data that is all family shapes and atoms: constructor calls
+(define (promote-quoted d)
+  (cond
+    [(and (pair? d) (symbol? (car d)) (list? d) (family-ctor (car d) (length (cdr d))))
+     (let ([c (family-ctor (car d) (length (cdr d)))]
+           [parts (map promote-quoted-arg (cdr d))])
+       (and (andmap (lambda (p) p) parts)
+            (if (null? parts) c (str-cat "(" c " " (string-join parts " ") ")"))))]
+    [else #f]))
+(define (promote-quoted-arg d)
+  (cond [(fixnum? d) (number->string d)]
+        [(boolean? d) (if d "#t" "#f")]
+        [(string? d) (json-str d)]
+        [(symbol? d) (str-cat "'" (symbol->string d))]
+        [(null? d) "'()"]
+        [else (promote-quoted d)]))
+
+(define (fresh-type-name base forms)
+  (let ([taken (append (map nm (hash-keys (adts))) (program-names forms))])
+    (let loop ([i 1])
+      (let ([name (if (eq? i 1) base (str-cat base (number->string i)))])
+        (if (member (string->symbol name) taken) (loop (+ i 1)) name)))))
+
+(define (promote-assist m path forms)
+  (let* ([shapes (filter-map (lambda (cl) (and (lst? cl) (pair? (lst-kids cl))
+                                               (simple-qq (syn->datum (car (lst-kids cl))))))
+                             (cdr (cdr (lst-kids m))))]
+         [heads (dedupe-by (lambda (s) s) (map car shapes))]
+         [taken (append (map nm (hash-keys (ctors))) (program-names forms))])
+    (when (>= (length heads) 2)
+      (let ([family (map (lambda (h)
+                           (let ([s (findf (lambda (s) (eq? (car s) h)) shapes)])
+                             (list h (length (cdr s)) (capitalize (symbol->string h)))))
+                         heads)])
+        ;; one arity per head, and constructor names that are free
+        (when (and (andmap (lambda (f) (andmap (lambda (s) (or (not (eq? (car s) (first f)))
+                                                               (eq? (length (cdr s)) (second f))))
+                                                shapes))
+                           family)
+                   (not (ormap (lambda (f) (member (string->symbol (third f)) taken)) family)))
+          (set! promote-family family)
+          (let* ([tname (fresh-type-name "Expr" forms)]
+                 [evidence (field-evidence family)]
+                 [decl (str-cat "(define-type " tname
+                                (string-concat
+                                 (map (lambda (f)
+                                        (str-cat "\n  (" (third f)
+                                                 (string-concat
+                                                  (map (lambda (i) (str-cat " " (field-type evidence (first f) i tname)))
+                                                       (range 0 (second f))))
+                                                 ")"))
+                                      family))
+                                ")\n\n")]
+                 [top (top-of path)]
+                 ;; each changed top-level form is one edit; the
+                 ;; declaration goes in front of the match's own form
+                 [changed (filter-map (lambda (t)
+                                        (let ([new (promote-text t #f)])
+                                          (and (not (string=? new (node-text t))) (cons t new))))
+                                      entry-nodes)]
+                 [edits (map (lambda (tn)
+                               (edit (syn-start (car tn)) (syn-end (car tn))
+                                     (if (eq? (car tn) top) (str-cat decl (cdr tn)) (cdr tn))))
+                             changed)]
+                 [edits (if (assoc-node top changed) edits
+                            (cons (edit (syn-start top) (syn-start top) decl) edits))])
+            (set! promote-family '())
+            (emit-assist "promote"
+                         (str-cat "Promote " (string-join (map (lambda (f) (symbol->string (first f))) family) ", ")
+                                  " to a define-type " tname " (rewrites " (number->string (length changed))
+                                  (if (eq? (length changed) 1) " form)" " forms)"))
+                         "patterns"
+                         edits)))))))
+
+;; what the file's data says each field holds: every quoted datum and
+;; quasiquote template building a family shape contributes the kind
+;; of each literal argument -- Int, Str, Bool, or `family` for a nested
+;; family shape. A hash head#i -> (kind ...), keyed by an interned
+;; symbol: a mutable hash keys pairs and strings by identity.
+(define (field-key h i) (string->symbol (str-cat (symbol->string h) "#" (number->string i))))
+(define (field-evidence family)
+  (let ([ev (make-hash)])
+    (define (note! h i kind)
+      (hash-set! ev (field-key h i) (cons kind (hash-ref/default ev (field-key h i) '()))))
+    (define (from-datum d)
+      (when (and (pair? d) (symbol? (car d)) (list? d))
+        (when (findf (lambda (f) (and (eq? (first f) (car d)) (eq? (second f) (length (cdr d))))) family)
+          (let loop ([as (cdr d)] [i 0])
+            (when (pair? as)
+              (let ([a (car as)])
+                (cond [(fixnum? a) (note! (car d) i 'Int)]
+                      [(string? a) (note! (car d) i 'Str)]
+                      [(boolean? a) (note! (car d) i 'Bool)]
+                      [(and (pair? a) (symbol? (car a))
+                            (findf (lambda (f) (and (eq? (first f) (car a)) (eq? (second f) (length (cdr a))))) family))
+                       (note! (car d) i 'family)]
+                      [(pair? a) (note! (car d) i 'other)]
+                      [(symbol? a) (note! (car d) i 'other)]
+                      [else (void)])
+                (from-datum a))
+              (loop (cdr as) (+ i 1)))))))
+    (define (walk n)
+      (cond [(and (eq? (car n) 'sugar) (eq? (fourth n) 'quote)) (from-datum (syn->datum (fifth n)))]
+            ;; a template's unquotes say nothing; its literal parts do
+            [(and (eq? (car n) 'sugar) (eq? (fourth n) 'quasiquote))
+             (from-datum (strip-unquotes (syn->datum (fifth n))))]
+            [else (for-each-node walk (syn-kids n))]))
+    (for-each-node walk entry-nodes)
+    ev))
+
+;; a template datum with each unquote replaced by a marker that is no
+;; kind of evidence
+(define (strip-unquotes d)
+  (cond [(and (pair? d) (eq? (car d) 'unquote)) (vector)]
+        [(pair? d) (cons (strip-unquotes (car d)) (strip-unquotes (cdr d)))]
+        [else d]))
+
+;; one field's declared type: what all its evidence agrees on, else _
+(define (field-type ev h i tname)
+  (let ([kinds (hash-ref/default ev (field-key h i) '())])
+    (cond [(null? kinds) "_"]
+          [(andmap (lambda (k) (eq? k (car kinds))) kinds)
+           (cond [(eq? (car kinds) 'family) tname]
+                 [(eq? (car kinds) 'other) "_"]
+                 [else (symbol->string (car kinds))])]
+          [else "_"])))
+
+(define (assoc-node n pairs)
+  (findf (lambda (p) (eq? (car p) n)) pairs))
+
 ;; ---- the assists operation --------------------------------------------------------
 
 ;; a cursor just past a closer belongs, for assists, to the form it
@@ -1323,7 +1542,8 @@
         ;; observed shapes need no checker run, so they come first
         (when (and m (pair? (cdr (lst-kids m))))
           (observed-match-assist m path)
-          (call-site-match-assist m path))
+          (call-site-match-assist m path)
+          (promote-assist m path forms))
         (when (and (not on-hole) (eq? (head-sym top) 'define)) (annotate-assist top))
         (when (and m (pair? (cdr (lst-kids m))))
           (let ([scrut (car (cdr (lst-kids m)))])
@@ -1517,7 +1737,7 @@
                              (bind (car (lst-kids k)) env)
                              (bind k env)))
                        env (lst-kids f))])
-       (if (fifth f) (bind (fifth f) env) env))]   ;; (a b . rest)
+       (if (lst-tail f) (bind (lst-tail f) env) env))]   ;; (a b . rest)
     [else env]))
 
 (define (walk-define-rest n env)
@@ -1527,7 +1747,7 @@
         (if (lst? h)
             ;; (define (f . formals) [: rt] body ...): f is bound by the
             ;; enclosing body (or the top level); the formals here
-            (let ([env (bind-formals (list 'lst 0 0 40 (cdr (lst-kids h)) (fifth h)) env)])
+            (let ([env (bind-formals (list 'lst 0 0 40 (cdr (lst-kids h)) (lst-tail h)) env)])
               (walk-body (strip-result-type body) env))
             (walk-body body env))))))
 

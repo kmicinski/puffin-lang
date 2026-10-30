@@ -1,0 +1,34 @@
+== assists @ 288 (exit 0)
+== stdout
+{"id":"promote","title":"Promote num, add, mul to a define-type Expr (rewrites 5 forms)","source":"patterns","edits":[{"start":268,"end":387,"text":"(define-type Expr\n  (Num Int)\n  (Add Expr Expr)\n  (Mul Expr Expr))\n\n(define (ev e)\n  (match e\n    [(Num n) n]\n    [(Add a b) (+ (ev a) (ev b))]\n    [(Mul a b) (* (ev a) (ev b))]))"},{"start":389,"end":520,"text":"(define (simp e)\n  (match e\n    [(Add a b) (Add (simp a) (simp b))]\n    [(Mul a b) (Mul (simp a) (simp b))]\n    [_ e]))"},{"start":522,"end":559,"text":"(define (double x) (Mul (Num 2) x))"},{"start":561,"end":619,"text":"(println (ev (simp (Add (Num 1) (Mul (Num 2) (Num 3))))))"},{"start":620,"end":653,"text":"(println (ev (double (Num 21))))"}]}
+{"done":true}
+== stderr
+== apply 1: promote
+;; assist: assists @ "(match e" +3
+;; promote an untyped s-expression language to a define-type: field
+;; types come from the data the file builds; patterns, templates,
+;; and quoted data are rewritten, and the program means the same
+;; an untyped arithmetic language
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+(define (ev e)
+  (match e
+    [(Num n) n]
+    [(Add a b) (+ (ev a) (ev b))]
+    [(Mul a b) (* (ev a) (ev b))]))
+
+(define (simp e)
+  (match e
+    [(Add a b) (Add (simp a) (simp b))]
+    [(Mul a b) (Mul (simp a) (simp b))]
+    [_ e]))
+
+(define (double x) (Mul (Num 2) x))
+
+(println (ev (simp (Add (Num 1) (Mul (Num 2) (Num 3))))))
+(println (ev (double (Num 21))))
+== check (exit 0)
+{"ok":true}

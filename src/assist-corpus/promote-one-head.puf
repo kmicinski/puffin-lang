@@ -1,0 +1,8 @@
+;; assist: assists @ "(match e" +3
+;; one quasiquote case is not a language: no promote
+(define (ev e)
+  (match e
+    [`(add ,a ,b) (+ (ev a) (ev b))]
+    [_ e]))
+
+(ev '(add 1 2))
