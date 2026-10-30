@@ -387,7 +387,11 @@
        (unless (= (length ps) (hash-ref ctor-arity c))
          (error 'desugar "constructor ~a expects ~a fields, got ~a in pattern ~a"
                 c (hash-ref ctor-arity c) (length ps) pat))
-       (compile-ctor-pattern c ps subject success fail-e bound)]))
+       (compile-ctor-pattern c ps subject success fail-e bound)]
+      ;; whole programs never get here (the checker rejects the
+      ;; pattern's unbound names first); a REPL unit late-binds names,
+      ;; so (Circle r) with no Circle in scope arrives here
+      [_ (error 'desugar "unrecognized match pattern ~a" pat)]))
 
   ;; quasiquote patterns: symbols/numbers match themselves as data;
   ;; (unquote p) escapes back to pattern matching; lists match
@@ -516,7 +520,9 @@
       [(list-rest 'list ps) (apply set-union (set) (map pattern-vars ps))]
       [(list-rest 'vector ps) (apply set-union (set) (map pattern-vars ps))]
       [(list '? _ p) (pattern-vars p)]
-      [`(,(? ctor-name?) ,ps ...) (apply set-union (set) (map pattern-vars ps))]))
+      [`(,(? ctor-name?) ,ps ...) (apply set-union (set) (map pattern-vars ps))]
+      ;; see compile-pattern's last clause
+      [_ (error 'desugar "unrecognized match pattern ~a" pat)]))
 
   (define (compile-match e-subj clauses bound)
     (define subject (gensym 'mat-subject))
