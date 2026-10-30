@@ -146,10 +146,19 @@ export function bindMonaco(monaco, editor) {
     });
   }
 
+  // Enter is newline-and-indent in the program editor only: in the REPL
+  // prompt it submits. It stays Monaco's while the completion list is up
+  // (Enter takes an item) and with Shift.
+  const typingHere = { ...TYPING, Enter: paredit.newline };
+  const completing = () => {
+    const widget = editor.getDomNode()?.querySelector(".suggest-widget");
+    return Boolean(widget) && getComputedStyle(widget).display !== "none";
+  };
   editor.onKeyDown((event) => {
-    const typing = TYPING[event.browserEvent.key];
+    const typing = typingHere[event.browserEvent.key];
     if (!structured.on || !typing || event.ctrlKey || event.metaKey || event.altKey
       || event.browserEvent.isComposing || editor.getSelections().length > 1 || readOnly()) return;
+    if (event.browserEvent.key === "Enter" && (event.shiftKey || completing())) return;
     if (!run(typing)) return;
     event.preventDefault();
     event.stopPropagation();

@@ -516,10 +516,51 @@ function downList(text, selection) {
   return same(text, next ? cursor(next.start + 1) : selection);
 }
 
+// Indentation --------------------------------------------------------------
+
+// Forms whose body goes two in from the opener however the first line is
+// laid out: (define (f x)\n  body), (match e\n  [..]), (let (..)\n  body).
+const BODY_FORMS = new Set([
+  "define", "define-type", "define-foreign-type", "lambda", "λ", "let", "let*", "letrec",
+  "match", "when", "unless", "cond", "case", "begin", "do",
+]);
+
+// The column a line starting at `pos` takes, Lisp's way, from the list
+// `pos` is in: nothing before it there, one in from the opener; a body
+// form's head, two in; a head with an argument beside it, under that
+// argument; else under the head (one in from the opener).
+export function indentation(text, pos, root = parse(text)) {
+  const list = enclosing(root, pos);
+  if (list === root) return 0;
+  const column = (at) => at - (text.lastIndexOf("\n", at - 1) + 1);
+  const before = sexps(list).filter((s) => s.end <= pos);
+  if (!before.length) return column(list.start) + 1;
+  const [head, second] = before;
+  if (head.kind === "word" && BODY_FORMS.has(text.slice(head.start, head.end))) return column(list.start) + 2;
+  const sameLine = (a, b) => text.lastIndexOf("\n", a.start - 1) === text.lastIndexOf("\n", b.start - 1);
+  if (head.kind === "word" && second && sameLine(head, second)) return column(second.start);
+  return column(head.start);
+}
+
+// Enter: a newline, indented for where it starts. The blanks either side
+// of the cut go: the new line is indented afresh and the old one keeps no
+// trailing ones. Inside a string or a comment the editor's own Enter is
+// right.
+function newline(text, selection) {
+  const root = parse(text);
+  if (leafAt(root, selection.start) || leafAt(root, selection.end)) return null;
+  let from = selection.start;
+  while (from > 0 && (text[from - 1] === " " || text[from - 1] === "\t")) from--;
+  let to = selection.end;
+  while (to < text.length && (text[to] === " " || text[to] === "\t")) to++;
+  const indent = " ".repeat(indentation(text, from, root));
+  return { text: `${text.slice(0, from)}\n${indent}${text.slice(to)}`, selection: cursor(from + 1 + indent.length) };
+}
+
 // The operations, by name ------------------------------------------------
 
 export const unguarded = {
-  insertOpen, insertClose, insertQuote, insertSemicolon, deleteBackward, deleteForward,
+  insertOpen, insertClose, insertQuote, insertSemicolon, deleteBackward, deleteForward, newline,
   slurpForward, slurpBackward, barfForward, barfBackward,
   splice, raise, wrap, split, join, kill,
   expandSelection, contractSelection, forwardSexp, backwardSexp, upList, forwardUpList, downList,

@@ -552,7 +552,12 @@ transcripts can be goldens too.
   line, extended over an expression that starts on it, stopped at
   the enclosing list's closer -- so `C-k` on a match clause takes
   that clause, never the ones below. Paredit's own keys (`C-M-f`,
-  slurp and barf on `C-Right` / `C-Left`, ...) stay.
+  slurp and barf on `C-Right` / `C-Left`, ...) stay. Enter is
+  newline-and-indent, Lisp's way (`sexp.js` `indentation`): two in
+  for a body form (`define`, `match`, `let`, `lambda`, `cond`, ...),
+  under the first argument when one sits beside the head, else under
+  the head; the REPL prompt's Enter still submits, and Enter is
+  Monaco's while the completion list is up.
 - **The page is the playground's** (`web/src/App.jsx`): the editor
   with file tabs on the left, the output and the `puffin>` prompt on
   the right, Run / Reset session in the header. Panels are the
