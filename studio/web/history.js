@@ -5,7 +5,10 @@
 // asked for (the History button, `,history`); it reads the project's git
 // log, so it is the whole story, not this tab's.
 //
-//   createHistory({ panel, send }) -> { toggle, changed, receive }
+//   createHistory({ panel, send, onMoments, onJump })
+//     -> { toggle, changed, load, summary, receive }
+// `onMoments(list)` gets every timeline received (replay.js slides over
+// it); `onJump(index)` is a click on a row's time.
 
 const element = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -41,7 +44,7 @@ const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minu
 const day = (at) => new Date(at).toLocaleDateString([], { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 const formName = (key) => key.split(":").slice(2).join(":") || key.split(":").slice(1).join(":");
 
-export function createHistory({ panel, send }) {
+export function createHistory({ panel, send, onMoments, onJump }) {
   let open = false;
   let seq = 0;
   let filter = "all";
@@ -60,6 +63,10 @@ export function createHistory({ panel, send }) {
 
   function request() {
     if (!open) return;
+    load();
+  }
+
+  function load() {
     send({ t: "history", seq: ++seq });
   }
 
@@ -115,7 +122,12 @@ export function createHistory({ panel, send }) {
         lastDay = today;
       }
       const row = list.appendChild(element("div", `history-row ${moment.kind}${moment.status === "error" || moment.error ? " failed" : ""}`));
-      row.append(element("span", "history-when", time(moment.at)));
+      const when = row.appendChild(element("span", "history-when", time(moment.at)));
+      if (onJump) {
+        when.title = "Replay: see what was on screen at this moment";
+        when.classList.add("jump");
+        when.addEventListener("click", (event) => { event.stopPropagation(); onJump(index); });
+      }
       row.append(element("span", `history-kind ${moment.kind}`, KINDS[moment.kind]?.word ?? moment.kind));
       const what = row.appendChild(element("span", "history-what", summary(moment)));
       what.title = moment.commit ? `commit ${moment.commit.slice(0, 7)}` : "not committed yet";
@@ -186,13 +198,16 @@ export function createHistory({ panel, send }) {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(request, 700);
     },
+    load,
+    summary,
     receive: {
       history(reply) {
         if (reply.seq !== seq) return;
         moments = reply.moments ?? [];
         tracked = reply.tracked;
         error = reply.error ?? null;
-        render();
+        onMoments?.(moments);
+        if (open) render();
       },
       "history-diff"({ commit, diff, error: failed }) {
         diffs.set(commit, failed ? `(${failed})` : diff);

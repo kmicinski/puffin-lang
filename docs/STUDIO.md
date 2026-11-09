@@ -467,6 +467,14 @@ its ground truth:
   tests, asks, gestures, or sessions; an edit opens to its commit's
   diff, an evaluation to its output, a question to its answer. It is
   hidden until asked for. (`,versions` is the older per-file panel.)
+- **Replay** (`studio/web/replay.js`): a clock hovers at the bottom
+  left; click it and a slider over the history opens. Drag it, or step
+  with ← →, and the studio shows what was on screen at that moment,
+  for sitting with a student and looking together: the files as that
+  commit left them (`files-at`: `git ls-tree` and `git show`),
+  read-only over the live editor, and the transcript as it stood
+  then, over the live one. Live goes on underneath; Live or Esc
+  returns. A click on a time in the History panel jumps there.
 - Opening or making a project makes the studio serve it: the server
   swaps its studio (`web.rs` `Web::switch`), after committing the
   previous project's pending records, and every tab reloads.

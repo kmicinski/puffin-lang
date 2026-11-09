@@ -298,6 +298,26 @@ pub fn diff(directory: &Path, hash: &str) -> Result<String, String> {
     git(directory, &["show", "--format=", "--unified=3", "--no-color", hash, "--", ".", &format!(":(exclude){JOURNAL}")])
 }
 
+/// The project's files as commit `hash` left them: path -> text, for the
+/// Puffin files (studio.rs EXTENSIONS) outside `.puffin/`. What a person
+/// saw at that moment (the replay slider).
+pub fn files_at(directory: &Path, hash: &str) -> Result<std::collections::BTreeMap<String, String>, String> {
+    if hash.len() < 7 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("{hash} is not a commit"));
+    }
+    let listed = git(directory, &["ls-tree", "-r", "--name-only", "-z", hash])?;
+    let mut files = std::collections::BTreeMap::new();
+    for path in listed.split('\0').filter(|path| !path.is_empty()) {
+        let puffin = path.rsplit_once('.').is_some_and(|(_, extension)| crate::studio::EXTENSIONS.contains(&extension));
+        if !puffin || path.starts_with(".puffin/") {
+            continue;
+        }
+        let text = git(directory, &["show", &format!("{hash}:{path}")])?;
+        files.insert(path.to_owned(), text);
+    }
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +373,10 @@ mod tests {
         assert_eq!(kinds, ["project", "edit", "eval"]);
         assert_eq!(moments[2].commit.as_deref(), Some(hash.as_str()));
         assert!(diff(&directory, &hash).unwrap().contains("+(define x 1)"));
+        let then = files_at(&directory, &hash).unwrap();
+        assert_eq!(then.get("main.puf").map(String::as_str), Some("(define x 1)\n"));
+        assert!(!then.contains_key(".puffin/journal.jsonl"));
+        assert!(files_at(&directory, "nope").is_err());
         let journal = std::fs::read_to_string(directory.join(JOURNAL)).unwrap();
         assert_eq!(journal.lines().count(), 3);
         // a commit made by hand is a moment too

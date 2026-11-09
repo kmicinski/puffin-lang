@@ -39,11 +39,16 @@
       <aside id="history-panel" hidden></aside>
       <div id="notice" hidden></div>
     </div>
+    <div id="past" class="past" hidden>
+      <div class="file-tabs past-tabs" id="past-tabs"></div>
+      <div class="past-editor"></div>
+    </div>
   </section>
   <div id="divider" title="Drag to resize"></div>
   <section class="right-pane" id="repl">
     <div class="pane-title">Output</div>
     <div id="transcript" class="console"></div>
+    <div id="past-transcript" class="console past-transcript" hidden></div>
     <div class="repl prompt-row">
       <span class="prompt caret">puffin&gt;</span>
       <textarea id="prompt" rows="1" spellcheck="false" autocomplete="off"
@@ -57,6 +62,8 @@
     </div>
   </section>
 </main>
+<div id="clock" class="clock"></div>
+<div id="replay" class="replay" hidden></div>
 <script type="module" src="/static/main.js"></script>
 </body>
 </html>

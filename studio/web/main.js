@@ -12,6 +12,7 @@ import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
 import { createHistory } from "./history.js";
 import { createProjects } from "./projects.js";
+import { createReplay } from "./replay.js";
 import { createSession, functionDefine } from "./session.js";
 import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
@@ -97,7 +98,22 @@ function askFacts(file, pos, full = false) {
 
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), files, send });
-const history = createHistory({ panel: $("history-panel"), send });
+const history = createHistory({
+  panel: $("history-panel"),
+  send,
+  onMoments: (list) => replay.moments(list),
+  onJump: (index) => replay.start(index),
+});
+const replay = createReplay({
+  editor,
+  send,
+  history,
+  clock: $("clock"),
+  panel: $("replay"),
+  past: $("past"),
+  pastTabs: $("past-tabs"),
+  pastTranscript: $("past-transcript"),
+});
 const projects = createProjects({ button: $("project"), menu: $("projects-menu"), send });
 $("history").addEventListener("click", () => history.toggle());
 session = createSession({ editor, files, traced: () => traced, canTrace: () => Boolean(features.trace && features.observe) });
@@ -369,7 +385,9 @@ const handlers = {
   "entry-done"(message) {
     repl.receive["entry-done"](message);
     history.changed();
+    if (replay.on()) history.load();
   },
+  journal: () => { history.changed(); if (replay.on()) history.load(); },
   agent: assist.receive.agent,
   asked: assist.receive.asked,
   review(view) {
@@ -385,7 +403,7 @@ const handlers = {
   version: versions.receive.version,
   history: history.receive.history,
   "history-diff": history.receive["history-diff"],
-  journal: () => history.changed(),
+  "files-at": replay.receive["files-at"],
   projects: projects.receive.projects,
   reopen: projects.receive.reopen,
   notice: ({ message }) => note(message),

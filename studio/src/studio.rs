@@ -954,6 +954,12 @@ impl Studio {
         Ok(moments)
     }
 
+    /// The files as commit `hash` left them (the replay slider).
+    pub async fn files_at(&self, hash: String) -> Result<Files, String> {
+        let directory = self.directory.clone();
+        tokio::task::spawn_blocking(move || project::files_at(&directory, &hash)).await.unwrap_or_else(|e| Err(e.to_string()))
+    }
+
     /// What commit `hash` changed, as a unified diff.
     pub async fn history_diff(&self, hash: String) -> Result<String, String> {
         let directory = self.directory.clone();

@@ -107,7 +107,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js", "projects.js",
+    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js", "projects.js", "replay.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -245,6 +245,8 @@ enum Request {
     History { seq: u64 },
     /// What commit `commit` changed; answered with `seq`.
     HistoryDiff { seq: u64, commit: String },
+    /// The files as commit `commit` left them; answered with `seq`.
+    FilesAt { seq: u64, commit: String },
     /// The projects under the home; answered with `seq`.
     Projects { seq: u64 },
     /// Make a project (named, or with a short random name) and serve it.
@@ -283,6 +285,7 @@ enum Reply<'a> {
     VersionText { id: u64, file: String, text: String },
     History { seq: u64, tracked: bool, moments: Vec<project::Moment>, error: Option<String> },
     HistoryDiff { seq: u64, commit: String, diff: String, error: Option<String> },
+    FilesAt { seq: u64, commit: String, files: crate::toolchain::Files, error: Option<String> },
     Projects { seq: u64, home: String, current: String, projects: Vec<project::Listed> },
 }
 
@@ -591,6 +594,15 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
                     Err(error) => (String::new(), Some(error)),
                 };
                 let _ = direct.send(json(&Reply::HistoryDiff { seq, commit, diff, error }));
+            });
+        }
+        Request::FilesAt { seq, commit } => {
+            tokio::spawn(async move {
+                let (files, error) = match studio.files_at(commit.clone()).await {
+                    Ok(files) => (files, None),
+                    Err(error) => (Default::default(), Some(error)),
+                };
+                let _ = direct.send(json(&Reply::FilesAt { seq, commit, files, error }));
             });
         }
         Request::Projects { seq } => {

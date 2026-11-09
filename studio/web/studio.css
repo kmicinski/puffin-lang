@@ -405,6 +405,50 @@ button.project-name:empty { display: none; }
 .diff-file { font-weight: 600; color: var(--strong); margin-top: 4px; }
 .diff-hunk { color: var(--cyan); }
 
+.history-when.jump { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.history-when.jump:hover { color: var(--blue); }
+
+/* ---- Replay: the clock, the slider, and what was on screen then ------------------ */
+
+.editor-pane { position: relative; }
+.right-pane { position: relative; }
+.clock {
+  position: fixed; left: 14px; bottom: 14px; z-index: 40;
+  font: 500 12px var(--mono); color: var(--muted); background: var(--base3);
+  border: 1px solid var(--border); border-radius: 14px; padding: 3px 10px; cursor: pointer; user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.clock:hover { color: var(--text); border-color: var(--border-strong); }
+.clock.on { color: var(--base3); background: var(--yellow); border-color: var(--yellow); }
+.clock-face::before { content: "◷ "; }
+.replay {
+  position: fixed; left: 14px; bottom: 44px; z-index: 40; width: 440px; max-width: calc(100vw - 28px);
+  background: var(--base3); border: 1px solid var(--yellow); border-radius: 10px; padding: 10px 14px 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+.replay-clock { font: 600 28px var(--mono); color: var(--strong); letter-spacing: 0.02em; line-height: 1.1; }
+.replay-date { font: 12px var(--sans); color: var(--muted); margin-bottom: 4px; }
+.replay-what { font: 11.5px var(--mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 6px; }
+.replay-row { display: flex; align-items: center; gap: 6px; }
+.replay-slider { flex: 1; accent-color: var(--yellow); }
+.past {
+  position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column;
+  background: var(--base3); outline: 2px solid var(--yellow); outline-offset: -2px;
+}
+.past-tabs { flex-shrink: 0; }
+.past-editor { flex: 1; min-height: 0; position: relative; }
+.past-plain { margin: 0; padding: 8px 12px; font: 14px/1.5 var(--mono); white-space: pre-wrap; overflow: auto; height: 100%; box-sizing: border-box; }
+.past-badge { font: 600 10px var(--sans); color: var(--base3); background: var(--yellow); border-radius: 8px; padding: 1px 7px; margin: 0 6px; text-transform: uppercase; letter-spacing: 0.06em; align-self: center; }
+.past-transcript {
+  position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 20;
+  background: var(--base3); outline: 2px solid var(--yellow); outline-offset: -2px;
+}
+.past-transcript .past-title { position: sticky; top: 0; background: var(--base3); }
+.past-transcript .entry.ask .line::before { content: ""; }
+.past-transcript .entry .ask-mark { color: var(--violet); }
+.past-transcript .entry pre.answer { color: var(--text); border-left: 2px solid var(--violet); padding-left: 8px; margin-top: 2px; }
+.past-transcript .entry pre.err { color: var(--red); }
+
 /* ---- Versions (,versions) -------------------------------------------------------- */
 
 #versions {
