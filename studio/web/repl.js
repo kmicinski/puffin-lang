@@ -18,7 +18,8 @@
 //   ,test                   run tests.puf
 //   ,accept #N  ,reject #N  a proposal
 //   ,restore vN             a file's version, as its text again
-//   ,history                show or hide the shown file's versions
+//   ,history                show or hide the project's history
+//   ,versions               show or hide the shown file's versions
 //   ,structured [on|off]    whether typing keeps brackets balanced
 //   ,save  ,reset  ,interrupt  ,help
 //
@@ -61,7 +62,8 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,pin N               keep entry N's printed result as a check in tests.puf (pin)
 ,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
-,history             show or hide the shown file's versions (,restore vN brings one back)
+,history             show or hide the project's history: every edit, eval, ask and test, in order
+,versions            show or hide the shown file's versions (,restore vN brings one back)
 ,restore vN          make a version of a file its text again
 ,structured [on|off] whether typing keeps brackets balanced (on, unless turned off)
 ,save                write the edited files (⌘S)
@@ -133,7 +135,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
         return commands.save();
       case "restore": {
         const id = Number(arg.replace(/^v/, ""));
-        if (!id) return local(text, "usage: ,restore vN (,history lists them)", true);
+        if (!id) return local(text, "usage: ,restore vN (,versions lists them)", true);
         send({ t: "restore", id });
         return send({ t: "echo", line: `,restore v${id}` });
       }
@@ -165,6 +167,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       }
       case "untrace": return send({ t: "trace", names: rest.filter(Boolean), on: false });
       case "history": return local(text, commands.history());
+      case "versions": return local(text, commands.versions());
       case "structured": return local(text, commands.structured(arg));
       case "help": return local(text, HELP);
       default: return local(text, `unknown command ,${verb}: ,help lists them`, true);

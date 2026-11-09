@@ -358,9 +358,49 @@ pub async fn run(studio: Arc<Studio>, thread: u32, message: String, context: Str
     transcript.event("done", "");
 }
 
+/// The turn is over: the thread stops running, and the question with its
+/// answer goes to the project's history (studio.rs `record`).
 fn finish(studio: &Studio, thread: u32) {
-    if let Some(entry) = studio.review.lock().expect("review lock").thread_mut(thread) {
+    let record = {
+        let mut review = studio.review.lock().expect("review lock");
+        let Some(entry) = review.thread_mut(thread) else { return };
         entry.running = false;
+        let last_user = entry.messages.iter().rposition(|m| m.role == "user");
+        last_user.map(|index| {
+            let turn = &entry.messages[index..];
+            let text_of = |role: &str| turn.iter().filter(|m| m.role == role).map(|m| m.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
+            let stats = turn.iter().rev().find(|m| m.role == "turn").map(|m| m.data.clone()).unwrap_or(Value::Null);
+            let tools = turn.iter().filter(|m| m.role == "tool").count();
+            let mut data = json!({
+                "line": turn[0].text,
+                "thread": thread,
+                "turn": entry.messages[..=index].iter().filter(|m| m.role == "user").count() - 1,
+                "scope": turn[0].data["scope"],
+                "status": if text_of("error").is_empty() { "ok" } else { "error" },
+            });
+            let object = data.as_object_mut().expect("an object");
+            let answer = text_of("assistant");
+            if !answer.is_empty() {
+                object.insert("out".into(), json!(clip_text(&answer)));
+            }
+            let error = text_of("error");
+            if !error.is_empty() {
+                object.insert("error".into(), json!(error));
+            }
+            if let Some(ms) = stats["ms"].as_u64() {
+                object.insert("ms".into(), json!(ms));
+            }
+            if !stats["cost"].is_null() {
+                object.insert("cost".into(), stats["cost"].clone());
+            }
+            if tools > 0 {
+                object.insert("tools".into(), json!(tools));
+            }
+            data
+        })
+    };
+    if let Some(data) = record {
+        studio.record("ask", data);
     }
     studio.publish_review();
 }

@@ -72,6 +72,41 @@ async fn edits_need_their_base_and_save_writes_them() {
 }
 
 #[tokio::test]
+async fn a_tracked_project_commits_its_edits_and_journals_its_evaluations() {
+    if !crate::project::git_available() {
+        return;
+    }
+    let root = crate::repository_root();
+    if !root.join("build/puffincc").is_file() || !root.join("bin/puffin-vm").is_file() {
+        return;
+    }
+    let directory = project("tracked", &[("main.puf", MAIN)]);
+    assert_eq!(crate::project::adopt(&directory), Ok(true));
+    let studio = Fixture(Studio::new(root, directory.clone(), "test-token".into()).unwrap());
+    assert!(studio.tracked);
+    let version = studio.version_of("main.puf").unwrap();
+    studio.edit(1, "main.puf", version, format!("{MAIN}(define y 2)\n")).unwrap();
+    studio.evaluate("(* 2 4)".into(), crate::repl::Source::Prompt).await;
+    // nothing is committed until the edits settle: flush stands in for the pause
+    let before = crate::project::history(&directory).unwrap().len();
+    studio.flush_journal().await;
+    let moments = studio.history().await.unwrap();
+    assert!(moments.len() > before);
+    let edit = moments.iter().find(|m| m.kind == "edit").expect("an edit moment");
+    assert_eq!(edit.data["forms"], json!(["main.puf:define:y"]));
+    let eval = moments.iter().find(|m| m.kind == "eval").expect("an eval moment");
+    assert_eq!((eval.data["line"].as_str(), eval.data["out"].as_str()), (Some("(* 2 4)"), Some("=> 8\n")));
+    assert!(eval.commit.is_some(), "the evaluation is committed with the edit");
+    // the file on disk is the edited text, and the commit's diff shows it
+    assert_eq!(std::fs::read_to_string(directory.join("main.puf")).unwrap(), format!("{MAIN}(define y 2)\n"));
+    let diff = studio.history_diff(edit.commit.clone().unwrap()).await.unwrap();
+    assert!(diff.contains("+(define y 2)"), "{diff}");
+    // settled again with nothing new: no commit
+    studio.flush_journal().await;
+    assert_eq!(studio.history().await.unwrap().len(), moments.len());
+}
+
+#[tokio::test]
 async fn checks_locate_errors_and_warnings() {
     let broken = "(define-type T (A Int) (B))\n(define (f [t : T]) : Int\n  (match t [(A n) n]))\n(car 1 2)\n";
     let Some(studio) = studio("check", &[("main.puf", broken), ("ok.puf", "(define x 1)\n")]) else { return };

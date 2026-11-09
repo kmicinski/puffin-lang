@@ -8,9 +8,10 @@
 //! hold no data. The server binds 127.0.0.1 only.
 
 use crate::ask::Context;
+use crate::project;
 use crate::repl::{At, Source};
 use crate::sexp;
-use crate::studio::{Refused, Studio};
+use crate::studio::{Event, Refused, Studio};
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
@@ -19,17 +20,56 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, mpsc};
 
-struct Web {
-    studio: Arc<Studio>,
+/// The served studio, and what it takes to open another project in its
+/// place (project.rs): the repository root and the assistant's token.
+pub struct Web {
+    studio: RwLock<Arc<Studio>>,
+    root: PathBuf,
+    mcp_token: String,
     next_connection: AtomicU64,
 }
 
-pub fn router(studio: Arc<Studio>) -> Router {
-    let web = Arc::new(Web { studio, next_connection: AtomicU64::new(1) });
+impl Web {
+    pub fn new(studio: Arc<Studio>, root: PathBuf, mcp_token: String) -> Arc<Self> {
+        Arc::new(Self { studio: RwLock::new(studio), root, mcp_token, next_connection: AtomicU64::new(1) })
+    }
+
+    /// The studio served now.
+    pub fn current(&self) -> Arc<Studio> {
+        self.studio.read().expect("studio lock").clone()
+    }
+
+    /// Serve the project in `directory` instead: its history is committed
+    /// first, and every tab is told to reload. The new studio listens on the
+    /// same port.
+    pub async fn switch(&self, directory: PathBuf) -> Result<(), String> {
+        let previous = self.current();
+        previous.flush_journal().await;
+        let adopted = project::adopt(&directory);
+        let next = Studio::new(self.root.clone(), directory.clone(), self.mcp_token.clone()).map_err(|error| error.to_string())?;
+        next.set_port(previous.port());
+        next.start();
+        if let Err(error) = adopted {
+            next.notice(format!("{} is not tracked: {error}", directory.display()));
+        }
+        *self.studio.write().expect("studio lock") = next;
+        previous.publish(Event::Reopen);
+        // the old studio's processes end with it; its scratch goes once its tabs have gone
+        let scratch = previous.toolchain.scratch.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let _ = std::fs::remove_dir_all(scratch);
+        });
+        Ok(())
+    }
+}
+
+pub fn router(web: Arc<Web>) -> Router {
     Router::new()
         .route("/", get(|| async { page(asset_text("index.html")) }))
         .route("/static/{name}", get(|Path(name): Path<String>| async move { asset(&name) }))
@@ -38,7 +78,8 @@ pub fn router(studio: Arc<Studio>) -> Router {
         .route(
             "/mcp",
             post(|State(web): State<Arc<Web>>, headers: HeaderMap, body: String| async move {
-                crate::mcp::handle(&web.studio, headers, body).await
+                let studio = web.current();
+                crate::mcp::handle(&studio, headers, body).await
             }),
         )
         .with_state(web)
@@ -66,7 +107,7 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js",
+    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js", "projects.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -92,7 +133,7 @@ async fn monaco(State(web): State<Arc<Web>>, Path(path): Path<String>) -> Respon
     if path.split('/').any(|part| part == ".." || part.is_empty()) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let file = web.studio.root.join("web/node_modules/monaco-editor/min/vs").join(&path);
+    let file = web.root.join("web/node_modules/monaco-editor/min/vs").join(&path);
     let Ok(bytes) = tokio::fs::read(&file).await else { return StatusCode::NOT_FOUND.into_response() };
     let kind = match file.extension().and_then(|e| e.to_str()) {
         Some("js") => "text/javascript; charset=utf-8",
@@ -200,6 +241,19 @@ enum Request {
     Versions { file: String },
     VersionText { id: u64 },
     Restore { id: u64 },
+    /// The project's timeline (project.rs); answered with `seq`.
+    History { seq: u64 },
+    /// What commit `commit` changed; answered with `seq`.
+    HistoryDiff { seq: u64, commit: String },
+    /// The projects under the home; answered with `seq`.
+    Projects { seq: u64 },
+    /// Make a project (named, or with a short random name) and serve it.
+    NewProject {
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Serve the project `name` under the home.
+    OpenProject { name: String },
 }
 
 /// Messages for one tab only; everything else is a broadcast `Event`.
@@ -227,6 +281,9 @@ enum Reply<'a> {
     Asked { thread: Option<u32>, message: &'a str, error: Option<String> },
     Versions { file: &'a str, versions: Vec<crate::versions::Version> },
     VersionText { id: u64, file: String, text: String },
+    History { seq: u64, tracked: bool, moments: Vec<project::Moment>, error: Option<String> },
+    HistoryDiff { seq: u64, commit: String, diff: String, error: Option<String> },
+    Projects { seq: u64, home: String, current: String, projects: Vec<project::Listed> },
 }
 
 fn json<T: Serialize>(value: &T) -> String {
@@ -238,10 +295,11 @@ async fn socket(State(web): State<Arc<Web>>, headers: HeaderMap, upgrade: WebSoc
         return StatusCode::FORBIDDEN.into_response();
     }
     let connection = web.next_connection.fetch_add(1, Ordering::SeqCst);
-    upgrade.on_upgrade(move |socket| serve(socket, web.studio.clone(), connection))
+    upgrade.on_upgrade(move |socket| serve(socket, web, connection))
 }
 
-async fn serve(mut socket: WebSocket, studio: Arc<Studio>, connection: u64) {
+async fn serve(mut socket: WebSocket, web: Arc<Web>, connection: u64) {
+    let studio = web.current();
     let mut events = studio.subscribe();
     let (direct, mut replies) = mpsc::unbounded_channel::<String>();
     if send_init(&mut socket, &studio).await.is_err() {
@@ -251,7 +309,7 @@ async fn serve(mut socket: WebSocket, studio: Arc<Studio>, connection: u64) {
         let outgoing = tokio::select! {
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => {
-                    handle(&studio, connection, &text, &direct);
+                    handle(&web, &studio, connection, &text, &direct);
                     continue;
                 }
                 Some(Ok(_)) => continue,
@@ -367,7 +425,7 @@ pub fn importers_note(files: &crate::toolchain::Files, file: &str, pos: usize) -
 
 /// Edits are answered at once; everything that runs a process runs as its
 /// own task, so this tab can still interrupt it.
-fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::UnboundedSender<String>) {
+fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::UnboundedSender<String>) {
     let request = match serde_json::from_str::<Request>(text) {
         Ok(request) => request,
         Err(error) => {
@@ -516,5 +574,58 @@ fn handle(studio: &Arc<Studio>, connection: u64, text: &str, direct: &mpsc::Unbo
             None => notice(&direct, Err(format!("no version {id}"))),
         },
         Request::Restore { id } => notice(&direct, studio.restore(id)),
+        Request::History { seq } => {
+            tokio::spawn(async move {
+                let tracked = studio.tracked;
+                let (moments, error) = match studio.history().await {
+                    Ok(moments) => (moments, None),
+                    Err(error) => (Vec::new(), Some(error)),
+                };
+                let _ = direct.send(json(&Reply::History { seq, tracked, moments, error }));
+            });
+        }
+        Request::HistoryDiff { seq, commit } => {
+            tokio::spawn(async move {
+                let (diff, error) = match studio.history_diff(commit.clone()).await {
+                    Ok(diff) => (diff, None),
+                    Err(error) => (String::new(), Some(error)),
+                };
+                let _ = direct.send(json(&Reply::HistoryDiff { seq, commit, diff, error }));
+            });
+        }
+        Request::Projects { seq } => {
+            let home = project::home();
+            let current = studio.directory.display().to_string();
+            tokio::spawn(async move {
+                let listed = tokio::task::spawn_blocking(move || project::list(&home)).await.unwrap_or_default();
+                let home = project::home().display().to_string();
+                let _ = direct.send(json(&Reply::Projects { seq, home, current, projects: listed }));
+            });
+        }
+        Request::NewProject { name } => {
+            let web = web.clone();
+            tokio::spawn(async move {
+                let home = project::home();
+                let made = tokio::task::spawn_blocking(move || project::create(&home, name.as_deref())).await.unwrap_or_else(|e| Err(e.to_string()));
+                let outcome = match made {
+                    Ok(directory) => web.switch(directory).await,
+                    Err(error) => Err(error),
+                };
+                notice(&direct, outcome);
+            });
+        }
+        Request::OpenProject { name } => {
+            let web = web.clone();
+            tokio::spawn(async move {
+                let outcome = match project::valid_name(&name) {
+                    Ok(name) => {
+                        let directory = project::home().join(name);
+                        if directory.is_dir() { web.switch(directory).await } else { Err(format!("no project {name} under {}", project::home().display())) }
+                    }
+                    Err(error) => Err(error),
+                };
+                notice(&direct, outcome);
+            });
+        }
     }
 }

@@ -1,5 +1,6 @@
-// A file's versions (studio/src/versions.rs): the History panel (,history)
-// lists the shown file's, newest first, with the forms each changed.
+// A file's versions (studio/src/versions.rs): the Versions panel
+// (,versions) lists the shown file's, newest first, with the forms each
+// changed; the project's whole history is history.js.
 // Compare shows a version's difference to the text now; Restore makes it
 // the text again, as a new version.
 
@@ -32,7 +33,7 @@ export function createVersions({ panel, files, send }) {
   function render(file, versions) {
     panel.replaceChildren();
     const head = panel.appendChild(element("div", "versions-head"));
-    head.append(element("span", "", `History of ${file}`));
+    head.append(element("span", "", `Versions of ${file}`));
     const x = head.appendChild(element("button", "quiet small", "×"));
     x.addEventListener("click", () => show(false));
     if (!versions.length) panel.append(element("p", "hint", "No versions yet."));
@@ -79,7 +80,7 @@ export function createVersions({ panel, files, send }) {
     // ,history: the panel, shown or hidden; what it says in the transcript
     toggle() {
       show(!open);
-      return open ? `the History panel lists ${files.active()}'s versions (,history again hides it)` : "History hidden";
+      return open ? `the Versions panel lists ${files.active()}'s versions (,versions again hides it)` : "Versions hidden";
     },
     receive: {
       versions({ file, versions }) {

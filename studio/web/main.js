@@ -10,6 +10,8 @@ import { initAssist } from "./assist.js";
 import { createAssists } from "./assists.js";
 import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
+import { createHistory } from "./history.js";
+import { createProjects } from "./projects.js";
 import { createSession, functionDefine } from "./session.js";
 import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
@@ -95,6 +97,9 @@ function askFacts(file, pos, full = false) {
 
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), files, send });
+const history = createHistory({ panel: $("history-panel"), send });
+const projects = createProjects({ button: $("project"), menu: $("projects-menu"), send });
+$("history").addEventListener("click", () => history.toggle());
 session = createSession({ editor, files, traced: () => traced, canTrace: () => Boolean(features.trace && features.observe) });
 const lint = createLint({ editor, files });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
@@ -113,7 +118,8 @@ const repl = createRepl({
     traced: () => traced,
     assist: (id, file, pos, end) => assists.run(id, file, pos, end),
     rename: (file, pos, name) => rename.run(file, pos, name),
-    history: () => versions.toggle(),
+    history: () => history.toggle(),
+    versions: () => versions.toggle(),
     structured(word) {
       if (word === "on" || word === "off") structured.set(word === "on");
       return `structured editing is ${structured.on ? "on: brackets stay balanced (,structured off to type freely)" : "off (,structured on keeps brackets balanced)"}`;
@@ -360,7 +366,10 @@ const handlers = {
   features: renderFeatures,
   entry: repl.receive.entry,
   "entry-out": repl.receive["entry-out"],
-  "entry-done": repl.receive["entry-done"],
+  "entry-done"(message) {
+    repl.receive["entry-done"](message);
+    history.changed();
+  },
   agent: assist.receive.agent,
   asked: assist.receive.asked,
   review(view) {
@@ -374,6 +383,11 @@ const handlers = {
   versions: versions.receive.versions,
   "version-text": versions.receive["version-text"],
   version: versions.receive.version,
+  history: history.receive.history,
+  "history-diff": history.receive["history-diff"],
+  journal: () => history.changed(),
+  projects: projects.receive.projects,
+  reopen: projects.receive.reopen,
   notice: ({ message }) => note(message),
 };
 

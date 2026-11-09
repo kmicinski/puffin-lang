@@ -1,7 +1,7 @@
 #!/bin/sh
 # Puffin Studio: a local web workbench for Puffin (docs/STUDIO.md).
 #
-#   bin/puffin-studio [PROJECT_DIR] [--port N] [--no-open]
+#   bin/puffin-studio [PROJECT_DIR] [--port N] [--no-open] [--new [NAME]]
 #
 # Builds studio/ (cargo, release) when its binary is missing or older than
 # its sources, then serves PROJECT_DIR (default: the current directory) on

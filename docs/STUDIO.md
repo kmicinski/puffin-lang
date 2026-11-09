@@ -435,6 +435,53 @@ transcripts can be goldens too.
   domain), the fact store's dependency invalidation.
 - **M4.** Multi-module changesets, rewind, a co-author socket.
 
+## 8a. Projects and history
+
+A project is a directory of Puffin files, and a git repository: one
+made from the studio (the Projects menu under the project's name, or
+`puffin-studio --new [NAME]`) lives under the projects home
+(`PUFFIN_PROJECTS`, else `~/Puffin`), named or given a short random
+name, and is a repository from its first commit; a directory opened
+from the command line is adopted the same way, unless it sits inside
+another repository (then nothing is committed, and History shows the
+current run alone). `studio/src/project.rs` holds all of it, and
+takes a directory, never a studio.
+
+In a tracked project the studio keeps the history itself, and git is
+its ground truth:
+
+- **Edits settle and land.** About 1.5 s after typing pauses (15 s at
+  the longest in a run of typing), the edited files are saved and
+  committed as one commit. There is no separate save step to forget;
+  ⌘S still works and changes nothing about the history.
+- **Everything else is a record.** An evaluation and its result, a
+  question to the assistant and its answer, a `,test` run, a gesture
+  echoed as a command, an accepted proposal, a restore, a file changed
+  on disk, the studio opening: each is a timestamped JSON line
+  (`{"at", "kind", ...}`; `at` in milliseconds since the epoch), kept
+  in `.puffin/journal.jsonl` and carried in the body of the commit it
+  rides in. An entry's output is kept up to 4 KB.
+- **History** (the History button, `,history`) rebuilds the timeline
+  from the git log, oldest first, so a clone has the whole story and
+  a commit made by hand appears as one. Filters pick edits, evals and
+  tests, asks, gestures, or sessions; an edit opens to its commit's
+  diff, an evaluation to its output, a question to its answer. It is
+  hidden until asked for. (`,versions` is the older per-file panel.)
+- Opening or making a project makes the studio serve it: the server
+  swaps its studio (`web.rs` `Web::switch`), after committing the
+  previous project's pending records, and every tab reloads.
+
+Why: transparency. The intent is that a course can ask a student
+about their own history -- how a program came to be, what they tried,
+what they asked -- with the record already there and in order, and
+that an instructor can read it the same way. What this needs next, on
+a branch of its own, is accounts: each student's projects as private
+repositories on their own GitHub account, the studio pushing as it
+commits, and an instructor's view that reads a student's timeline the
+way History does. The journal is built so that is a matter of carrying
+a `who` and a remote, not of changing the record: nothing in a record
+names a machine or a login yet.
+
 ## 9. Where the built studio differs
 
 - **Tool names.** The assistant's tools are `list_files`, `get_file`

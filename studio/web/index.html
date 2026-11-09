@@ -15,7 +15,8 @@
   <div class="brand">
     <span class="logo">🐧</span>
     <span class="name">Puffin</span>
-    <span id="project" class="target-note"></span>
+    <button id="project" class="project-name" title="Projects: open another, or make a new one" aria-haspopup="true" aria-expanded="false"></button>
+    <div id="projects-menu" class="projects-menu" hidden></div>
   </div>
   <button id="new-file" class="btn new" title="Add a file to the project">+ New</button>
   <button id="load" class="btn run" title="Load the shown file into the session and run it (⇧⌘↵ · ,load)">Run ▸</button>
@@ -25,6 +26,7 @@
     <span id="connection" class="running-indicator bad" hidden>reconnecting…</span>
     <span id="lane" class="running-indicator" hidden><span class="dot"></span><span class="text"></span></span>
     <button id="check" class="check"></button>
+    <button id="history" class="btn quiet small" title="Everything that happened in this project, in order (,history)">History</button>
   </div>
 </header>
 <main class="main">
@@ -34,6 +36,7 @@
     <div id="editor-wrap">
       <div id="editor"></div>
       <aside id="versions" hidden></aside>
+      <aside id="history-panel" hidden></aside>
       <div id="notice" hidden></div>
     </div>
   </section>

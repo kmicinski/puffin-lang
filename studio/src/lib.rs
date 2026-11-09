@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod lane;
 pub mod mcp;
 pub mod pin;
+pub mod project;
 pub mod repl;
 pub mod review;
 pub mod session;
