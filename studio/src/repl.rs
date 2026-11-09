@@ -575,6 +575,15 @@ mod tests {
     }
 
     #[test]
+    fn type_aliases_ride_along_like_types() {
+        let mut types = Vec::new();
+        remember(&mut types, &sexp::define_types("(define-type-alias Env (Hash Str Int))\n(define (f [e : Env]) 1)"));
+        assert_eq!(prefix(&types, &[]), "(define-type-alias Env (Hash Str Int))\n");
+        remember(&mut types, &sexp::define_types("(define-type-alias (Table a) (Hash Str a))"));
+        assert_eq!(prefix(&types, &[]), "(define-type-alias Env (Hash Str Int))\n(define-type-alias (Table a) (Hash Str a))\n");
+    }
+
+    #[test]
     fn buffer_lines_map_back_piece_by_piece() {
         let pieces = [(1, 5), (3, 20)];
         assert_eq!(file_line(&pieces, 1), 5);

@@ -521,7 +521,7 @@ function downList(text, selection) {
 // Forms whose body goes two in from the opener however the first line is
 // laid out: (define (f x)\n  body), (match e\n  [..]), (let (..)\n  body).
 const BODY_FORMS = new Set([
-  "define", "define-type", "define-foreign-type", "lambda", "λ", "let", "let*", "letrec",
+  "define", "define-type", "define-type-alias", "define-foreign-type", "lambda", "λ", "let", "let*", "letrec",
   "match", "when", "unless", "cond", "case", "begin", "do",
 ]);
 

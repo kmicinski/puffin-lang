@@ -72,7 +72,7 @@ const SOL = {
 };
 
 export const KEYWORDS = [
-  "define", "define-type", "define-foreign-type", "foreign", "lambda", "λ", "let", "let*", "letrec", "if", "cond",
+  "define", "define-type", "define-type-alias", "define-foreign-type", "foreign", "lambda", "λ", "let", "let*", "letrec", "if", "cond",
   "case", "match", "when", "unless", "begin", "while", "set!", "quote", "quasiquote", "unquote", "and", "or", "not",
   "else", "program", "require", "provide", "ann", ":",
 ];

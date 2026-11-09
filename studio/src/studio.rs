@@ -261,7 +261,8 @@ pub struct Studio {
     /// Files edited since the last check.
     to_check: Mutex<BTreeSet<String>>,
     edited: Arc<Notify>,
-    /// The `define-type` forms the live session has loaded: (name, form),
+    /// The `define-type` and `define-type-alias` forms the live session has
+    /// loaded: (name, form),
     /// in the order the names first came, each its latest text (repl.rs).
     pub(crate) types: Mutex<Vec<(String, String)>>,
     /// Held across a unit's compile and run, so units load in order.

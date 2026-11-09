@@ -100,6 +100,13 @@ async fn the_live_session_keeps_definitions_and_types_and_survives_errors() {
     let (status, out) = output_of(&studio, "(area (Sq 3))");
     assert_eq!(status.as_deref(), Some("ok"));
     assert!(out.contains(&("result".to_owned(), "9".to_owned())), "{out:?}");
+    // a type alias declared in one unit types a later unit's annotation
+    studio.evaluate("(define-type-alias Env (Hash Str Int))".into(), Source::Prompt).await;
+    studio.evaluate("(define (size [e : Env]) : Int (hash-count e))".into(), Source::Prompt).await;
+    studio.evaluate("(size (hash-set (hash) \"a\" 1))".into(), Source::Prompt).await;
+    let (status, out) = output_of(&studio, "(size (hash-set (hash) \"a\" 1))");
+    assert_eq!(status.as_deref(), Some("ok"));
+    assert!(out.contains(&("result".to_owned(), "1".to_owned())), "{out:?}");
     // a runtime error leaves the session as it was
     studio.evaluate("(error 'boom)".into(), Source::Prompt).await;
     assert_eq!(output_of(&studio, "(error 'boom)").0.as_deref(), Some("error"));
