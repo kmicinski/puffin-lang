@@ -318,10 +318,236 @@
 ;; the checker
 ;; ---------------------------------------------------------------------
 
-(define (typecheck-program p)
-  (match p
-    [`(program ,forms ...)
-     (define-values (adts ctors ctor-orders ftypes) (collect-adts forms))
+;; ---------------------------------------------------------------------
+;; constructor-directed quasiquote (docs/TYPES.md §2)
+;; ---------------------------------------------------------------------
+;; A quasiquote template is constructor syntax wherever a constructor
+;; is in scope: at depth 1, a list whose head names a constructor is
+;; that constructor applied to its elements (each elaborated the same
+;; way), and a bare symbol naming a nullary constructor is its value.
+;; Everything else stays data, exactly as before. The rule is purely
+;; syntactic and runs BEFORE checking, so the checker (field types,
+;; exhaustiveness), desugar's pattern compiler, and the module
+;; resolver (which renames exactly these positions, modules.rkt qq)
+;; all see ordinary constructor applications and patterns -- a
+;; template elaborates to the constructor call it spells, with its
+;; remaining data parts left as (smaller) templates. A quote
+;; spells constructors at the same positions, but has no escapes
+;; (the quoted-data section below).
+;; Nested quasiquote (depth 2+) is data. Mirrors puffincc-src/types.puf
+;; elaborate-quasiquote byte-for-byte in its diagnostics.
+(define (elaborate-quasiquote forms ctors)
+  (define (ctor-arity-of s)
+    (and (symbol? s)
+         (let ([info (hash-ref ctors s #f)])
+           (and info (length (ctor-info-fields info))))))
+  (define (ctor-head? s) (and (ctor-arity-of s) #t))
+  (define (nullary? s) (eqv? (ctor-arity-of s) 0))
+  ;; the elements a constructor-headed template applies C to: a proper
+  ;; list, no splices, no ellipsis, the constructor's arity (a dotted
+  ;; ,tail reads as the two elements `unquote` and the tail: improper)
+  ;; escapes? says the elements are quasiquote template nodes (where
+  ;; ,@ and ... are escapes); under quote they are plain data
+  (define (ctor-elems c elems where escapes?)
+    (unless (and (list? elems) (not (and escapes? (memq 'unquote elems))))
+      (type-error "quasiquote: constructor ~a applied to an improper list" (nm c)))
+    (when escapes?
+      (for ([e elems])
+        (match e
+          [(list 'unquote-splicing _)
+           (type-error "quasiquote: constructor ~a takes no splice (,@)" (nm c))]
+          [_ (when (eq? e '...)
+               (type-error "quasiquote: constructor ~a takes no ellipsis" (nm c)))])))
+    (unless (= (length elems) (ctor-arity-of c))
+      (type-error "constructor ~a expects ~a fields, got ~a in ~a"
+                  (nm c) (ctor-arity-of c) (length elems) where))
+    elems)
+
+  ;; --- expressions ---
+  ;; a template node as an EXPRESSION (depth 1): the constructor call
+  ;; it spells, or a (residual) quasiquote; atoms come out as the
+  ;; literals they are, not as residual quasiquotes (which the checker
+  ;; types dynamic: (Num "one") must fail to check)
+  (define (tmpl->expr t)
+    (match t
+      [(list 'unquote e) (walk e)]
+      [(? symbol? s) (if (nullary? s) s (list 'quote s))]
+      [(? pair?)
+       (if (ctor-head? (car t))
+           (cons (car t) (map tmpl->expr (ctor-elems (car t) (cdr t) "template" #t)))
+           (list 'quasiquote (tmpl t 1)))]
+      ['() (list 'quote '())]
+      [_ t]))
+  ;; a template node as a TEMPLATE: constructor shapes at depth 1
+  ;; become unquoted constructor calls; unquotes at depth 1 are
+  ;; expressions (walked); deeper levels are data
+  (define (tmpl t depth)
+    (match t
+      [(list 'unquote e)
+       (list 'unquote (if (= depth 1) (walk e) (tmpl e (sub1 depth))))]
+      [(list 'quasiquote e) (list 'quasiquote (tmpl e (add1 depth)))]
+      [(? pair?)
+       (if (and (= depth 1) (ctor-head? (car t)))
+           (list 'unquote (cons (car t) (map tmpl->expr (ctor-elems (car t) (cdr t) "template" #t))))
+           (tmpl-elems t depth))]
+      [(? symbol? s) (if (and (= depth 1) (nullary? s)) (list 'unquote s) s)]
+      [_ t]))
+  ;; the spine of a list node: each element is a node; a dotted
+  ;; unquote/quasiquote tail is a node too (`(a . ,b) reads as
+  ;; (a unquote b), which is NOT three elements)
+  (define (tmpl-elems t depth)
+    (match t
+      [(list 'unquote _) (tmpl t depth)]
+      [(list 'quasiquote _) (tmpl t depth)]
+      [(cons (list 'unquote-splicing e) rest)
+       (cons (list 'unquote-splicing (if (= depth 1) (walk e) (tmpl e (sub1 depth))))
+             (tmpl-elems rest depth))]
+      [(cons a rest) (cons (tmpl a depth) (tmpl-elems rest depth))]
+      [_ (tmpl t depth)]))
+  ;; --- quoted data ---
+  ;; (quote d) spells constructors at the same positions a template
+  ;; does, but it has NO escapes: under quote, (unquote x) is a plain
+  ;; two-element list and ... a plain symbol (both readers agree). A
+  ;; datum that mentions no constructor stays a quote (the checker
+  ;; types it Sym / (List _)). One that does rebuilds as a template
+  ;; around its constructor calls, with every escape-shaped symbol
+  ;; (unquote, unquote-splicing, quasiquote, ...) unquoted as the
+  ;; quoted symbol it is, so no escape shape can form.
+  (define (escape-sym? s)
+    (and (memq s '(unquote unquote-splicing quasiquote ...)) #t))
+  (define (qmentions? d)
+    (cond [(symbol? d) (nullary? d)]
+          [(pair? d) (or (ctor-head? (car d)) (qspine-mentions? d))]
+          [else #f]))
+  (define (qspine-mentions? d)
+    (cond [(pair? d) (or (qmentions? (car d)) (qspine-mentions? (cdr d)))]
+          [else (qmentions? d)]))
+  (define (qdatum->expr d)
+    (cond [(symbol? d) (if (nullary? d) d (list 'quote d))]
+          [(pair? d)
+           (cond [(ctor-head? (car d))
+                  (cons (car d) (map qdatum->expr (ctor-elems (car d) (cdr d) "template" #f)))]
+                 [(qspine-mentions? d) (list 'quasiquote (qspine->tmpl d))]
+                 [else (list 'quote d)])]
+          [(null? d) (list 'quote d)]
+          [else d]))
+  (define (qdatum->tmpl d)
+    (cond [(symbol? d)
+           (cond [(nullary? d) (list 'unquote d)]
+                 [(escape-sym? d) (list 'unquote (list 'quote d))]
+                 [else d])]
+          [(pair? d)
+           (if (ctor-head? (car d))
+               (list 'unquote (cons (car d) (map qdatum->expr (ctor-elems (car d) (cdr d) "template" #f))))
+               (qspine->tmpl d))]
+          [else d]))
+  (define (qspine->tmpl d)
+    (cond [(pair? d) (cons (qdatum->tmpl (car d)) (qspine->tmpl (cdr d)))]
+          [else (qdatum->tmpl d)]))
+  (define (quote->expr d) (if (qmentions? d) (qdatum->expr d) (list 'quote d)))
+
+  ;; --- patterns ---
+  (define (tmpl->pat t)
+    (match t
+      [(list 'unquote p) (pat p)]
+      [(? symbol? s) (if (nullary? s) s (list 'quote s))]
+      [(? pair?)
+       (if (ctor-head? (car t))
+           (cons (car t) (map tmpl->pat (ctor-elems (car t) (cdr t) "pattern" #t)))
+           (list 'quasiquote (ptmpl t)))]
+      ['() (list 'quote '())]
+      [_ t]))
+  (define (ptmpl t)
+    (match t
+      [(list 'unquote p) (list 'unquote (pat p))]
+      [(list 'quasiquote _) t]
+      [(? pair?)
+       (if (ctor-head? (car t))
+           (list 'unquote (cons (car t) (map tmpl->pat (ctor-elems (car t) (cdr t) "pattern" #t))))
+           (ptmpl-elems t))]
+      [(? symbol? s) (if (nullary? s) (list 'unquote s) s)]
+      [_ t]))
+  (define (ptmpl-elems t)
+    (match t
+      [(list 'unquote _) (ptmpl t)]
+      [(list 'quasiquote _) t]
+      [(cons a rest) (cons (ptmpl a) (ptmpl-elems rest))]
+      [_ (ptmpl t)]))
+  ;; quoted data as a pattern: the same encoding, with constructor
+  ;; patterns in place of calls (an unquoted quoted symbol is the
+  ;; pattern matching that symbol)
+  (define (qdatum->pat d)
+    (cond [(symbol? d) (if (nullary? d) d (list 'quote d))]
+          [(pair? d)
+           (cond [(ctor-head? (car d))
+                  (cons (car d) (map qdatum->pat (ctor-elems (car d) (cdr d) "pattern" #f)))]
+                 [(qspine-mentions? d) (list 'quasiquote (qspine->ptmpl d))]
+                 [else (list 'quote d)])]
+          [(null? d) (list 'quote d)]
+          [else d]))
+  (define (qdatum->ptmpl d)
+    (cond [(symbol? d)
+           (cond [(nullary? d) (list 'unquote d)]
+                 [(escape-sym? d) (list 'unquote (list 'quote d))]
+                 [else d])]
+          [(pair? d)
+           (if (ctor-head? (car d))
+               (list 'unquote (cons (car d) (map qdatum->pat (ctor-elems (car d) (cdr d) "pattern" #f))))
+               (qspine->ptmpl d))]
+          [else d]))
+  (define (qspine->ptmpl d)
+    (cond [(pair? d) (cons (qdatum->ptmpl (car d)) (qspine->ptmpl (cdr d)))]
+          [else (qdatum->ptmpl d)]))
+  (define (quote->pat d) (if (qmentions? d) (qdatum->pat d) (list 'quote d)))
+  ;; a match pattern: elaborate the quasiquote/quote patterns in it,
+  ;; through the structural patterns that nest them
+  (define (pat p)
+    (match p
+      [(list 'quasiquote t) (tmpl->pat t)]
+      [(list 'quote d) (quote->pat d)]
+      [(list 'cons p0 p1) (list 'cons (pat p0) (pat p1))]
+      [(cons 'list (? list? ps)) (cons 'list (map pat ps))]
+      [(cons 'vector (? list? ps)) (cons 'vector (map pat ps))]
+      [(list '? pred p0) (list '? pred (pat p0))]
+      [(cons (? ctor-head? c) (? list? ps)) (cons c (map pat ps))]
+      [_ p]))
+  (define (clause cl)
+    (match cl
+      [`(,p #:when ,g . ,body) (cons (pat p) (cons '#:when (walk (cons g body))))]
+      [(cons p body) (cons (pat p) (walk body))]
+      [_ cl]))
+
+  ;; --- the walker: every expression position, shape-agnostic ---
+  (define (walk e)
+    (match e
+      [(list 'quote d) (quote->expr d)]
+      [(list 'quasiquote t) (tmpl->expr t)]
+      [`(match ,scrut . ,(? list? clauses))
+       (cons 'match (cons (walk scrut) (map clause clauses)))]
+      [(cons a d) (cons (walk a) (walk d))]
+      [_ e]))
+  (map-form forms walk))
+
+;; map over top-level forms with current-form-origin set per form
+;; (system.rkt for-each-form, keeping the results)
+(define (map-form forms proc)
+  (define os (surface-origins))
+  (define aligned? (and (list? os) (= (length os) (length forms))))
+  (define out
+    (map (λ (f o) (current-form-origin-set! o) (proc f))
+         forms
+         (if aligned? os (map (λ (_) #f) forms))))
+  (current-form-origin-set! #f)
+  out)
+
+(define (typecheck-program p0)
+  (match p0
+    [`(program ,forms0 ...)
+     (define-values (adts ctors ctor-orders ftypes) (collect-adts forms0))
+     ;; constructor-directed quasiquote: the program the checker sees
+     ;; (and returns, for desugar) has its templates elaborated
+     (define forms (elaborate-quasiquote forms0 ctors))
+     (define p (cons 'program forms))
 
      ;; a name cannot be both a type and a value: `provide` resolves a
      ;; name against both namespaces (docs/MODULES.md), so a collision

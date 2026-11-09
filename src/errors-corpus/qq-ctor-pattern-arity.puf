@@ -1,0 +1,7 @@
+;; a quasiquote pattern spelling a constructor with the wrong field count
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (f e)
+  (match e
+    [`(Add ,a) a]
+    [_ e]))
+(println (f '(Num 1)))

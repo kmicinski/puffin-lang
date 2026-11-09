@@ -95,6 +95,65 @@ syntax.
   `_`-typed scrutinee is exempt (the gradual guarantee: untyped code
   never warns).
 
+### Quasiquote is constructor syntax
+
+The compiler-writer's idiom — a language as backquoted s-expressions,
+`` `(add ,a ,b) `` built and matched — is the idiom ADTs were meant
+to replace, and the two meet in the middle: **a quasiquote template
+(or a quoted datum) spells constructors.** The rule, applied at depth
+1 of every template:
+
+- a list whose head names a constructor in scope is that constructor
+  applied to its elements, each read by the same rule — in an
+  expression a call, in a `match` pattern a constructor pattern;
+- a bare symbol naming a *nullary* constructor is that constructor's
+  value (its pattern, in a pattern);
+- everything else is data exactly as before: a head that is not a
+  constructor stays a list (holding whatever instances its elements
+  build), a non-nullary constructor's name in element position stays
+  a symbol, `,e`/`,@e`/`...` keep their meanings, and nested
+  quasiquote (depth 2 and deeper) is data throughout.
+
+```scheme
+(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
+(define-type (Option a) (None) (Some a))
+
+`(Add ,a (Num 1))            ≡  (Add a (Num 1))
+'(Neg (Num 2))               ≡  (Neg (Num 2))          ;; a quote has no holes
+`(Some ,x)   `None   'None   ≡  (Some x)  None  None
+`(block ,e1 (Num 1) ,@rest)  ≡  (cons 'block (cons e1 (cons (Num 1) rest)))
+[`(Add ,a ,b) ...]           ≡  [(Add a b) ...]        ;; in match
+[`(seq (Num ,n) ...) ...]    ;; ellipsis over constructor patterns: n is a (List Int)
+```
+
+The elaboration is purely syntactic and runs before checking, so
+everything downstream sees ordinary constructor applications and
+patterns: fields are checked against their declared types
+(`` `(Num "one") `` is `Num: argument has type Str, expected Int`),
+a `match` written with templates is exhaustiveness-checked like one
+written with constructor patterns, and `desugar` compiles the same
+code. The compiler rejects a template that spells a constructor with
+the wrong field count (`constructor Add expects 2 fields, got 1 in
+template` / `... in pattern`), a splice into one, an ellipsis as a
+field, or an improper list under a constructor head. Wrapped data
+stays dynamic: a template whose head is not a constructor is `_` as
+always, so the gradual guarantee holds — a program without
+`define-type` elaborates to itself.
+
+"In scope" is the module system's ordinary notion (docs/MODULES.md):
+a local `define-type`, an unqualified import of the constructor (with
+`#:only`/`#:rename` narrowing and respelling it like any name), or
+the qualified `M.Ctor` spelling under `#:as` — `` `(M.Add ,a ,b) ``
+works exactly like `(M.Add a b)`. There is no separate "open" form:
+a template head means what the same name means as an expression, and
+the resolver renames exactly those positions (a template symbol that
+resolves to no constructor stays data). Two consequences worth
+knowing: a constructor's name is no longer free as *data* in the
+module that can see it (`'(Add 1)` is a compile-time arity error,
+not a list), and a constructor you did not import is data in your
+templates — so a typed boundary, not silence, is what catches the
+missing `require`.
+
 ### Implicit mutual recursion
 
 All `define-type` declarations in a module form **one implicitly

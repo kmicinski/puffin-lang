@@ -1,0 +1,4 @@
+;; a quote spells constructors too (it is a template with no holes)
+(define-type Expr (Num Int) (Add Expr Expr))
+(define e '(Add (Num 1) (Num 2) (Num 3)))
+(println e)

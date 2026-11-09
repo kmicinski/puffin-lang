@@ -26,7 +26,9 @@
 (println (adt? None))                      ;; #t
 (println (adt? (vector 1 2)))              ;; #f
 (println (adt? 42))                        ;; #f
-(println (adt? 'None))                     ;; #f
+;; ('None itself IS the constructor: a quote spells constructors too,
+;; docs/TYPES.md §2 -- so make the symbol at run time)
+(println (adt? (string->symbol "None")))  ;; #f
 
 ;; a real vector that merely looks like an instance is neither
 ;; adt? nor a match for the constructor pattern

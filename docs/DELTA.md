@@ -322,6 +322,16 @@ lives in both compiler sources — `src/types.rkt` and
 runs on every route, including in the browser. The tagged
 representation was chosen so checked and unchecked code coexist.
 
+Quasiquote is constructor syntax (docs/TYPES.md §2): a template or
+quoted datum whose head names a constructor in scope *is* that
+constructor — built in expressions, matched in patterns — so the
+Racket idiom of a language as backquoted s-expressions carries over
+unchanged and is typed. It is one syntactic elaboration pass at the
+top of the checker (`elaborate-quasiquote`, in both checkers), with
+the resolver renaming exactly the positions it reads; the checker,
+exhaustiveness, desugar, and every backend see plain constructor
+calls and patterns.
+
 Type information reaches the backends: arithmetic (`+ - * <`) is
 tag-checked with typed error messages (`eq?` stays polymorphic — a
 raw word compare), and ADT instances are their own heap kind

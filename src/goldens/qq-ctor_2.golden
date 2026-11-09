@@ -1,0 +1,17 @@
+(Add (Num 1) (Mul (Num 3) (Neg (Num 4))))
+-11
+(Var x)
+42
+#t
+#t
+(Some 42)
+None
+(block (Num 1) (Mul (Num 2) (Num 2)) (Var y))
+(1 4 5)
+1
+(1 2 3)
+6
+#t
+(ops Add Mul)
+(q (quasiquote (Num 1)))
+2

@@ -1,0 +1,18 @@
+;; modules-qq: constructor-directed quasiquote across modules. This
+;; module's own templates spell its own constructors (a non-entry
+;; module: every name here is mangled, templates included).
+(provide Expr Num Add Mul mk-sum ev)
+
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr))
+
+(define (mk-sum [xs : (List Int)]) : Expr
+  (foldl (lambda (x acc) `(Add ,acc (Num ,x))) `(Num 0) xs))
+
+(define (ev [e : Expr]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (ev a) (ev b))]
+    [`(Mul ,a ,b) (* (ev a) (ev b))]))

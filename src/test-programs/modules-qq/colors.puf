@@ -1,0 +1,10 @@
+;; nullary constructors, imported under #:only and #:rename
+(provide Color Red Green Blue color-name)
+
+(define-type Color (Red) (Green) (Blue))
+
+(define (color-name [c : Color]) : Sym
+  (match c
+    [`Red 'red]
+    [`Green 'green]
+    [`Blue 'blue]))

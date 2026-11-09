@@ -1,0 +1,32 @@
+;; constructor-directed quasiquote through the module system
+;; (docs/MODULES.md): an unqualified import brings a type's
+;; constructors into scope, so templates here spell them bare; a
+;; #:as import spells them qualified; #:only / #:rename narrow and
+;; respell them like any other name. Nothing is "opened" separately:
+;; a template head is a constructor exactly when the name is in scope.
+(require "ast.puf")
+(require "pretty.puf" #:as P)
+(require "colors.puf" #:only (Color Red Green color-name) #:rename ((Red Rouge)))
+
+;; unqualified: Add / Num / Mul are in scope
+(define (double [e : Expr]) : Expr `(Mul (Num 2) ,e))
+(println (ev (double (mk-sum (list 1 2 3)))))         ;; 12
+(println (ev '(Add (Num 40) (Mul (Num 1) (Num 2)))))   ;; 42
+(println (match (mk-sum (list 5))
+           [`(Add (Num 0) (Num ,n)) n]
+           [_ 'other]))                                 ;; 5
+
+;; qualified: the head is spelled P.Cat, P.Text
+(define doc `(P.Cat (P.Text "ab") ,(P.Cat `(P.Text "c") `(P.Text "d"))))
+(println (P.render doc))                                ;; abcd
+(println (match doc
+           [`(P.Cat (P.Text ,s) ,_) s]
+           [`(P.Text ,s) s]))                            ;; ab
+
+;; #:rename respells a nullary constructor; #:only leaves Blue out, so
+;; a template `Blue would be a plain symbol here (not written: it
+;; would not be a Color)
+(println (color-name `Rouge))                           ;; red
+(println (map color-name (list 'Rouge 'Green)))         ;; (red green)
+(println (equal? `Rouge 'Rouge))                        ;; #t (one instance)
+(ev (double `(Num ,(read))))

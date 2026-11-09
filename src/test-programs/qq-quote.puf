@@ -1,0 +1,40 @@
+;; quote spells constructors too (docs/TYPES.md §2) -- but a quote has
+;; no escapes: under quote, (unquote x) is a plain two-element list
+;; and ... a plain symbol, exactly as both readers read them. These
+;; are the shapes that must survive the rewrite around constructors.
+(define-type Expr (Num Int) (Add Expr Expr))
+(define-type Color (Red) (Green))
+
+;; data that merely contains the escape symbols is data
+(println '(unquote unquote-splicing))
+(println (member 'unquote '(unquote unquote-splicing)))
+(println '(a quasiquote (b ...)))
+
+;; constructors inside data, next to escape-shaped data
+(define d '(prog (Add (Num 1) (Num 2)) (unquote x) ... Red))
+(println d)
+(println (adt? (car (cdr d))))                            ;; #t: an instance
+(println (equal? (car (cdr (cdr d))) (list 'unquote 'x)))  ;; #t: plain data
+(println (match d
+           ['(prog (Add (Num 1) (Num 2)) (unquote x) ... Red) 'same]
+           [_ 'different]))
+(println (match (list 'prog (Add (Num 1) (Num 2)) (list 'unquote 'x) '... Red)
+           ['(prog (Add (Num 1) (Num 2)) (unquote x) ... Red) 'same]
+           [_ 'different]))
+(println (match '(a (b Green))
+           ['(a (b Red)) 'red]
+           ['(a (b Green)) 'green]
+           [_ 'neither]))
+
+;; nullary constructors in quoted data are instances; a non-nullary
+;; constructor's name in ELEMENT position is a symbol (at the head it
+;; would be the constructor, and '(Add Red) an arity error)
+(println (car (cdr '(x Red (Num 3)))))                    ;; Red
+(println (symbol? (car (cdr '(x Add Red)))))              ;; #t
+(println (adt? (car (cdr (cdr '(x Add Red))))))           ;; #t
+
+;; a quote with no constructor in it is the quote it always was
+(println '(let ([x 1]) (+ x 1)))
+(println (match '(let ([x 1]) (+ x 1))
+           [`(let ([,v ,e]) ,body) (list v e body)]))
+(length d)

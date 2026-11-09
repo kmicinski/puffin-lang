@@ -107,6 +107,17 @@ What you can rely on:
   a built-in type or former (`Int`, `List`, ...) is likewise
   rejected.
 
+- **Templates resolve through the same scope.** Quasiquote is
+  constructor syntax (docs/TYPES.md §2): a template or quoted datum
+  whose head names a constructor in scope builds or matches that
+  constructor. The resolver renames exactly those positions — a list
+  head that resolves to a constructor, a bare symbol that resolves to
+  a nullary one — and leaves every other template symbol as data. So
+  `` `(Circle ,r) `` works after `(require "shapes.puf")`,
+  `` `(S.Circle ,r) `` after `(require "shapes.puf" #:as S)`, and a
+  `#:rename ((Circle Disc))` makes it `` `(Disc ,r) ``; a module that
+  did not import `Circle` has it as a plain symbol in templates.
+
 Separate compilation carries all of this across module boundaries: a
 dependency's exports typecheck at their recorded interface types,
 and imported ADTs (constructors, exhaustiveness, cast blame) behave

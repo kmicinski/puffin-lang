@@ -37,6 +37,7 @@
          (struct-out mod)
          (struct-out req)
          rename-forms
+         define-type-ctor-arities
          check-signature
          keyword-names
          defn-name
@@ -519,30 +520,77 @@
 ;; the renamer: uniform symbol substitution, data-position aware
 ;; ---------------------------------------------------------------------
 
-;; ren: hasheq name -> new-name; qual: (symbol-with-dot -> symbol or #f)
-(define (rename-forms forms ren qual)
+;; ren: hasheq name -> new-name; qual: (symbol-with-dot -> symbol or #f);
+;; ctor-arity: hasheq RESOLVED constructor name -> field count, for
+;; the one place data positions carry names: constructor-directed
+;; quasiquote (docs/TYPES.md §2). In a template or quoted datum at
+;; depth 1, a list head that resolves to a constructor, and a bare
+;; symbol that resolves to a nullary constructor, are references and
+;; rename; every other template symbol stays data. The checker's
+;; elaboration (types.rkt elaborate-quasiquote) reads exactly these
+;; positions, so the two agree on what a template spells.
+(define (rename-forms forms ren qual ctor-arity)
   (define (sym s)
     (cond [(hash-ref ren s #f) => values]
           [(qual s) => values]
           [else s]))
+  ;; a template head naming a constructor (any arity) / a bare
+  ;; template symbol naming a nullary constructor: the resolved
+  ;; spelling, else #f (the symbol is data)
+  (define (ctor-ref s)
+    (and (symbol? s)
+         (let ([t (sym s)])
+           (and (hash-has-key? ctor-arity t) t))))
+  (define (nullary-ref s)
+    (and (symbol? s)
+         (let ([t (sym s)])
+           (and (eqv? (hash-ref ctor-arity t #f) 0) t))))
   ;; quasiquote template: symbols are data; descend only into escapes
+  ;; -- except the constructor positions above, at depth 1
   (define (qq q depth)
     (match q
       [(list 'unquote e)
        (list 'unquote (if (= depth 1) (expr e) (qq e (sub1 depth))))]
       [(list 'quasiquote e) (list 'quasiquote (qq e (add1 depth)))]
+      [(? pair?)
+       (define c (and (= depth 1) (ctor-ref (car q))))
+       (if c
+           (cons c (qq-elems (cdr q) depth))
+           (qq-elems q depth))]
+      [(? symbol? s) (or (and (= depth 1) (nullary-ref s)) s)]
+      [_ q]))
+  ;; the spine of a list node: elements are nodes; a dotted
+  ;; unquote/quasiquote tail is a node, not two elements
+  (define (qq-elems q depth)
+    (match q
+      [(list 'unquote _) (qq q depth)]
+      [(list 'quasiquote _) (qq q depth)]
       [(cons (list 'unquote-splicing e) rest)
        (cons (list 'unquote-splicing (if (= depth 1) (expr e) (qq e (sub1 depth))))
-             (qq rest depth))]
-      [(cons a rest) (cons (qq a depth) (qq rest depth))]
-      [_ q]))
+             (qq-elems rest depth))]
+      [(cons a rest) (cons (qq a depth) (qq-elems rest depth))]
+      [_ (qq q depth)]))
+  ;; quoted datums: a holeless template -- the same positions rename
+  (define (quoted d)
+    (match d
+      [(? pair?)
+       (define c (ctor-ref (car d)))
+       (if c
+           (cons c (quoted-elems (cdr d)))
+           (quoted-elems d))]
+      [(? symbol? s) (or (nullary-ref s) s)]
+      [_ d]))
+  (define (quoted-elems d)
+    (match d
+      [(cons a rest) (cons (quoted a) (quoted-elems rest))]
+      [_ (quoted d)]))
   ;; match patterns: variables rename (uniformly with their uses),
   ;; constructor heads and datums do not
   (define (pat p)
     (match p
       ['_ p]
       [(? symbol? x) (sym x)]
-      [(list 'quote _) p]
+      [(list 'quote d) (list 'quote (quoted d))]
       [(list 'quasiquote q) (list 'quasiquote (qq-pat q))]
       [(list 'cons p0 p1) (list 'cons (pat p0) (pat p1))]
       [(list-rest 'list ps) (cons 'list (map pat ps))]
@@ -555,8 +603,20 @@
   (define (qq-pat q)
     (match q
       [(list 'unquote p) (list 'unquote (pat p))]
-      [(cons a rest) (cons (qq-pat a) (qq-pat rest))]
+      [(list 'quasiquote _) q]
+      [(? pair?)
+       (define c (ctor-ref (car q)))
+       (if c
+           (cons c (qq-pat-elems (cdr q)))
+           (qq-pat-elems q))]
+      [(? symbol? s) (or (nullary-ref s) s)]
       [_ q]))
+  (define (qq-pat-elems q)
+    (match q
+      [(list 'unquote _) (qq-pat q)]
+      [(list 'quasiquote _) q]
+      [(cons a rest) (cons (qq-pat a) (qq-pat-elems rest))]
+      [_ (qq-pat q)]))
   (define (match-clause cl)
     (match cl
       [`[,p #:when ,guard ,body ...]
@@ -572,7 +632,7 @@
   (define (expr e)
     (match e
       [(? symbol? x) (sym x)]
-      [(list 'quote _) e]
+      [(list 'quote d) (list 'quote (quoted d))]
       [(list 'quasiquote q) (list 'quasiquote (qq q 1))]
       [`(match ,subj ,clauses ...)
        `(match ,(expr subj) ,@(map match-clause clauses))]
@@ -585,6 +645,18 @@
 ;; ---------------------------------------------------------------------
 ;; resolve-modules: the entry point
 ;; ---------------------------------------------------------------------
+
+;; the constructors a body's define-types declare, keyed by (resolve
+;; name) -> field count, folded onto acc (shared with separate.rkt)
+(define (define-type-ctor-arities body resolve acc)
+  (for/fold ([acc acc]) ([f body])
+    (match f
+      [`(,(or 'define-type '#%extern-type) ,_ ,cs ...)
+       (for/fold ([acc acc]) ([c cs])
+         (match c
+           [`(,(? symbol? cn) ,fts ...) (hash-set acc (resolve cn) (length fts))]
+           [_ acc]))]
+      [_ acc])))
 
 (define (resolve-modules entry-path)
   (define-values (mods loaded) (load-modules entry-path))
@@ -599,6 +671,11 @@
         (cond [(symbol? v) (set-add acc v)]
               [(pair? v) (walk (cdr v) (walk (car v) acc))]
               [else acc]))))
+  ;; every constructor in the program under its RESOLVED spelling ->
+  ;; field count, for the renamer's constructor positions in templates
+  (define ctor-arities
+    (for/fold ([acc (hasheq)]) ([m mods])
+      (define-type-ctor-arities (mod-body m) (λ (cn) (mangled m cn)) acc)))
   (define flat
     (for/list ([m mods])
       ;; import maps for this module
@@ -663,7 +740,7 @@
                         (module-error "~a: ~a is not provided by ~a (via ~a)"
                                       (mod-path m) n (mod-path dep) s))
                       (mangled dep n))))))
-      (rename-forms (mod-body m) ren qual)))
+      (rename-forms (mod-body m) ren qual ctor-arities)))
   ;; the renamer is 1:1 per form, so each module's body-lines map
   ;; straight onto its renamed forms; stash the flattened origins for
   ;; read-program-file (see system.rkt: resolved-origins)

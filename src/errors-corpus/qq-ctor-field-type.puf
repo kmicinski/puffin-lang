@@ -1,0 +1,4 @@
+;; a template is a constructor call, so its fields are typed
+(define-type Expr (Num Int) (Add Expr Expr))
+(define e `(Add (Num "one") (Num 2)))
+(println e)

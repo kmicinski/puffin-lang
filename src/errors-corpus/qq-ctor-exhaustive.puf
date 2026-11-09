@@ -1,0 +1,7 @@
+;; quasiquote patterns are constructor patterns to the exhaustiveness check
+(define-type Expr (Num Int) (Add Expr Expr) (Mul Expr Expr))
+(define (ev [e : Expr]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (ev a) (ev b))]))
+(println (ev '(Num 1)))

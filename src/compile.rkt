@@ -61,12 +61,15 @@
 ;; let-bound `car` stays a variable reference.
 ;; ---------------------------------------------------------------------
 
-(define (desugar p)
+(define (desugar p0)
   ;; gradual typecheck first (docs/TYPES.md): desugar is the funnel
   ;; every route passes through, so checking here covers the
   ;; interpreter, the chain, both backends, and the trace server.
-  ;; Types then erase below; unannotated code cannot fail.
-  (typecheck-program p)
+  ;; Types then erase below; unannotated code cannot fail. The checker
+  ;; hands back the program with its quasiquote templates elaborated
+  ;; into the constructor calls and patterns they spell (docs/TYPES.md
+  ;; §2): that is the program desugar lowers.
+  (define p (typecheck-program p0))
   ;; ---- gradual types (docs/TYPES.md): ADT tables ---------------------
   ;; define-type constructors are collected up front (all of a
   ;; module's types are implicitly mutually recursive, like top-level

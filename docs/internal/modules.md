@@ -15,7 +15,13 @@ Renaming is UNIFORM through a module — binders and references alike
 — which preserves binding structure without scope analysis. The
 renamer only knows where symbols are *data* (quoted datums,
 quasiquote templates outside unquotes, match-pattern structure,
-`case` datums) and leaves those alone. This is what makes reserved-
+`case` datums) and leaves those alone — with one principled
+exception: a template or quoted datum spells constructors
+(docs/TYPES.md §2), so at depth 1 a list head that resolves to a
+constructor, and a bare symbol that resolves to a nullary one, are
+references and rename (`rename-forms`/`rename-module-forms` take the
+program's resolved constructor arities for this). The checker's
+`elaborate-quasiquote` reads exactly those positions. This is what makes reserved-
 word imports an error (the renamer would rewrite `match`'s binding
 occurrences) and what makes `set!` to an imported name just work
 (it renames to the exporting module's cell).

@@ -316,6 +316,39 @@ s-expression can leak in, and nothing owns the set of cases. In the ADT version,
 recognizes it because <code>Add</code> is bound as a constructor — and the type
 declaration is the single place the shape of expressions is defined.</p>
 
+<p>You do not have to choose. <strong>Quasiquote is constructor syntax</strong>:
+wherever a constructor is in scope, a template (or quoted datum) whose head names
+it <em>is</em> that constructor — built in expressions, matched in patterns.
+Keep the left-hand program, capitalize the tags to match the
+<code>define-type</code>, and it is the right-hand program:</p>
+<div class="pair">
+<div><div class="side-label puf">The Racket spelling, over an ADT</div>
+<pre><code>(define-type Expr
+  (Num Int) (Add Expr Expr) (Mul Expr Expr) (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(Mul ,a ,b) (* (eval-expr a) (eval-expr b))]
+    [`(Neg ,a) (- (eval-expr a))]))
+
+(eval-expr '(Add (Num 1) (Mul (Num 3) (Neg (Num 4)))))  ;; -11
+</code></pre></div>
+<div><div class="side-label puf">What the compiler sees</div>
+<pre><code>;; `(Add ,a ,b) in a pattern is (Add a b);
+;; '(Add (Num 1) ...) builds the instance;
+;; `(Mul (Num 2) ,e) is (Mul (Num 2) e).
+;; Fields are typed and the match is
+;; exhaustiveness-checked, so
+;;   `(Num "one")      is a type error
+;;   `(Add (Num 1))    is an arity error
+;; A head that names no constructor
+;; stays a list; nested quasiquote
+;; stays data.
+</code></pre></div>
+</div>
+
 <p>The difference shows up in a single typo. Misspell a quasiquote tag and you
 get a clause that silently never matches — the program dies at runtime, on the
 input that should have worked. Misspell a constructor and the compiler stops you

@@ -629,7 +629,14 @@
                         ,@(for/list ([c ctor-rows])
                             (match-let ([`((,cm ,_) ,fts ...) c])
                               `(,cm ,@fts))))))))
-  (values (append extern-forms (rename-forms body ren qual))
+  ;; constructor positions in templates (modules.rkt rename-forms):
+  ;; the imported ADTs' constructors under their marker spellings plus
+  ;; the body's own under their renamed ones
+  (define ctor-arities
+    (define-type-ctor-arities (append extern-forms body)
+                              (λ (cn) (hash-ref ren cn cn))
+                              (hasheq)))
+  (values (append extern-forms (rename-forms body ren qual ctor-arities))
           (for/hash ([(k v) (in-hash ext-funs)]) (values k v))
           (for/hash ([(k v) (in-hash ext-globals)]) (values k v))
           (for/hash ([(k v) (in-hash ext-types)]) (values k v))
@@ -722,7 +729,9 @@
     [else
      (define ren (make-hasheq))
      (for ([n (in-set provides-set)]) (hash-set! ren n (mangle n mid)))
-     (define resolved (rename-forms body ren (λ (_) #f)))
+     (define resolved
+       (rename-forms body ren (λ (_) #f)
+                     (define-type-ctor-arities body (λ (cn) (hash-ref ren cn cn)) (hasheq))))
      (define sink (box (hash)))
      (define n-globals
        (compile-unit-to-object resolved o-path

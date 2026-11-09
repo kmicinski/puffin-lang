@@ -1,0 +1,12 @@
+;; a second ADT, imported #:as-qualified by main: template heads then
+;; spell P.Text / P.Cat, exactly like expressions and patterns do
+(provide Doc Text Cat render)
+
+(define-type Doc
+  (Text Str)
+  (Cat Doc Doc))
+
+(define (render [d : Doc]) : Str
+  (match d
+    [`(Text ,s) s]
+    [`(Cat ,a ,b) (string-append (render a) (render b))]))

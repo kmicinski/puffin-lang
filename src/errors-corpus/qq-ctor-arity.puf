@@ -1,0 +1,4 @@
+;; a template spelling a constructor with the wrong field count
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (f) `(Add (Num 1)))
+(println (f))

@@ -109,6 +109,8 @@ Data:
 ```scheme
 '(a 1 (b 2))                          ;; quoted data (symbols, ints, lists)
 `(let ([,x ,e]) ,@body)               ;; quasiquote CONSTRUCTION, with splicing
+`(Add ,a (Num 1))                     ;; ... and a constructor in scope at the head
+                                      ;;     IS that constructor (see Types)
 (gensym 'tmp)                         ;; fresh interned symbols
 (list 1 2 3)  (cons 1 '())  (car p) (cdr p) (pair? p) (null? p)
 (vector 1 2 3) (make-vector n) (vector-ref v i) (vector-set! v i x) (vector-length v)
@@ -259,6 +261,33 @@ make ASTs pleasant to work with:
     [`(mul ,a ,b) (* (eval-expr a) (eval-expr b))]
     [(? fixnum? n) n]))
 ```
+
+**Quasiquote is constructor syntax.** Wherever a `define-type`
+constructor is in scope, a template or quoted datum whose head names
+it *is* that constructor — built in expressions, matched in
+patterns — and a bare name of a nullary constructor is its value.
+So the same interpreter over an ADT reads exactly like the
+s-expression one, and gets the type system (field types,
+exhaustiveness) for free:
+
+```scheme
+(define-type Expr (Num Int) (Add Expr Expr) (Mul Expr Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(Mul ,a ,b) (* (eval-expr a) (eval-expr b))]))
+
+(eval-expr '(Add (Num 1) (Mul (Num 2) (Num 3))))   ;; 7: the quote builds the instance
+(define (double [e : Expr]) : Expr `(Mul (Num 2) ,e))
+```
+
+Heads that name nothing in scope stay data (`` `(block ,e ...) `` is
+still a list, holding instances), nested quasiquote is data, and the
+compiler rejects a template that spells a constructor with the wrong
+field count, a splice into one, or a field of the wrong type.
+docs/TYPES.md §2 has the precise rule.
 
 ## Running
 

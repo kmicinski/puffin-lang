@@ -9,7 +9,8 @@ I used Claude Code to build Puffin by extending that teaching-focused
 language (from Jeremy Siek's compiler book) with several
 quality-of-life features:
 
-- Match patterns and quasiquoting
+- Match patterns and quasiquoting (a template whose head names an
+  ADT constructor in scope builds or matches that constructor)
 - A gradual type system using consistency-based typing
 - A simple standard library consisting of sets, hashes (dictionaries),
   and several other facilities

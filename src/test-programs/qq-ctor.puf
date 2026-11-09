@@ -1,0 +1,82 @@
+;; constructor-directed quasiquote (docs/TYPES.md §2): a quasiquote
+;; template whose head names a constructor in scope IS that
+;; constructor -- built in expressions, matched in patterns -- so the
+;; Racket idiom of writing a language as backquoted s-expressions
+;; carries over unchanged, and gets the type system for free.
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr)
+  (Var Sym))
+
+;; the Racket way to write it: quasiquote patterns and templates
+(define (ev [e : Expr] [env : (List _)]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (ev a env) (ev b env))]
+    [`(Mul ,a ,b) (* (ev a env) (ev b env))]
+    [`(Neg ,a) (- 0 (ev a env))]
+    [`(Var ,x) (cdr (assoc x env))]))
+
+;; templates build instances: nested, with holes anywhere
+(define (double [e : Expr]) : Expr `(Mul (Num 2) ,e))
+(define (simp [e : Expr]) : Expr
+  (match e
+    [`(Add (Num 0) ,b) (simp b)]
+    [`(Add ,a (Num 0)) (simp a)]
+    [`(Mul (Num 1) ,b) (simp b)]
+    [`(Add ,a ,b) `(Add ,(simp a) ,(simp b))]
+    [`(Mul ,a ,b) `(Mul ,(simp a) ,(simp b))]
+    [`(Neg (Neg ,a)) (simp a)]
+    [_ e]))
+
+;; a quote is a template with no holes: '(Add (Num 1) (Num 2)) is
+;; the instance, printed back the way it was written
+(define e1 '(Add (Num 1) (Mul (Num 3) (Neg (Num 4)))))
+(println e1)
+(println (ev e1 '()))                                   ;; -11
+(println (simp '(Add (Num 0) (Mul (Num 1) (Var x)))))  ;; (Var x)
+(println (ev (double '(Var x)) (list (cons 'x 21))))    ;; 42
+(println (adt? e1))                                     ;; #t
+(println (equal? e1 (Add (Num 1) (Mul (Num 3) (Neg (Num 4))))))  ;; #t
+
+;; nullary constructors: bare in templates and quotes
+(define-type (Option a) (None) (Some a))
+(define (opt-map f o)
+  (match o
+    [`(Some ,x) `(Some ,(f x))]
+    [`None `None]))
+(println (opt-map add1 '(Some 41)))   ;; (Some 42)
+(println (opt-map add1 'None))        ;; None
+
+;; data around constructors: a template whose head is NOT a
+;; constructor is still a list -- the constructor shapes inside it are
+;; instances. Instances inside data, ellipsis over them.
+(define prog `(block (Num 1) ,(double '(Num 2)) (Var y)))
+(println prog)                                            ;; (block (Num 1) (Mul (Num 2) (Num 2)) (Var y))
+(println (match prog
+           [`(block ,es ...) (map (lambda (e) (ev e (list (cons 'y 5)))) es)]))  ;; (1 4 5)
+(println (match prog
+           [`(block (Num ,n) ,_ ...) n]))                 ;; 1
+(println (match '(seq (Num 1) (Num 2) (Num 3))
+           [`(seq (Num ,ns) ...) ns]))                    ;; (1 2 3)
+
+;; exhaustiveness sees through the sugar: this match over a typed
+;; scrutinee is complete, so no warning appears
+(define (size [e : Expr]) : Int
+  (match e
+    [`(Num ,_) 1]
+    [`(Add ,a ,b) (+ 1 (+ (size a) (size b)))]
+    [`(Mul ,a ,b) (+ 1 (+ (size a) (size b)))]
+    [`(Neg ,a) (+ 1 (size a))]
+    [`(Var ,_) 1]))
+(println (size e1))  ;; 6
+
+;; a symbol that merely spells a non-nullary constructor's name stays
+;; a symbol: only list heads and nullary names are constructors
+(println (symbol? 'Add))      ;; #t
+(println `(ops Add Mul))      ;; (ops Add Mul)
+;; nested quasiquote is data (depth 2+ never elaborates)
+(println `(q `(Num 1)))       ;; (q (quasiquote (Num 1)))
+(size '(Neg (Var z)))         ;; 2

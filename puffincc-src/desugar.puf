@@ -12,12 +12,15 @@
 (require "system.puf")
 (require "types.puf")
 
-(define (desugar p)
+(define (desugar p0)
   ;; gradual typecheck first (docs/TYPES.md): desugar is the funnel
   ;; every route passes through, so checking here covers the
   ;; interpreter, the chain, and both backends. Types then erase
-  ;; below; unannotated code cannot fail.
-  (typecheck-program p)
+  ;; below; unannotated code cannot fail. The checker hands back the
+  ;; program with its quasiquote templates elaborated into the
+  ;; constructor calls and patterns they spell (docs/TYPES.md §2):
+  ;; that is the program desugar lowers.
+  (define p (typecheck-program p0))
   ;; the #:when clause marker: puffincc's reader reads it as a
   ;; symbol, but the host Racket reader would read a keyword, so it
   ;; is built from its string here rather than written literally
