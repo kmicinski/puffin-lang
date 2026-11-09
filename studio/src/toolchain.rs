@@ -730,7 +730,7 @@ pub fn json_lines(stdout: &str, key: &str) -> (Vec<Value>, bool) {
 /// Where an assist's source comes in the menu: the checker's first, then
 /// what runs observed, then the file's patterns, then the call site.
 pub fn source_rank(source: &str) -> usize {
-    ["type", "observed", "patterns", "call-site"].iter().position(|known| *known == source).unwrap_or(4)
+    ["type", "observed", "patterns", "declared", "call-site"].iter().position(|known| *known == source).unwrap_or(4)
 }
 
 /// The project file `[base:line]` names: `entry` when its base name is

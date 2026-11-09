@@ -1,0 +1,8 @@
+== complete @ 244 (exit 0)
+== stdout
+{"pattern":"(App e1 e2)","clause":"[(App e1 e2) (let ([r1 (eval e1 env)] [r2 (eval e2 env)]) (error \"TODO: App\"))]","source":"declared"}
+{"pattern":"(Lam s e)","clause":"[(Lam s e) (let ([r1 (eval e env)]) (error \"TODO: Lam\"))]","source":"declared"}
+{"pattern":"(VarRef s)","clause":"[(VarRef s) (error \"TODO: VarRef\")]","source":"declared"}
+{"pattern":"(Num n)","clause":"[(Num n) (error \"TODO: Num\")]","source":"declared"}
+{"done":true}
+== stderr

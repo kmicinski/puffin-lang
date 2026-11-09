@@ -1,0 +1,13 @@
+;; assist: assists @ "[(Num n) 1]" +1
+;; the lightbulb on an untyped match with constructor patterns: the
+;; missing cases (from the patterns) and the annotation
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Neg Expr))
+
+(define (size e)
+  (match e
+    [(Num n) 1]))
+
+(println (size (Num 3)))

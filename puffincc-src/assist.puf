@@ -120,6 +120,8 @@
       [`(define ,x ,_ ...) #:when (symbol? x) (str-cat "define:" (symbol->string x))]
       [`(define-type (,t . ,_) ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
       [`(define-type ,t ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
+      [`(define-type-alias (,t . ,_) ,_) #:when (symbol? t) (str-cat "define-type-alias:" (symbol->string t))]
+      [`(define-type-alias ,t ,_) #:when (symbol? t) (str-cat "define-type-alias:" (symbol->string t))]
       [`(: ,x ,_) #:when (symbol? x) (str-cat "sig:" (symbol->string x))]
       [`(require ,m ,_ ...) #:when (string? m) (str-cat "require:" m)]
       [`(provide ,_ ...) "provide"]
@@ -376,6 +378,34 @@
 ;; source spelling -> the (possibly module-mangled) constructor
 (define (ctor-by-source s)
   (findf (lambda (c) (eq? (nm c) s)) (hash-keys (ctors))))
+(define (nullary-ctor? s)
+  (let ([k (ctor-by-source s)])
+    (and k (null? (ctor-fields (hash-ref (ctors) k))))))
+
+;; a clause's pattern as the checker reads it (docs/TYPES.md,
+;; "Quasiquote is constructor syntax"): a quasiquote or quote pattern
+;; whose head names a constructor in scope is that constructor's
+;; pattern, an unquote at a field the field's pattern; a bare nullary
+;; constructor name is its pattern. Every other pattern is itself.
+(define (clause-datum cl)
+  (ctor-pattern (syn->datum (car (lst-kids cl)))))
+(define (ctor-pattern d)
+  (match d
+    [(list 'quasiquote t) (or (template-ctor-pattern t #t) d)]
+    [(list 'quote t) (or (template-ctor-pattern t #f) d)]
+    [_ d]))
+;; the constructor pattern a template (escapes? #f: a quoted datum)
+;; spells at depth 1, or #f when its head is data
+(define (template-ctor-pattern t escapes?)
+  (cond
+    [(and (symbol? t) (nullary-ctor? t)) t]
+    [(and (pair? t) (symbol? (car t)) (list? t) (ctor-by-source (car t)))
+     (cons (car t) (map (lambda (e) (template-elem-pattern e escapes?)) (cdr t)))]
+    [else #f]))
+(define (template-elem-pattern e escapes?)
+  (cond
+    [(and escapes? (pair? e) (eq? (car e) 'unquote) (pair? (cdr e)) (null? (cdr (cdr e)))) (second e)]
+    [else (or (template-ctor-pattern e escapes?) (list (if escapes? 'quasiquote 'quote) e))]))
 
 ;; the ADT a type names, with its arguments: (name . args), or #f
 (define (adt-of t)
@@ -401,7 +431,7 @@
     (if (null? cls)
         (reverse acc)
         (let* ([cl (car cls)]
-               [p (if (and (lst? cl) (pair? (lst-kids cl))) (syn->datum (car (lst-kids cl))) '_)]
+               [p (if (and (lst? cl) (pair? (lst-kids cl))) (clause-datum cl) '_)]
                [cname (cond [(symbol? p) p]
                             [(and (pair? p) (symbol? (car p))) (car p)]
                             [else #f])]
@@ -414,7 +444,8 @@
              'all]
             [else 'all])))))
 
-(define (match-assists m path t)
+(define (match-assists m path t) (match-assists-from m path t "type"))
+(define (match-assists-from m path t source)
   (let* ([ad (adt-of t)])
     (when ad
       (let* ([owner (car ad)] [args (cdr ad)]
@@ -438,13 +469,57 @@
                  [tname (render-type t)])
             (when (pair? missing)
               (if (null? covered)
-                  (emit-assist "fill-match" (str-cat "Fill match on " tname) "type"
+                  (emit-assist "fill-match" (str-cat "Fill match on " tname) source
                                (list (insert-clauses-edit m texts)))
                   (emit-assist "add-missing-cases"
                                (str-cat "Add missing cases: "
                                         (string-join (map (lambda (c) (symbol->string (nm c))) missing) ", "))
-                               "type"
+                               source
                                (list (insert-clauses-edit m texts)))))))))))
+
+;; ---- an untyped scrutinee: the type its clauses spell, or the program's one type ----
+
+;; A match on a scrutinee the checker types `_` still has cases to
+;; offer. When its clauses are constructor patterns of one ADT, that
+;; ADT's missing constructors (source "patterns": the same evidence
+;; annotate-param reads). With no clause written yet, the constructors
+;; of the one ADT the program declares, when it declares exactly one
+;; (source "declared") -- unless the session or the file's call sites
+;; have shown what the scrutinee holds, which the observed and
+;; call-site layers answer from. A clause that is neither a constructor
+;; pattern nor a catch-all says the data is something else: nothing is
+;; guessed.
+(define (declared-match-assist m path)
+  (let* ([ds (map clause-datum (filter (lambda (cl) (and (lst? cl) (pair? (lst-kids cl)))) (match-clauses m)))]
+         [owner-of (lambda (d)
+                     (let ([c (cond [(and (pair? d) (symbol? (car d))) (ctor-by-source (car d))]
+                                    [(symbol? d) (ctor-by-source d)]
+                                    [else #f])])
+                       (cond [c (ctor-owner (hash-ref (ctors) c))]
+                             [(symbol? d) 'any]
+                             [else 'other])))]
+         [owners (dedupe-by (lambda (o) o) (filter (lambda (o) (not (eq? o 'any))) (map owner-of ds)))]
+         [declared (hash-keys (adts))]
+         ;; shapes seen for the scrutinee (the session's runs, the
+         ;; file's call sites) are evidence of what it is; the declared
+         ;; type is only a guess, and yields to them
+         [evidence? (let ([sp (scrutinee-param m path)])
+                      (and sp
+                           (ormap (lambda (lookup)
+                                    (let ([obs (lookup (car (first sp)))])
+                                      (and obs (< (second sp) (length (cdr obs)))
+                                           (pair? (list-ref (cdr obs) (second sp))))))
+                                  (list (observed-of-in observed-record) (observed-of-in (call-site-record))))))]
+         [pick (cond [(and (pair? owners) (null? (cdr owners)) (not (eq? (car owners) 'other)))
+                      (cons (car owners) "patterns")]
+                     [(and (null? ds) (pair? declared) (null? (cdr declared)) (not evidence?))
+                      (cons (car declared) "declared")]
+                     [else #f])])
+    (when pick
+      (let* ([t (car pick)]
+             [params (hash-ref (adts) t)]
+             [type (if (null? params) t (cons t (map (lambda (p) '_) params)))])
+        (match-assists-from m path type (cdr pick))))))
 
 ;; ---- assist: case-split a binder in a constructor pattern ----------------------
 
@@ -759,7 +834,7 @@
 (define (clause-keys m)
   (filter-map (lambda (cl)
                 (and (lst? cl) (pair? (lst-kids cl))
-                     (let ([d (syn->datum (car (lst-kids cl)))])
+                     (let ([d (clause-datum cl)])
                        (cond [(pattern-key d) (pattern-key d)]
                              [(equal? d '(quote ())) "nil"]
                              [(and (pair? d) (eq? (car d) 'cons)) "cons"]
@@ -1468,7 +1543,7 @@
     (when (and sp (not (param-annotated? path (second sp))))
       (let* ([owners (filter-map (lambda (cl)
                                    (and (lst? cl) (pair? (lst-kids cl))
-                                        (let* ([d (syn->datum (car (lst-kids cl)))]
+                                        (let* ([d (clause-datum cl)]
                                                [c (cond [(and (pair? d) (symbol? (car d))) (ctor-by-source (car d))]
                                                         [(symbol? d) (ctor-by-source d)]
                                                         [else #f])])
@@ -1539,12 +1614,17 @@
         (when (and (not on-hole) (eq? (head-sym top) 'define)) (annotate-assist top))
         (when (and m (pair? (cdr (lst-kids m))))
           (let ([scrut (car (cdr (lst-kids m)))])
-            (run-probe (syn-start scrut) (syn-end scrut)
-                       (lambda (t env)
-                         (when (adt-of t)
-                           (match-assists m path t)
-                           (when cl (case-split-assist m cl path t))))
-                       load-entry assemble)))))
+            ;; no type for the scrutinee (dynamic, or no probe): its
+            ;; clauses or the program's one type still say the cases
+            (unless (run-probe (syn-start scrut) (syn-end scrut)
+                               (lambda (t env)
+                                 (cond [(adt-of t)
+                                        (match-assists m path t)
+                                        (when cl (case-split-assist m cl path t))]
+                                       [(eq? t '_) (declared-match-assist m path)]
+                                       [else (void)]))
+                               load-entry assemble)
+              (declared-match-assist m path))))))
     (println (json-obj (list (cons "done" "true"))))))
 
 ;; ---- complete: the clause patterns missing at a position -----------------------
@@ -1570,9 +1650,13 @@
           (observed-match-assist m path)
           (call-site-match-assist m path)
           (let ([scrut (car (cdr (lst-kids m)))])
-            (run-probe (syn-start scrut) (syn-end scrut)
-                       (lambda (t env) (when (adt-of t) (match-assists m path t)))
-                       load-entry assemble)))))
+            (unless (run-probe (syn-start scrut) (syn-end scrut)
+                               (lambda (t env)
+                                 (cond [(adt-of t) (match-assists m path t)]
+                                       [(eq? t '_) (declared-match-assist m path)]
+                                       [else (void)]))
+                               load-entry assemble)
+              (declared-match-assist m path))))))
     (println (json-obj (list (cons "done" "true"))))))
 
 ;; ---- facts: what the layers know at a position ------------------------------------

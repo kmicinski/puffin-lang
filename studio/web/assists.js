@@ -347,6 +347,8 @@ const SOURCE_NOTE = {
   type: "the scrutinee's type, from the checker",
   observed: "a shape this session's runs passed",
   "call-site": "a shape a call in this file passes",
+  patterns: "the type the match's constructor patterns are of (the scrutinee is untyped)",
+  declared: "the one type this program declares (the scrutinee is untyped)",
 };
 
 // Where a clause pattern would go at `pos`, or null: inside a clause of a

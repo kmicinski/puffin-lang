@@ -535,6 +535,11 @@ transcripts can be goldens too.
   accepting one inserts the pattern and leaves the cursor at the
   body. The clause under the cursor is the one being written, so a
   half-typed `(Nu` does not hide `(Num n)`.
+  An untyped scrutinee completes too (`declared-match-assist`): from
+  the type its constructor clauses already spell (source `patterns`),
+  or, with no clause written yet, from the one type the program
+  declares, when it declares exactly one (`declared`). A clause that
+  is neither a constructor pattern nor a catch-all stops the guess.
 - **The rest of a match, before it is written** (`assists.js`
   `restSlot`, Monaco's inline completions): where a whole clause
   could go -- right after `(match e`, on the fresh line after Enter
@@ -546,6 +551,15 @@ transcripts can be goldens too.
   A bare constructor in a `define-type` (`Int` for `(Int)`) used to
   crash both checkers in pass 2 before any of this could run; it is
   a diagnostic now (`tc-ctor-bare` in the errors corpus).
+- **TeX characters** (`studio/web/tex.js`), DrRacket's way: type a
+  TeX name after a backslash and press `⌥↵` (Alt-Enter) to replace
+  it with the character: `\lambda` λ, `\varsigma` ς, `\to` →,
+  `\forall` ∀, `\in` ∈, `\_1` ₁, `\^2` ². The table covers the Greek
+  alphabet, arrows, logic, sets, relations, operators, brackets and
+  sub/superscripts. An unfinished name that starts exactly one entry
+  is completed; one that starts several opens the completion list on
+  them. The same key works at the REPL prompt (the first candidate
+  there, which has no list).
 - **Emacs keys** (`studio/web/emacs.js`): motion, mark, a kill ring
   in which consecutive kills join and `M-y` cycles, `C-x C-s`, undo,
   find. `C-k` is paredit-kill (`sexp.js` `kill`): the rest of the

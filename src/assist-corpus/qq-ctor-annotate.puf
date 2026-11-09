@@ -1,0 +1,13 @@
+;; assist: assists @ "(match e" +7
+;; a match on an unannotated parameter whose quasiquote patterns spell
+;; one type's constructors: the parameter is that type
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr))
+
+(define (size e)
+  (match e
+    [`(Num ,n) 1]
+    [`(Add ,a ,b) (+ 1 (+ (size a) (size b)))]))
+
+(println (size (Add (Num 3) (Num 4))))

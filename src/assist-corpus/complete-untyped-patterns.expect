@@ -1,0 +1,7 @@
+== complete @ 304 (exit 0)
+== stdout
+{"pattern":"(Add e1 e2)","clause":"[(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: Add\"))]","source":"patterns"}
+{"pattern":"(Mul e1 e2)","clause":"[(Mul e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: Mul\"))]","source":"patterns"}
+{"pattern":"(Neg e1)","clause":"[(Neg e1) (let ([r1 (size e1)]) (error \"TODO: Neg\"))]","source":"patterns"}
+{"done":true}
+== stderr

@@ -1,0 +1,11 @@
+;; assist: complete @ "(match expr " +12
+;; an untyped scrutinee, no clause yet, and one type declared: its
+;; constructors
+(define-type Expr
+  (App Expr Expr)
+  (Lam Str Expr)
+  (VarRef Str)
+  (Num Int))
+
+(define (eval expr env)
+  (match expr ))

@@ -1,0 +1,6 @@
+== lint (exit 0)
+== stdout
+{"start":445,"end":472,"line":16,"source":"observed","message":"e was seen as Add in this session, and no clause matches it"}
+{"start":496,"end":526,"line":20,"source":"observed","message":"e was seen as lam in this session, and no clause matches it"}
+{"done":true}
+== stderr

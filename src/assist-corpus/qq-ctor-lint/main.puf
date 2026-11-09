@@ -1,0 +1,21 @@
+;; assist: lint observed=observed.sexp
+;; quasiquote patterns over constructors count as the constructor
+;; cases they are: eval-expr handles every shape the session saw, so
+;; it is quiet; count misses Add, and the untyped language in interp
+;; still keys on its heads
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr))
+
+(define (eval-expr e)
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (eval-expr a) (eval-expr b))]))
+
+(define (count e)
+  (match e
+    [`(Num ,n) 1]))
+
+(define (interp e)
+  (match e
+    [`(add ,a ,b) 0]))

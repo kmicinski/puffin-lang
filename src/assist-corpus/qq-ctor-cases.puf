@@ -1,0 +1,16 @@
+;; assist: assists @ "[`(Num ,n) 1]" +1
+;; quasiquote patterns whose heads are constructors in scope are
+;; constructor patterns (docs/TYPES.md): the match is partial by the
+;; type, and the cases it misses are offered
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [`(Num ,n) 1]
+    [`(Mul ,a ,b) (+ 1 (+ (size a) (size b)))]))
+
+(println (size `(Mul (Num 3) (Num 4))))

@@ -1,0 +1,41 @@
+== assists @ 258 (exit 0)
+== stdout
+{"id":"annotate-param","title":"Annotate e : Expr (its patterns are Expr's)","source":"type","edits":[{"start":239,"end":240,"text":"[e : Expr]"}]}
+{"id":"add-missing-cases","title":"Add missing cases: Add, Neg","source":"patterns","edits":[{"start":268,"end":268,"text":"\n    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: Add\"))]\n    [(Neg e1) (let ([r1 (size e1)]) (error \"TODO: Neg\"))]"}]}
+{"done":true}
+== stderr
+== apply 1: annotate-param
+;; assist: assists @ "[(Num n) 1]" +1
+;; the lightbulb on an untyped match with constructor patterns: the
+;; missing cases (from the patterns) and the annotation
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr])
+  (match e
+    [(Num n) 1]))
+
+(println (size (Num 3)))
+== check (exit 0)
+{"ok":true}
+typecheck warning: match on Expr is not exhaustive: missing Add, Neg [assists-untyped-patterns.puf:9]
+== apply 2: add-missing-cases
+;; assist: assists @ "[(Num n) 1]" +1
+;; the lightbulb on an untyped match with constructor patterns: the
+;; missing cases (from the patterns) and the annotation
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Neg Expr))
+
+(define (size e)
+  (match e
+    [(Num n) 1]
+    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error "TODO: Add"))]
+    [(Neg e1) (let ([r1 (size e1)]) (error "TODO: Neg"))]))
+
+(println (size (Num 3)))
+== check (exit 0)
+{"ok":true}

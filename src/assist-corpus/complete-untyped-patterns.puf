@@ -1,0 +1,15 @@
+;; assist: complete @ "[(A) 0]" +3
+;; an untyped scrutinee whose clauses are one type's constructor
+;; patterns (here spelled with quasiquote): that type's missing cases
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size e)
+  (match e
+    [`(Num ,n) 1]
+    [(A) 0]))
+
+(println (size (Num 3)))

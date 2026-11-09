@@ -1,0 +1,27 @@
+== assists @ 348 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add missing cases: Add, Neg","source":"type","edits":[{"start":407,"end":407,"text":"\n    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: Add\"))]\n    [(Neg e1) (let ([r1 (size e1)]) (error \"TODO: Neg\"))]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Expr is not exhaustive: missing Add, Neg [qq-ctor-cases.puf:11]
+== apply 1: add-missing-cases
+;; assist: assists @ "[`(Num ,n) 1]" +1
+;; quasiquote patterns whose heads are constructors in scope are
+;; constructor patterns (docs/TYPES.md): the match is partial by the
+;; type, and the cases it misses are offered
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Neg Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [`(Num ,n) 1]
+    [`(Mul ,a ,b) (+ 1 (+ (size a) (size b)))]
+    [(Add e1 e2) (let ([r1 (size e1)] [r2 (size e2)]) (error "TODO: Add"))]
+    [(Neg e1) (let ([r1 (size e1)]) (error "TODO: Neg"))]))
+
+(println (size `(Mul (Num 3) (Num 4))))
+== check (exit 0)
+{"ok":true}

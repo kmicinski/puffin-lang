@@ -1,0 +1,11 @@
+;; assist: assists @ "(match expr " +12
+;; an untyped scrutinee, no clause, and two types declared: no guess
+(define-type Expr
+  (Num Int)
+  (Add Expr Expr))
+(define-type Value
+  (IntV Int)
+  (Closure Str Expr))
+
+(define (eval expr env)
+  (match expr ))

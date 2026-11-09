@@ -38,6 +38,7 @@
 import { balanced, forms } from "./lexer.js";
 import { highlight } from "./markdown.js";
 import { bindTextarea } from "./paredit.js";
+import { bindTexField } from "./tex.js";
 import { renderOutput } from "./trace.js";
 
 const element = (tag, className, text) => {
@@ -100,6 +101,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
 
   const structure = bindTextarea(prompt);
   prompt.removeEventListener("keydown", structure);
+  bindTexField(prompt); // ⌥↵ turns \lambda into λ, before Enter submits
   const fit = () => { prompt.rows = Math.min(12, prompt.value.split("\n").length); };
 
   // What typing `line` at the prompt does.
