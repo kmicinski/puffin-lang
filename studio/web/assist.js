@@ -102,8 +102,19 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
   const caret = row.querySelector(".caret");
   const plainCaret = caret.textContent;
   const plainPlaceholder = prompt.placeholder;
-  const tag = row.appendChild(element("button", "assist-tag"));
+  // Ask mode's own strip above the prompt: the scope, the thread this
+  // question follows up on, and how to ask. It takes nothing from the
+  // prompt's width.
+  const bar = element("div", "ask-bar");
+  bar.hidden = true;
+  row.prepend(bar);
+  const tag = element("button", "assist-tag");
   tag.type = "button";
+  const fresh = element("button", "assist-tag-clear", "×");
+  fresh.type = "button";
+  fresh.title = "Ask a new question instead of following up";
+  const hint = element("span", "ask-hint", "Enter asks · ⇧Enter newline · Esc back to Puffin");
+  bar.append(scopeSelect, tag, fresh, hint);
 
   const state = {
     mode: "puffin",
@@ -123,21 +134,21 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     prompt.dataset.mode = mode === "ask" ? "ask" : "";
     row.classList.toggle("ask", mode === "ask");
     caret.textContent = mode === "ask" ? "ask✦" : plainCaret;
-    scopeSelect.hidden = mode !== "ask";
-    prompt.placeholder = mode === "ask"
-      ? "Ask about the program, an error, what to write next. Enter asks · Esc back to Puffin"
-      : plainPlaceholder;
+    bar.hidden = mode !== "ask";
+    scopeSelect.hidden = false;
+    prompt.placeholder = mode === "ask" ? "Ask about the program, an error, what to write next…" : plainPlaceholder;
     if (mode === "puffin" && !keepThread) state.thread = null;
     renderTag();
   }
 
   function renderTag() {
-    tag.hidden = state.mode !== "ask";
     const title = state.thread ? state.threads.get(state.thread)?.title : null;
-    tag.textContent = state.thread ? `follow-up: ${title ?? "this thread"} ×` : "new question";
-    tag.title = state.thread ? "Ask a new question instead" : "Esc returns to Puffin";
+    tag.classList.toggle("follow", Boolean(state.thread));
+    tag.textContent = state.thread ? `↳ follow-up to “${title ?? "this thread"}”` : "new question";
+    tag.title = state.thread ? `This question continues the thread “${title ?? ""}”. × asks a new one.` : "A question of its own";
+    fresh.hidden = !state.thread;
   }
-  tag.addEventListener("click", () => {
+  fresh.addEventListener("click", () => {
     state.thread = null;
     renderTag();
     prompt.focus();

@@ -104,7 +104,14 @@ export function createRepl({ transcript, prompt, send, commands }) {
   const structure = bindTextarea(prompt);
   prompt.removeEventListener("keydown", structure);
   bindTexField(prompt); // ⌥↵ turns \lambda into λ, before Enter submits
-  const fit = () => { prompt.rows = Math.min(12, prompt.value.split("\n").length); };
+  // The prompt grows with what is typed, wrapped lines included, to
+  // twelve lines, then scrolls.
+  const fit = () => {
+    prompt.style.height = "auto";
+    const line = parseFloat(getComputedStyle(prompt).lineHeight) || 19.5;
+    prompt.style.height = `${Math.min(prompt.scrollHeight, Math.round(line * 12))}px`;
+  };
+  fit();
 
   // What typing `line` at the prompt does.
   function run(line) {

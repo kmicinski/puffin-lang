@@ -250,6 +250,8 @@ button.check:empty { display: none; }
   background: transparent;
   color: var(--base01);
   font: 13px/1.5 var(--mono);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 #prompt::placeholder { color: var(--base1); }
 #scope {

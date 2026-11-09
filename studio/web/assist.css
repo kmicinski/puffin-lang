@@ -4,26 +4,39 @@
 
 /* ---- The prompt ---------------------------------------------------------- */
 
-.prompt-row { position: relative; }
+.prompt-row { position: relative; flex-wrap: wrap; }
 .prompt-row.ask { background: var(--violet-tint); box-shadow: inset 3px 0 0 var(--violet); }
+/* ask mode's strip: the whole width, above the caret and the prompt */
+.ask-bar { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; min-width: 0; padding-bottom: 4px; }
+.ask-bar[hidden] { display: none; }
+.ask-hint { margin-left: auto; font: 11px var(--sans); color: var(--muted); white-space: nowrap; }
 .prompt-row.ask .caret { color: var(--violet); }
 /* Ask mode was chosen: how to ask, and how to leave, show without hints. */
 #repl .prompt-row.ask #prompt::placeholder { color: var(--muted); }
 .assist-tag {
-  height: 20px;
-  padding: 0 8px;
+  height: 22px;
+  padding: 0 10px;
   border: none;
-  border-radius: 999px;
+  border-radius: 999px 0 0 999px;
   background: white;
   color: var(--violet);
-  font: 11px var(--sans);
-  max-width: 40%;
+  font: 11.5px var(--sans);
+  min-width: 0;
+  max-width: 60%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+  cursor: default;
 }
-.assist-tag:hover:not(:disabled) { background: white; color: var(--strong); }
+.assist-tag:not(.follow) { border-radius: 999px; }
+.assist-tag:hover:not(:disabled) { background: white; color: var(--violet); }
+.assist-tag-clear {
+  height: 22px; padding: 0 8px; margin-left: -8px; border: none; border-radius: 0 999px 999px 0;
+  background: white; color: var(--muted); font: 13px var(--sans); line-height: 22px;
+}
+.assist-tag-clear:hover:not(:disabled) { color: var(--red); background: white; }
+.assist-tag-clear[hidden] { display: none; }
 
 /* ---- Answers in the transcript --------------------------------------------- */
 
