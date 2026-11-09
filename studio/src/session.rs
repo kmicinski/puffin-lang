@@ -96,7 +96,7 @@ impl Session {
         let found = sexp::forms(text);
         let forms = self.forms.entry(file.to_owned()).or_default();
         for form in &found {
-            if definition(form) && form.head.as_deref() != Some("define-type") {
+            if definition(form) && !sexp::type_form(form) {
                 forms.insert(form.key(), Loaded { text: text[form.start..form.end].to_owned(), by: "buffer", entry });
                 if let Some(name) = &form.name {
                     self.prompt.remove(name);
@@ -117,7 +117,7 @@ impl Session {
         for path in closure {
             let Some(text) = files.get(path) else { continue };
             let forms = self.forms.entry(path.clone()).or_default();
-            for form in sexp::forms(text).iter().filter(|form| definition(form) && form.head.as_deref() != Some("define-type")) {
+            for form in sexp::forms(text).iter().filter(|form| definition(form) && !sexp::type_form(form)) {
                 forms.insert(form.key(), Loaded { text: text[form.start..form.end].to_owned(), by: "file", entry });
                 if let Some(name) = &form.name {
                     self.prompt.remove(name);
@@ -129,7 +129,7 @@ impl Session {
     /// A prompt unit ran: each definition in it is now the session's for
     /// its name, in every file that defines that name.
     pub fn loaded_prompt(&mut self, files: &Files, text: &str, entry: u64) {
-        for form in sexp::forms(text).iter().filter(|form| definition(form) && form.head.as_deref() != Some("define-type")) {
+        for form in sexp::forms(text).iter().filter(|form| definition(form) && !sexp::type_form(form)) {
             if let Some(name) = &form.name {
                 self.prompt.insert(name.clone(), text[form.start..form.end].to_owned());
             }
@@ -147,7 +147,7 @@ impl Session {
     pub fn view(&self, files: &Files, types: &[(String, String)]) -> SessionView {
         let mut out = self.forms.clone();
         for (path, text) in files {
-            for form in sexp::forms(text).iter().filter(|form| form.head.as_deref() == Some("define-type")) {
+            for form in sexp::forms(text).iter().filter(|form| sexp::type_form(form)) {
                 if let Some((_, declared)) = types.iter().find(|(name, _)| Some(name) == form.name.as_ref()) {
                     out.entry(path.clone()).or_default().insert(form.key(), Loaded { text: declared.clone(), by: "types", entry: 0 });
                 }
@@ -198,7 +198,7 @@ impl Session {
 pub fn needs(text: &str, target: &Form, wanted: &dyn Fn(&Form) -> bool) -> Vec<Form> {
     let all = sexp::forms(text);
     let defines: Vec<&Form> =
-        all.iter().filter(|form| definition(form) && form.head.as_deref() != Some("define-type") && form.start != target.start).collect();
+        all.iter().filter(|form| definition(form) && !sexp::type_form(form) && form.start != target.start).collect();
     let mut seen: BTreeSet<usize> = BTreeSet::new();
     let mut queue = vec![target.clone()];
     while let Some(form) = queue.pop() {

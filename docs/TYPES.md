@@ -31,6 +31,7 @@ rest locally.
     | (-> τ ... τ)                       functions, fixed arity
     | (->* (τ ...) τ τ)                  variadic: fixed args, rest-elem, result
     | (Name τ ...)                       ADT instances, e.g. (Option Int)
+    | Alias | (Alias τ ...)              a type alias, unfolded (§3)
     | a b c ...                          type variables (lowercase)
 ```
 
@@ -203,6 +204,35 @@ so user code cannot forge or mutate one.
 
 Anything unannotated is `_`. A whole program with no annotations
 type-checks by construction — gradual, not optional-but-nagging.
+
+### Type aliases
+
+```scheme
+(define-type-alias Env (Hash Str Value))      ;; Env abbreviates the hash type
+(define-type-alias (Table a) (Hash Str a))    ;; parametric
+(define-type-alias Scope (Table Int))         ;; an alias of an alias
+
+(define (lookup [env : Env] [x : Str]) : Value (hash-ref env x))
+(define-type Value (IntV Int) (Closure Str Expr Env))   ;; in a field, too
+```
+
+An alias is transparent: it names a type, it does not make one. Both
+checkers unfold every alias (`collect-aliases`, `expand-type-aliases`
+in `types.puf` / `types.rkt`) at every type position — `[x : τ]`
+formals and bindings, `: τ` results, `(: n τ)`, `(ann e τ)`,
+`define-type` fields, foreign declarations — before any type is read,
+so the checker, desugar's casts and the backends only ever see what
+an alias abbreviates: `Env` and `(Hash Str Value)` are the same type,
+a cast on an `Env` argument checks for a hash, and an error message
+spells the unfolded type. Aliases may be declared after their uses
+and may refer to each other, but not to themselves (`type alias A is
+recursive`); a parametric alias takes exactly its parameters (`type
+alias Table expects 1 parameters, got 0`); an alias may not share a
+name with a `define-type` or a built-in (`type Env defined twice`),
+and its name is capitalized like any type's. The form has no runtime
+meaning and desugar drops it. Across modules an alias is a type name
+like any other: it provides, imports, qualifies and renames exactly
+as a `define-type` head does (docs/MODULES.md).
 
 ## 4. Checking: bidirectional, with consistency
 

@@ -240,6 +240,9 @@
     ;; (define-type (Name a ...) (Ctor t ...) ...)
     [`(define-type ,(? symbol?) (,(? symbol?) ,(? type-syntax?) ...) ...) #t]
     [`(define-type (,(? symbol?) ,(? symbol?) ...) (,(? symbol?) ,(? type-syntax?) ...) ...) #t]
+    ;; type aliases: (define-type-alias Name τ) or (define-type-alias (Name a ...) τ)
+    [`(define-type-alias ,(? symbol?) ,(? type-syntax?)) #t]
+    [`(define-type-alias (,(? symbol?) ,(? symbol?) ...) ,(? type-syntax?)) #t]
     ;; a top-level type declaration
     [`(: ,(? symbol?) ,(? type-syntax?)) #t]
     ;; defines, with optional [x : t] formals and a `: t` result

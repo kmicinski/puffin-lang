@@ -107,6 +107,12 @@ What you can rely on:
   a built-in type or former (`Int`, `List`, ...) is likewise
   rejected.
 
+- **Type aliases are type names.** `(define-type-alias Env (Hash
+  Str Value))` binds `Env` like a `define-type` head: it provides,
+  imports unqualified or as `M.Env`, and renames the same way, and
+  an importer may alias it again (`(define-type-alias Env2 E.Env)`).
+  The checker unfolds it after resolution, so the exporting module's
+  types are what the importer's annotations mean (docs/TYPES.md §3).
 - **Templates resolve through the same scope.** Quasiquote is
   constructor syntax (docs/TYPES.md §2): a template or quoted datum
   whose head names a constructor in scope builds or matches that

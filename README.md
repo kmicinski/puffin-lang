@@ -61,8 +61,8 @@ Some highlights coming from Racket:
   toolchain (why not Rust!?), and should yield a stage-2/3
   byte-identical fixpoint every time.
 
-- **Gradual types** are described in `docs/TYPES.md`: ADTs,
-  annotations where you want them, `_` where you don't; transient
+- **Gradual types** are described in `docs/TYPES.md`: ADTs, type
+  aliases, annotations where you want them, `_` where you don't; transient
   casts with blame at declared boundaries; exhaustiveness warnings.
 
 - **A typed FFI** (`docs/FFI.md`): `dlopen`'d C imports declared with

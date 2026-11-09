@@ -894,6 +894,8 @@
       [else (lower-type-form-core form)]))
   (define (lower-type-form-core form)
     (match form
+      ;; a type alias is the checker's alone (expanded away there)
+      [`(define-type-alias ,_ ,_) '()]
       [`(define-type ,_ ,ctors ...)
        ;; builders allocate the dedicated ADT kind and initialize the
        ;; fields (adt-alloc + adt-set!, mirroring how (vector ...)

@@ -1,0 +1,4 @@
+;; a parametric alias takes exactly its parameters
+(define-type-alias (Table a) (Hash Str a))
+(define (f [t : Table]) : Int (hash-count t))
+(println (f (hash)))

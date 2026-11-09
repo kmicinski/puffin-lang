@@ -1,0 +1,62 @@
+;; type aliases: (define-type-alias Name t) names a type, transparently.
+;; An environment is a hash from strings to values.
+
+(define-type Value
+  (IntV Int)
+  (Closure Str Expr Env))
+
+(define-type Expr
+  (Num Int)
+  (Var Str)
+  (Lam Str Expr)
+  (App Expr Expr)
+  (Let Str Expr Expr))
+
+;; the alias is used above, in a constructor's field, before it is declared
+(define-type-alias Env (Hash Str Value))
+
+;; a parametric alias, and an alias of an alias
+(define-type-alias (Table a) (Hash Str a))
+(define-type-alias Scope (Table Int))
+
+(define (empty-env) : Env (hash))
+
+(define (lookup [env : Env] [x : Str]) : Value
+  (if (hash-has-key? env x)
+      (hash-ref env x)
+      (error (string-append "unbound variable " x))))
+
+(define (extend [env : Env] [x : Str] [v : Value]) : Env
+  (hash-set env x v))
+
+(define (eval-expr [e : Expr] [env : Env]) : Value
+  (match e
+    [`(Num ,n) (IntV n)]
+    [`(Var ,x) (lookup env x)]
+    [`(Lam ,x ,body) (Closure x body env)]
+    [`(App ,f ,a)
+     (match (eval-expr f env)
+       [(Closure x body cenv) (eval-expr body (extend cenv x (eval-expr a env)))]
+       [(IntV n) (error "applied an integer")])]
+    [`(Let ,x ,rhs ,body) (eval-expr body (extend env x (eval-expr rhs env)))]))
+
+;; annotations at every position take an alias: (: f t), [x : t] in a
+;; let, a lambda's result, ann
+(: depths Scope)
+(define depths (hash-set (hash) "a" 1))
+
+(define (scope-size [s : Scope]) : Int (hash-count s))
+
+(define (with-env [f : (-> Env Int)]) : Int
+  (f (empty-env)))
+
+(println (with-env (lambda ([env : Env]) : Int (hash-count env))))        ;; 0
+(println (let ([s : (Table Int) (hash-set depths "b" 2)]) (scope-size s))) ;; 2
+(println (scope-size (ann (hash) Scope)))                                  ;; 0
+
+(define program
+  `(Let "x" (Num 20)
+     (App (Lam "y" (Var "y")) (Var "x"))))
+
+(println (eval-expr program (empty-env)))   ;; (IntV 20)
+(println (lookup (extend (empty-env) "z" (IntV 7)) "z"))  ;; (IntV 7)

@@ -313,7 +313,9 @@ corpus holds every backend to the same goldens.
 ## Gradual types
 
 Puffin has a gradual type system (docs/TYPES.md): ADTs via
-`define-type`, annotations via `(: name type)` and inline parameter
+`define-type`, transparent type aliases via `define-type-alias`
+(unfolded by the checker before any type is read, so they cost the
+pipeline nothing), annotations via `(: name type)` and inline parameter
 types where you want them, `_` where you don't, exhaustiveness
 warnings, and transient casts with blame at declared boundaries. The
 checker is a `typecheck` pass between desugar and shrink, and it

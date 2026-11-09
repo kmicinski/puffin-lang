@@ -128,6 +128,9 @@
        [`(define-type ,head ,ctors ...)
         (cons (match head [`(,n ,_ ...) n] [n n])
               (filter-map (λ (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
+       ;; a type alias binds its head, a type name like define-type's
+       [`(define-type-alias ,head ,_)
+        (list (match head [`(,n ,_ ...) n] [n n]))]
        [_ (let ([n (defn-name f)]) (if n (list n) '()))])]))
 
 ;; ---------------------------------------------------------------------
@@ -214,7 +217,7 @@
 ;; unqualified is an error (use #:as or #:rename); stdlib primitives
 ;; are checked separately so the message can say so.
 (define keyword-names
-  (seteq 'define-type 'ann ':
+  (seteq 'define-type 'define-type-alias 'ann ':
          'define 'lambda 'λ 'let 'let* 'letrec 'begin 'if 'cond 'case
          'when 'unless 'match 'set! 'while 'quote 'quasiquote 'unquote
          'unquote-splicing 'and 'or 'else '_ '... 'require 'provide
@@ -368,10 +371,10 @@
                 (cons '-> (map norm (cdr t)))))))
   (define type-heads
     (for/seteq ([f forms]
-                #:when (match f [`(define-type ,_ ,_ ...) #t] [_ #f]))
+                #:when (match f [`(,(or 'define-type 'define-type-alias) ,_ ,_ ...) #t] [_ #f]))
       (match f
-        [`(define-type (,n ,_ ...) ,_ ...) n]
-        [`(define-type ,n ,_ ...) n])))
+        [`(,_ (,n ,_ ...) ,_ ...) n]
+        [`(,_ ,n ,_ ...) n])))
   ;; define-foreign-type heads satisfy (type n) entries too
   (define ftype-heads (mutable-seteq))
   (for-each

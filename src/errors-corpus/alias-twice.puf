@@ -1,0 +1,4 @@
+;; a name is one type: an alias cannot share it with a define-type
+(define-type Env (Empty))
+(define-type-alias Env (Hash Str Int))
+(println 1)

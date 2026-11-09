@@ -1,0 +1,17 @@
+;; main.puf -- aliases imported unqualified and under a prefix
+(require "env.puf" #:only (Env Value IntV empty-env extend lookup))
+(require "env.puf" #:as E)
+
+(define (count-bindings [env : Env]) : Int (hash-count env))
+
+(define (pair-up [p : E.Str2]) : Str (string-append (car p) (cdr p)))
+
+(define e (extend (extend (empty-env) "a" (IntV 1)) "b" (IntV 2)))
+(println (count-bindings e))          ;; 2
+(match (lookup e "b") [(IntV n) (println n)])   ;; 2
+(println (pair-up (cons "ab" "cd")))  ;; abcd
+
+;; an alias of an imported alias
+(define-type-alias Env2 E.Env)
+(define (first-key [env : Env2]) : Int (hash-count env))
+(println (first-key e))               ;; 2

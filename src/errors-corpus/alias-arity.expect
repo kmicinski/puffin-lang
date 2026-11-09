@@ -1,0 +1,1 @@
+error: typecheck: type alias Table expects 1 parameters, got 0 [alias-arity.puf:3]

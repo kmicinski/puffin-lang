@@ -78,8 +78,9 @@
                          ;; imported-constructor patterns incl. a bare
                          ;; nullary, an own define-type over an
                          ;; imported field type -- same goldens as
-                         ;; every whole-program route
-                         (list "modules-typed"))])
+                         ;; every whole-program route; constructor
+                         ;; templates and type aliases across modules
+                         (list "modules-typed" "modules-qq" "modules-alias"))])
        (define entry (build-path tests-dir prog "main.puf"))
        (define exe (build-path work-root (format "exe-~a" prog)))
        (build! entry exe cache)

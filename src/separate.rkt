@@ -207,6 +207,9 @@
         ;; makes them value defines)
         `(,n type ,(mangled n))
     (match form
+      ;; a type alias: a type row, backed by an alias-marked (types ...)
+      ;; entry the importer splices back as define-type-alias
+      [`(define-type-alias ,_ ,_) `(,n type ,(mangled n))]
       [`(define-type ,head ,cs ...)
        (define type-name (match head [`(,tn ,_ ...) tn] [tn tn]))
        (cond
@@ -277,15 +280,25 @@
        ,(for/list ([c cs])
           (match c
             [`(,cn ,fts ...) `((,cn ,(module-demangle cn)) ,@fts)])))]
+    ;; a type alias: (alias τ) where an ADT row carries its constructor
+    ;; list -- the importer splices the define-type-alias back
+    [`(define-type-alias ,head ,body)
+     (define-values (n ps) (match head [`(,n ,ps ...) (values n ps)] [n (values n '())]))
+     `(,n ,(module-demangle n) ,ps (alias ,body))]
     [_ #f])))
+
+(define (alias-row? row)
+  (match (list-ref row 3) [`(alias ,_) #t] [_ #f]))
 
 (define (row-mentions row)
   ;; foreign-marked rows (opaque handle types) mention nothing
-  (if (eq? (list-ref row 3) 'foreign)
-      '()
-      (match row
-        [`(,_ ,_ ,ps (,ctor-rows ...))
-         (remove* ps (append-map (λ (c) (append-map type-mentions (cdr c))) ctor-rows))])))
+  (cond
+    [(eq? (list-ref row 3) 'foreign) '()]
+    [(alias-row? row) (match row [`(,_ ,_ ,ps (alias ,body)) (remove* ps (type-mentions body))])]
+    [else
+     (match row
+       [`(,_ ,_ ,ps (,ctor-rows ...))
+        (remove* ps (append-map (λ (c) (append-map type-mentions (cdr c))) ctor-rows))])]))
 
 ;; the closed types section for a unit: own rows (from the resolved
 ;; body) + foreign rows (from dep infos), restricted to what the
@@ -526,8 +539,9 @@
         (error 'separate "interface type ~a has two conflicting definitions" mn))
       (hash-set! extern-rows mn row)
       (module-demangle-register! mn src)
-      ;; foreign-marked rows carry the marker symbol, not ctor rows
-      (unless (eq? ctor-rows 'foreign)
+      ;; foreign-marked rows carry the marker symbol, alias rows the
+      ;; aliased type, not ctor rows
+      (unless (or (eq? ctor-rows 'foreign) (alias-row? row))
         (for ([c ctor-rows])
           (match-define `((,cm ,cs) ,_ ...) c)
           (module-demangle-register! cm cs))))
@@ -620,15 +634,21 @@
   ;; defines nothing; the tags/labels live in the exporting .o)
   (define extern-forms
     (for/list ([row (sort (hash-values extern-rows) symbol<? #:key car)])
-      (if (eq? (list-ref row 3) 'foreign)
-          ;; an imported foreign handle type (docs/FFI.md §6): the
-          ;; checker registers it opaque, desugar's cast-descs brand it
-          (list '#%extern-foreign-type (car row))
+      (cond
+        [(eq? (list-ref row 3) 'foreign)
+         ;; an imported foreign handle type (docs/FFI.md §6): the
+         ;; checker registers it opaque, desugar's cast-descs brand it
+         (list '#%extern-foreign-type (car row))]
+        ;; an imported type alias: the checker unfolds it like a local one
+        [(alias-row? row)
+         (match-let ([`(,mn ,_ ,ps (alias ,body)) row])
+           `(define-type-alias ,(if (null? ps) mn (cons mn ps)) ,body))]
+        [else
       (match-let ([`(,mn ,_ ,ps ,ctor-rows) row])
         `(#%extern-type ,(if (null? ps) mn (cons mn ps))
                         ,@(for/list ([c ctor-rows])
                             (match-let ([`((,cm ,_) ,fts ...) c])
-                              `(,cm ,@fts))))))))
+                              `(,cm ,@fts)))))])))
   ;; constructor positions in templates (modules.rkt rename-forms):
   ;; the imported ADTs' constructors under their marker spellings plus
   ;; the body's own under their renamed ones

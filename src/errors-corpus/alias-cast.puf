@@ -1,0 +1,5 @@
+;; an alias is transparent at runtime too: the cast names what it abbreviates
+(define-type-alias Env (Hash Str Int))
+(define (size [env : Env]) : Int (hash-count env))
+(define (call f) (f 5))
+(println (call size))

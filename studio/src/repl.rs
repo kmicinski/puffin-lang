@@ -129,7 +129,7 @@ pub fn fixes(files: &Files, errors: &str) -> Vec<Fix> {
         for (file, text) in files {
             let defines = sexp::forms(text)
                 .into_iter()
-                .find(|form| session::definition(form) && form.head.as_deref() != Some("define-type") && form.name.as_deref() == Some(name.as_str()));
+                .find(|form| session::definition(form) && !sexp::type_form(form) && form.name.as_deref() == Some(name.as_str()));
             if let Some(form) = defines {
                 out.push(Fix { name: name.clone(), file: file.clone(), line: form.line });
                 break;

@@ -1,0 +1,5 @@
+;; an alias cannot unfold to itself
+(define-type-alias A (List B))
+(define-type-alias B (Pairof Int A))
+(define (f [a : A]) : Int 0)
+(println (f '()))

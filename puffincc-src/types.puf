@@ -68,6 +68,124 @@
         [(pair? t) (cons (ty (car t)) (ty (cdr t)))]
         [else t]))
 
+;; ---- type aliases (docs/TYPES.md §3) --------------------------------
+;; (define-type-alias Name τ) and (define-type-alias (Name a ...) τ):
+;; Name abbreviates τ, transparently. Aliases are unfolded before
+;; anything else reads a type, so the checker, desugar's casts and the
+;; backends only ever see what they abbreviate; the form itself stays
+;; in the program (the walkers ignore it) and desugar drops it.
+;; aliases: mutable hash  name -> (params . body)
+
+(define (alias-head-np head f)
+  (match head
+    [`(,n ,ps ...) #:when (and (symbol? n) (andmap symbol? ps)) (cons n ps)]
+    [(? symbol? n) (cons n '())]
+    [_ (type-error (format "malformed define-type-alias: ~a" (ty f)))]))
+
+(define (collect-aliases forms)
+  (define aliases (make-hash))
+  ;; the heads of the ADTs and foreign types, to refuse a name used both ways
+  (define type-heads (make-set))
+  (for-each-form
+   (lambda (f)
+     (match f
+       [`(define-type ,head ,_ ...)
+        (set-add! type-heads (match head [`(,n ,_ ...) n] [n n]))]
+       [`(#%extern-type ,head ,_ ...)
+        (set-add! type-heads (match head [`(,n ,_ ...) n] [n n]))]
+       [`(,h ,n) #:when (or (eq? h 'define-foreign-type) (eq? h '#%extern-foreign-type))
+        (set-add! type-heads n)]
+       [_ (void)]))
+   forms)
+  (for-each-form
+   (lambda (f)
+     (match f
+       [`(define-type-alias ,head ,body)
+        (let* ([np (alias-head-np head f)] [n (car np)])
+          (when (or (base-type? n) (type-former-name? n))
+            (type-error (format "define-type-alias cannot redefine built-in type ~a" n)))
+          (when (tyvar? n)
+            (type-error (format "define-type-alias ~a: a type name is capitalized (a lowercase name is a type variable)" n)))
+          (when (or (set-member? type-heads n) (hash-has-key? aliases n))
+            (type-error (format "type ~a defined twice" (nm n))))
+          (hash-set! aliases n (cons (cdr np) body)))]
+       [`(define-type-alias ,_ ...)
+        (type-error (format "malformed define-type-alias: ~a" (ty f)))]
+       [_ (void)]))
+   forms)
+  aliases)
+
+(define (subst-type t env)
+  (cond [(symbol? t) (let ([hit (assoc t env)]) (if hit (cdr hit) t))]
+        [(pair? t) (cons (subst-type (car t) env) (subst-type (cdr t) env))]
+        [else t]))
+
+;; τ with every alias unfolded; `seen` holds the aliases being
+;; unfolded, so a cycle is an error rather than a loop
+(define (expand-alias-type t aliases) (expand-alias-type* t aliases '()))
+(define (expand-alias-type* t aliases seen)
+  (define (unfold n args)
+    (let* ([a (hash-ref aliases n)] [ps (car a)] [body (cdr a)])
+      (when (member n seen)
+        (type-error (format "type alias ~a is recursive" (nm n))))
+      (unless (eq? (length ps) (length args))
+        (type-error (format "type alias ~a expects ~a parameters, got ~a"
+                            (nm n) (length ps) (length args))))
+      (expand-alias-type* (subst-type body (map2 (lambda (p a) (cons p a)) ps args))
+                          aliases (cons n seen))))
+  (define (expand s) (expand-alias-type* s aliases seen))
+  (match t
+    [(? symbol? s) (if (hash-has-key? aliases s) (unfold s '()) s)]
+    ;; the fixed-argument list of a ->* is a list of types, not an application
+    [`(->* (,ts ...) ,tr ,tres) (list '->* (map expand ts) (expand tr) (expand tres))]
+    [`(,h ,args ...) #:when (and (symbol? h) (hash-has-key? aliases h))
+     (unfold h (map expand args))]
+    ;; any other list: its elements are types (never its tails, which
+    ;; would read (-> Env Int)'s (Env Int) as an application)
+    [(? list? l) (map expand l)]
+    [(cons a d) (cons (expand a) (expand d))]
+    [_ t]))
+
+;; the program with every type position unfolded: [x : τ] formals and
+;; bindings, the `: τ` result of a define or lambda, (: n τ),
+;; (#%prelude: n τ), (ann e τ), define-type and #%extern-type fields,
+;; and foreign declarations (: n τ). Quoted data is left alone, a
+;; template is entered only through its escapes, and the alias forms
+;; themselves stay (checked for well-formedness in typecheck-program).
+(define (expand-type-aliases forms aliases)
+  (define (tyx t) (expand-alias-type t aliases))
+  (define (walk-ctor c)
+    (match c [`(,cn ,fts ...) (cons cn (map tyx fts))] [_ c]))
+  (define (walk-template q depth)
+    (match q
+      [(list 'unquote x)
+       (list 'unquote (if (eq? depth 1) (walk x) (walk-template x (- depth 1))))]
+      [(list 'unquote-splicing x)
+       (list 'unquote-splicing (if (eq? depth 1) (walk x) (walk-template x (- depth 1))))]
+      [(list 'quasiquote x) (list 'quasiquote (walk-template x (+ depth 1)))]
+      [(cons a d) (cons (walk-template a depth) (walk-template d depth))]
+      [_ q]))
+  (define (walk e)
+    (match e
+      [`(quote ,_) e]
+      [`(quasiquote ,q) (list 'quasiquote (walk-template q 1))]
+      [`(define-type-alias ,_ ,_) e]
+      [`(define-type ,head ,cs ...) (cons 'define-type (cons head (map walk-ctor cs)))]
+      [`(#%extern-type ,head ,cs ...) (cons '#%extern-type (cons head (map walk-ctor cs)))]
+      [`(: ,n ,t) (list ': n (tyx t))]
+      [`(#%prelude: ,n ,t) (list '#%prelude: n (tyx t))]
+      [`(ann ,x ,t) (list 'ann (walk x) (tyx t))]
+      ;; [x : τ] and [x : τ e]
+      [`(,x : ,t . ,rest) #:when (symbol? x) (cons x (cons ': (cons (tyx t) (walk rest))))]
+      ;; (define (f ...) : τ body ...), (lambda (...) : τ body ...)
+      [`(,h ,formals : ,t . ,body) #:when (member h '(define lambda λ))
+       (cons h (cons (walk formals) (cons ': (cons (tyx t) (walk body)))))]
+      [(cons a d) (cons (walk a) (walk d))]
+      [_ e]))
+  (if (eq? (hash-count aliases) 0)
+      forms
+      (map-form walk forms)))
+
 ;; ---- the ADT registry -----------------------------------------------
 ;; adts:  mutable hash  name -> params-list
 ;; ctors: mutable hash  ctor -> (list owner params fields)
@@ -80,7 +198,9 @@
 ;; types are mutually recursive. Returns (list adts ctors ctor-orders),
 ;; where ctor-orders maps a type name to its constructor names in
 ;; declaration order (exhaustiveness reports depend on that order).
-(define (collect-adts forms)
+(define (collect-adts forms0)
+  ;; constructor fields may name type aliases: unfold them first
+  (define forms (expand-type-aliases forms0 (collect-aliases forms0)))
   (define adts (make-hash))
   (define ctors (make-hash))
   (define ctor-orders (make-hash))
@@ -638,7 +758,10 @@
 
 (define (typecheck-program p0)
   (match p0
-    [`(program ,forms0 ...)
+    [`(program ,forms00 ...)
+     ;; type aliases are unfolded everywhere before any type is read
+     (define aliases (collect-aliases forms00))
+     (define forms0 (expand-type-aliases forms00 aliases))
      (define ac (collect-adts forms0))
      (define adts (car ac))
      (define ctors (car (cdr ac)))
@@ -660,8 +783,18 @@
                    [`(define (,g . ,_) ,_ ...) (if (symbol? g) g #f)]
                    [`(define ,x ,_) (if (symbol? x) x #f)]
                    [_ #f])])
-          (when (and n (hash-has-key? adts n))
+          (when (and n (or (hash-has-key? adts n) (hash-has-key? aliases n)))
             (type-error (format "~a is defined as both a type and a value" (nm n))))))
+      forms)
+
+     ;; every alias abbreviates a well-formed type (its parameters in scope)
+     (for-each-form
+      (lambda (f)
+        (match f
+          [`(define-type-alias ,head ,body)
+           (let ([np (alias-head-np head f)])
+             (check-type-wf (expand-alias-type body aliases) (cdr np) adts))]
+          [_ (void)]))
       forms)
 
      ;; formal helpers for populating `top`
@@ -1231,6 +1364,7 @@
             (void)
         (match f
           [`(define-type ,_ ,_ ...) (void)]
+          [`(define-type-alias ,_ ,_) (void)]
           [`(: ,_ ,_) (void)]
           [`(#%prelude: ,_ ,_) (void)]
           [`(define (,g ,formals ...) ,body0 ...) #:when (valid-formals? formals)

@@ -1,0 +1,1 @@
+error: typecheck: type alias A is recursive [alias-cycle.puf:4]

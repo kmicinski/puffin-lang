@@ -1,0 +1,4 @@
+;; an alias must abbreviate a well-formed type
+(define-type-alias Env (Hash Str Value))
+(define (f [e : Env]) : Int (hash-count e))
+(println (f (hash)))

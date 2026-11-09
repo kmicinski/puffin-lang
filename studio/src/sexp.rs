@@ -222,11 +222,18 @@ pub fn form_at(text: &str, pos: usize) -> Option<Form> {
     all.into_iter().find(|form| form.start >= pos && form.start < line_end)
 }
 
-/// The `define-type` forms of `text`: (type name, form text).
+/// Whether a form declares a type: `define-type` or `define-type-alias`.
+/// A REPL unit carries every one of them (repl.rs).
+pub fn type_form(form: &Form) -> bool {
+    matches!(form.head.as_deref(), Some("define-type" | "define-type-alias"))
+}
+
+/// The `define-type` and `define-type-alias` forms of `text`: (type
+/// name, form text).
 pub fn define_types(text: &str) -> Vec<(String, String)> {
     forms(text)
         .into_iter()
-        .filter(|form| form.head.as_deref() == Some("define-type"))
+        .filter(type_form)
         .filter_map(|form| Some((form.name.clone()?, text[form.start..form.end].to_owned())))
         .collect()
 }

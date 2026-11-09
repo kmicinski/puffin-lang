@@ -185,6 +185,8 @@ nullary constructor is a value referenced bare (`None`, not
 (: scale Int)                              ;; standalone declaration
 (define scale 100)
 (ann (car xs) Int)                         ;; expression ascription
+(define-type-alias Env (Hash Str Int))     ;; a type alias: Env IS (Hash Str Int)
+(define-type-alias (Table a) (Hash Str a)) ;; parametric; (Table Int) unfolds
 ```
 
 Checking is bidirectional with consistency — `_` is compatible with

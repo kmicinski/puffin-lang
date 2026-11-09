@@ -100,6 +100,9 @@
        [`(define-type ,head ,ctors ...)
         (cons (match head [`(,n ,_ ...) n] [n n])
               (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
+       ;; a type alias binds its head, a type name like define-type's
+       [`(define-type-alias ,head ,_)
+        (list (match head [`(,n ,_ ...) n] [n n]))]
        [_ (let ([n (module-defn-name f)]) (if n (list n) '()))])]))
 
 ;; ---------------------------------------------------------------------
@@ -160,7 +163,7 @@
 
 ;; names that change meaning if spliced in unqualified
 (define module-keyword-names
-  (list->set '(define-type ann :
+  (list->set '(define-type define-type-alias ann :
                define lambda λ let let* letrec begin if cond case
                when unless match set! while quote quasiquote unquote
                unquote-splicing and or else _ ... require provide
@@ -361,6 +364,8 @@
     (foldl (lambda (f acc)
              (match f
                [`(define-type ,head ,_ ...)
+                (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
+               [`(define-type-alias ,head ,_)
                 (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
                [`(define-foreign-type ,n) (if (symbol? n) (set-add acc n) acc)]
                [_ acc]))
