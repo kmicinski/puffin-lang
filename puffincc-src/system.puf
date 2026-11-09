@@ -72,6 +72,16 @@
 ;; compilation is unaffected.
 (define probe-hook (ann #f _))
 
+;; The expression the typechecker is synthesizing, innermost first:
+;; set on the way into synth and restored on the way out, so when a
+;; type error fires it names the expression at fault, not just the
+;; top-level form. type-error-hook, when set (an assist's check), is
+;; called (hook message focus) before the error is raised; the assist
+;; locates the focus in its span tree and reports the span. Unset,
+;; whole-program compilation is unaffected (docs/STUDIO.md §4).
+(define check-focus (ann #f _))
+(define type-error-hook (ann #f _))
+
 ;; Promote the typechecker's exhaustiveness WARNING (a match over a
 ;; closed ADT that misses constructors; docs/TYPES.md §2) to a
 ;; compile-time error. Off by default: the warning goes to stderr

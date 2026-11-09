@@ -1,0 +1,5 @@
+== check (exit 1)
+== stdout
+{"message":"typecheck: interp expects 2 arguments, got 1","start":300,"end":311}
+error: typecheck: interp expects 2 arguments, got 1 [check-focus.puf:6]
+== stderr

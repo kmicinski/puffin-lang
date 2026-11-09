@@ -17,4 +17,5 @@ typecheck warning: match on Color is not exhaustive: missing Red, Green [later-e
 
 (define oops (+ 1 "two"))
 == check (exit 1)
+{"message":"typecheck: +: argument has type Str, expected Int","start":312,"end":323}
 error: typecheck: +: argument has type Str, expected Int [later-error.puf:11]

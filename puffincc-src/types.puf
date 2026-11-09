@@ -37,6 +37,8 @@
 ;; every type error carries the nearest enclosing top-level form's
 ;; source position when known (system.puf origin-suffix)
 (define (type-error msg)
+  (when type-error-hook
+    (type-error-hook (string-append "typecheck: " msg) check-focus))
   (error (string-append "typecheck: " (string-append msg (origin-suffix)))))
 
 ;; ---- type syntax helpers --------------------------------------------
@@ -1069,7 +1071,14 @@
              [arg-ts (map (lambda (r) (synth r env)) rands)])
          (check-app ft arg-ts (if (symbol? rator) rator "application"))))
 
+     ;; the expression under synthesis is the focus a type error names
      (define (synth e env)
+       (let ([saved check-focus])
+         (set! check-focus e)
+         (let ([t (synth* e env)])
+           (set! check-focus saved)
+           t)))
+     (define (synth* e env)
        (match e
          [(? fixnum? _) 'Int]
          [#t 'Bool]

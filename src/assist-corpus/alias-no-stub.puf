@@ -1,0 +1,5 @@
+;; assist: assists @ "(define-type-alias" +1
+;; a type alias is a declaration, not a call to stub
+(define-type-alias Env (Hash Str Int))
+(define (size [e : Env]) : Int (hash-count e))
+(println (size (hash)))

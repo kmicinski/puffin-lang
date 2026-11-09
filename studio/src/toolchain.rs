@@ -50,6 +50,13 @@ pub struct Diagnostic {
     /// "error", "warning", or "hole" (the checker stopped at a `??`).
     pub severity: &'static str,
     pub message: String,
+    /// The expression at fault, when the checker could name one
+    /// (`--assist check` prints its byte span; `check` turns it into
+    /// UTF-16 offsets for the editor): [start, end) in `file`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<usize>,
 }
 
 /// A check's answer.
@@ -87,7 +94,7 @@ impl Report {
     pub fn failure(message: impl Into<String>) -> Self {
         Report {
             ok: false,
-            diagnostics: vec![Diagnostic { file: String::new(), line: 0, severity: "error", message: message.into() }],
+            diagnostics: vec![Diagnostic { file: String::new(), line: 0, severity: "error", message: message.into(), start: None, end: None }],
         }
     }
 }
@@ -115,11 +122,19 @@ pub fn located(text: &str) -> (String, Option<(String, usize)>) {
 /// by base name; `resolve` maps it to the project's path.
 pub fn diagnostics(succeeded: bool, stdout: &str, stderr: &str, resolve: &dyn Fn(&str) -> String) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    let (focus, _) = json_lines(stdout, "message");
     let make = |severity: &'static str, text: &str| {
         let (message, at) = located(text);
         let (file, line) = at.map(|(file, line)| (resolve(&file), line)).unwrap_or_default();
         let severity = if message == HOLE_MESSAGE { "hole" } else { severity };
-        Diagnostic { file, line, severity, message }
+        // the checker named the expression at fault: a {"message","start","end"}
+        // line on stdout ahead of the error (puffincc-src/assist.puf op-check)
+        let (start, end) = focus
+            .iter()
+            .find(|f| f["message"].as_str() == Some(message.as_str()))
+            .and_then(|f| Some((f["start"].as_u64()? as usize, f["end"].as_u64()? as usize)))
+            .map_or((None, None), |(s, e)| (Some(s), Some(e)));
+        Diagnostic { file, line, severity, message, start, end }
     };
     for line in stderr.lines() {
         if let Some(rest) = line.strip_prefix("typecheck warning: ") {
@@ -508,7 +523,14 @@ impl Toolchain {
             Ok(output) if output.timed_out => Report::failure("the check timed out"),
             Ok(output) => {
                 let resolve = |base: &str| resolve(files, entry, base);
-                let diagnostics = diagnostics(output.success, &output.stdout, &output.stderr, &resolve);
+                let mut diagnostics = diagnostics(output.success, &output.stdout, &output.stderr, &resolve);
+                // spans arrive as byte offsets; the editor counts UTF-16 units
+                for d in &mut diagnostics {
+                    if let (Some(start), Some(end), Some(text)) = (d.start, d.end, files.get(&d.file)) {
+                        d.start = Some(sexp::utf16_of_byte(text, start));
+                        d.end = Some(sexp::utf16_of_byte(text, end));
+                    }
+                }
                 Report { ok: output.success, diagnostics }
             }
             Err(error) => Report::failure(error),
@@ -845,6 +867,23 @@ mod tests {
         let bare = diagnostics(false, "", "segfault\n", &resolve);
         assert_eq!(bare[0].message, "segfault");
         assert!(diagnostics(true, "", "", &resolve).is_empty());
+    }
+
+    #[test]
+    fn an_error_carries_the_span_the_checker_focused() {
+        let files = Files::from([("main.puf".to_owned(), String::new())]);
+        let resolve = |base: &str| resolve(&files, "main.puf", base);
+        let found = diagnostics(
+            false,
+            "{\"message\":\"typecheck: interp expects 2 arguments, got 1\",\"start\":445,\"end\":456}\n\
+             error: typecheck: interp expects 2 arguments, got 1 [main.puf:15]\n",
+            "",
+            &resolve,
+        );
+        assert_eq!((found.len(), found[0].line, found[0].start, found[0].end), (1, 15, Some(445), Some(456)));
+        // no focus line: the error still stands, on its line alone
+        let bare = diagnostics(false, "error: typecheck: oops [main.puf:2]\n", "", &resolve);
+        assert_eq!((bare[0].line, bare[0].start), (2, None));
     }
 
     #[test]

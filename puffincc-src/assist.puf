@@ -668,7 +668,7 @@
 
 (define special-forms
   '(define lambda λ let let* letrec if cond case match when unless begin while set!
-    quote quasiquote unquote and or not else ann : define-type require provide
+    quote quasiquote unquote and or not else ann : define-type define-type-alias require provide
     foreign define-foreign-type list vector hash set))
 
 ;; names bound around the cursor by the forms on its path
@@ -2071,10 +2071,40 @@
 
 ;; ---- check ----------------------------------------------------------------------
 
+;; `--assist check`: {"ok":true}, or the checker's error on stderr as
+;; for any compile -- preceded, when the checker could name the
+;; expression at fault (system.puf check-focus) and it is in this
+;; file, by one line {"message", "start", "end"} with the byte span of
+;; that expression, so the editor underlines the call and not the
+;; whole define.
 (define (op-check load-entry assemble)
+  (set! type-error-hook
+        (lambda (msg focus)
+          (let ([span (and focus (focus-span focus))])
+            (when span
+              (println (json-obj (list (cons "message" (json-str msg))
+                                       (cons "start" (json-int (car span)))
+                                       (cons "end" (json-int (cdr span))))))))))
   (let ([fo (load-entry entry-path)])
     (desugar (assemble (first fo) (second fo)))
     (println (json-obj (list (cons "ok" "true"))))))
+
+;; the span of the first node spelling `focus` inside the top-level
+;; form the current error origin names (the whole file when the
+;; origin is not one of this file's lines), or #f
+(define (focus-span focus)
+  (let* ([origin current-form-origin]
+         [here (and origin (string=? (car origin) (path-basename entry-path)))]
+         [tops (if here
+                   (filter (lambda (top) (eq? (line-of (syn-start top)) (cdr origin))) entry-nodes)
+                   '())]
+         [hit (node-with-datum (if (pair? tops) tops entry-nodes) focus)])
+    (and hit (cons (syn-start hit) (syn-end hit)))))
+(define (node-with-datum ns d)
+  (cond [(null? ns) #f]
+        [(equal? (syn->datum (car ns)) d) (car ns)]
+        [else (or (node-with-datum (syn-kids (car ns)) d)
+                  (node-with-datum (cdr ns) d))]))
 
 ;; ---- entry point ------------------------------------------------------------------
 

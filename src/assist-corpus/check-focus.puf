@@ -1,0 +1,9 @@
+;; assist: check
+;; a type error names the expression at fault: the call with the
+;; wrong number of arguments, by byte span, ahead of the error
+(define-type Expr (Num Int) (App Expr Expr))
+
+(define (interp [e : Expr] [env : Int]) : Int
+  (match e
+    [(Num n) n]
+    [(App e1 e2) (+ (interp e1 env) (interp e2))]))

@@ -52,6 +52,7 @@
 
 (simp (Num 1) 3)
 == check (exit 1)
+{"message":"typecheck: unbound variable ??","start":360,"end":362}
 error: typecheck: unbound variable ?? [hole-result.puf:7]
 == apply 4: fill-hole
 ;; assist: assists @ "x) ??]" +3
@@ -67,6 +68,7 @@ error: typecheck: unbound variable ?? [hole-result.puf:7]
 
 (simp (Num 1) 3)
 == check (exit 1)
+{"message":"typecheck: unbound variable ??","start":359,"end":361}
 error: typecheck: unbound variable ?? [hole-result.puf:7]
 == apply 5: fill-hole
 ;; assist: assists @ "x) ??]" +3
@@ -82,6 +84,7 @@ error: typecheck: unbound variable ?? [hole-result.puf:7]
 
 (simp (Num 1) 3)
 == check (exit 1)
+{"message":"typecheck: unbound variable ??","start":359,"end":361}
 error: typecheck: unbound variable ?? [hole-result.puf:7]
 == apply 6: fill-hole
 ;; assist: assists @ "x) ??]" +3
@@ -97,4 +100,5 @@ error: typecheck: unbound variable ?? [hole-result.puf:7]
 
 (simp (Num 1) 3)
 == check (exit 1)
+{"message":"typecheck: unbound variable ??","start":359,"end":361}
 error: typecheck: unbound variable ?? [hole-result.puf:7]

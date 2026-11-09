@@ -1,4 +1,5 @@
 == check (exit 1)
 == stdout
+{"message":"typecheck: unbound variable ??","start":135,"end":137}
 error: typecheck: unbound variable ?? [hole-compiles-not.puf:4]
 == stderr

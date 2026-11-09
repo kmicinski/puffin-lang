@@ -551,6 +551,15 @@ transcripts can be goldens too.
   A bare constructor in a `define-type` (`Int` for `(Int)`) used to
   crash both checkers in pass 2 before any of this could run; it is
   a diagnostic now (`tc-ctor-bare` in the errors corpus).
+- **A type error underlines the expression at fault** (`system.puf`
+  `check-focus`, `assist.puf` `op-check`): the checker keeps the
+  expression it is synthesizing, innermost first, and `--assist
+  check` prints its byte span on stdout (`{"message","start","end"}`)
+  ahead of the error, located in the span tree by the form the error
+  names. The studio turns it into editor offsets (`toolchain.rs`
+  `check`), so `(interp e2)` is underlined, not the whole define;
+  an error the checker cannot place still marks the form's line.
+  Messages are unchanged: the span is a separate line, assist-only.
 - **TeX characters** (`studio/web/tex.js`), DrRacket's way: type a
   TeX name after a backslash and press `⌥↵` (Alt-Enter) to replace
   it with the character: `\lambda` λ, `\varsigma` ς, `\to` →,
