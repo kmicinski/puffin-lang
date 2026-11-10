@@ -112,7 +112,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
 
   function showNothing() {
     state.active = null;
-    editor.show("", state.files.size ? ";; no file is open: pick one in the tree, or ⌘P\n" : ";; the project has no files: + makes one\n");
+    editor.show("", state.files.size ? ";; no file is open: pick one in the tree, or ,open\n" : ";; the project has no files: + makes one\n");
     render();
   }
 

@@ -62,8 +62,8 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,pin N               keep entry N's printed result as a check in tests.puf (pin)
 ,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
-,files               show or hide the tree of the project's files (⌘⇧E); ⌘P opens one by name
-,open [FILE]         show FILE in the editor (without one: ⌘P's picker)
+,files               show or hide the tree of the project's files (⌘⇧E)
+,open [FILE]         show FILE in the editor (without one: a picker, by part of the path)
 ,new NAME            a new file, NAME.puf unless a suffix is typed (lib/vec makes a folder)
 ,history             show or hide the project's history: every edit, eval, ask and test, in order
 ,versions            show or hide the shown file's versions (,restore vN brings one back)

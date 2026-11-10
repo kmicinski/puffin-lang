@@ -9,8 +9,9 @@
 // hidden), a rename is typed over the name (F2, or the menu), a delete asks
 // once in the row, and a drag onto a folder moves a file or a folder there.
 // The studio does the work (studio/src/studio.rs new_file, move_file,
-// delete_file and the folder forms) and every tab's tree follows. ⌘P opens
-// a file by typing part of its path.
+// delete_file and the folder forms) and every tab's tree follows. `,open`
+// without a name opens a file by typing part of its path. No key is bound
+// beyond ⌘⇧E (the Command key alone: Control is Emacs's in the editor).
 //
 //   createTree({ panel, toggle, add, quick, files, editor, note })
 //     -> { toggle, show, newFile, quickOpen, receive }
@@ -425,7 +426,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
   });
   const refocus = () => panel.querySelector(`.tree-row[data-path="${CSS.escape(focused)}"]`)?.focus();
 
-  // ---- ⌘P: a file by part of its path ----------------------------------------------
+  // ---- ,open: a file by part of its path -------------------------------------------
 
   let quickRows = [];
   let quickAt = 0;
@@ -485,9 +486,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
   toggle.addEventListener("click", () => show(!shown, true));
   add.addEventListener("click", () => startNew("new-file", shown && focused ? folderOf(focused) : ""));
   document.addEventListener("keydown", (event) => {
-    const cmd = event.metaKey || event.ctrlKey;
-    if (cmd && event.shiftKey && event.code === "KeyE") { event.preventDefault(); event.stopPropagation(); show(!shown, true); }
-    else if (cmd && !event.shiftKey && !event.altKey && event.code === "KeyP") { event.preventDefault(); event.stopPropagation(); quickOpen(); }
+    if (event.metaKey && !event.ctrlKey && event.shiftKey && event.code === "KeyE") { event.preventDefault(); event.stopPropagation(); show(!shown, true); }
   }, true);
   const folderOf = (path) => (files.folders().includes(path) ? path : dirname(path));
 
