@@ -66,6 +66,8 @@ pub struct Snapshot {
     /// The project is a repository the studio commits to (project.rs).
     pub tracked: bool,
     pub files: Vec<FileView>,
+    /// Every directory of the project, empty ones included.
+    pub folders: Vec<String>,
     pub lane: LaneStatus,
     pub review: ReviewView,
     pub diagnostics: BTreeMap<String, Report>,
@@ -166,8 +168,9 @@ pub enum Event {
     /// A file's text changed; `origin` is the connection that changed it
     /// (0: the studio itself, as an accepted proposal or a restore).
     Text { file: String, version: u64, text: String, origin: u64 },
-    /// The set of files changed: one was added or went.
-    Files { files: Vec<FileView> },
+    /// The set of files changed: one was added, moved or went; `folders`
+    /// are every directory of the project, empty ones included.
+    Files { files: Vec<FileView>, folders: Vec<String> },
     /// These files, at these versions, are what disk holds.
     Saved { files: BTreeMap<String, u64> },
     /// The latest check of each program, by its entry file.
@@ -237,12 +240,33 @@ impl Doc {
 struct Open {
     docs: BTreeMap<String, Doc>,
     clock: u64,
+    /// The project's directories as disk has them (scan), made from the
+    /// studio included: a folder stays listed while it is empty.
+    folders: BTreeSet<String>,
 }
 
 impl Open {
     fn tick(&mut self) -> u64 {
         self.clock += 1;
         self.clock
+    }
+
+    /// Every directory a file sits in, every one known to disk, and
+    /// their parents.
+    fn folders(&self) -> Vec<String> {
+        let mut out = self.folders.clone();
+        for path in self.docs.keys().chain(self.folders.iter()) {
+            let mut at = path.as_str();
+            while let Some((dir, _)) = at.rsplit_once('/') {
+                out.insert(dir.to_owned());
+                at = dir;
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    fn files_event(&self) -> Event {
+        Event::Files { files: self.views(), folders: self.folders() }
     }
 
     fn views(&self) -> Vec<FileView> {
@@ -317,10 +341,11 @@ impl Studio {
                 let _ = lane_events.send(Event::Lane(status));
             }),
         );
-        let mut open = Open { docs: BTreeMap::new(), clock: 0 };
+        let scanned = scan(&directory);
+        let mut open = Open { docs: BTreeMap::new(), clock: 0, folders: scanned.folders.into_iter().collect() };
         let mut history = History::default();
         let mut committed: Files = Files::new();
-        for (path, text, modified) in scan(&directory) {
+        for (path, text, modified) in scanned.files {
             let version = open.tick();
             history.record(&path, &text, "open", "");
             committed.insert(path.clone(), text.clone());
@@ -417,7 +442,10 @@ impl Studio {
     pub async fn snapshot(&self) -> Snapshot {
         let features = self.features().await;
         // each lock taken alone: a guard in a struct literal lives to its end
-        let files = self.open.lock().expect("open lock").views();
+        let (files, folders) = {
+            let open = self.open.lock().expect("open lock");
+            (open.views(), open.folders())
+        };
         let review = self.review_view();
         let diagnostics = self.diagnostics.lock().expect("diagnostics lock").clone();
         let transcript = self.transcript.lock().expect("transcript lock").clone();
@@ -430,6 +458,7 @@ impl Studio {
             directory: self.directory.display().to_string(),
             tracked: self.tracked,
             files,
+            folders,
             lane: self.lane.status(),
             review,
             diagnostics,
@@ -491,9 +520,9 @@ impl Studio {
                 }
                 None => {
                     open.docs.insert(file.to_owned(), Doc { text: text.clone(), version: clock, disk: None, modified: None });
-                    let files = open.views();
+                    let event = open.files_event();
                     drop(open);
-                    self.publish(Event::Files { files });
+                    self.publish(event);
                 }
             }
             clock
@@ -524,17 +553,261 @@ impl Studio {
 
     pub fn new_file(&self, path: &str) -> Result<(), String> {
         let path = valid_path(path)?;
-        let files = {
+        let event = {
             let mut open = self.open.lock().expect("open lock");
             if open.docs.contains_key(&path) {
                 return Err(format!("{path} exists already"));
             }
             let version = open.tick();
             open.docs.insert(path.clone(), Doc { text: String::new(), version, disk: None, modified: None });
-            open.views()
+            open.files_event()
         };
-        self.publish(Event::Files { files });
+        self.publish(event);
         Ok(())
+    }
+
+    /// Make directory `path` in the project: listed at once, empty, and
+    /// kept on disk (git takes no note of it until a file is in it).
+    pub fn new_folder(&self, path: &str) -> Result<(), String> {
+        let path = valid_folder(path)?;
+        let event = {
+            let mut open = self.open.lock().expect("open lock");
+            if open.docs.keys().any(|file| file == &path) {
+                return Err(format!("{path} is a file"));
+            }
+            std::fs::create_dir_all(self.directory.join(&path)).map_err(|error| format!("cannot make {path}: {error}"))?;
+            open.folders.insert(path.clone());
+            open.files_event()
+        };
+        self.publish(event);
+        Ok(())
+    }
+
+    /// Move file `from` to `to`, on disk too, and point every `require`
+    /// of it in the other files at its new place. Says which files were
+    /// pointed anew.
+    pub fn move_file(&self, from: &str, to: &str) -> Result<String, String> {
+        let to = valid_path(to)?;
+        if from == to {
+            return Ok(String::new());
+        }
+        let event = {
+            let mut open = self.open.lock().expect("open lock");
+            if !open.docs.contains_key(from) {
+                return Err(format!("there is no file {from}"));
+            }
+            if open.docs.contains_key(&to) {
+                return Err(format!("{to} exists already"));
+            }
+            self.move_on_disk(from, &to)?;
+            let version = open.tick();
+            let mut doc = open.docs.remove(from).expect("checked above");
+            doc.version = version;
+            open.docs.insert(to.clone(), doc);
+            open.files_event()
+        };
+        self.moved(from, &to);
+        self.publish(event);
+        let pointed = self.point_requires(&[(from.to_owned(), to.clone())]);
+        self.record("rename", json!({ "from": from, "to": to, "pointed": pointed }));
+        self.edited_file(&to);
+        Ok(pointed_note(&pointed))
+    }
+
+    /// Move directory `from` and every file in it to `to`.
+    pub fn move_folder(&self, from: &str, to: &str) -> Result<String, String> {
+        let from = valid_folder(from)?;
+        let to = valid_folder(to)?;
+        if from == to {
+            return Ok(String::new());
+        }
+        if to.starts_with(&format!("{from}/")) {
+            return Err(format!("{to} is inside {from}"));
+        }
+        let moves: Vec<(String, String)>;
+        let event = {
+            let mut open = self.open.lock().expect("open lock");
+            let inside = |path: &str| path.starts_with(&format!("{from}/"));
+            if open.docs.contains_key(&to) || open.folders().contains(&to) {
+                return Err(format!("{to} exists already"));
+            }
+            if !open.folders().contains(&from) {
+                return Err(format!("there is no folder {from}"));
+            }
+            moves = open.docs.keys().filter(|path| inside(path)).map(|path| (path.clone(), format!("{to}{}", &path[from.len()..]))).collect();
+            let source = self.directory.join(&from);
+            if source.is_dir() {
+                let target = self.directory.join(&to);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| format!("cannot make {to}: {error}"))?;
+                }
+                std::fs::rename(&source, &target).map_err(|error| format!("cannot move {from} to {to}: {error}"))?;
+            }
+            for (old, new) in &moves {
+                let version = open.tick();
+                let mut doc = open.docs.remove(old).expect("listed above");
+                doc.version = version;
+                open.docs.insert(new.clone(), doc);
+            }
+            let renamed: Vec<String> = open.folders.iter().filter(|dir| *dir == &from || inside(dir)).cloned().collect();
+            for dir in renamed {
+                open.folders.remove(&dir);
+                open.folders.insert(format!("{to}{}", &dir[from.len()..]));
+            }
+            open.files_event()
+        };
+        for (old, new) in &moves {
+            self.moved(old, new);
+        }
+        self.publish(event);
+        let pointed = self.point_requires(&moves);
+        self.record("rename", json!({ "from": from, "to": to, "folder": true, "files": moves.len(), "pointed": pointed }));
+        for (_, new) in &moves {
+            self.edited_file(new);
+        }
+        Ok(pointed_note(&pointed))
+    }
+
+    /// Take file `path` out of the project and off disk. A tracked
+    /// project's history keeps it.
+    pub fn delete_file(&self, path: &str) -> Result<(), String> {
+        let event = {
+            let mut open = self.open.lock().expect("open lock");
+            if !open.docs.contains_key(path) {
+                return Err(format!("there is no file {path}"));
+            }
+            let target = self.directory.join(path);
+            if target.exists() {
+                std::fs::remove_file(&target).map_err(|error| format!("cannot delete {path}: {error}"))?;
+            }
+            let _ = std::fs::remove_file(target.with_extension("puffin-studio-tmp"));
+            open.docs.remove(path);
+            open.files_event()
+        };
+        self.forget(path);
+        self.publish(event);
+        self.record("delete", json!({ "file": path }));
+        if self.tracked {
+            self.journal_due.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Take directory `path` and its files out of the project. A folder
+    /// holding files the studio does not manage stays, and says so.
+    pub fn delete_folder(&self, path: &str) -> Result<(), String> {
+        let path = valid_folder(path)?;
+        let removed: Vec<String>;
+        let event = {
+            let mut open = self.open.lock().expect("open lock");
+            if !open.folders().contains(&path) {
+                return Err(format!("there is no folder {path}"));
+            }
+            let inside = |dir: &str| dir.starts_with(&format!("{path}/"));
+            removed = open.docs.keys().filter(|file| inside(file)).cloned().collect();
+            for file in &removed {
+                let target = self.directory.join(file);
+                if target.exists() {
+                    std::fs::remove_file(&target).map_err(|error| format!("cannot delete {file}: {error}"))?;
+                }
+                let _ = std::fs::remove_file(target.with_extension("puffin-studio-tmp"));
+                open.docs.remove(file);
+            }
+            let dirs: Vec<String> = open.folders.iter().filter(|dir| *dir == &path || inside(dir)).cloned().collect();
+            for dir in dirs {
+                open.folders.remove(&dir);
+            }
+            let target = self.directory.join(&path);
+            let kept = target.is_dir() && remove_empty_dirs(&target).is_err();
+            if kept {
+                open.folders.insert(path.clone());
+            }
+            (open.files_event(), kept)
+        };
+        let (event, kept) = event;
+        for file in &removed {
+            self.forget(file);
+        }
+        self.publish(event);
+        self.record("delete", json!({ "file": path, "folder": true, "files": removed.len() }));
+        if self.tracked {
+            self.journal_due.notify_one();
+        }
+        if kept {
+            return Err(format!("{path} holds files the studio does not manage, so the folder stays; its Puffin files are gone"));
+        }
+        Ok(())
+    }
+
+    /// Move `from` to `to` on disk, if `from` is there.
+    fn move_on_disk(&self, from: &str, to: &str) -> Result<(), String> {
+        let source = self.directory.join(from);
+        if !source.is_file() {
+            return Ok(());
+        }
+        let target = self.directory.join(to);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| format!("cannot make {to}'s folder: {error}"))?;
+        }
+        std::fs::rename(&source, &target).map_err(|error| format!("cannot move {from} to {to}: {error}"))?;
+        let _ = std::fs::remove_file(source.with_extension("puffin-studio-tmp"));
+        Ok(())
+    }
+
+    /// What the studio keeps per file follows a moved one.
+    fn moved(&self, from: &str, to: &str) {
+        self.history.lock().expect("history lock").rename(from, to);
+        {
+            let mut committed = self.committed.lock().expect("committed lock");
+            if let Some(text) = committed.remove(from) {
+                committed.insert(to.to_owned(), text);
+            }
+        }
+        self.forget_checks(from);
+    }
+
+    /// What the studio keeps per file goes with a deleted one.
+    fn forget(&self, path: &str) {
+        self.committed.lock().expect("committed lock").remove(path);
+        self.forget_checks(path);
+    }
+
+    fn forget_checks(&self, path: &str) {
+        self.to_check.lock().expect("check lock").remove(path);
+        self.diagnostics.lock().expect("diagnostics lock").retain(|entry, report| entry != path && !report.diagnostics.iter().any(|d| d.file == path));
+        if self.holes.lock().expect("holes lock").remove(path).is_some() {
+            self.publish(Event::Holes { file: path.to_owned(), holes: Marks::default() });
+        }
+        if self.lint.lock().expect("lint lock").remove(path).is_some() {
+            self.publish(Event::Lint { file: path.to_owned(), lint: Marks::default() });
+        }
+        let reports = self.diagnostics.lock().expect("diagnostics lock").clone();
+        self.publish(Event::Diagnostics { reports });
+    }
+
+    /// Rewrite each `(require "...")` that named a moved file so it names
+    /// the file where it is now. Returns the files rewritten.
+    fn point_requires(&self, moves: &[(String, String)]) -> Vec<String> {
+        let files = self.files();
+        let mut pointed = Vec::new();
+        for (path, text) in &files {
+            let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let mut edited = text.clone();
+            for form in crate::sexp::forms(text).iter().rev() {
+                let (Some("require"), Some(target)) = (form.head.as_deref(), form.string.as_ref()) else { continue };
+                let named = toolchain::normalize(dir, target);
+                let Some((_, to)) = moves.iter().find(|(from, _)| *from == named) else { continue };
+                let quoted = format!("\"{target}\"");
+                let Some(at) = text[form.start..form.end].find(&quoted) else { continue };
+                let start = form.start + at;
+                edited.replace_range(start..start + quoted.len(), &format!("\"{}\"", relative_path(dir, to)));
+            }
+            if edited != *text {
+                self.replace(path, edited, "rename", &format!("requires {}", moves.iter().map(|(_, to)| to.as_str()).collect::<Vec<_>>().join(", ")));
+                pointed.push(path.clone());
+            }
+        }
+        pointed
     }
 
     /// Write every file whose text differs from disk's.
@@ -600,19 +873,41 @@ impl Studio {
                 tokio::time::sleep(DISK_POLL).await;
                 let Some(studio) = studio.upgrade() else { return };
                 let directory = studio.directory.clone();
-                let found = tokio::task::spawn_blocking(move || scan(&directory)).await.unwrap_or_default();
+                let Ok(found) = tokio::task::spawn_blocking(move || scan(&directory)).await else { continue };
                 studio.take_disk(found);
             }
         });
     }
 
-    fn take_disk(&self, found: Vec<(String, String, Option<SystemTime>)>) {
+    fn take_disk(&self, found: Scanned) {
         let mut changed = Vec::new();
         let mut kept = Vec::new();
+        let mut gone = Vec::new();
         let mut added = false;
         {
             let mut open = self.open.lock().expect("open lock");
-            for (path, text, stamp) in found {
+            // a saved file that went from disk (deleted or moved outside the
+            // studio) goes from the project; one with unsaved edits stays
+            let complete = found.files.len() < MAX_FILES;
+            if complete {
+                let present: BTreeSet<&str> = found.files.iter().map(|(path, ..)| path.as_str()).collect();
+                let vanished: Vec<String> = open
+                    .docs
+                    .iter()
+                    .filter(|(path, doc)| doc.disk.is_some() && doc.saved() && !present.contains(path.as_str()) && !self.directory.join(path).exists())
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                for path in vanished {
+                    open.docs.remove(&path);
+                    gone.push(path);
+                }
+            }
+            let folders: BTreeSet<String> = found.folders.into_iter().collect();
+            if folders != open.folders {
+                open.folders = folders;
+                added = true;
+            }
+            for (path, text, stamp) in found.files {
                 let clock = open.clock + 1;
                 match open.docs.get_mut(&path) {
                     Some(doc) if doc.disk.as_deref() == Some(text.as_str()) => doc.modified = stamp,
@@ -629,6 +924,8 @@ impl Studio {
                         doc.modified = stamp;
                         kept.push(path);
                     }
+                    // the scan ran before a move or a delete: not back again
+                    None if !self.directory.join(&path).is_file() => {}
                     None => {
                         open.clock = clock;
                         open.docs.insert(path.clone(), Doc { text: text.clone(), version: clock, disk: Some(text.clone()), modified: stamp });
@@ -637,11 +934,16 @@ impl Studio {
                     }
                 }
             }
-            if added {
-                let files = open.views();
+            if added || !gone.is_empty() {
+                let event = open.files_event();
                 drop(open);
-                self.publish(Event::Files { files });
+                self.publish(event);
             }
+        }
+        for path in gone {
+            self.forget(&path);
+            self.record("delete", json!({ "file": path, "disk": true }));
+            self.notice(format!("{path} went from disk; it is out of the project"));
         }
         for (path, version, text) in changed {
             self.publish(Event::Text { file: path.clone(), version, text: text.clone(), origin: 0 });
@@ -1060,15 +1362,25 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|meta| meta.modified()).ok()
 }
 
-/// The project's files under `directory`: (relative path, text, mtime).
-pub fn scan(directory: &Path) -> Vec<(String, String, Option<SystemTime>)> {
-    let mut out = Vec::new();
-    walk(directory, directory, 0, &mut out);
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
+/// What a scan of the project found.
+#[derive(Default)]
+pub struct Scanned {
+    /// The Puffin files: (relative path, text, mtime).
+    pub files: Vec<(String, String, Option<SystemTime>)>,
+    /// Every directory, relative, empty ones included.
+    pub folders: Vec<String>,
 }
 
-fn walk(root: &Path, directory: &Path, depth: usize, out: &mut Vec<(String, String, Option<SystemTime>)>) {
+/// The project's files under `directory`, and its directories.
+pub fn scan(directory: &Path) -> Scanned {
+    let mut found = Scanned::default();
+    walk(directory, directory, 0, &mut found.files, &mut found.folders);
+    found.files.sort_by(|a, b| a.0.cmp(&b.0));
+    found.folders.sort();
+    found
+}
+
+fn walk(root: &Path, directory: &Path, depth: usize, out: &mut Vec<(String, String, Option<SystemTime>)>, folders: &mut Vec<String>) {
     if depth > 6 || out.len() >= MAX_FILES {
         return;
     }
@@ -1083,7 +1395,10 @@ fn walk(root: &Path, directory: &Path, depth: usize, out: &mut Vec<(String, Stri
         let path = entry.path();
         if path.is_dir() {
             if !SKIPPED.contains(&name.as_str()) {
-                walk(root, &path, depth + 1, out);
+                if let Ok(relative) = path.strip_prefix(root) {
+                    folders.push(relative.to_string_lossy().into_owned());
+                }
+                walk(root, &path, depth + 1, out, folders);
             }
         } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| EXTENSIONS.contains(&e))
             && let Ok(text) = std::fs::read_to_string(&path)
@@ -1105,7 +1420,7 @@ fn subject_of(records: &[Record]) -> String {
     if !edited.is_empty() {
         parts.push(format!("edit {}", edited.join(", ")));
     }
-    for kind in ["eval", "ask", "test", "accept", "restore", "echo", "disk", "session"] {
+    for kind in ["rename", "delete", "eval", "ask", "test", "accept", "restore", "echo", "disk", "session"] {
         let count = records.iter().filter(|r| r.kind == kind).count();
         match count {
             0 => {}
@@ -1130,14 +1445,54 @@ fn clip(text: &str, limit: usize) -> String {
 
 /// A new file's path: relative, inside the project, with a Puffin suffix.
 pub fn valid_path(path: &str) -> Result<String, String> {
-    let path = path.trim().trim_start_matches("./");
+    let path = valid_folder(path)?;
+    if EXTENSIONS.iter().any(|extension| path.ends_with(&format!(".{extension}"))) {
+        Ok(path)
+    } else {
+        Ok(format!("{path}.puf"))
+    }
+}
+
+/// A directory's path: relative, inside the project, no hidden parts.
+pub fn valid_folder(path: &str) -> Result<String, String> {
+    let path = path.trim().trim_start_matches("./").trim_end_matches('/');
     if path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == ".." || part.is_empty() || part.starts_with('.')) {
         return Err(format!("{path}: a file of the project is a relative path inside it"));
     }
-    if EXTENSIONS.iter().any(|extension| path.ends_with(&format!(".{extension}"))) {
-        Ok(path.to_owned())
-    } else {
-        Ok(format!("{path}.puf"))
+    Ok(path.to_owned())
+}
+
+/// `target` as a path relative to directory `dir`, as a `require` names it.
+pub fn relative_path(dir: &str, target: &str) -> String {
+    let from: Vec<&str> = if dir.is_empty() { Vec::new() } else { dir.split('/').collect() };
+    let to: Vec<&str> = target.split('/').collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<&str> = vec![".."; from.len() - shared];
+    parts.extend(&to[shared..]);
+    parts.join("/")
+}
+
+/// Remove `directory` and the directories under it, if nothing else is
+/// in them.
+fn remove_empty_dirs(directory: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(directory)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            remove_empty_dirs(&path)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("puffin-studio-tmp") || path.file_name().is_some_and(|n| n == ".DS_Store") {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    std::fs::remove_dir(directory)
+}
+
+/// A note for the tab: which files now require a moved file by its new
+/// name.
+fn pointed_note(pointed: &[String]) -> String {
+    match pointed {
+        [] => String::new(),
+        [one] => format!("{one} requires it by its new name now"),
+        many => format!("{} require it by its new name now", many.join(", ")),
     }
 }
 
@@ -1156,6 +1511,7 @@ mod tests {
             Record::new("ask", json!({})),
         ];
         assert_eq!(subject_of(&records), "edit calc.puf · eval ×2 · ask");
+        assert_eq!(subject_of(&[Record::new("rename", json!({})), Record::new("edit", json!({ "file": "main.puf" }))]), "edit main.puf · rename");
         assert_eq!(subject_of(&[]), "studio");
         assert_eq!(clip("héllo", 2), "h… (5 bytes cut)");
         assert_eq!(clip("hi", 2), "hi");
@@ -1168,5 +1524,16 @@ mod tests {
         assert!(valid_path("../x.puf").is_err());
         assert!(valid_path("/etc/x.puf").is_err());
         assert!(valid_path("a//b.puf").is_err());
+        assert_eq!(super::valid_folder("lib/").unwrap(), "lib");
+        assert!(super::valid_folder("lib/.hidden").is_err());
+    }
+
+    #[test]
+    fn a_require_names_a_moved_file_from_where_it_stands() {
+        use super::relative_path;
+        assert_eq!(relative_path("", "lib/vec.puf"), "lib/vec.puf");
+        assert_eq!(relative_path("lib", "lib/vec.puf"), "vec.puf");
+        assert_eq!(relative_path("lib/a", "lib/b/vec.puf"), "../b/vec.puf");
+        assert_eq!(relative_path("src", "main.puf"), "../main.puf");
     }
 }

@@ -5,6 +5,7 @@
 
 import { createEditor } from "./editor.js";
 import { createFiles } from "./files.js";
+import { createTree } from "./tree.js";
 import { createRepl } from "./repl.js";
 import { initAssist } from "./assist.js";
 import { createAssists } from "./assists.js";
@@ -78,9 +79,11 @@ const files = createFiles({
     proposals?.refresh();
     session?.changed();
   },
+  onFiles: () => tree?.changed(),
 });
 // every message waits behind the edits already made, so it sees them
 const send = files.send;
+const tree = createTree({ panel: $("files"), toggle: $("files-toggle"), add: $("new-file"), quick: $("quick-open"), files, editor, note });
 
 // The studio's facts at UTF-16 offset `pos` of `file` (studio/src/facts.rs):
 // the type there (a hole's goal) and what runs passed a parameter. The
@@ -136,6 +139,13 @@ const repl = createRepl({
     rename: (file, pos, name) => rename.run(file, pos, name),
     history: () => history.toggle(),
     versions: () => versions.toggle(),
+    files: () => tree.toggle(),
+    newFile: (path) => tree.newFile(path),
+    open(file) {
+      if (!file) return tree.quickOpen();
+      if (!files.paths().includes(file)) return note(`no file ${file}`);
+      files.open(file);
+    },
     structured(word) {
       if (word === "on" || word === "off") structured.set(word === "on");
       return `structured editing is ${structured.on ? "on: brackets stay balanced (,structured off to type freely)" : "off (,structured on keeps brackets balanced)"}`;
@@ -343,6 +353,7 @@ const handlers = {
     $("project").textContent = snapshot.project;
     $("project").title = snapshot.directory;
     files.receive.init(snapshot);
+    tree.receive.init(snapshot);
     reports = snapshot.diagnostics;
     proposals.update(snapshot.review);
     assist.receive.review(snapshot.review);

@@ -23,6 +23,8 @@ const KINDS = {
   accept: { word: "accepted", group: "edits" },
   restore: { word: "restored", group: "edits" },
   disk: { word: "changed on disk", group: "edits" },
+  rename: { word: "moved", group: "edits" },
+  delete: { word: "deleted", group: "edits" },
   eval: { word: "eval", group: "evals" },
   ask: { word: "asked", group: "asks" },
   test: { word: "tests", group: "evals" },
@@ -81,6 +83,12 @@ export function createHistory({ panel, send, onMoments, onJump }) {
       case "accept": return `proposal ${moment.label} into ${moment.file}`;
       case "restore": return `${moment.label} of ${moment.file}`;
       case "disk": return moment.file;
+      case "rename": {
+        const what = moment.folder ? `folder ${moment.from} → ${moment.to} (${moment.files} file${moment.files === 1 ? "" : "s"})` : `${moment.from} → ${moment.to}`;
+        const pointed = moment.pointed?.length ? `; ${moment.pointed.join(", ")} now require it there` : "";
+        return what + pointed;
+      }
+      case "delete": return moment.folder ? `folder ${moment.file} (${moment.files} file${moment.files === 1 ? "" : "s"})` : `${moment.file}${moment.disk ? " (went from disk)" : ""}`;
       case "eval": return moment.command || moment.line;
       case "ask": return moment.line;
       case "test": {
@@ -139,7 +147,7 @@ export function createHistory({ panel, send, onMoments, onJump }) {
           if (expanded.has(index)) expanded.delete(index);
           else {
             expanded.add(index);
-            if (moment.kind === "edit" && moment.commit && !diffs.has(moment.commit)) send({ t: "history-diff", seq: ++seq, commit: moment.commit });
+            if (moment.commit && !diffs.has(moment.commit) && detailOf(moment)) send({ t: "history-diff", seq: ++seq, commit: moment.commit });
           }
           render();
         });
@@ -153,7 +161,7 @@ export function createHistory({ panel, send, onMoments, onJump }) {
 
   // what a row opens to: an edit's diff, an evaluation's output, an answer
   function detailOf(moment) {
-    if (moment.kind === "edit" || moment.kind === "accept" || moment.kind === "restore" || moment.kind === "commit") {
+    if (["edit", "accept", "restore", "commit", "rename", "delete"].includes(moment.kind)) {
       if (!moment.commit) return null;
       const box = element("div", "history-detail");
       const diff = diffs.get(moment.commit);

@@ -62,6 +62,9 @@ const HELP = `,load FILE           evaluate a whole module in the session (⌘�
 ,pin N               keep entry N's printed result as a check in tests.puf (pin)
 ,test                run tests.puf as a program: each check's ok or FAIL
 ,accept #N  ,reject #N   decide a proposal
+,files               show or hide the tree of the project's files (⌘⇧E); ⌘P opens one by name
+,open [FILE]         show FILE in the editor (without one: ⌘P's picker)
+,new NAME            a new file, NAME.puf unless a suffix is typed (lib/vec makes a folder)
 ,history             show or hide the project's history: every edit, eval, ask and test, in order
 ,versions            show or hide the shown file's versions (,restore vN brings one back)
 ,restore vN          make a version of a file its text again
@@ -175,6 +178,9 @@ export function createRepl({ transcript, prompt, send, commands }) {
       case "untrace": return send({ t: "trace", names: rest.filter(Boolean), on: false });
       case "history": return local(text, commands.history());
       case "versions": return local(text, commands.versions());
+      case "files": return local(text, commands.files());
+      case "open": return commands.open(arg || null);
+      case "new": return arg ? commands.newFile(arg) : local(text, "say which file: ,new NAME");
       case "structured": return local(text, commands.structured(arg));
       case "help": return local(text, HELP);
       default: return local(text, `unknown command ,${verb}: ,help lists them`, true);

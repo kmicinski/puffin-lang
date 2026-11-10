@@ -479,6 +479,32 @@ its ground truth:
   swaps its studio (`web.rs` `Web::switch`), after committing the
   previous project's pending records, and every tab reloads.
 
+### Files
+
+A project's files are a tree (`studio/web/tree.js`), and the tabs are
+the files open in this browser tab, not every file: a small flat
+project (up to four files, no folders) opens with all of them as tabs
+and no tree, so a one-file project looks like one file; a project with
+folders or more files opens with `main.puf` and the tree beside it.
+The Files button at the tabs' left (⌘⇧E, `,files`) shows or hides the
+tree, and the choice is remembered per project; ⌘P (`,open`) opens a
+file by part of its path. Everything a project's files need happens in
+the tree, in place, without dialogs: a new file or folder is typed
+into it (＋ in the tabs when it is hidden; `,new NAME`), a rename is
+typed over the name (F2, the row's ⋯, or the right-click menu), a
+delete asks once in the row, and a drag onto a folder moves a file or a
+whole folder there. The studio does the work (`studio.rs` `new_file`,
+`new_folder`, `move_file`, `move_folder`, `delete_file`,
+`delete_folder`): a move renames on disk and rewrites every `(require
+"...")` that named the file so it names its new place (the tab is told
+which files were pointed anew), a delete removes the file from disk
+(a tracked project's history keeps it; the row says which), and an
+empty folder stays listed until it is deleted (git takes no note of
+it, so a clone has only the folders with files). Moves and deletes are
+records in the history (`rename`, `delete`), and a file that goes from
+disk outside the studio goes from the project too, with a notice.
+Every tab's tree follows the studio.
+
 Why: transparency. The intent is that a course can ask a student
 about their own history -- how a program came to be, what they tried,
 what they asked -- with the record already there and in order, and

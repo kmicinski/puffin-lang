@@ -716,3 +716,41 @@ async fn the_assistant_traces_without_touching_the_session() {
     assert!(tool(&studio, t, "trace", json!({ "names": ["nope"], "expr": "1" })).await.unwrap_err().contains("nothing defines nope"));
     studio.lane.reset().await;
 }
+
+#[tokio::test]
+async fn files_move_with_their_requires_and_folders_come_and_go() {
+    let Some(studio) = studio("files", &[("main.puf", "(require \"lib/vec.puf\")\n(dot 1 2)\n")]) else { return };
+    std::fs::create_dir_all(studio.directory.join("lib")).unwrap();
+    std::fs::write(studio.directory.join("lib/vec.puf"), "(define (dot a b) (* a b))\n").unwrap();
+    let studio = Fixture(Studio::new(studio.root.clone(), studio.directory.clone(), "test-token".into()).unwrap());
+    assert_eq!(studio.snapshot().await.folders, ["lib"]);
+
+    // a moved file: on disk, in the project, and named anew by main.puf
+    let note = studio.move_file("lib/vec.puf", "lib/vector.puf").unwrap();
+    assert_eq!(note, "main.puf requires it by its new name now");
+    assert!(studio.directory.join("lib/vector.puf").is_file() && !studio.directory.join("lib/vec.puf").exists());
+    assert_eq!(studio.files().keys().cloned().collect::<Vec<_>>(), ["lib/vector.puf", "main.puf"]);
+    assert_eq!(studio.text_of("main.puf").unwrap(), "(require \"lib/vector.puf\")\n(dot 1 2)\n");
+    assert!(studio.move_file("main.puf", "lib/vector.puf").unwrap_err().contains("exists already"));
+    assert!(studio.move_file("main.puf", "../out.puf").is_err());
+
+    // a folder: made empty, moved with its files (requires follow), deleted
+    studio.new_folder("src/util").unwrap();
+    assert!(studio.directory.join("src/util").is_dir());
+    assert_eq!(studio.snapshot().await.folders, ["lib", "src", "src/util"]);
+    let note = studio.move_folder("lib", "src/lib").unwrap();
+    assert_eq!(note, "main.puf requires it by its new name now");
+    assert!(studio.directory.join("src/lib/vector.puf").is_file());
+    assert_eq!(studio.text_of("main.puf").unwrap(), "(require \"src/lib/vector.puf\")\n(dot 1 2)\n");
+    assert_eq!(studio.snapshot().await.folders, ["src", "src/lib", "src/util"]);
+    studio.delete_folder("src").unwrap();
+    assert!(!studio.directory.join("src").exists());
+    assert_eq!(studio.files().keys().cloned().collect::<Vec<_>>(), ["main.puf"]);
+    assert!(studio.snapshot().await.folders.is_empty());
+
+    // a deleted file leaves disk; the last one may go too
+    studio.delete_file("main.puf").unwrap();
+    assert!(!studio.directory.join("main.puf").exists());
+    assert!(studio.files().is_empty());
+    assert!(studio.delete_file("main.puf").is_err());
+}

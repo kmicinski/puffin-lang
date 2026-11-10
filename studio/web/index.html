@@ -18,7 +18,6 @@
     <button id="project" class="project-name" title="Projects: open another, or make a new one" aria-haspopup="true" aria-expanded="false"></button>
     <div id="projects-menu" class="projects-menu" hidden></div>
   </div>
-  <button id="new-file" class="btn new" title="Add a file to the project">+ New</button>
   <button id="load" class="btn run" title="Load the shown file into the session and run it (⇧⌘↵ · ,load)">Run ▸</button>
   <button id="interrupt" class="btn stop" title="Interrupt the running evaluation (Ctrl-C at the prompt · ,interrupt)" hidden>Stop</button>
   <button id="reset" class="btn" title="Discard every definition the session holds (,reset)">Reset session</button>
@@ -31,14 +30,22 @@
 </header>
 <main class="main">
   <section class="editor-pane">
-    <div class="file-tabs" id="tabs"></div>
-    <div id="proposals" class="proposal-bar" hidden></div>
-    <div id="editor-wrap">
-      <div id="editor"></div>
-      <aside id="versions" hidden></aside>
-      <aside id="history-panel" hidden></aside>
-      <div id="notice" hidden></div>
+    <aside id="files" class="files" hidden></aside>
+    <div class="editor-column">
+      <div class="file-tabs" id="tabs">
+        <button id="files-toggle" class="tabs-toggle" title="The project's files (⌘⇧E · ,files)"></button>
+        <div class="tab-list" id="tab-list"></div>
+        <button id="new-file" class="tabs-add" title="A new file (,new NAME)">+</button>
+      </div>
+      <div id="proposals" class="proposal-bar" hidden></div>
+      <div id="editor-wrap">
+        <div id="editor"></div>
+        <aside id="versions" hidden></aside>
+        <aside id="history-panel" hidden></aside>
+        <div id="notice" hidden></div>
+      </div>
     </div>
+    <div id="quick-open" class="quick-open" hidden></div>
     <div id="past" class="past" hidden>
       <div class="file-tabs past-tabs" id="past-tabs"></div>
       <div class="past-editor"></div>

@@ -33,6 +33,16 @@ pub struct History {
 }
 
 impl History {
+    /// A moved file's versions follow it.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        if let Some(mut list) = self.files.remove(from) {
+            for version in &mut list {
+                version.file = to.to_owned();
+            }
+            self.files.insert(to.to_owned(), list);
+        }
+    }
+
     /// Record `text` as `file`'s newest version, unless it is the newest
     /// already. Returns the version made.
     pub fn record(&mut self, file: &str, text: &str, origin: &'static str, label: &str) -> Option<Version> {

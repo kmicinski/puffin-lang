@@ -107,7 +107,8 @@ macro_rules! assets {
 assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
-    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js", "projects.js", "replay.js",
+    "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
+        "tree.js", "projects.js", "replay.js",
 );
 
 fn asset_text(name: &str) -> String {
@@ -166,6 +167,12 @@ enum Request {
     Edit { file: String, base: u64, text: String },
     Save,
     NewFile { path: String },
+    NewFolder { path: String },
+    /// Move (rename) a file or a folder: `to` is its new path.
+    MoveFile { from: String, to: String },
+    MoveFolder { from: String, to: String },
+    DeleteFile { path: String },
+    DeleteFolder { path: String },
     /// The tab shows `file`: check it if nothing is known of it.
     Focus { file: String },
     /// Evaluate in the live session: `source` "prompt", "buffer" (text of
@@ -350,6 +357,19 @@ fn notice(direct: &mpsc::UnboundedSender<String>, outcome: Result<(), String>) {
     }
 }
 
+/// As `notice`, for an outcome with something to say when it went well.
+fn told(direct: &mpsc::UnboundedSender<String>, outcome: Result<String, String>) {
+    match outcome {
+        Ok(message) if !message.is_empty() => {
+            let _ = direct.send(json(&Reply::Notice { message: &message }));
+        }
+        Ok(_) => {}
+        Err(message) => {
+            let _ = direct.send(json(&Reply::Notice { message: &message }));
+        }
+    }
+}
+
 /// Edits' byte offsets into `text` as UTF-16 offsets.
 fn edits_in_utf16(text: &str, edits: &mut Value) {
     for edit in edits.as_array_mut().into_iter().flatten() {
@@ -449,6 +469,11 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
         }),
         Request::Save => notice(&direct, studio.save()),
         Request::NewFile { path } => notice(&direct, studio.new_file(&path)),
+        Request::NewFolder { path } => notice(&direct, studio.new_folder(&path)),
+        Request::MoveFile { from, to } => told(&direct, studio.move_file(&from, &to)),
+        Request::MoveFolder { from, to } => told(&direct, studio.move_folder(&from, &to)),
+        Request::DeleteFile { path } => notice(&direct, studio.delete_file(&path)),
+        Request::DeleteFolder { path } => notice(&direct, studio.delete_folder(&path)),
         Request::Focus { file } => {
             tokio::spawn(async move { studio.check_if_unknown(&file).await });
         }
