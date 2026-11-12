@@ -51,9 +51,13 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
 # ---- runtime image ---------------------------------------------------------
+# Default: one studio (entrypoint.sh). Many users, one studio each, each
+# under its own uid: run /usr/local/bin/puffin-studio-hub as root with
+# PUFFIN_USERS set (deploy/hub.sh, deploy/README.md).
 FROM debian:bookworm-slim
 # git: projects are git repositories; libgc: none needed (static);
 # ca-certificates: the assistant's `claude` CLI talks HTTPS
+# (util-linux's setpriv/prlimit, for deploy/hub.sh, are in the base image)
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/puffin
@@ -63,6 +67,7 @@ COPY --from=toolchain /opt/puffin/build build
 COPY --from=studio /opt/puffin/studio/target/release/puffin-studio /usr/local/bin/puffin-studio
 COPY --from=web /opt/puffin/web/node_modules web/node_modules
 COPY deploy/entrypoint.sh /usr/local/bin/puffin-studio-entrypoint
+COPY deploy/hub.sh /usr/local/bin/puffin-studio-hub
 ENV PUFFIN_ROOT=/opt/puffin \
     PUFFIN_PROJECTS=/data/projects \
     HOME=/data/home \

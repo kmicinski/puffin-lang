@@ -76,14 +76,19 @@ pub fn router(web: Arc<Web>) -> Router {
         .route("/static/{name}", get(|Path(name): Path<String>| async move { asset(&name) }))
         .route("/vs/{*path}", get(monaco))
         .route("/ws", get(socket))
-        .route(
-            "/mcp",
-            post(|State(web): State<Arc<Web>>, headers: HeaderMap, body: String| async move {
-                let studio = web.current();
-                crate::mcp::handle(&studio, headers, body).await
-            }),
-        )
+        .route("/mcp", post(mcp))
         .with_state(web)
+}
+
+/// Only the assistant's `/mcp`: what the TCP listener serves when the
+/// browser side is on a Unix socket (`--unix`).
+pub fn mcp_router(web: Arc<Web>) -> Router {
+    Router::new().route("/mcp", post(mcp)).with_state(web)
+}
+
+async fn mcp(State(web): State<Arc<Web>>, headers: HeaderMap, body: String) -> Response {
+    let studio = web.current();
+    crate::mcp::handle(&studio, headers, body).await
 }
 
 fn page(html: String) -> Response {

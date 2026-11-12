@@ -1,4 +1,4 @@
-//! `puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--no-open]`: serve
+//! `puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--unix PATH] [--no-open]`: serve
 //! Puffin Studio for the project in PROJECT_DIR (default: the current
 //! directory) on 127.0.0.1 (or ADDR), and print the address to open.
 
@@ -6,7 +6,7 @@ use puffin_studio::{private_token, project, repository_root, studio::Studio, web
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--no-open]
+const USAGE: &str = "usage: puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--unix PATH] [--no-open]
 
 Edit, check and evaluate the Puffin files of PROJECT_DIR (default: the
 current directory) in the browser. The studio listens on 127.0.0.1:N
@@ -15,6 +15,12 @@ current directory) in the browser. The studio listens on 127.0.0.1:N
              container). The studio has no login of its own and runs
              whatever its users evaluate: only bind beyond loopback
              behind a proxy that authenticates every request.
+--unix PATH  serve the browser on a Unix socket at PATH (mode 0600, so
+             only this user -- and root, e.g. a reverse proxy -- can open
+             it). TCP then carries only the assistant's /mcp, on
+             127.0.0.1 and an ephemeral port unless --port is given:
+             one studio per login, each under its own uid, cannot reach
+             one another's sessions.
 --no-open    print the address without opening a browser
 --new [NAME] make a project under the projects home (PUFFIN_PROJECTS,
              else ~/Puffin; NAME, or a short random one) and serve it
@@ -32,19 +38,21 @@ effort.";
 
 struct Options {
     directory: Option<PathBuf>,
-    port: u16,
+    port: Option<u16>,
     bind: String,
+    unix: Option<PathBuf>,
     open: bool,
     /// --new: make a project (Some(None): with a random name).
     new: Option<Option<String>>,
 }
 
 fn options(args: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
-    let mut options = Options { directory: None, port: 7360, bind: "127.0.0.1".to_owned(), open: true, new: None };
+    let mut options = Options { directory: None, port: None, bind: "127.0.0.1".to_owned(), unix: None, open: true, new: None };
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--port" => options.port = args.next().and_then(|port| port.parse().ok()).ok_or("--port needs a port number")?,
+            "--port" => options.port = Some(args.next().and_then(|port| port.parse().ok()).ok_or("--port needs a port number")?),
+            "--unix" => options.unix = Some(args.next().map(PathBuf::from).ok_or("--unix needs a path")?),
             "--bind" => options.bind = args.next().ok_or("--bind needs an address")?,
             "--no-open" => options.open = false,
             "--new" => options.new = Some(args.next_if(|next| !next.starts_with('-'))),
@@ -85,15 +93,32 @@ async fn run() -> Result<(), String> {
     let root = repository_root();
     let mcp_token = private_token().map_err(|error| format!("cannot make a token: {error}"))?;
     let studio = Studio::new(root.clone(), directory.clone(), mcp_token.clone()).map_err(|error| error.to_string())?;
-    let listener = tokio::net::TcpListener::bind((options.bind.as_str(), options.port))
+    let wanted = options.port.unwrap_or(if options.unix.is_some() { 0 } else { 7360 });
+    let listener = tokio::net::TcpListener::bind((options.bind.as_str(), wanted))
         .await
-        .map_err(|error| format!("cannot listen on {}:{}: {error}", options.bind, options.port))?;
+        .map_err(|error| format!("cannot listen on {}:{wanted}: {error}", options.bind))?;
+    let socket = match &options.unix {
+        None => None,
+        Some(path) => {
+            use std::os::unix::fs::PermissionsExt;
+            // a socket left by a previous run (but never anything else)
+            if std::fs::symlink_metadata(path).is_ok_and(|meta| std::os::unix::fs::FileTypeExt::is_socket(&meta.file_type())) {
+                let _ = std::fs::remove_file(path);
+            }
+            let socket = tokio::net::UnixListener::bind(path).map_err(|error| format!("cannot listen on {}: {error}", path.display()))?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(socket)
+        }
+    };
     let port = listener.local_addr().map_err(|error| error.to_string())?.port();
     studio.set_port(port);
     studio.start();
     let url = format!("http://127.0.0.1:{port}/");
     println!("Puffin Studio: {}", directory.display());
-    println!("  {url}");
+    match &options.unix {
+        Some(path) => println!("  unix:{} (assistant /mcp on 127.0.0.1:{port})", path.display()),
+        None => println!("  {url}"),
+    }
     match adopted {
         Ok(true) => println!("  history: committed to the project's git repository as you work"),
         Ok(false) => println!("  note: {} sits inside another repository, so its history is not committed", directory.display()),
@@ -107,7 +132,7 @@ async fn run() -> Result<(), String> {
     if !root.join("web/node_modules/monaco-editor/min/vs/loader.js").is_file() {
         println!("  note: Monaco is not installed; the editor is a plain textarea. (cd web && npm install) for the full editor.");
     }
-    if options.open {
+    if options.open && options.unix.is_none() {
         let _ = std::process::Command::new("open").arg(&url).spawn();
     }
     let web = web::Web::new(studio, root, mcp_token);
@@ -120,7 +145,21 @@ async fn run() -> Result<(), String> {
             _ = async { if let Some(t) = terminate.as_mut() { t.recv().await; } else { std::future::pending::<()>().await } } => {}
         }
     };
-    let served = axum::serve(listener, app).with_graceful_shutdown(shutdown).await;
+    let served = match socket {
+        None => axum::serve(listener, app).with_graceful_shutdown(shutdown).await,
+        Some(socket) => {
+            // TCP: the assistant's /mcp only (bearer-guarded); the page and
+            // the WebSocket only on the socket
+            let mcp = axum::serve(listener, web::mcp_router(web.clone()));
+            tokio::select! {
+                served = axum::serve(socket, app).with_graceful_shutdown(shutdown) => served,
+                served = mcp => served,
+            }
+        }
+    };
+    if let Some(path) = &options.unix {
+        let _ = std::fs::remove_file(path);
+    }
     // the last edits and records land before the studio goes
     let studio = web.current();
     studio.flush_journal().await;
