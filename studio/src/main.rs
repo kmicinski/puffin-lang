@@ -1,16 +1,20 @@
-//! `puffin-studio [PROJECT_DIR] [--port N] [--no-open]`: serve Puffin Studio
-//! for the project in PROJECT_DIR (default: the current directory) on
-//! 127.0.0.1, and print the address to open.
+//! `puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--no-open]`: serve
+//! Puffin Studio for the project in PROJECT_DIR (default: the current
+//! directory) on 127.0.0.1 (or ADDR), and print the address to open.
 
 use puffin_studio::{private_token, project, repository_root, studio::Studio, web};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: puffin-studio [PROJECT_DIR] [--port N] [--no-open]
+const USAGE: &str = "usage: puffin-studio [PROJECT_DIR] [--port N] [--bind ADDR] [--no-open]
 
 Edit, check and evaluate the Puffin files of PROJECT_DIR (default: the
 current directory) in the browser. The studio listens on 127.0.0.1:N
 (default 7360) and opens http://127.0.0.1:N.
+--bind ADDR  listen on ADDR instead of 127.0.0.1 (e.g. 0.0.0.0 in a
+             container). The studio has no login of its own and runs
+             whatever its users evaluate: only bind beyond loopback
+             behind a proxy that authenticates every request.
 --no-open    print the address without opening a browser
 --new [NAME] make a project under the projects home (PUFFIN_PROJECTS,
              else ~/Puffin; NAME, or a short random one) and serve it
@@ -29,17 +33,19 @@ effort.";
 struct Options {
     directory: Option<PathBuf>,
     port: u16,
+    bind: String,
     open: bool,
     /// --new: make a project (Some(None): with a random name).
     new: Option<Option<String>>,
 }
 
 fn options(args: impl IntoIterator<Item = String>) -> Result<Option<Options>, String> {
-    let mut options = Options { directory: None, port: 7360, open: true, new: None };
+    let mut options = Options { directory: None, port: 7360, bind: "127.0.0.1".to_owned(), open: true, new: None };
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--port" => options.port = args.next().and_then(|port| port.parse().ok()).ok_or("--port needs a port number")?,
+            "--bind" => options.bind = args.next().ok_or("--bind needs an address")?,
             "--no-open" => options.open = false,
             "--new" => options.new = Some(args.next_if(|next| !next.starts_with('-'))),
             "-h" | "--help" => return Ok(None),
@@ -79,9 +85,9 @@ async fn run() -> Result<(), String> {
     let root = repository_root();
     let mcp_token = private_token().map_err(|error| format!("cannot make a token: {error}"))?;
     let studio = Studio::new(root.clone(), directory.clone(), mcp_token.clone()).map_err(|error| error.to_string())?;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", options.port))
+    let listener = tokio::net::TcpListener::bind((options.bind.as_str(), options.port))
         .await
-        .map_err(|error| format!("cannot listen on 127.0.0.1:{}: {error}", options.port))?;
+        .map_err(|error| format!("cannot listen on {}:{}: {error}", options.bind, options.port))?;
     let port = listener.local_addr().map_err(|error| error.to_string())?.port();
     studio.set_port(port);
     studio.start();

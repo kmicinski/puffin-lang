@@ -5,7 +5,8 @@
 //! Only the WebSocket and `/mcp` can read or change anything, so only they
 //! are guarded: the WebSocket by a same-origin `Origin` (a page from another
 //! site cannot open it); `/mcp` by its bearer token. The page and its assets
-//! hold no data. The server binds 127.0.0.1 only.
+//! hold no data. The server binds 127.0.0.1 unless told otherwise (--bind,
+//! for serving behind an authenticating proxy).
 
 use crate::ask::Context;
 use crate::project;
@@ -152,11 +153,13 @@ pub fn same_secret(given: &str, expected: &str) -> bool {
     given.len() == expected.len() && given.bytes().zip(expected.bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
-/// Whether a request's `Origin`, if any, is the host it was sent to.
+/// Whether a request's `Origin`, if any, is the host it was sent to --
+/// over http (served directly) or https (behind a TLS-terminating proxy
+/// that passes the original `Host` through).
 pub fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else { return true };
     let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("");
-    origin.strip_prefix("http://").is_some_and(|rest| rest == host)
+    origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")).is_some_and(|rest| rest == host)
 }
 
 /// What a tab asks of the studio.

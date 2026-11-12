@@ -1,0 +1,13 @@
+.git
+.claude
+build
+bin/puffin-vm
+bin/puffin-vm-gctest
+src/runtime/build
+src/runtime/libpuffin.a
+studio/target
+web/node_modules
+web/dist
+site/node_modules
+_site
+**/*.o
