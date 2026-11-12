@@ -12,6 +12,7 @@ import { createAssists } from "./assists.js";
 import { createProposals } from "./proposals.js";
 import { createVersions } from "./versions.js";
 import { createHistory } from "./history.js";
+import { initGist } from "./gist.js";
 import { createProjects } from "./projects.js";
 import { createReplay } from "./replay.js";
 import { createSession, functionDefine } from "./session.js";
@@ -119,6 +120,7 @@ const replay = createReplay({
 });
 const projects = createProjects({ button: $("project"), menu: $("projects-menu"), send });
 $("history").addEventListener("click", () => history.toggle());
+initGist({ button: $("gist"), texts: () => files.texts(), project: () => $("project").textContent.trim(), note });
 session = createSession({ editor, files, traced: () => traced, canTrace: () => Boolean(features.trace && features.observe) });
 const lint = createLint({ editor, files });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
@@ -421,7 +423,7 @@ const handlers = {
 };
 
 function connect() {
-  socket = new WebSocket(`ws://${location.host}/ws`);
+  socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   socket.addEventListener("open", () => renderConnection(true));
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);

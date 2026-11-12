@@ -420,7 +420,15 @@ static pf equal_iset(pf a, pf b) {
   return PF_BOOL(acc.ok);
 }
 
-static void display_ihash(pf v, FILE *out) { fprintf(out, "#<hash:%" PRId64 ">", root_count(v)); }
+// {k ↦ v, ...} / ∅, exactly like a mutable hash (lib/hashes.c)
+extern void *pf_hash_printer_new(void);
+extern void pf_hash_printer_add(pf k, pf v, void *printer);
+extern void pf_hash_printer_finish(void *printer, FILE *out);
+static void display_ihash(pf v, FILE *out) {
+  void *p = pf_hash_printer_new();
+  node_walk(root_node(v), pf_hash_printer_add, p);
+  pf_hash_printer_finish(p, out);
+}
 static void display_iset(pf v, FILE *out)  { fprintf(out, "#<set:%" PRId64 ">", root_count(v)); }
 
 // ---------------------------------------------------------------

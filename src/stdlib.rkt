@@ -151,7 +151,19 @@
       ;; foreign handles: #<Regex 0x104a3c200>, #<Regex closed> --
       ;; exactly like lib/foreign.c's display_handle
       [(foreign-handle? v) (foreign-handle-render v out)]
-      [(hash? v)          (display (format "#<hash:~a>" (hash-count v)) out)]
+      ;; {k ↦ v, ...} sorted by the key's printed text; ∅ when empty --
+      ;; exactly like lib/hashes.c's pf_hash_printer_finish
+      [(hash? v)
+       (if (zero? (hash-count v))
+           (display "\u2205" out)
+           (let ([entries (sort (for/list ([(k x) (in-hash v)])
+                                  (cons (render-value k) (render-value x)))
+                                string<? #:key car)])
+             (display "{" out)
+             (for ([e entries] [i (in-naturals)])
+               (when (positive? i) (display ", " out))
+               (display (car e) out) (display " \u21a6 " out) (display (cdr e) out))
+             (display "}" out)))]
       [(or (set-mutable? v) (set? v))
                           (display (format "#<set:~a>" (set-count v)) out)]
       [else               (display "#<procedure>" out)]))

@@ -5,6 +5,12 @@
 // several opens the completion list on them, and Enter there picks one.
 // `compress` is the pure part; bindTex puts it on Monaco's Alt-Enter
 // and on a plain text field's keydown (the REPL prompt).
+// Ctrl-\ (DrRacket's key, the real Control key on a Mac too) types a λ
+// straight away, in both places, replacing any selection.
+
+// Ctrl-\ and nothing else held (Shift aside: some layouts need it for \)
+const isLambdaKey = (event) =>
+  event.ctrlKey && !event.altKey && !event.metaKey && (event.code === "Backslash" || event.key === "\\");
 
 // the table: TeX name -> character
 export const TEX = {
@@ -109,6 +115,15 @@ export function bindTex(monaco, editor) {
       };
     },
   });
+  editor.onKeyDown((event) => {
+    if (!isLambdaKey(event.browserEvent)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (editor.getOption(monaco.editor.EditorOption.readOnly)) return;
+    editor.pushUndoStop();
+    editor.executeEdits("tex", editor.getSelections().map((range) => ({ range, text: "λ", forceMoveMarkers: true })));
+    editor.pushUndoStop();
+  });
   editor.addAction({
     id: "puffin.tex",
     label: "TeX character (\\lambda → λ)",
@@ -136,6 +151,12 @@ export function bindTex(monaco, editor) {
 // Several candidates take the first; the field has no list to show.
 export function bindTexField(field) {
   field.addEventListener("keydown", (event) => {
+    if (isLambdaKey(event)) {
+      event.preventDefault();
+      field.setRangeText("λ", field.selectionStart, field.selectionEnd, "end");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
     if (!(event.altKey && event.key === "Enter")) return;
     const result = compress(field.value, field.selectionStart);
     if (!result) return;

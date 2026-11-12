@@ -52,8 +52,12 @@ function loadMonaco() {
     if (typeof window.require !== "function") return resolve(null);
     const timer = setTimeout(() => resolve(null), 10000);
     window.MonacoEnvironment = {
-      getWorkerUrl: () => `data:text/javascript;charset=utf-8,${encodeURIComponent(
-        `self.MonacoEnvironment={baseUrl:'${location.origin}/'};importScripts('${location.origin}/vs/base/worker/workerMain.js');`)}`,
+      // A blob: worker keeps the page's origin, so its importScripts is
+      // same-site and carries the proxy's login cookie (behind Authelia a
+      // data: worker's opaque origin got a redirect instead of the script).
+      getWorkerUrl: () => URL.createObjectURL(new Blob(
+        [`self.MonacoEnvironment={baseUrl:'${location.origin}/'};importScripts('${location.origin}/vs/base/worker/workerMain.js');`],
+        { type: "text/javascript" })),
     };
     window.require.config({ paths: { vs: "/vs" } });
     window.require(

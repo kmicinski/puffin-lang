@@ -114,7 +114,7 @@ assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
-        "tree.js", "projects.js", "replay.js",
+        "tree.js", "projects.js", "replay.js", "gist.js",
 );
 
 fn asset_text(name: &str) -> String {
