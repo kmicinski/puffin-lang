@@ -1,4 +1,27 @@
-== assists @ 192 (exit 0)
+== assists @ 362 (exit 0)
 == stdout
+{"id":"promote","title":"Promote add, mul to a grammar Expr2","source":"patterns","edits":[{"start":342,"end":342,"text":"(define-grammar Expr2\n  (add Int Int)\n  (mul _ _))\n\n"},{"start":354,"end":355,"text":"[e : Expr2]"}]}
 {"done":true}
 == stderr
+== apply 1: promote
+;; assist: assists @ "(match e" +3
+;; the grammar's name avoids the type names already taken (Expr is),
+;; and a constructor named like a head does not matter: grammars are
+;; structural, nothing is renamed. The file's data says add holds Ints,
+;; yet ev recurses into them -- the check after applying says so
+(define-type Expr (Add) (Sub))
+
+(define-grammar Expr2
+  (add Int Int)
+  (mul _ _))
+
+(define (ev [e : Expr2])
+  (match e
+    [`(add ,a ,b) (+ (ev a) (ev b))]
+    [`(mul ,a ,b) (* (ev a) (ev b))]
+    [_ e]))
+
+(ev '(add 1 2))
+== check (exit 1)
+{"message":"typecheck: ev: argument has type Int, expected Expr2","start":451,"end":457}
+error: typecheck: ev: argument has type Int, expected Expr2 [promote-taken.puf:12]

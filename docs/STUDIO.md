@@ -41,7 +41,7 @@ they apply.
   produce the code (match clauses, templates, stubs), it does, and
   the assistant calls the same operation as a tool instead of
   writing it.
-- **Say where a suggestion came from.** A clause from an ADT is
+- **Say where a suggestion came from.** A clause from a declared type is
   certain; one from observed values is "seen so far"; one from flow
   analysis over-approximates. The UI and the assistant both see the
   label.
@@ -172,7 +172,7 @@ library that starts threads would break that.
 REPL units compile with `puffincc --repl IN.puf -o OUT.pbc` (about
 6 ms natively); the prelude unit with `puffincc --repl-prelude -o
 OUT.pbc`. Each unit is checked alone, so a later unit does not know
-an earlier unit's `define-type`: the server keeps the session's
+an earlier unit's `define-type` or `define-grammar`: the server keeps the session's
 type declarations and prepends them to each unit it compiles.
 
 Every assist returns plain text edits (§4), never a new AST. This
@@ -227,8 +227,13 @@ distinct depth-one shapes it received (at most 16):
 Int Str Bool Void Nil Vec Hash Set Proc Pair Other
 (sym S)        the symbol S
 (list H N)     a proper list headed by the symbol H, N long (#f: long)
-(adt C)        an instance of constructor C
+(adt C)        a value of the old datatype kind (no longer built)
 ```
+
+define-type instances are plain s-expressions (docs/GRAMMARS.md), so
+`(Circle 2)` is observed as `(list Circle 2)` and a nullary `Point` as
+`(sym Point)`; the assists read a shape whose head and length name a
+constructor back as that constructor's instance.
 
 `try` of a unit holding `(#%observations)` prints the whole record
 as one result, `((f CALLS ((shape ...) ...)) ...)`. The studio keeps
@@ -369,17 +374,23 @@ any occurrence would now refer to a different binder (a capture, or
 a name freed), the rename is refused. Names nothing in the file
 binds -- prims, imports -- are not renamed; neither are other
 modules' uses of a provided name.
-11. **Promote an s-expression language to a `define-type`** inferred
-    from its quasiquote patterns. Built (`promote`): at a match with
-    two or more quasiquote cases `(h ,x ...)`, declare
-    `(define-type Expr (H τ ...) ...)` and rewrite the whole file --
-    each match clause over those shapes becomes a constructor
-    pattern, each quasiquote template and quoted datum that builds
-    them a constructor call. A field's type is what all the file's
-    literal data agrees it holds (Int, Str, Bool, or the new type for
-    a nested shape), else `_`. Code that takes the data apart by hand
-    (`car`, `cadr`) is left alone; the check after applying shows
-    where it breaks. Refused when a constructor name is taken.
+11. **Promote an s-expression language to a grammar** inferred from
+    its quasiquote patterns. Built (`promote`): at a match with two or
+    more quasiquote cases `(h ,x ...)`, declare
+    `(define-grammar Expr (h τ ...) ...)` and annotate the matched
+    parameter `[e : Expr]`. Nothing else is rewritten: the file's
+    patterns, templates and quoted data already are what the grammar
+    describes (docs/GRAMMARS.md), and from then on they are checked. A
+    field's type is what all the file's literal data agrees it holds
+    (Int, Str, Bool, or the new grammar for a nested shape), else `_`;
+    the check after applying shows where the inferred grammar is too
+    narrow for the code.
+12. **Fill a match over a grammar.** The fill-match and
+    add-missing-cases assists (items 1-2) work over `define-grammar`
+    scrutinees too: one clause per uncovered production, a type-test
+    for a base leaf (`(? fixnum? n)`), a quasiquote pattern with a
+    binder per leaf (plural under `...`: `` `(let ((,syms ,es) ...) ,e1) ``),
+    and the recursive call on the grammar's own leaves.
 
 ## 6. The assistant
 

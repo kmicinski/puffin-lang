@@ -1,7 +1,9 @@
 ;; assist: assists @ "(match e" +3
-;; a constructor name the promotion would need is taken: no promote
-;; (Add is already a constructor here)
-(define-type Op (Add) (Sub))
+;; the grammar's name avoids the type names already taken (Expr is),
+;; and a constructor named like a head does not matter: grammars are
+;; structural, nothing is renamed. The file's data says add holds Ints,
+;; yet ev recurses into them -- the check after applying says so
+(define-type Expr (Add) (Sub))
 
 (define (ev e)
   (match e

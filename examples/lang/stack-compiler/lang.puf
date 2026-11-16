@@ -1,0 +1,13 @@
+;; the two languages, as grammars (docs/GRAMMARS.md): Arith is what
+;; (also a golden-corpus program: src/test-programs/modules-4/lang.puf -- tests and examples share sources)
+;; the compiler reads, Code what it writes and the VM runs. Both are
+;; plain s-expressions; the modules below are typed against them.
+(provide Arith Instr Code)
+(define-grammar Arith
+  Int
+  (+ Arith Arith)
+  (- Arith Arith)
+  (* Arith Arith)
+  (neg Arith))
+(define-grammar Instr (push Int) (add) (sub) (mul) (neg))
+(define-type-alias Code (List Instr))

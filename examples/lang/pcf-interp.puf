@@ -1,11 +1,14 @@
-;; puffin-12: a small interpreter for PCF, the canonical toy typed
+;; puffin-12: a small interpreter for PCF, the canonical toy typed language
 ;; (also a golden-corpus program: src/test-programs/puffin-12.scm -- tests and examples share sources)
-;; language (Plotkin 1977): naturals with succ/pred, the zero test
-;; ifz, unary lambdas, application, and general recursion via fix.
-;; Written with quasiquote PATTERNS on the way in and quasiquote
-;; CONSTRUCTION on the way out -- values are tagged s-expressions,
-;; environments are immutable hashes. (This is also the bundled demo
-;; for the web pipeline visualizer.)
+;; (Plotkin 1977): naturals with succ/pred, the zero test ifz, unary
+;; lambdas, application, and general recursion via fix.
+;;
+;; Programs and values are plain s-expressions, typed by grammars
+;; (docs/GRAMMARS.md): PCF is the syntax below, Value what evaluation
+;; produces. Every program in this file is checked against PCF when it
+;; compiles -- the templates that splice pcf-add into pcf-mul included
+;; -- and pcf-eval's quasiquote patterns get their productions' types.
+;; Environments are immutable hashes.
 ;;
 ;;   e ::= n | x | (lambda (x) e) | (e e)
 ;;       | (succ e) | (pred e) | (ifz e e e) | (fix e)
@@ -13,7 +16,23 @@
 ;; fix is call-by-value, eta-delayed: (fix f) is a value; applying
 ;; it to v unrolls one step, applying f to (fix f) and then to v.
 
-(define (pcf-eval e env)
+(define-grammar PCF
+  #:keywords (lambda succ pred ifz fix)
+  Int
+  Sym
+  (lambda (Sym) PCF)
+  (succ PCF)
+  (pred PCF)
+  (ifz PCF PCF PCF)
+  (fix PCF)
+  (PCF PCF))
+
+(define-grammar Value
+  Int
+  (closure Sym PCF (Hash Sym Value))
+  (fixpoint Value))
+
+(define (pcf-eval [e : PCF] [env : (Hash Sym Value)]) : Value
   (match e
     [(? fixnum? n) n]
     [(? symbol? x)
@@ -21,26 +40,30 @@
          (hash-ref env x)
          (error `(unbound ,x)))]
     [`(lambda (,x) ,body) `(closure ,x ,body ,env)]
-    [`(succ ,e0) (+ (pcf-eval e0 env) 1)]
+    [`(succ ,e0) (+ (num (pcf-eval e0 env)) 1)]
     [`(pred ,e0)
-     (let ([n (pcf-eval e0 env)])
+     (let ([n (num (pcf-eval e0 env))])
        (if (eq? n 0) 0 (- n 1)))]                 ;; pred 0 = 0, as in PCF
     [`(ifz ,e0 ,e1 ,e2)
-     (if (eq? (pcf-eval e0 env) 0)
+     (if (eq? (num (pcf-eval e0 env)) 0)
          (pcf-eval e1 env)
          (pcf-eval e2 env))]
     [`(fix ,e0) `(fixpoint ,(pcf-eval e0 env))]
     [`(,e-f ,e-a)
-     (pcf-apply (pcf-eval e-f env) (pcf-eval e-a env))]
-    [_ (error `(bad-pcf-expression ,e))]))
+     (pcf-apply (pcf-eval e-f env) (pcf-eval e-a env))]))
 
-(define (pcf-apply vf va)
+(define (pcf-apply [vf : Value] [va : Value]) : Value
   (match vf
     [`(closure ,x ,body ,env) (pcf-eval body (hash-set env x va))]
     [`(fixpoint ,f) (pcf-apply (pcf-apply f vf) va)]
     [_ (error `(not-a-function ,vf))]))
 
-(define (run e) (pcf-eval e (hash)))
+(define (num [v : Value]) : Int
+  (match v
+    [(? fixnum? n) n]
+    [_ (error `(not-a-number ,v))]))
+
+(define (run [e : PCF]) : Value (pcf-eval e (hash)))
 
 ;; addition, defined recursively on the first argument
 (define pcf-add
@@ -73,7 +96,11 @@
                  (lambda (y) (pred y)))
                 9)))                                       ;; 7
 
-;; PCF programs are data: count the lambdas in pcf-fact
+;; PCF programs are data: count the lambdas in pcf-fact. This walker
+;; visits every element of every list -- keywords like fix included,
+;; which are not PCF terms -- so it stays unannotated: an untyped
+;; walk over any s-expression (annotating e : PCF would make the
+;; deep cast reject the bare `fix` it recurses into)
 (define (count-lambdas e)
   (match e
     [`(lambda (,_) ,body) (+ 1 (count-lambdas body))]

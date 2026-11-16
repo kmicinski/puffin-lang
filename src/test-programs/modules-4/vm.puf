@@ -1,6 +1,7 @@
 ;; the stack machine
 (provide run-vm)
-(define (run-vm instrs stack)
+(require "lang.puf")
+(define (run-vm [instrs : Code] [stack : (List Int)]) : Int
   (match instrs
     ['() (car stack)]
     [(cons i rest)

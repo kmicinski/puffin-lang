@@ -113,21 +113,26 @@ What you can rely on:
   an importer may alias it again (`(define-type-alias Env2 E.Env)`).
   The checker unfolds it after resolution, so the exporting module's
   types are what the importer's annotations mean (docs/TYPES.md §3).
-- **Templates resolve through the same scope.** Quasiquote is
-  constructor syntax (docs/TYPES.md §2): a template or quoted datum
-  whose head names a constructor in scope builds or matches that
-  constructor. The resolver renames exactly those positions — a list
-  head that resolves to a constructor, a bare symbol that resolves to
-  a nullary one — and leaves every other template symbol as data. So
-  `` `(Circle ,r) `` works after `(require "shapes.puf")`,
-  `` `(S.Circle ,r) `` after `(require "shapes.puf" #:as S)`, and a
-  `#:rename ((Circle Disc))` makes it `` `(Disc ,r) ``; a module that
-  did not import `Circle` has it as a plain symbol in templates.
+- **Templates are data; they never resolve.** A constructor builds
+  the list headed by its own source name (docs/GRAMMARS.md §3), so a
+  template spells a value with that name however the constructor was
+  imported: `` `(Circle ,r) `` is the same value as `(Circle r)` after
+  `(require "shapes.puf")`, as `(S.Circle r)` under `#:as S`, and as
+  `(Disc r)` after `#:rename ((Circle Disc))`. Expressions and
+  constructor patterns name the constructor through the module system
+  like any other name; templates and quoted data never rename.
+- **Grammars are type names.** A `define-grammar` binds its head like a
+  `define-type` head: it provides, imports, qualifies and renames the
+  same way. Inside its productions only type names (capitalized) are
+  references; every other symbol is a literal.
 
 Separate compilation carries all of this across module boundaries: a
 dependency's exports typecheck at their recorded interface types,
-and imported ADTs (constructors, exhaustiveness, cast blame) behave
-exactly as under whole-program compilation.
+and imported define-types (constructors, exhaustiveness) behave
+exactly as under whole-program compilation. One difference: a cast
+against an imported grammar or define-type checks nothing in the
+importing unit (its recognizer lives in the exporting unit), so that
+boundary is unchecked at run time under separate compilation.
 
 ## Signatures (the SML mix-in, optional)
 

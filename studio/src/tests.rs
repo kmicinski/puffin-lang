@@ -389,7 +389,9 @@ async fn observed_calls_come_back_as_the_record() {
     let view = studio.session_view();
     let eval = view.observed.iter().find(|observed| observed.function == "eval-expr").expect("eval-expr observed");
     assert_eq!(eval.calls, 3);
-    assert!(eval.args[0].contains(&"(adt Add)".to_owned()), "{eval:?}");
+    // define-type instances are plain lists (docs/GRAMMARS.md): (Add a b)
+    // is observed as a three-element list headed by Add
+    assert!(eval.args[0].contains(&"(list Add 3)".to_owned()), "{eval:?}");
     assert!(studio.toolchain.observed.lock().unwrap().as_ref().is_some_and(|path| path.is_file()));
     // the facts at the parameter say what it received
     let text = studio.text_of("expr.puf").unwrap();

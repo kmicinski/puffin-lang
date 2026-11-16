@@ -12,7 +12,7 @@
 ;;     and what it returned, as a tree. ,untrace eval-expr stops it.
 ;;  3. Hover. Rest the mouse on the e of [e : Expr] in eval-expr: the
 ;;     checker's type, and the shapes e was called with in the session.
-;;  4. Extract. Select (cons (cons x v) env) in the Let case, press Cmd-.
+;;  4. Extract. Select (cons (cons x v) env) in the let case, press Cmd-.
 ;;     and pick Extract: it becomes a function of its free variables. Then
 ;;     F2 on its name renames it (try extend), the binder and every use.
 ;;  5. Fill a match. Cursor in the (match e) of size, Cmd-.: the checker
@@ -23,17 +23,23 @@
 ;;  7. Pin. Hover a result in the transcript and click pin: tests.puf gains
 ;;     a check. ,test runs them all.
 ;;  8. Ask. Tab on the empty prompt asks the assistant (Esc returns), e.g.
-;;     "trace eval-expr on example and explain the Let case". What it
+;;     "trace eval-expr on example and explain the let case". What it
 ;;     proposes arrives as hunks to accept or reject.
-;;  9. Untyped data: sexp.puf does the same over s-expressions, where what
+;;  9. Untyped data: sexp.puf does the same with no grammar, where what
 ;;     the session sees teaches the editor.
+;;
+;; Expr is a grammar (docs/GRAMMARS.md): programs are their own
+;; s-expressions, matched with quasiquote patterns, and a quoted program
+;; is checked against Expr when the file compiles.
 
-(define-type Expr
-  (Num Int)
-  (Var Sym)
-  (Add Expr Expr)
-  (Mul Expr Expr)
-  (Let Sym Expr Expr))
+;; the language: numbers, variables, + and *, and a one-binding let
+(define-grammar Expr
+  #:keywords (+ * let)
+  Int
+  Sym
+  (+ Expr Expr)
+  (* Expr Expr)
+  (let ([Sym Expr]) Expr))
 
 ;; An environment: (name . value) pairs, the innermost binding first.
 (define (lookup [env : (List (Pairof Sym Int))] [x : Sym]) : Int
@@ -43,27 +49,26 @@
 
 (define (eval-expr [e : Expr] [env : (List (Pairof Sym Int))]) : Int
   (match e
-    [(Num n) n]
-    [(Var x) (lookup env x)]
-    [(Add a b) (+ (eval-expr a env) (eval-expr b env))]
-    [(Mul a b) (* (eval-expr a env) (eval-expr b env))]
-    [(Let x rhs body)
+    [(? fixnum? n) n]
+    [(? symbol? x) (lookup env x)]
+    [`(+ ,a ,b) (+ (eval-expr a env) (eval-expr b env))]
+    [`(* ,a ,b) (* (eval-expr a env) (eval-expr b env))]
+    [`(let ([,x ,rhs]) ,body)
      (let ([v (eval-expr rhs env)])
        (eval-expr body (cons (cons x v) env)))]))
 
 (define (run [e : Expr]) : Int
   (eval-expr e '()))
 
-;; let x = 2 + 3 in x * (let y = 4 in x + y)
 (define example
-  (Let 'x (Add (Num 2) (Num 3))
-       (Mul (Var 'x) (Let 'y (Num 4) (Add (Var 'x) (Var 'y))))))
+  '(let ([x (+ 2 3)])
+     (* x (let ([y 4]) (+ x y)))))
 
 (run example)
 
 ;; ---- Exercises ---------------------------------------------------------
 
-;; Step 5: Cmd-. in the match fills it.
+;; Step 5: Cmd-. in the match fills it: one clause per production.
 (define (size [e : Expr]) : Int
   (match e))
 
@@ -72,8 +77,8 @@
 ;; above it).
 (define (count-vars [e : Expr]) : Int
   (match e
-    [(Num n) 0]
-    [(Var x) 1]
-    [(Add a b) (+ (count-vars a) (count-vars b))]
-    [(Mul a b) ??]
-    [(Let x rhs body) (+ (count-vars rhs) (count-vars body))]))
+    [(? fixnum? n) 0]
+    [(? symbol? x) 1]
+    [`(+ ,a ,b) (+ (count-vars a) (count-vars b))]
+    [`(* ,a ,b) ??]
+    [`(let ([,x ,rhs]) ,body) (+ (count-vars rhs) (count-vars body))]))

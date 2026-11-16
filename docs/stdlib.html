@@ -799,15 +799,15 @@ see <code>docs/LANGUAGE.md</code> and the <a href="tutorial.html">tutorial</a>.<
 <p class="catlede">define-type declares an algebraic datatype whose constructors work in expressions and in match patterns; see the tutorial for the full story. Constructor instances are their own heap kind, disjoint from vectors.</p>
 <div class="entry" id="e-adt_63">
 <div class="sighead"><code class="nm">adt?</code> <code class="ty">(-> a Bool)</code><span class="src prim" title="a runtime primitive (C / reference / VM, kept in lockstep by the manifest)">primitive</span></div>
-<p class="doc">Is this value a define-type constructor instance?</p>
+<p class="doc">Is this value of the old datatype heap kind? (#f for define-type instances, which are lists and symbols: docs/GRAMMARS.md)</p>
 <pre><code>(define-type Opt (None) (Some Int))
 (println (Some 1))
 (println (adt? (Some 1)))
-(println (adt? (vector 1)))
+(println (list? (Some 1)))
 ;; prints:
 ;;   (Some 1)
-;;   #t
-;;   #f</code></pre></div>
+;;   #f
+;;   #t</code></pre></div>
 
 <section id="cat-9">
 <h2>I/O &amp; the REPL</h2>

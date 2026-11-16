@@ -9,9 +9,9 @@ I used Claude Code to build Puffin by extending that teaching-focused
 language (from Jeremy Siek's compiler book) with several
 quality-of-life features:
 
-- Match patterns and quasiquoting (a template whose head names an
-  ADT constructor in scope builds or matches that constructor)
-- A gradual type system using consistency-based typing
+- Match patterns and quasiquoting
+- A gradual type system using consistency-based typing, whose
+  datatypes are grammars over plain s-expressions (`docs/GRAMMARS.md`)
 - A simple standard library consisting of sets, hashes (dictionaries),
   and several other facilities
 - A simple module system inspired by SML
@@ -33,18 +33,18 @@ implementation.
 Here's a "hello world" example:
 
 ```scheme
-(define-type Expr
-  (Num Int)
-  (Add Expr Expr)
-  (Mul Expr Expr))
+(define-grammar Expr          ;; the syntax is the type
+  Int
+  (+ Expr Expr)
+  (* Expr Expr))
 
 (define (eval-expr [e : Expr]) : Int
   (match e
-    [(Num n) n]
-    [(Add a b) (+ (eval-expr a) (eval-expr b))]
-    [(Mul a b) (* (eval-expr a) (eval-expr b))]))
+    [(? fixnum? n) n]
+    [`(+ ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(* ,a ,b) (* (eval-expr a) (eval-expr b))]))
 
-(println (eval-expr (Add (Mul (Num 3) (Num 4)) (Num 1))))   ;; 13
+(println (eval-expr '(+ (* 3 4) 1)))   ;; 13 -- the quote is checked against Expr
 ```
 
 **The compiler is called `puffincc`**: it is self-hosting, written in
@@ -61,9 +61,12 @@ Some highlights coming from Racket:
   toolchain (why not Rust!?), and should yield a stage-2/3
   byte-identical fixpoint every time.
 
-- **Gradual types** are described in `docs/TYPES.md`: ADTs, type
-  aliases, annotations where you want them, `_` where you don't; transient
-  casts with blame at declared boundaries; exhaustiveness warnings.
+- **Gradual types** are described in `docs/TYPES.md` and
+  `docs/GRAMMARS.md`: grammars and define-types over plain
+  s-expressions, type aliases, annotations where you want them, `_`
+  where you don't; casts with blame at declared boundaries (a grammar's
+  checks the whole term); exhaustiveness warnings that name the missing
+  productions.
 
 - **A typed FFI** (`docs/FFI.md`): `dlopen`'d C imports declared with
   ordinary `(: name τ)` types; the declaration generates the

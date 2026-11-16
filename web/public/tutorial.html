@@ -289,39 +289,77 @@ this differs from Racket; what differs is what you match <em>on</em>.</p>
   '(add (num 1)
         (mul (num 3) (neg (num 4))))))  ;; -11
 </code></pre></div>
-<div><div class="side-label puf">Puffin style: ADT constructor patterns</div>
-<pre><code>(define-type Expr
-  (Num Int)
-  (Add Expr Expr)
-  (Mul Expr Expr)
-  (Neg Expr))
+<div><div class="side-label puf">Puffin style: the same program, plus a grammar</div>
+<pre><code>(define-grammar Expr
+  (num Int)
+  (add Expr Expr)
+  (mul Expr Expr)
+  (neg Expr))
 
 (define (eval-expr [e : Expr]) : Int
   (match e
-    [(Num n) n]
-    [(Add a b) (+ (eval-expr a) (eval-expr b))]
-    [(Mul a b) (* (eval-expr a) (eval-expr b))]
-    [(Neg a) (- (eval-expr a))]))
+    [`(num ,n) n]
+    [`(add ,a ,b)
+     (+ (eval-expr a) (eval-expr b))]
+    [`(mul ,a ,b)
+     (* (eval-expr a) (eval-expr b))]
+    [`(neg ,a) (- (eval-expr a))]))
 
 (println
  (eval-expr
-  (Add (Num 1)
-       (Mul (Num 3) (Neg (Num 4))))))   ;; -11
+  '(add (num 1)
+        (mul (num 3) (neg (num 4))))))  ;; -11
 </code></pre></div>
 </div>
-<p>Both run in Puffin — the left one is also verbatim Racket. In the quasiquote
+<p>Both run in Puffin — the left one is also verbatim Racket. In the untyped
 version an expression is "whatever list shape the patterns happen to expect": any
-s-expression can leak in, and nothing owns the set of cases. In the ADT version,
-<code>(Add a b)</code> is a <em>constructor pattern</em> — <code>match</code>
-recognizes it because <code>Add</code> is bound as a constructor — and the type
-declaration is the single place the shape of expressions is defined.</p>
+s-expression can leak in, and nothing owns the set of cases. The right one is the
+same program with one declaration and one annotation. <code>Expr</code> is a
+<strong>grammar</strong> (docs/GRAMMARS.md): a union of productions written like the
+patterns themselves, with types where the binders go. Nothing is translated —
+programs stay their own s-expressions — but now the quoted input is checked against
+<code>Expr</code> when the file compiles, <code>a</code> and <code>b</code> are
+<code>Expr</code>s, and the match is checked to cover every production.</p>
 
-<p>The difference shows up in a single typo. Misspell a quasiquote tag and you
-get a clause that silently never matches — the program dies at runtime, on the
-input that should have worked. Misspell a constructor and the compiler stops you
-immediately, even when the bad clause is unreachable:</p>
+<p>When you want constructors to call, <code>define-type</code> is a grammar plus
+constructor functions: <code>(define-type Expr (Num Int) (Add Expr Expr) ...)</code>
+makes <code>(Add a b)</code> build the very list <code>`(Add ,a ,b)</code> spells,
+so the two spellings are interchangeable values:</p>
 <div class="pair">
-<div><div class="side-label rkt">Quasiquote typo: dead clause, runtime failure</div>
+<div><div class="side-label puf">A define-type, matched with quasiquote</div>
+<pre><code>(define-type Expr
+  (Num Int) (Add Expr Expr) (Mul Expr Expr) (Neg Expr))
+
+(define (eval-expr [e : Expr]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Add ,a ,b) (+ (eval-expr a) (eval-expr b))]
+    [`(Mul ,a ,b) (* (eval-expr a) (eval-expr b))]
+    [`(Neg ,a) (- (eval-expr a))]))
+
+(eval-expr '(Add (Num 1) (Mul (Num 3) (Neg (Num 4)))))  ;; -11
+(equal? (Num 1) '(Num 1))                              ;; #t
+</code></pre></div>
+<div><div class="side-label puf">What the checker sees</div>
+<pre><code>;; a quote or template has the exact type
+;; of its shape; where Expr is expected it
+;; must fit one of Expr's productions:
+;;   '(Num "one")      Str is not Int
+;;   `(Add (Num 1))    no production fits
+;; are compile-time errors that print the
+;; offending shape. Templates and quotes
+;; are data at every depth -- nothing is
+;; rewritten.
+</code></pre></div>
+</div>
+
+<p>The difference shows up in a single typo. Misspell a quasiquote tag in the
+untyped program and you get a clause that silently never matches — the program
+dies at runtime, on the input that should have worked. With the grammar, the same
+typo leaves a production uncovered, and the compiler names it before anything
+runs (<code>--strict-types</code> makes the warning an error):</p>
+<div class="pair">
+<div><div class="side-label rkt">Untyped: dead clause, runtime failure</div>
 <pre><code>(define (f e)
   (match e
     [`(add ,a ,b) (+ a b)]
@@ -329,18 +367,19 @@ immediately, even when the bad clause is unreachable:</p>
 (println (f '(mul 3 4)))
 </code></pre>
 <pre class="err"><code>error: match-failure</code></pre></div>
-<div><div class="side-label puf">Constructor typo: compile-time error</div>
-<pre><code>(match e
-  [(Num n) n]
-  [(Add a b) (+ (eval-expr a) (eval-expr b))]
-  [(Mull a b) (* (eval-expr a) (eval-expr b))])
-;; Mull names no constructor in scope
+<div><div class="side-label puf">With the grammar: named at compile time</div>
+<pre><code>(define (eval-expr [e : Expr]) : Int
+  (match e
+    ...
+    [`(mull ,a ,b)    ;; oops
+     (* (eval-expr a) (eval-expr b))]
+    ...))
 </code></pre>
-<pre class="err"><code>error: match: no matching clause for '(Mull a b)</code></pre></div>
+<pre class="err"><code>typecheck warning: match on Expr is not exhaustive: missing (mul Expr Expr) [main.puf:7]</code></pre></div>
 </div>
-<p>And because a module's <code>define-type</code>s are a closed world (see
-<a href="#modules">modules</a>), the compiler knows the complete constructor set of
-every ADT — which is what makes exhaustiveness checking possible at all.</p>
+<p>And because a module's grammars and <code>define-type</code>s are a closed world
+(see <a href="#modules">modules</a>), the compiler knows every production of every
+type — which is what makes exhaustiveness checking possible at all.</p>
 
 <h3>Nullary constructors are bare names — and patterns nest</h3>
 <pre><code>(define-type Shape
@@ -382,10 +421,11 @@ misusing them is a compile-time error:</p>
 <aside class="qa">
 <div class="q">Does Puffin check exhaustiveness?</div>
 <p>Yes. Because requires form a DAG and all of a module's
-<code>define-type</code>s are closed once the file ends, the full constructor set
-of every ADT is statically known — so a <code>match</code> whose scrutinee has a
-concrete ADT type is checked against it. Missing constructors are a
-<strong>warning</strong> (the program still runs), reported in declaration order:</p>
+grammars and <code>define-type</code>s are closed once the file ends, every type's
+full set of productions is statically known — so a <code>match</code> whose
+scrutinee has a grammar or define-type type is checked against it. Missing
+constructors (or, for a grammar, productions) are a <strong>warning</strong> (the
+program still runs), reported in declaration order:</p>
 <pre><code>(define (radius [s : Shape]) : Int
   (match s [(Circle r) r]))          ;; Shape also has Point, Rect
 </code></pre>
@@ -506,9 +546,13 @@ Concrete-vs-concrete disagreement is a compile-time error:</p>
 Run typechecks with the same checker before anything executes, so the red boxes
 in this tutorial reproduce verbatim in its output pane.</p>
 <p>The other pillar of Typed Racket — occurrence typing, where <code>(if (string?
-x) ...)</code> narrows a union — has no analogue in Puffin, because there are no
-unions to narrow. Dynamic dispatch on predicates is what <code>_</code> is for;
-statically known alternatives are what ADTs are for:</p>
+x) ...)</code> narrows a union — has only a structural analogue in Puffin. Its
+unions are grammars, unions of s-expression shapes, and a <code>match</code>
+narrows by pattern: a quasiquote clause's binders get the types of the productions
+it matches, and <code>(? fixnum? n)</code> makes <code>n</code> an <code>Int</code>.
+There is no flow narrowing of variables. Dynamic dispatch on predicates is what
+<code>_</code> is for; statically known alternatives are what grammars and
+define-types are for:</p>
 <div class="pair">
 <div><div class="side-label rkt">In Typed Racket: unions + occurrence typing</div>
 <pre><code>#lang typed/racket
@@ -517,7 +561,7 @@ statically known alternatives are what ADTs are for:</p>
       (string-length x)   ; x : String here
       (add1 x)))          ; x : Integer here
 </code></pre></div>
-<div><div class="side-label puf">In Puffin: <code>_</code> flows, or an ADT owns the cases</div>
+<div><div class="side-label puf">In Puffin: <code>_</code> flows, or a type owns the cases</div>
 <pre><code>(define (len-or-inc x)    ;; x : _
   (if (string? x)
       (string-length x)   ;; _ ~ Str: allowed
@@ -579,18 +623,19 @@ cast is a precise runtime error carrying a <strong>blame label</strong> naming
 the boundary — <code>cast: expected Int, got #t (blame: f's argument x)</code> —
 instead of whatever tag check the value happened to hit later. Unannotated code
 gets no casts at all (it compiles byte-identically), so the gradual guarantee is
-free. Constructor instances have their own heap kind — not vectors — so
-<code>(println (Some 1))</code> prints <code>(Some 1)</code> (a nullary
-constructor prints bare: <code>None</code>), <code>(vector? (Some 1))</code> is
-<code>#f</code>, and <code>adt?</code> is the disjoint predicate.</p>
+free. Constructor instances are plain s-expressions — <code>(println (Some 1))</code>
+prints <code>(Some 1)</code> because it IS the list <code>(Some 1)</code>, and a nullary
+constructor is its symbol, <code>None</code>. A grammar or <code>define-type</code>
+annotation checks the whole term against the grammar, not just its outermost
+shape.</p>
 
 <table>
 <thead><tr><th></th><th>Typed Racket</th><th>Puffin</th></tr></thead>
 <tbody>
 <tr><td>How you opt in</td><td>separate <code>#lang typed/racket</code>, per module</td><td>one language; per-annotation, <code>_</code> is the default</td></tr>
 <tr><td>Core relation</td><td>subtyping, with unions + occurrence typing</td><td>consistency (<code>~</code>), non-transitive, no unions</td></tr>
-<tr><td>Data</td><td>structs + union types</td><td><code>define-type</code> ADTs, constructors in <code>match</code></td></tr>
-<tr><td>Typed/untyped boundary</td><td>contracts generated at module boundaries</td><td>transient casts with blame at every declared boundary (first-order checks; ADT casts verify the constructor set)</td></tr>
+<tr><td>Data</td><td>structs + union types</td><td>plain s-expressions, typed by grammars (<code>define-grammar</code>, <code>define-type</code>)</td></tr>
+<tr><td>Typed/untyped boundary</td><td>contracts generated at module boundaries</td><td>casts with blame at every declared boundary (first-order for ordinary types; a grammar's cast checks the whole term)</td></tr>
 <tr><td>Unannotated code</td><td>must still typecheck (or live in an untyped module)</td><td>never fails to check — the gradual guarantee</td></tr>
 </tbody>
 </table>
@@ -620,9 +665,10 @@ declared boundary it lands on, at the boundary, with blame:</p>
 (println (sneaky 'oops))            ;; dies at first-of's door, not inside car:
 </code></pre>
 <pre class="err"><code>puffin runtime error: cast: expected Pairof, got oops (blame: first-of's argument p [main.puf:1])</code></pre>
-<p>The check is first-order (transient): it validates the value's outermost shape
-— for an ADT type, that the value's constructor belongs to that type — and trusts
-the checker for the rest. Fully unannotated code has no declared boundaries, so
+<p>For ordinary types the check is first-order (transient): it validates the
+value's outermost shape and trusts the checker for the rest. A grammar or
+<code>define-type</code> annotation checks the whole term against its productions,
+so a malformed node deep inside is caught at the boundary too. Fully unannotated code has no declared boundaries, so
 it carries no casts and the runtime's ordinary tag checks remain the net, exactly
 as before.</p>
 </aside>
@@ -793,8 +839,8 @@ this: a module can't <code>define-type</code> a name it also
 outright.</p>
 <p>Separate compilation carries types too: under <code>--separate</code> (the
 Racket-side <code>bin/puffin</code> path; puffincc compiles whole programs only), a
-module's <code>.pufi</code> interface records every export's type — and full ADT
-definitions, constructor tags included — so an importer typechecks against
+module's <code>.pufi</code> interface records every export's type — and full
+define-type definitions, constructors included — so an importer typechecks against
 <code>(fun area (-&gt; Shape Int))</code> without ever reading the exporting
 module's source. The same misuse, exhaustiveness warning, and cast blame above
 reproduce across independently compiled units, demangled the same way; a

@@ -92,7 +92,7 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `command-line-args` | 0 | `(-> (List Str))` | `pf_command_line_args` | The program's command-line arguments (a list of strings, argv[0] excluded). |
 | `system` | 1 | `(-> Str Int)` | `pf_system` | Run a shell command; its exit code. |
 | `eprintln` | 1 | `(-> a Void)` | `pf_eprintln` | Display a value followed by a newline on standard error; returns void. |
-| `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value a define-type constructor instance? |
+| `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value of the old datatype heap kind? (#f for define-type instances, which are lists and symbols: docs/GRAMMARS.md) |
 | `foreign-ptr?` | 1 | `(-> a Bool)` | `pf_foreign_ptr_huh` | Is this value a foreign handle (an opaque pointer from a foreign library)? |
 | `read-line` | 0 | `(-> _)` | `pf_read_line` | The next line of standard input without its newline, or #f at end of input. |
 

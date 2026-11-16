@@ -1,23 +1,33 @@
 ;; Hindley-Milner inference for mini-ML: unification + Algorithm W
 ;; (also a golden-corpus program: src/test-programs/pl-hindley-milner.scm -- tests and examples share sources)
 ;; (monomorphic let for brevity: let generalization elided; the W
-;; skeleton, substitutions, and occurs check are the point)
+;; skeleton, substitutions, and occurs check are the point).
+;; Programs and types are s-expressions typed by grammars
+;; (docs/GRAMMARS.md); `->` names a type former, so the production
+;; quotes it to mean the literal symbol.
+(define-grammar Expr
+  #:keywords (lambda let)
+  Int Bool Sym
+  (lambda (Sym) Expr)
+  (let ([Sym Expr]) Expr)
+  (Expr Expr))
+(define-grammar Type int bool (tv Int) ('-> Type Type))
 (define counter (vector 0))
 (define (fresh!)
   (vector-set! counter 0 (+ 1 (vector-ref counter 0)))
   (list 'tv (vector-ref counter 0)))
-(define (tv? t) (match t [`(tv ,_) #t] [_ #f]))
+(define (tv? [t : Type]) : Bool (match t [`(tv ,_) #t] [_ #f]))
 ;; substitution: immutable hash tvnum -> type
-(define (walk t s)
+(define (walk [t : Type] s) : Type
   (match t
     [`(tv ,n) (if (hash-has-key? s n) (walk (hash-ref s n) s) t)]
     [_ t]))
-(define (occurs? n t s)
+(define (occurs? [n : Int] [t : Type] s) : Bool
   (match (walk t s)
     [`(tv ,m) (eq? n m)]
     [`(-> ,a ,b) (or (occurs? n a s) (occurs? n b s))]
     [_ #f]))
-(define (unify a b s)
+(define (unify [a : Type] [b : Type] s)
   (let ([a (walk a s)] [b (walk b s)])
     (match (list a b)
       [`((tv ,n) ,_) (if (equal? a b) s (if (occurs? n b s) 'occurs-fail (hash-set s n b)))]
@@ -26,12 +36,12 @@
        (let ([s1 (unify a1 b1 s)])
          (if (eq? s1 'occurs-fail) 'occurs-fail (unify a2 b2 s1)))]
       [_ (if (equal? a b) s 'clash)]))) 
-(define (resolve t s)
+(define (resolve [t : Type] s) : Type
   (match (walk t s)
     [`(-> ,a ,b) `(-> ,(resolve a s) ,(resolve b s))]
     [t2 t2]))
 ;; W: returns (type . subst) or an error symbol
-(define (W e ctx s)
+(define (W [e : Expr] ctx s)
   (match e
     [(? fixnum? _) (cons 'int s)]
     [#t (cons 'bool s)] [#f (cons 'bool s)]
@@ -51,7 +61,7 @@
             [res (fresh!)]
             [s2 (unify (car rf) `(-> ,(car ra) ,res) (cdr ra))])
        (if (symbol? s2) (cons s2 (cdr ra)) (cons res s2)))]))
-(define (infer e)
+(define (infer [e : Expr])
   (vector-set! counter 0 0)
   (let ([r (W e (hash) (hash))])
     (if (symbol? (car r)) (car r) (rename-tvs (resolve (car r) (cdr r))))))

@@ -1,18 +1,24 @@
 ;; Huet zippers for binary trees: navigate, edit in place, rebuild
 ;; (also a golden-corpus program: src/test-programs/pl-zipper.scm -- tests and examples share sources)
 ;; loc = (subtree context); context = top | (left v right-tree ctx) | ...
-(define (go-left loc)
+;; as grammars (docs/GRAMMARS.md): the trees, contexts and locations
+;; are plain s-expressions, and every move below is checked to build a
+;; well-formed Loc
+(define-grammar Tree leaf (node Int Tree Tree))
+(define-grammar Ctx top (in-left Int Tree Ctx) (in-right Int Tree Ctx))
+(define-grammar Loc (Tree Ctx))
+(define (go-left [loc : Loc]) : Loc
   (match loc
     [`((node ,v ,l ,r) ,ctx) `(,l (in-left ,v ,r ,ctx))]))
-(define (go-right loc)
+(define (go-right [loc : Loc]) : Loc
   (match loc
     [`((node ,v ,l ,r) ,ctx) `(,r (in-right ,v ,l ,ctx))]))
-(define (go-up loc)
+(define (go-up [loc : Loc]) : Loc
   (match loc
     [`(,t (in-left ,v ,r ,ctx)) `((node ,v ,t ,r) ,ctx)]
     [`(,t (in-right ,v ,l ,ctx)) `((node ,v ,l ,t) ,ctx)]))
-(define (replace loc t) (match loc [`(,_ ,ctx) `(,t ,ctx)]))
-(define (to-top loc)
+(define (replace [loc : Loc] [t : Tree]) : Loc (match loc [`(,_ ,ctx) `(,t ,ctx)]))
+(define (to-top [loc : Loc]) : Tree
   (match loc
     [`(,t top) t]
     [_ (to-top (go-up loc))]))

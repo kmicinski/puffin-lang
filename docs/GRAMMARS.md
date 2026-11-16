@@ -156,7 +156,14 @@ Fill-match writes one clause per production: a quasiquote pattern with a
 binder per leaf (`` [`(+ ,e1 ,e2) ??] ``), `(? fixnum? n)` / `(? symbol? x)`
 for base leaves, and constructor patterns for `define-type`s as before.
 Hover shows a binder's production type. REPL units carry
-`define-grammar` forms like `define-type` ones.
+`define-grammar` forms like `define-type` ones. **Promote** turns an
+untyped s-expression language into a grammar: at a match with two or
+more quasiquote cases it declares `(define-grammar Expr (add Expr Expr)
+...)` from the cases (field types from the file's literal data) and
+annotates the matched parameter; nothing else is rewritten, because the
+data already is what the grammar describes. The session observer sees
+define-type instances as the lists they are; the assists read an
+observed `(list Add 3)` back as an `Add` instance.
 
 ## 8. Compatibility
 
@@ -171,3 +178,28 @@ Hover shows a binder's production type. REPL units carry
 - Field and constructor arity errors in templates (`'(Add 1)`) are no
   longer compile errors where the template is unconstrained; they are
   inclusion errors where a grammar is expected.
+
+## 9. Known limits
+
+- **No flow narrowing.** A catch-all binder after other clauses still
+  has the whole scrutinee's type: earlier clauses are not subtracted.
+  Write the remaining cases (`(? fixnum? n)`, a quasiquote pattern)
+  when a later use needs the narrower type.
+- **`->` and the other type formers** (`List`, `Hash`, `Pairof`, ...)
+  at the head of a production read as types: `(-> Type Type)` is the
+  function type. Quote the head for the literal: `('-> Type Type)`.
+- **Joins.** The two branches of an `if` that build unrelated shapes
+  join to `_` (no union types); annotate the result when it should be
+  a grammar.
+- **Literal atoms bound to a type variable** widen to their base type
+  (`'b` passed where `a` is expected binds `a` to `Sym`); list shapes
+  bind exactly.
+- **Separate compilation** leaves a cast against an imported grammar
+  unchecked at run time (the recognizer lives in the exporting unit);
+  static checking is unaffected. Whole-program compilation checks it.
+- **Exhaustiveness is conservative**: guards are ignored and a clause
+  that matches part of a production covers it, so a warning is always
+  a real omission but a missing sub-case can go unreported.
+- **Recognizers are linear but uncached**: a cast walks the whole term
+  each time it fires. Typed-to-typed calls never cast, so this costs
+  only at `_` boundaries.

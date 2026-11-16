@@ -24,7 +24,8 @@ skipped, not failed — the `z3/` examples need `brew install z3`.
 ## lang/ — the language by example
 
 - **pcf-interp.puf** — an interpreter for PCF, the canonical typed
-  toy language: quasiquote patterns in, quasiquote construction out.
+  toy language: quasiquote patterns in, quasiquote construction out,
+  programs and values typed by grammars (`docs/GRAMMARS.md`).
 - **red-black-tree.puf** — Okasaki red-black insertion; `balance` is
   one four-way match. THE pattern-matching showcase.
 - **hindley-milner.puf** — Algorithm W for mini-ML: unification,
@@ -32,7 +33,8 @@ skipped, not failed — the `z3/` examples need `brew install z3`.
 - **zipper.puf** — Huet zippers over binary trees: navigate, edit,
   rebuild, persistently.
 - **stack-compiler/** — the classic expr→stack-machine compiler,
-  split across three modules (`require`/`provide` in action).
+  split across modules (`require`/`provide` in action), with the
+  source and target languages as grammars in `lang.puf`.
 
 The `lang/` programs share sources with the golden test corpus
 (`src/test-programs/`), which also feeds the web playground's

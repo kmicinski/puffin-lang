@@ -1,7 +1,8 @@
 ;; the stack machine
 ;; (also a golden-corpus program: src/test-programs/modules-4/vm.puf -- tests and examples share sources)
 (provide run-vm)
-(define (run-vm instrs stack)
+(require "lang.puf")
+(define (run-vm [instrs : Code] [stack : (List Int)]) : Int
   (match instrs
     ['() (car stack)]
     [(cons i rest)

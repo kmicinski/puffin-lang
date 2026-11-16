@@ -791,7 +791,8 @@
            [else #f])]
     [(pair? q)
      (cond [(slist? s) (list-overlap? q (cdr s) vs)]
-           [(and (pair? s) (memq (car s) '(List Pairof))) #t]
+           [(and (pair? s) (eq? (car s) 'List)) (list-overlap? q (list (list '#%star (cadr s))) vs)]
+           [(and (pair? s) (eq? (car s) 'Pairof)) #t]
            [else #f])]
     [else (lit-in? q s)]))
 (define (all-overlap? ps fs vs)
@@ -878,6 +879,23 @@
     [(or (? fixnum?) (? string?) (? boolean?))
      (indices-where (λ (s) (tmpl-overlap? p s '())) prods)]
     [_ (covers-all prods)]))
+
+;; the names some set! assigns, anywhere in forms (quoted data aside)
+(define (assigned-names forms)
+  (define s (mutable-seteq))
+  (let walk ([e forms])
+    (cond [(and (pair? e) (eq? (car e) 'quote)) (void)]
+          [(and (pair? e) (eq? (car e) 'set!) (pair? (cdr e)) (symbol? (cadr e)))
+           (set-add! s (cadr e)) (walk (cddr e))]
+          [(pair? e) (walk (car e)) (walk (cdr e))]
+          [else (void)]))
+  s)
+;; an assigned variable's type: an exact atom as its base type, an
+;; exact list shape as _
+(define (loosen t)
+  (if (sexp-type? t)
+      (if (lit? (cadr t)) (widen t) '_)
+      t))
 
 ;; ---- widening: an exact shape as the ordinary type it inhabits ------
 (define (widen t) (if (sexp-type? t) (widen-shape (cadr t)) t))
@@ -968,6 +986,11 @@
      ;; nothing is rewritten, the checker types them by their shape
      (define forms forms0)
      (define p (cons 'program forms))
+     ;; every name some set! assigns: such a variable never keeps an
+     ;; exact shape (docs/GRAMMARS.md), which a later assignment of a
+     ;; different value would contradict -- the no-refinement-of-
+     ;; assigned-variables rule
+     (define assigned (assigned-names forms))
 
      ;; a name cannot be both a type and a value: `provide` resolves a
      ;; name against both namespaces (docs/MODULES.md), so a collision
@@ -1301,7 +1324,7 @@
          ;; against an s-expression type, a template's binders take
          ;; their types from the productions it matches (docs/GRAMMARS.md §5)
          [`(quasiquote ,tmpl)
-          (if (sexpy? scrut-t)
+          (if (or (sexpy? scrut-t) (and (pair? scrut-t) (eq? (car scrut-t) 'List)))
               (or (align tmpl (leaf->shape scrut-t) '()) (qq-pattern-binds tmpl 1))
               (qq-pattern-binds tmpl 1))]
          [(? fixnum?) '()] [(? boolean?) '()] [(? string?) '()]
@@ -1361,7 +1384,9 @@
                 [else #f])]
          [(pair? q)
           (cond [(slist? s) (align-list q (cdr s) vs)]
-                [(and (pair? s) (memq (car s) '(List Pairof))) (untyped-binds q)]
+                ;; an ordinary (List τ) is "zero or more τ"
+                [(and (pair? s) (eq? (car s) 'List)) (align-list q (list (list '#%star (cadr s))) vs)]
+                [(and (pair? s) (eq? (car s) 'Pairof)) (untyped-binds q)]
                 [else #f])]
          [else (if (lit-in? q s) '() #f)]))
      ;; the alternatives' bindings, joined name by name
@@ -1395,6 +1420,12 @@
                  (concat-binds
                   (append (map al pre (take pf lpre))
                           (list (pattern-bindings tail (list '#%sexp (cons '#%list (drop fs lpre)))))))]
+                ;; the prefix runs into a final star: the rest is more of it
+                [(and sf (null? qf))
+                 (concat-binds
+                  (append (map al (take pre lpf) pf)
+                          (map (λ (p) (al p sf)) (drop pre lpf))
+                          (list (pattern-bindings tail (list '#%sexp (list '#%list (list '#%star sf)))))))]
                 [else (untyped-binds q)])]
          [(not ell)
           (cond [(not sf)
@@ -1757,7 +1788,7 @@
           (define dt (hash-ref top x '_))
           (unless (consistent? et dt)
             (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
-          (when (eq? dt '_) (hash-set! top x et))]
+          (when (eq? dt '_) (hash-set! top x (if (set-member? assigned x) (loosen et) et)))]
          [e (synth e '())]))))
      ;; typed interfaces (separate compilation): deposit the final
      ;; top-level environment -- declared, derived, and synthesized

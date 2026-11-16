@@ -1,16 +1,20 @@
 ;; the CIS352 classic, in three modules: compile arithmetic
 ;; (also a golden-corpus program: src/test-programs/modules-4/main.puf -- tests and examples share sources)
 ;; expressions to a stack machine (compiler.puf), run the machine
-;; (vm.puf), and check both against direct evaluation
+;; (vm.puf), and check both against direct evaluation. Both languages
+;; are grammars (lang.puf), so every quoted test below is checked to be
+;; Arith when this file compiles.
+(require "lang.puf")
 (require "compiler.puf")
 (require "vm.puf")
-(define (direct e)
+(define (direct [e : Arith]) : Int
   (match e
     [(? fixnum? n) n]
     [`(+ ,a ,b) (+ (direct a) (direct b))]
     [`(- ,a ,b) (- (direct a) (direct b))]
     [`(* ,a ,b) (* (direct a) (direct b))]
     [`(neg ,a) (- (direct a))]))
+(: tests (List Arith))
 (define tests
   '((+ 1 2)
     (* (+ 1 2) (- 10 4))
@@ -18,7 +22,7 @@
     (- (* (* 2 3) (* 4 5)) (+ (+ 1 2) 3))
     (* (neg 7) (- 2 9))))
 (for-each-check tests)
-(define (for-each-check ts)
+(define (for-each-check [ts : (List Arith)])
   (match ts
     ['() 'all-agree]
     [(cons t rest)

@@ -135,7 +135,7 @@ returns a new hash sharing structure with the old (a persistent HAMT
 in the native runtime, so it's O(log n), not a copy), and immutable
 collections compare by value under `equal?`. Immutable hashes and sets
 key **structurally** (by `equal?`): heap values — lists, vectors,
-ADTs, computed strings, nested collections — are valid keys and
+define-type instances, computed strings, nested collections — are valid keys and
 elements, deduped by content, exactly like fixnums and symbols.
 Mutability is tolerated where you ask for it: `set!`, vectors (the raw
 mutable building block), and the `make-hash`/`hash-set!` family, which
@@ -164,24 +164,29 @@ eta-expands it, so `(map car xs)` works.
 
 Puffin is gradually typed (docs/TYPES.md is the full story):
 annotations are optional anywhere, `_` is the dynamic type, and
-unannotated code just runs. `define-type` declares an algebraic
-datatype; a constructor with fields is an ordinary function, a
-nullary constructor is a value referenced bare (`None`, not
-`(None)`), and `match` destructures both.
+unannotated code just runs. Data stays plain s-expressions, and types
+describe its shape (docs/GRAMMARS.md): `define-grammar` declares a
+type as a union of productions written like quasiquote patterns, and
+`define-type` is a grammar plus constructors -- a constructor with
+fields is an ordinary function building the list it names, a nullary
+constructor is its symbol, referenced bare (`None`, not `(None)`).
 
 ```scheme
-(define-type (Option a) (None) (Some a))   ;; parameterized ADT
-(define-type Expr                          ;; plain ADT
-  (Num Int)
-  (Add Expr Expr)
-  (Mul Expr Expr))
+(define-grammar Expr                       ;; the syntax itself is the type
+  #:keywords (+ *)
+  Int
+  (+ Expr Expr)
+  (* Expr Expr))
 
 (define (eval-expr [e : Expr]) : Int       ;; annotated formals + result
   (match e
-    [(Num n) n]
-    [(Add a b) (+ (eval-expr a) (eval-expr b))]
-    [(Mul a b) (* (eval-expr a) (eval-expr b))]))
+    [(? fixnum? n) n]
+    [`(+ ,a ,b) (+ (eval-expr a) (eval-expr b))]   ;; a, b : Expr
+    [`(* ,a ,b) (* (eval-expr a) (eval-expr b))]))
 
+(eval-expr '(+ 1 (* 2 3)))                 ;; the quote is checked against Expr
+
+(define-type (Option a) (None) (Some a))   ;; (Some 1) is the list (Some 1)
 (: scale Int)                              ;; standalone declaration
 (define scale 100)
 (ann (car xs) Int)                         ;; expression ascription
@@ -190,11 +195,12 @@ nullary constructor is a value referenced bare (`None`, not
 ```
 
 Checking is bidirectional with consistency — `_` is compatible with
-everything, so typed and untyped code mix freely — and declared
-boundaries get transient run-time casts with blame. A
-non-exhaustive `match` over an ADT warns on stderr; `--strict-types`
-(on both `bin/puffin` and `puffincc`) promotes the warning to a
-compile-time error.
+everything, so typed and untyped code mix freely — plus inclusion into
+grammars, and declared boundaries get run-time casts with blame (a
+grammar's cast checks the whole term). A non-exhaustive `match` over a
+grammar or define-type warns on stderr, naming the missing
+productions; `--strict-types` (on both `bin/puffin` and `puffincc`)
+promotes the warning to a compile-time error.
 
 ## Foreign functions
 
@@ -238,7 +244,7 @@ as a Puffin API, with a solve-and-prove-unique Sudoku showcase);
   [(cons hd tl) ...]           ;; pairs
   [(list a b c) ...]           ;; exactly three elements
   [(vector x y) ...]           ;; vectors by length
-  [(Some x) ...]               ;; ADT constructors (docs/TYPES.md)
+  [(Some x) ...]               ;; constructor patterns (docs/GRAMMARS.md)
   [(? fixnum? n) ...]          ;; predicate guard around a subpattern
   [`(add ,a ,b) ...]           ;; quasiquote: literal structure + unquote holes
   [`(lambda (,xs ...) ,body) ...]  ;; ellipsis: xs collects a sublist
@@ -264,13 +270,12 @@ make ASTs pleasant to work with:
     [(? fixnum? n) n]))
 ```
 
-**Quasiquote is constructor syntax.** Wherever a `define-type`
-constructor is in scope, a template or quoted datum whose head names
-it *is* that constructor — built in expressions, matched in
-patterns — and a bare name of a nullary constructor is its value.
-So the same interpreter over an ADT reads exactly like the
-s-expression one, and gets the type system (field types,
-exhaustiveness) for free:
+**Quasiquote over grammars.** Templates and quoted data are data at
+every depth; a grammar types them. Matched against a grammar-typed
+scrutinee, a quasiquote pattern's binders take their productions' types
+(under `...`, lists of them), and a constructor builds exactly the list
+a template spells, so the same interpreter reads identically whether
+its language is a `define-grammar` or a `define-type`:
 
 ```scheme
 (define-type Expr (Num Int) (Add Expr Expr) (Mul Expr Expr))
@@ -281,15 +286,13 @@ exhaustiveness) for free:
     [`(Add ,a ,b) (+ (eval-expr a) (eval-expr b))]
     [`(Mul ,a ,b) (* (eval-expr a) (eval-expr b))]))
 
-(eval-expr '(Add (Num 1) (Mul (Num 2) (Num 3))))   ;; 7: the quote builds the instance
+(eval-expr '(Add (Num 1) (Mul (Num 2) (Num 3))))   ;; 7: the quote IS the value (Add ...) builds
 (define (double [e : Expr]) : Expr `(Mul (Num 2) ,e))
 ```
 
-Heads that name nothing in scope stay data (`` `(block ,e ...) `` is
-still a list, holding instances), nested quasiquote is data, and the
-compiler rejects a template that spells a constructor with the wrong
-field count, a splice into one, or a field of the wrong type.
-docs/TYPES.md §2 has the precise rule.
+A template that fits no production where a grammar is expected
+(`` `(Add (Num 1)) `` as an `Expr`) is a compile-time error naming the
+template's shape. docs/GRAMMARS.md has the precise rules.
 
 ## Running
 

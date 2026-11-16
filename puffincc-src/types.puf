@@ -618,7 +618,8 @@
            [else #f])]
     [(pair? q)
      (cond [(slist? s) (list-overlap? q (cdr s) vs)]
-           [(and (pair? s) (or (eq? (car s) 'List) (eq? (car s) 'Pairof))) #t]
+           [(and (pair? s) (eq? (car s) 'List)) (list-overlap? q (list (list '#%star (car (cdr s)))) vs)]
+           [(and (pair? s) (eq? (car s) 'Pairof)) #t]
            [else #f])]
     [else (lit-in? q s)]))
 (define (all-overlap? ps fs vs)
@@ -711,6 +712,23 @@
     [(? string? _) (indices-where (lambda (s) (tmpl-overlap? p s '())) prods)]
     [(? boolean? _) (indices-where (lambda (s) (tmpl-overlap? p s '())) prods)]
     [_ (covers-all prods)]))
+
+;; the names some set! assigns, anywhere in forms (quoted data aside)
+(define (assigned-names forms)
+  (let ([s (make-set)])
+    (define (walk e)
+      (cond [(and (pair? e) (eq? (car e) 'quote)) (void)]
+            [(and (pair? e) (eq? (car e) 'set!) (pair? (cdr e)) (symbol? (car (cdr e))))
+             (begin (set-add! s (car (cdr e))) (walk (cdr (cdr e))))]
+            [(pair? e) (begin (walk (car e)) (walk (cdr e)))]
+            [else (void)]))
+    (begin (for-each walk forms) s)))
+;; an assigned variable's type: an exact atom as its base type, an
+;; exact list shape as _
+(define (loosen t)
+  (if (sexp-type? t)
+      (if (lit? (car (cdr t))) (widen t) '_)
+      t))
 
 ;; ---- widening: an exact shape as the ordinary type it inhabits ------
 (define (widen t) (if (sexp-type? t) (widen-shape (car (cdr t))) t))
@@ -1080,6 +1098,11 @@
      (define forms forms0)
      (define p (cons 'program forms))
      (define top (make-hash))
+     ;; every name some set! assigns: such a variable never keeps an
+     ;; exact shape (docs/GRAMMARS.md), which a later assignment of a
+     ;; different value would contradict -- the no-refinement-of-
+     ;; assigned-variables rule
+     (define assigned (assigned-names forms))
 
      ;; a name cannot be both a type and a value: `provide` resolves a
      ;; name against both namespaces (docs/MODULES.md), so a collision
@@ -1198,7 +1221,7 @@
          ;; against an s-expression type, a template's binders take
          ;; their types from the productions it matches (docs/GRAMMARS.md §5)
          [(list 'quasiquote tmpl)
-          (if (sexpy? scrut-t)
+          (if (or (sexpy? scrut-t) (and (pair? scrut-t) (eq? (car scrut-t) 'List)))
               (let ([bs (align tmpl (leaf->shape scrut-t) '())])
                 (if bs bs (qq-pattern-binds tmpl 1)))
               (qq-pattern-binds tmpl 1))]
@@ -1255,7 +1278,9 @@
                 [else #f])]
          [(pair? q)
           (cond [(slist? s) (align-list q (cdr s) vs)]
-                [(and (pair? s) (or (eq? (car s) 'List) (eq? (car s) 'Pairof))) (untyped-binds q)]
+                ;; an ordinary (List τ) is "zero or more τ"
+                [(and (pair? s) (eq? (car s) 'List)) (align-list q (list (list '#%star (car (cdr s)))) vs)]
+                [(and (pair? s) (eq? (car s) 'Pairof)) (untyped-binds q)]
                 [else #f])]
          [else (if (lit-in? q s) '() #f)]))
      ;; the alternatives' bindings, joined name by name
@@ -1290,6 +1315,12 @@
                    (concat-binds
                     (append (map2 (lambda (p f) (align p f vs)) pre (take pf lpre))
                             (list (pattern-bindings tail (list '#%sexp (cons '#%list (drop fs lpre)))))))]
+                  ;; the prefix runs into a final star: the rest is more of it
+                  [(and sf (null? qf))
+                   (concat-binds
+                    (append (map2 (lambda (p f) (align p f vs)) (take pre lpf) pf)
+                            (append (map (lambda (p) (align p sf vs)) (drop pre lpf))
+                                    (list (pattern-bindings tail (list '#%sexp (list '#%list (list '#%star sf))))))))]
                   [else (untyped-binds q)])]
            [(not ell)
             (cond [(not sf)
@@ -1890,7 +1921,7 @@
                   [dt (hash-ref/default top x '_)])
              (unless (consistent? et dt)
                (type-error (format "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et))))
-             (when (eq? dt '_) (hash-set! top x et)))]
+             (when (eq? dt '_) (hash-set! top x (if (set-member? assigned x) (loosen et) et))))]
           [e (synth e '())])))
       forms)
 

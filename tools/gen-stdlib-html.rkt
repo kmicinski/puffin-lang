@@ -314,9 +314,9 @@
    'symbol->string (make-ex "(println (string-length (symbol->string 'hello)))" "5\n")
    'string->symbol (make-ex "(println (eq? (string->symbol \"cat\") 'cat))" "#t\n")
    'symbol<? (make-ex "(println (symbol<? 'apple 'banana))" "#t\n")
-   ;; ADTs
-   'adt? (make-ex "(define-type Opt (None) (Some Int))\n(println (Some 1))\n(println (adt? (Some 1)))\n(println (adt? (vector 1)))"
-                  "(Some 1)\n#t\n#f\n")
+   ;; the old datatype kind: define-type instances are lists now
+   'adt? (make-ex "(define-type Opt (None) (Some Int))\n(println (Some 1))\n(println (adt? (Some 1)))\n(println (list? (Some 1)))"
+                  "(Some 1)\n#f\n#t\n")
    ;; I/O
    'println (make-ex "(println (list 1 'two \"three\"))" "(1 two three)\n")
    'display (make-ex "(display 'answer)\n(display \": \")\n(display 42)\n(newline)" "answer: 42\n")

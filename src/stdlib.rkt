@@ -558,14 +558,12 @@
               "Display a value followed by a newline on standard error; returns void."
               #:type '(-> a Void))
 
-   ;; ---- ADT constructor instances (lib/adt.c) ---------------------------
-   ;; The dedicated heap kind for define-type constructor instances
-   ;; (docs/TYPES.md §2, kind 18). Only the desugar lowering emits the
-   ;; internal four -- construction (adt-alloc + adt-set!, mirroring
-   ;; how (vector ...) lowers) and match compilation (adt-tag +
-   ;; adt-ref) -- so user code cannot forge an instance. adt? is the
-   ;; surface predicate, disjoint from vector?. Appended to the
-   ;; manifest: every existing prim id (a manifest index) is unchanged.
+   ;; ---- the old datatype heap kind (lib/adt.c) ---------------------------
+   ;; define-type instances used to be their own heap kind (kind 18).
+   ;; They are plain s-expressions now (docs/GRAMMARS.md §3) and no
+   ;; compiler emits the internal four any more; the prims stay so every
+   ;; prim id (a manifest index) is unchanged. adt? is #f for every
+   ;; value either compiler builds.
    (prim-spec 'adt-alloc 2 'pf_adt_alloc #f
               (λ (tag n) (adt-value tag (make-vector n 0)))
               "INTERNAL: a constructor instance with the tag symbol and n zeroed fields.")
@@ -580,7 +578,7 @@
               "INTERNAL: the constructor symbol of an instance.")
    (prim-spec 'adt? 1 'pf_adt_huh #t
               adt-value?
-              "Is this value a define-type constructor instance?"
+              "Is this value of the old datatype heap kind? (#f for define-type instances, which are lists and symbols: docs/GRAMMARS.md)"
               #:type '(-> a Bool))
 
    ;; ---- transient casts (lib/cast.c) -------------------------------------

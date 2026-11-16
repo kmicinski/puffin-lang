@@ -11,9 +11,10 @@ Design goals, in order: (1) **gradual by design** — every program that
 runs today is well-typed tomorrow; the unannotated type is `_` (Any),
 and annotations only ever tighten. Unannotated code keeps compiling,
 and the golden corpus is the standing regression suite for that
-claim. (2) **Algebraic datatypes as the foundation** — the
-interesting types in a PL-course language are tree shapes, and
-quasiquote-matched s-expressions deserve a typed alternative.
+claim. (2) **Grammars as the foundation** — the interesting types in a
+PL-course language are tree shapes over s-expressions, so the types
+describe those shapes directly (docs/GRAMMARS.md) rather than a second,
+disjoint world of datatype values.
 (3) **Honest container types** for the collections the language
 already has. (4) **Inference over annotation** in practice — you
 annotate module boundaries and tricky spots, the checker fills in the
@@ -96,64 +97,42 @@ syntax.
   `_`-typed scrutinee is exempt (the gradual guarantee: untyped code
   never warns).
 
-### Quasiquote is constructor syntax
+### Grammars, and what a define-type is
 
-The compiler-writer's idiom — a language as backquoted s-expressions,
-`` `(add ,a ,b) `` built and matched — is the idiom ADTs were meant
-to replace, and the two meet in the middle: **a quasiquote template
-(or a quoted datum) spells constructors.** The rule, applied at depth
-1 of every template:
-
-- a list whose head names a constructor in scope is that constructor
-  applied to its elements, each read by the same rule — in an
-  expression a call, in a `match` pattern a constructor pattern;
-- a bare symbol naming a *nullary* constructor is that constructor's
-  value (its pattern, in a pattern);
-- everything else is data exactly as before: a head that is not a
-  constructor stays a list (holding whatever instances its elements
-  build), a non-nullary constructor's name in element position stays
-  a symbol, `,e`/`,@e`/`...` keep their meanings, and nested
-  quasiquote (depth 2 and deeper) is data throughout.
+A `define-type` is a **grammar** plus constructors, and grammars are the
+general form: `define-grammar` declares a type as a union of
+productions over plain s-expressions, written like quasiquote patterns
+with types where binders go. docs/GRAMMARS.md is the reference; in
+brief:
 
 ```scheme
-(define-type Expr (Num Int) (Add Expr Expr) (Neg Expr))
-(define-type (Option a) (None) (Some a))
+(define-grammar Expr
+  #:keywords (+ let)              ;; Sym leaves exclude these
+  Int
+  Sym
+  (+ Expr Expr)
+  (let ([Sym Expr] ...) Expr))
 
-`(Add ,a (Num 1))            ≡  (Add a (Num 1))
-'(Neg (Num 2))               ≡  (Neg (Num 2))          ;; a quote has no holes
-`(Some ,x)   `None   'None   ≡  (Some x)  None  None
-`(block ,e1 (Num 1) ,@rest)  ≡  (cons 'block (cons e1 (cons (Num 1) rest)))
-[`(Add ,a ,b) ...]           ≡  [(Add a b) ...]        ;; in match
-[`(seq (Num ,n) ...) ...]    ;; ellipsis over constructor patterns: n is a (List Int)
+(define (ev [e : Expr] env) : Int
+  (match e
+    [(? fixnum? n) n]
+    [(? symbol? x) (hash-ref env x)]
+    [`(+ ,a ,b) (+ (ev a env) (ev b env))]          ;; a, b : Expr
+    [`(let ([,xs ,es] ...) ,body) ...]))            ;; xs : (List Sym), es : (List Expr)
+
+(ev '(let ([x 1]) (+ x 2)) (hash))                  ;; checked against Expr statically
 ```
 
-The elaboration is purely syntactic and runs before checking, so
-everything downstream sees ordinary constructor applications and
-patterns: fields are checked against their declared types
-(`` `(Num "one") `` is `Num: argument has type Str, expected Int`),
-a `match` written with templates is exhaustiveness-checked like one
-written with constructor patterns, and `desugar` compiles the same
-code. The compiler rejects a template that spells a constructor with
-the wrong field count (`constructor Add expects 2 fields, got 1 in
-template` / `... in pattern`), a splice into one, an ellipsis as a
-field, or an improper list under a constructor head. Wrapped data
-stays dynamic: a template whose head is not a constructor is `_` as
-always, so the gradual guarantee holds — a program without
-`define-type` elaborates to itself.
-
-"In scope" is the module system's ordinary notion (docs/MODULES.md):
-a local `define-type`, an unqualified import of the constructor (with
-`#:only`/`#:rename` narrowing and respelling it like any name), or
-the qualified `M.Ctor` spelling under `#:as` — `` `(M.Add ,a ,b) ``
-works exactly like `(M.Add a b)`. There is no separate "open" form:
-a template head means what the same name means as an expression, and
-the resolver renames exactly those positions (a template symbol that
-resolves to no constructor stays data). Two consequences worth
-knowing: a constructor's name is no longer free as *data* in the
-module that can see it (`'(Add 1)` is a compile-time arity error,
-not a list), and a constructor you did not import is data in your
-templates — so a typed boundary, not silence, is what catches the
-missing `require`.
+- Quote and quasiquote are **data at every depth**: nothing is
+  rewritten. A quoted datum or a template has the exact type of its
+  shape, and fits a grammar when one of its productions includes it.
+- `(Some 1)` builds the list `(Some 1)`; `None` is the symbol `None`.
+  So a template that spells a constructor IS that constructor's value
+  (`` `(Some ,x) `` and `(Some x)` are equal), and a constructor's name
+  is ordinary data everywhere.
+- Constructor patterns `(Some p)` and bare nullary patterns are list and
+  literal patterns; quasiquote patterns over a grammar-typed scrutinee
+  bind their variables at the productions' types.
 
 ### Implicit mutual recursion
 
@@ -171,23 +150,14 @@ its file ends, which is also what makes exhaustiveness checkable.
 
 ### Runtime representation
 
-A constructor instance is its own heap kind, disjoint from every
-other runtime value. The layout mirrors a vector's (slot 0 holds the
-constructor's module-mangled symbol, slots 1..n the fields), but the
-dedicated kind keeps the surface honest — `(vector? (Some 1))` is
-`#f`, and `adt?` is the disjoint surface predicate. Instances print
-as `(Some 1)`; a nullary constructor (a value, referenced bare)
-prints bare: `None`. `equal?` recurses structurally (same
-constructor, `equal?` fields), like vectors; in the immutable
-(`equal?`-keyed) hashes and sets, instances participate as keys and
-elements by that same structural comparison, while the mutable
-`make-hash`/`make-set` family keys them by identity like any heap
-value (see the collections section of docs/LANGUAGE.md). Only the
-desugar lowering can construct an instance (via the internal
-`adt-alloc`/`adt-set!` prims) or take one apart positionally
-(`adt-tag`/`adt-ref`): `match` compiles a constructor pattern to an
-`adt?` kind check plus a tag `eq?` — the tag alone fixes the arity —
-so user code cannot forge or mutate one.
+There is no separate datatype heap kind: an instance is the
+s-expression its constructor spells -- a list headed by the
+constructor's source name, or for a nullary constructor that symbol.
+Instances print as `(Some 1)` and `None`, `equal?` compares them
+structurally like any lists, `list?` is `#t` for them, and `adt?` (the
+predicate of the old instance kind, still in the manifest) is `#f`.
+Two modules that declare the same constructor name build the same data:
+grammar types are structural (docs/GRAMMARS.md §4).
 
 ## 3. Annotations: anything, anywhere, defaulting to `_`
 
