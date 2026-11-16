@@ -1,5 +1,5 @@
-;; a second ADT, imported #:as-qualified by main: template heads then
-;; spell P.Text / P.Cat, exactly like expressions and patterns do
+;; a second define-type, imported #:as-qualified by main: expressions
+;; and patterns there say P.Text / P.Cat, its data stays (Text ...)
 (provide Doc Text Cat render)
 
 (define-type Doc

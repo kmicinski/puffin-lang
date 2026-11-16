@@ -66,7 +66,8 @@
 
 (define (nm x) (if (symbol? x) (module-demangle x) x))
 (define (ty t)
-  (cond [(symbol? t) (module-demangle t)]
+  (cond [(sexp-type? t) (string->symbol (render-sexp-type (car (cdr t))))]
+        [(symbol? t) (module-demangle t)]
         [(pair? t) (cons (ty (car t)) (ty (cdr t)))]
         [else t]))
 
@@ -92,6 +93,8 @@
    (lambda (f)
      (match f
        [`(define-type ,head ,_ ...)
+        (set-add! type-heads (match head [`(,n ,_ ...) n] [n n]))]
+       [`(define-grammar ,head ,_ ...)
         (set-add! type-heads (match head [`(,n ,_ ...) n] [n n]))]
        [`(#%extern-type ,head ,_ ...)
         (set-add! type-heads (match head [`(,n ,_ ...) n] [n n]))]
@@ -158,6 +161,20 @@
   (define (tyx t) (expand-alias-type t aliases))
   (define (walk-ctor c)
     (match c [`(,cn ,fts ...) (cons cn (map tyx fts))] [_ c]))
+  ;; a production: its type leaves unfold, its literals (quoted data,
+  ;; and the symbols no alias names) stay
+  (define (walk-prod q)
+    (match q
+      [(? symbol? s) (if (hash-has-key? aliases s) (tyx s) s)]
+      [(list 'quote _) q]
+      [`(,h ,_ ...) #:when (and (symbol? h) (or (type-former-name? h) (hash-has-key? aliases h)))
+       (tyx q)]
+      [(cons a d) (cons (walk-prod a) (walk-prod d))]
+      [_ q]))
+  (define (walk-grammar rest)
+    (if (and (pair? rest) (eq? (car rest) kw-keywords) (pair? (cdr rest)))
+        (cons (car rest) (cons (car (cdr rest)) (map walk-prod (cdr (cdr rest)))))
+        (map walk-prod rest)))
   (define (walk-template q depth)
     (match q
       [(list 'unquote x)
@@ -173,6 +190,7 @@
       [`(quasiquote ,q) (list 'quasiquote (walk-template q 1))]
       [`(define-type-alias ,_ ,_) e]
       [`(define-type ,head ,cs ...) (cons 'define-type (cons head (map walk-ctor cs)))]
+      [`(define-grammar ,head . ,rest) (cons 'define-grammar (cons head (walk-grammar rest)))]
       [`(#%extern-type ,head ,cs ...) (cons '#%extern-type (cons head (map walk-ctor cs)))]
       [`(: ,n ,t) (list ': n (tyx t))]
       [`(#%prelude: ,n ,t) (list '#%prelude: n (tyx t))]
@@ -230,17 +248,17 @@
               (set-add! ftypes n))))]
        [_ (void)]))
    forms)
-  ;; pass 1: heads
+  ;; pass 1: heads (define-type and define-grammar alike)
   (for-each-form
    (lambda (f)
      (match f
-       [`(define-type ,head ,_ ...)
+       [`(,dt ,head ,_ ...) #:when (or (eq? dt 'define-type) (eq? dt 'define-grammar))
         (let ([np (match head
                     [`(,n ,ps ...) (cons n ps)]
                     [n (cons n '())])])
           (let ([n (car np)] [ps (cdr np)])
             (when (or (base-type? n) (type-former-name? n))
-              (type-error (format "define-type cannot redefine built-in type ~a" n)))
+              (type-error (format "~a cannot redefine built-in type ~a" dt n)))
             (when (hash-has-key? adts n)
               (type-error (format "type ~a defined twice" (nm n))))
             (hash-set! adts n ps)))]
@@ -277,220 +295,486 @@
              cs)))]
        [_ (void)]))
    forms)
+  ;; pass 3: the grammar table -- every define-type and define-grammar
+  ;; as its productions (docs/GRAMMARS.md)
+  (set! grammar-table (make-hash))
+  (for-each-form
+   (lambda (f)
+     (match f
+       [`(define-type ,head ,cs ...)
+        (let ([n (match head [`(,n ,_ ...) n] [n n])])
+          (hash-set! grammar-table n
+                     (list (hash-ref adts n) '() (map ctor->shape cs) 'type (map car cs))))]
+       [`(define-grammar ,head . ,rest)
+        (let* ([n (match head [`(,n ,_ ...) n] [n n])]
+               [ps (hash-ref adts n)]
+               [kp (grammar-parts n rest)])
+          (when (null? (cdr kp))
+            (type-error (format "define-grammar ~a: expected at least one production" (nm n))))
+          (hash-set! grammar-table n
+                     (list ps (car kp)
+                           (map (lambda (q) (prod->shape q n ps (car kp) adts)) (cdr kp))
+                           'grammar '())))]
+       [_ (void)]))
+   forms)
   (list adts ctors ctor-orders ftypes))
 
-;; ---- constructor-directed quasiquote (docs/TYPES.md §2) -------------
-;; A quasiquote template is constructor syntax wherever a constructor
-;; is in scope: at depth 1, a list whose head names a constructor is
-;; that constructor applied to its elements (each elaborated the same
-;; way), and a bare symbol naming a nullary constructor is its value.
-;; Everything else stays data, exactly as before. The rule is purely
-;; syntactic and runs BEFORE checking, so the checker (field types,
-;; exhaustiveness), desugar's pattern compiler, and the module
-;; resolver (which renames exactly these positions, modules.puf rqq)
-;; all see ordinary constructor applications and patterns -- a
-;; quasiquote template elaborates to the constructor call it spells,
-;; with its remaining data parts left as (smaller) templates. A
-;; quote spells constructors at the same positions, but has no
-;; escapes (the quoted-data section below).
-;; Nested quasiquote (depth 2+) is data. Mirrors src/types.rkt.
-(define (elaborate-quasiquote forms ctors)
-  (define (ctor-arity-of s)
-    (if (symbol? s)
-        (let ([info (hash-ref/default ctors s #f)])
-          (if info (length (ctor-fields info)) #f))
-        #f))
-  (define (ctor-head? s) (if (ctor-arity-of s) #t #f))
-  (define (nullary? s) (eq? (ctor-arity-of s) 0))
-  ;; the elements a constructor-headed template applies C to: a proper
-  ;; list, no splices, no ellipsis, the constructor's arity
-  ;; escapes? says the elements are quasiquote template nodes (where
-  ;; ,@ and ... are escapes); under quote they are plain data
-  (define (ctor-elems c elems where escapes?)
-    ;; (a dotted ,tail reads as the two elements `unquote` and the
-    ;; tail: that spelling is improper too)
-    (unless (and (list? elems) (not (and escapes? (member 'unquote elems))))
-      (type-error (format "quasiquote: constructor ~a applied to an improper list" (nm c))))
-    (when escapes?
-      (for-each
-       (lambda (e)
-         (match e
-           [(list 'unquote-splicing _)
-            (type-error (format "quasiquote: constructor ~a takes no splice (,@)" (nm c)))]
-           [_ (when (eq? e '...)
-                (type-error (format "quasiquote: constructor ~a takes no ellipsis" (nm c))))]))
-       elems))
-    (unless (eq? (length elems) (ctor-arity-of c))
-      (type-error (format "constructor ~a expects ~a fields, got ~a in ~a"
-                          (nm c) (ctor-arity-of c) (length elems) where)))
-    elems)
+;; ---- grammar types (docs/GRAMMARS.md) -------------------------------
+;; A grammar is a union of productions over plain s-expressions, and a
+;; define-type is one too (literal head symbols, plus constructor
+;; functions). Productions, quoted data and templates are all
+;; normalized to SHAPES:
+;;   (#%lit d)             the literal atom d (symbol, fixnum, string,
+;;                         boolean); () is (#%list)
+;;   (#%list e ...)        a proper list; at most one element is
+;;                         (#%star s): zero or more s
+;;   (#%sym-except k ...)  a Sym leaf of a grammar with #:keywords
+;;   any type τ            a leaf: every value of τ
+;; The type of a quoted datum or a template is (#%sexp s). Mirrors
+;; src/types.rkt.
 
-  ;; --- expressions ---
-  ;; a template node as an EXPRESSION (depth 1): the constructor call
-  ;; it spells, or a (residual) quasiquote
-  ;; (atoms come out as the literals they are -- a quoted symbol, a
-  ;; number -- not as residual quasiquotes, which the checker types
-  ;; dynamic: (Num "one") must fail to check)
-  (define (tmpl->expr t)
-    (match t
-      [(list 'unquote e) (walk e)]
-      [(? symbol? s) (if (nullary? s) s (list 'quote s))]
-      [(? pair? _)
-       (if (ctor-head? (car t))
-           (cons (car t) (map tmpl->expr (ctor-elems (car t) (cdr t) "template" #t)))
-           (list 'quasiquote (tmpl t 1)))]
-      ['() (list 'quote '())]
-      [_ t]))
-  ;; a template node as a TEMPLATE: constructor shapes at depth 1
-  ;; become unquoted constructor calls; unquotes at depth 1 are
-  ;; expressions (walked); deeper levels are data
-  (define (tmpl t depth)
-    (match t
-      [(list 'unquote e)
-       (list 'unquote (if (eq? depth 1) (walk e) (tmpl e (- depth 1))))]
-      [(list 'quasiquote e) (list 'quasiquote (tmpl e (+ depth 1)))]
-      [(? pair? _)
-       (if (and (eq? depth 1) (ctor-head? (car t)))
-           (list 'unquote (cons (car t) (map tmpl->expr (ctor-elems (car t) (cdr t) "template" #t))))
-           (tmpl-elems t depth))]
-      [(? symbol? s) (if (and (eq? depth 1) (nullary? s)) (list 'unquote s) s)]
-      [_ t]))
-  ;; the spine of a list node: each element is a node; a dotted
-  ;; unquote/quasiquote tail is a node too (`(a . ,b) reads as
-  ;; (a unquote b), which is NOT three elements)
-  (define (tmpl-elems t depth)
-    (match t
-      [(list 'unquote _) (tmpl t depth)]
-      [(list 'quasiquote _) (tmpl t depth)]
-      [(cons (list 'unquote-splicing e) rest)
-       (cons (list 'unquote-splicing (if (eq? depth 1) (walk e) (tmpl e (- depth 1))))
-             (tmpl-elems rest depth))]
-      [(cons a rest) (cons (tmpl a depth) (tmpl-elems rest depth))]
-      [_ (tmpl t depth)]))
-  ;; --- quoted data ---
-  ;; (quote d) spells constructors at the same positions a template
-  ;; does, but it has NO escapes: under quote, (unquote x) is a plain
-  ;; two-element list and ... a plain symbol (both readers agree). A
-  ;; datum that mentions no constructor stays a quote (the checker
-  ;; types it Sym / (List _)). One that does rebuilds as a template
-  ;; around its constructor calls, with every escape-shaped symbol
-  ;; (unquote, unquote-splicing, quasiquote, ...) unquoted as the
-  ;; quoted symbol it is, so no escape shape can form.
-  (define (escape-sym? s)
-    (if (member s '(unquote unquote-splicing quasiquote ...)) #t #f))
-  (define (qmentions? d)
-    (cond [(symbol? d) (nullary? d)]
-          [(pair? d) (or (ctor-head? (car d)) (qspine-mentions? d))]
-          [else #f]))
-  (define (qspine-mentions? d)
-    (cond [(pair? d) (or (qmentions? (car d)) (qspine-mentions? (cdr d)))]
-          [else (qmentions? d)]))
-  (define (qdatum->expr d)
-    (cond [(symbol? d) (if (nullary? d) d (list 'quote d))]
-          [(pair? d)
-           (cond [(ctor-head? (car d))
-                  (cons (car d) (map qdatum->expr (ctor-elems (car d) (cdr d) "template" #f)))]
-                 [(qspine-mentions? d) (list 'quasiquote (qspine->tmpl d))]
-                 [else (list 'quote d)])]
-          [(null? d) (list 'quote d)]
-          [else d]))
-  (define (qdatum->tmpl d)
-    (cond [(symbol? d)
-           (cond [(nullary? d) (list 'unquote d)]
-                 [(escape-sym? d) (list 'unquote (list 'quote d))]
-                 [else d])]
-          [(pair? d)
-           (if (ctor-head? (car d))
-               (list 'unquote (cons (car d) (map qdatum->expr (ctor-elems (car d) (cdr d) "template" #f))))
-               (qspine->tmpl d))]
-          [else d]))
-  (define (qspine->tmpl d)
-    (cond [(pair? d) (cons (qdatum->tmpl (car d)) (qspine->tmpl (cdr d)))]
-          [else (qdatum->tmpl d)]))
-  (define (quote->expr d) (if (qmentions? d) (qdatum->expr d) (list 'quote d)))
+;; name -> (list params keywords prods kind ctors): kind is 'type for a
+;; define-type (ctors: its constructor names, one per production) or
+;; 'grammar. Set by collect-adts for the program being checked.
+(define grammar-table (make-hash))
 
-  ;; --- patterns ---
-  (define (tmpl->pat t)
-    (match t
-      [(list 'unquote p) (pat p)]
-      [(? symbol? s) (if (nullary? s) s (list 'quote s))]
-      [(? pair? _)
-       (if (ctor-head? (car t))
-           (cons (car t) (map tmpl->pat (ctor-elems (car t) (cdr t) "pattern" #t)))
-           (list 'quasiquote (ptmpl t)))]
-      ['() (list 'quote '())]
-      [_ t]))
-  (define (ptmpl t)
-    (match t
-      [(list 'unquote p) (list 'unquote (pat p))]
-      [(list 'quasiquote _) t]
-      [(? pair? _)
-       (if (ctor-head? (car t))
-           (list 'unquote (cons (car t) (map tmpl->pat (ctor-elems (car t) (cdr t) "pattern" #t))))
-           (ptmpl-elems t))]
-      [(? symbol? s) (if (nullary? s) (list 'unquote s) s)]
-      [_ t]))
-  (define (ptmpl-elems t)
-    (match t
-      [(list 'unquote _) (ptmpl t)]
-      [(list 'quasiquote _) t]
-      [(cons a rest) (cons (ptmpl a) (ptmpl-elems rest))]
-      [_ (ptmpl t)]))
-  ;; quoted data as a pattern: the same encoding, with constructor
-  ;; patterns in place of calls (an unquoted quoted symbol is the
-  ;; pattern matching that symbol)
-  (define (qdatum->pat d)
-    (cond [(symbol? d) (if (nullary? d) d (list 'quote d))]
-          [(pair? d)
-           (cond [(ctor-head? (car d))
-                  (cons (car d) (map qdatum->pat (ctor-elems (car d) (cdr d) "pattern" #f)))]
-                 [(qspine-mentions? d) (list 'quasiquote (qspine->ptmpl d))]
-                 [else (list 'quote d)])]
-          [(null? d) (list 'quote d)]
-          [else d]))
-  (define (qdatum->ptmpl d)
-    (cond [(symbol? d)
-           (cond [(nullary? d) (list 'unquote d)]
-                 [(escape-sym? d) (list 'unquote (list 'quote d))]
-                 [else d])]
-          [(pair? d)
-           (if (ctor-head? (car d))
-               (list 'unquote (cons (car d) (map qdatum->pat (ctor-elems (car d) (cdr d) "pattern" #f))))
-               (qspine->ptmpl d))]
-          [else d]))
-  (define (qspine->ptmpl d)
-    (cond [(pair? d) (cons (qdatum->ptmpl (car d)) (qspine->ptmpl (cdr d)))]
-          [else (qdatum->ptmpl d)]))
-  (define (quote->pat d) (if (qmentions? d) (qdatum->pat d) (list 'quote d)))
-  ;; a match pattern: elaborate the quasiquote/quote patterns in it,
-  ;; through the structural patterns that nest them
-  (define (pat p)
+(define (g-params gi) (first gi))
+(define (g-prods gi) (third gi))
+(define (g-kind gi) (car (cdr (cdr (cdr gi)))))
+(define (g-ctors gi) (car (cdr (cdr (cdr (cdr gi))))))
+
+(define (lit? s) (and (pair? s) (eq? (car s) '#%lit)))
+(define (slist? s) (and (pair? s) (eq? (car s) '#%list)))
+(define (star? s) (and (pair? s) (eq? (car s) '#%star)))
+(define (sym-except? s) (and (pair? s) (eq? (car s) '#%sym-except)))
+(define (sexp-type? t) (and (pair? t) (eq? (car t) '#%sexp)))
+(define (unstar e) (if (star? e) (car (cdr e)) e))
+
+;; the grammar a type names, or #f
+(define (gram-name t)
+  (cond [(and (symbol? t) (hash-has-key? grammar-table t)) t]
+        [(and (pair? t) (symbol? (car t)) (hash-has-key? grammar-table (car t))) (car t)]
+        [else #f]))
+(define (sexpy? t) (or (sexp-type? t) (if (gram-name t) #t #f)))
+
+;; substitution into a shape: literals are data, never parameters
+(define (subst-shape s env)
+  (cond [(lit? s) s]
+        [(sym-except? s) s]
+        [(slist? s) (cons '#%list (map (lambda (e) (subst-shape e env)) (cdr s)))]
+        [(star? s) (list '#%star (subst-shape (car (cdr s)) env))]
+        [else (subst-type s env)]))
+
+;; a grammar type's productions, its parameters instantiated (a missing
+;; argument is _)
+(define (gram-prods t)
+  (let* ([gi (hash-ref grammar-table (gram-name t))]
+         [ps (g-params gi)]
+         [args (if (pair? t) (cdr t) '())])
+    (if (null? ps)
+        (g-prods gi)
+        (let ([env (let loop ([ps ps] [as args] [acc '()])
+                     (if (null? ps)
+                         acc
+                         (loop (cdr ps) (if (pair? as) (cdr as) '())
+                               (cons (cons (car ps) (if (pair? as) (car as) '_)) acc))))])
+          (map (lambda (p) (subst-shape p env)) (g-prods gi))))))
+
+;; a quoted datum as a shape, or #f for an improper list
+(define (datum->shape d)
+  (cond [(null? d) (list '#%list)]
+        [(pair? d)
+         (if (list? d)
+             (let ([es (map datum->shape d)])
+               (if (andmap (lambda (e) (if e #t #f)) es) (cons '#%list es) #f))
+             #f)]
+        [else (list '#%lit d)]))
+
+(define (capitalized? s)
+  (let ([str (symbol->string s)])
+    (and (> (string-length str) 0)
+         (let ([b (string-byte str 0)]) (and (>= b 65) (<= b 90))))))
+
+;; (define-grammar head [#:keywords (k ...)] prod ...): the keywords
+;; and the productions
+(define kw-keywords (string->symbol "#:keywords"))
+(define (grammar-parts gname rest)
+  (if (and (pair? rest) (eq? (car rest) kw-keywords))
+      (if (and (pair? (cdr rest)) (list? (car (cdr rest))) (andmap symbol? (car (cdr rest))))
+          (cons (car (cdr rest)) (cdr (cdr rest)))
+          (type-error (format "define-grammar ~a: #:keywords takes a list of symbols" (nm gname))))
+      (cons '() rest)))
+
+;; a production as written -> its shape
+(define (prod->shape p gname params kws adts)
+  (define (type-sym? s)
+    (or (base-type? s) (if (member s params) #t #f) (hash-has-key? adts s)))
+  (define (conv p)
     (match p
-      [(list 'quasiquote t) (tmpl->pat t)]
-      [(list 'quote d) (quote->pat d)]
-      [(list 'cons p0 p1) (list 'cons (pat p0) (pat p1))]
-      [(cons 'list ps) #:when (list? ps) (cons 'list (map pat ps))]
-      [(cons 'vector ps) #:when (list? ps) (cons 'vector (map pat ps))]
-      [(list '? pred p0) (list '? pred (pat p0))]
-      [(cons c ps) #:when (and (ctor-head? c) (list? ps)) (cons c (map pat ps))]
-      [_ p]))
-  (define (clause cl)
-    (match cl
-      [`(,p ,kw ,g . ,body) #:when (eq? kw kw-when)
-       (cons (pat p) (cons kw (walk (cons g body))))]
-      [(cons p body) (cons (pat p) (walk body))]
-      [_ cl]))
+      [(? symbol? s)
+       (cond [(type-sym? s)
+              (begin (check-type-wf s params adts)
+                     (if (and (eq? s 'Sym) (pair? kws)) (cons '#%sym-except kws) s))]
+             [(eq? s '...) (type-error (format "define-grammar ~a: ... must follow an element" (nm gname)))]
+             [(capitalized? s)
+              (type-error (format "define-grammar ~a: unknown type ~a (quote it for the literal symbol)"
+                                  (nm gname) (nm s)))]
+             [else (list '#%lit s)])]
+      [(list 'quote d)
+       (let ([s (datum->shape d)])
+         (if s s (type-error (format "define-grammar ~a: dotted productions are not supported" (nm gname)))))]
+      [(cons h _)
+       #:when (and (symbol? h)
+                   (or (type-former-name? h)
+                       (and (hash-has-key? adts h) (pair? (hash-ref adts h)))))
+       (begin (check-type-wf p params adts) p)]
+      [(? list? l) (cons '#%list (conv-elems l))]
+      [(? pair? _) (type-error (format "define-grammar ~a: dotted productions are not supported" (nm gname)))]
+      [_ (list '#%lit p)]))
+  (define (conv-elems l)
+    (let loop ([l l] [acc '()] [stars 0])
+      (cond
+        [(null? l) (reverse acc)]
+        [(eq? (car l) '...)
+         (type-error (format "define-grammar ~a: ... must follow an element" (nm gname)))]
+        [(and (pair? (cdr l)) (eq? (car (cdr l)) '...))
+         (begin
+           (when (> stars 0)
+             (type-error (format "define-grammar ~a: at most one ... per list" (nm gname))))
+           (loop (cdr (cdr l)) (cons (list '#%star (conv (car l))) acc) (+ stars 1)))]
+        [else (loop (cdr l) (cons (conv (car l)) acc) stars)])))
+  (conv p))
 
-  ;; --- the walker: every expression position, shape-agnostic ---
-  (define (walk e)
-    (match e
-      [(list 'quote d) (quote->expr d)]
-      [(list 'quasiquote t) (tmpl->expr t)]
-      [`(match ,scrut . ,clauses) #:when (list? clauses)
-       (cons 'match (cons (walk scrut) (map clause clauses)))]
-      [(cons a d) (cons (walk a) (walk d))]
-      [_ e]))
-  (map-form walk forms))
+;; a define-type constructor (Cn ft ...) as a production: its head is
+;; the constructor's SOURCE spelling (what the constructor builds)
+(define (ctor->shape c)
+  (match c
+    [`(,cn) (list '#%lit (module-demangle cn))]
+    [`(,cn ,fts ...) (cons '#%list (cons (list '#%lit (module-demangle cn)) fts))]))
+
+;; ---- inclusion: every value of a is a value of b --------------------
+;; `_` and type variables include and are included by everything (the
+;; gradual reading). Grammar pairs are assumed included while their
+;; productions are compared (coinduction); a non-grammar revisiting a
+;; grammar it is already being compared against fails (left recursion).
+(define (sx-sub? a b) (sub* a b '()))
+
+(define (sub* a b as)
+  (cond
+    [(equal? a b) #t]
+    [(or (eq? a '_) (eq? b '_) (tyvar? a) (tyvar? b)) #t]
+    [(sexp-type? a) (sub* (car (cdr a)) b as)]
+    [(sexp-type? b) (sub* a (car (cdr b)) as)]
+    [(gram-name a)
+     (or (if (member (cons a b) as) #t #f)
+         (let ([as+ (cons (cons a b) as)])
+           (andmap (lambda (p) (sub* p b as+)) (gram-prods a))))]
+    [(gram-name b)
+     (if (member (cons a b) as)
+         #f
+         (let ([as+ (cons (cons a b) as)])
+           (ormap (lambda (q) (sub* a q as+)) (gram-prods b))))]
+    [(lit? a) (lit-in? (car (cdr a)) b)]
+    [(sym-except? a)
+     (cond [(eq? b 'Sym) #t]
+           [(sym-except? b) (andmap (lambda (k) (if (member k (cdr a)) #t #f)) (cdr b))]
+           [else #f])]
+    [(slist? a) (list-in? (cdr a) b as)]
+    ;; a is an ordinary type
+    [(or (lit? b) (sym-except? b)) #f]
+    [(slist? b) (type-in-list? a (cdr b) as)]
+    [else (consistent? a b)]))
+
+;; a literal atom in a shape or type
+(define (lit-in? d b)
+  (cond [(lit? b) (equal? d (car (cdr b)))]
+        [(sym-except? b) (and (symbol? d) (not (member d (cdr b))))]
+        [(eq? b 'Sym) (symbol? d)]
+        [(eq? b 'Int) (fixnum? d)]
+        [(eq? b 'Str) (string? d)]
+        [(eq? b 'Bool) (boolean? d)]
+        [(eq? b '_) #t]
+        [else #f]))
+
+;; a list shape's elements es in b
+(define (list-in? es b as)
+  (cond
+    [(slist? b) (elems-in? es (cdr b) as)]
+    [(and (pair? b) (eq? (car b) 'List))
+     (andmap (lambda (e) (sub* (unstar e) (car (cdr b)) as)) es)]
+    [(and (pair? b) (eq? (car b) 'Pairof))
+     (and (pair? es) (not (star? (car es)))
+          (sub* (car es) (car (cdr b)) as)
+          (sub* (cons '#%list (cdr es)) (car (cdr (cdr b))) as))]
+    [else #f]))
+
+;; an ordinary (List τ) / (Pairof x y) type in a list shape
+(define (type-in-list? a fs as)
+  (match a
+    [`(List ,t)
+     (match fs
+       [`((#%star ,s)) (sub* t s as)]
+       [_ #f])]
+    [`(Pairof ,x ,y)
+     (match fs
+       [`((#%star ,s)) (and (sub* x s as) (sub* y (cons '#%list fs) as))]
+       [(cons f rest) (and (not (star? f)) (sub* x f as) (sub* y (cons '#%list rest) as))]
+       [_ #f])]
+    [_ #f]))
+
+;; elements split at their star: (list prefix star-or-#f suffix)
+(define (split-star es)
+  (let loop ([es es] [pre '()])
+    (cond [(null? es) (list (reverse pre) #f '())]
+          [(star? (car es)) (list (reverse pre) (car (cdr (car es))) (cdr es))]
+          [else (loop (cdr es) (cons (car es) pre))])))
+
+(define (pairwise-sub? xs ys as)
+  (cond [(and (null? xs) (null? ys)) #t]
+        [(or (null? xs) (null? ys)) #f]
+        [(sub* (car xs) (car ys) as) (pairwise-sub? (cdr xs) (cdr ys) as)]
+        [else #f]))
+
+(define (elems-in? es fs as)
+  (let* ([e3 (split-star es)] [f3 (split-star fs)]
+         [pe (first e3)] [se (second e3)] [qe (third e3)]
+         [pf (first f3)] [sf (second f3)] [qf (third f3)]
+         [lpf (length pf)] [lqf (length qf)])
+    (cond
+      [(not sf) (and (not se) (pairwise-sub? es fs as))]
+      [(not se)
+       (let ([n (length es)])
+         (and (>= n (+ lpf lqf))
+              (pairwise-sub? (take es lpf) pf as)
+              (pairwise-sub? (drop es (- n lqf)) qf as)
+              (andmap (lambda (e) (sub* e sf as)) (take (drop es lpf) (- n (+ lpf lqf))))))]
+      [else
+       (and (>= (length pe) lpf) (>= (length qe) lqf)
+            (pairwise-sub? (take pe lpf) pf as)
+            (pairwise-sub? (drop qe (- (length qe) lqf)) qf as)
+            (andmap (lambda (e) (sub* e sf as)) (drop pe lpf))
+            (sub* se sf as)
+            (andmap (lambda (e) (sub* e sf as)) (take qe (- (length qe) lqf))))])))
+
+;; ---- overlap: a grammar used where an ordinary type is expected -----
+;; consistent when some value could be both (car on an Expr); disjoint
+;; is the error
+(define (sx-overlap? a t) (ovl* a t '()))
+(define (ovl* a t vs)
+  (cond
+    [(or (eq? a '_) (eq? t '_) (tyvar? a) (tyvar? t)) #t]
+    [(sexp-type? a) (ovl* (car (cdr a)) t vs)]
+    [(gram-name a)
+     (if (member a vs)
+         #f
+         (ormap (lambda (p) (ovl* p t (cons a vs))) (gram-prods a)))]
+    [(lit? a) (lit-in? (car (cdr a)) t)]
+    [(sym-except? a) (consistent? 'Sym t)]
+    [(slist? a)
+     (match t
+       [`(List ,_) #t]
+       [`(Pairof ,_ ,_) (pair? (cdr a))]
+       [_ #f])]
+    [else (consistent? a t)]))
+
+;; ---- patterns against productions (docs/GRAMMARS.md §5) ------------
+;; (list prefix ellipsis-element-or-#f after-ellipsis tail) of a
+;; quasiquote pattern list: tail is the pattern of a dotted ,tail, #f,
+;; or 'bad
+(define (split-qpat q)
+  (let loop ([q q] [pre '()])
+    (cond
+      [(null? q) (list (reverse pre) #f '() #f)]
+      [(and (pair? q) (eq? (car q) 'unquote) (pair? (cdr q)) (null? (cdr (cdr q))))
+       (list (reverse pre) #f '() (car (cdr q)))]
+      [(and (pair? q) (pair? (cdr q)) (eq? (car (cdr q)) '...))
+       (list (reverse pre) (car q) (cdr (cdr q)) #f)]
+      [(pair? q) (loop (cdr q) (cons (car q) pre))]
+      [else (list (reverse pre) #f '() 'bad)])))
+
+;; the base type a type-test establishes
+(define (pred-base pred)
+  (cond [(member pred '(fixnum? integer?)) 'Int]
+        [(eq? pred 'symbol?) 'Sym]
+        [(eq? pred 'string?) 'Str]
+        [(eq? pred 'boolean?) 'Bool]
+        [else #f]))
+
+;; can quasiquote pattern q (depth 1) match some value of shape or type
+;; s? The checker's binding alignment (align) succeeds exactly when
+;; this does; coverage and the editor's fill-match need only the yes/no
+(define (tmpl-overlap? q s vs)
+  (cond
+    [(and (pair? q) (eq? (car q) 'unquote) (pair? (cdr q)) (null? (cdr (cdr q)))) #t]
+    [(sexp-type? s) (tmpl-overlap? q (car (cdr s)) vs)]
+    [(gram-name s)
+     (if (member s vs)
+         #f
+         (ormap (lambda (p) (tmpl-overlap? q p (cons s vs))) (gram-prods s)))]
+    [(or (eq? s '_) (tyvar? s)) #t]
+    [(null? q)
+     (cond [(slist? s) (andmap star? (cdr s))]
+           [(and (pair? s) (eq? (car s) 'List)) #t]
+           [else #f])]
+    [(pair? q)
+     (cond [(slist? s) (list-overlap? q (cdr s) vs)]
+           [(and (pair? s) (or (eq? (car s) 'List) (eq? (car s) 'Pairof))) #t]
+           [else #f])]
+    [else (lit-in? q s)]))
+(define (all-overlap? ps fs vs)
+  (cond [(and (null? ps) (null? fs)) #t]
+        [(or (null? ps) (null? fs)) #f]
+        [(tmpl-overlap? (car ps) (car fs) vs) (all-overlap? (cdr ps) (cdr fs) vs)]
+        [else #f]))
+(define (list-overlap? q fs vs)
+  (let* ([sp (split-qpat q)]
+         [pre (first sp)] [ell (second sp)] [post (third sp)] [tail (car (cdr (cdr (cdr sp))))]
+         [f3 (split-star fs)]
+         [pf (first f3)] [sf (second f3)] [qf (third f3)]
+         [lpre (length pre)] [lpf (length pf)] [lqf (length qf)])
+    (cond
+      [(eq? tail 'bad) #t]
+      [tail
+       (cond [(and (not sf) (>= (length fs) lpre)) (all-overlap? pre (take fs lpre) vs)]
+             [(and sf (<= lpre lpf)) (all-overlap? pre (take pf lpre) vs)]
+             [else #t])]
+      [(not ell)
+       (cond [(not sf) (and (eq? lpre (length fs)) (all-overlap? pre fs vs))]
+             [(>= lpre (+ lpf lqf))
+              (and (all-overlap? (take pre lpf) pf vs)
+                   (andmap (lambda (p) (tmpl-overlap? p sf vs)) (take (drop pre lpf) (- lpre (+ lpf lqf))))
+                   (all-overlap? (drop pre (- lpre lqf)) qf vs))]
+             [else #f])]
+      [(not (list? post)) #t]
+      [(member '... post) #t]
+      [else
+       (let ([lpost (length post)])
+         (cond
+           [(not sf)
+            (and (<= (+ lpre lpost) (length fs))
+                 (all-overlap? pre (take fs lpre) vs)
+                 (all-overlap? post (drop fs (- (length fs) lpost)) vs)
+                 (andmap (lambda (f) (tmpl-overlap? ell f vs))
+                         (take (drop fs lpre) (- (length fs) (+ lpre lpost)))))]
+           [else
+            (let* ([pre-f (append (take pf (min lpre lpf))
+                                  (map (lambda (dummy) sf) (range 0 (max 0 (- lpre lpf)))))]
+                   [post-f (append (map (lambda (dummy) sf) (range 0 (max 0 (- lpost lqf))))
+                                   (drop qf (max 0 (- lqf lpost))))]
+                   [cands (append (drop pf (min lpre lpf))
+                                  (cons sf (take qf (max 0 (- lqf lpost)))))])
+              (and (all-overlap? pre pre-f vs)
+                   (all-overlap? post post-f vs)
+                   (ormap (lambda (c) (tmpl-overlap? ell c vs)) cands)))]))])))
+
+;; exhaustiveness coverage: the indices of the productions pattern p
+;; can match ('all patterns -- binders, _, cons/list/vector, unknown
+;; predicates -- cover every production). ctors: the checker's
+;; constructor table (nullary-constructor names and constructor
+;; patterns spell their source-named data).
+(define (covers-all prods) (range 0 (length prods)))
+(define (indices-where ok? prods)
+  (let loop ([ps prods] [i 0] [acc '()])
+    (if (null? ps)
+        (reverse acc)
+        (loop (cdr ps) (+ i 1) (if (ok? (car ps)) (cons i acc) acc)))))
+;; does production s admit a value of base type b?
+(define (admits-base? s b vs)
+  (cond [(or (eq? s '_) (tyvar? s)) #t]
+        [(lit? s) (lit-in? (car (cdr s)) b)]
+        [(sym-except? s) (eq? b 'Sym)]
+        [(gram-name s)
+         (if (member s vs) #f
+             (ormap (lambda (p) (admits-base? p b (cons s vs))) (gram-prods s)))]
+        [(symbol? s) (eq? s b)]
+        [else #f]))
+(define (pattern-cover p prods ctors)
+  (match p
+    [(? symbol? s)
+     (let ([info (hash-ref/default ctors s #f)])
+       (if (and info (null? (ctor-fields info)))
+           (indices-where (lambda (q) (tmpl-overlap? (module-demangle s) q '())) prods)
+           (covers-all prods)))]
+    [(list 'quasiquote q)
+     (indices-where (lambda (s) (tmpl-overlap? q s '())) prods)]
+    [(list 'quote d)
+     (indices-where (lambda (s) (tmpl-overlap? d s '())) prods)]
+    [`(,cn ,ps ...) #:when (hash-has-key? ctors cn)
+     (let ([q (cons (module-demangle cn) (map (lambda (x) (list 'unquote x)) ps))])
+       (indices-where (lambda (s) (tmpl-overlap? q s '())) prods))]
+    [(list '? pred _)
+     (let ([b (pred-base pred)])
+       (if b
+           (indices-where (lambda (s) (admits-base? s b '())) prods)
+           (covers-all prods)))]
+    [(? fixnum? _) (indices-where (lambda (s) (tmpl-overlap? p s '())) prods)]
+    [(? string? _) (indices-where (lambda (s) (tmpl-overlap? p s '())) prods)]
+    [(? boolean? _) (indices-where (lambda (s) (tmpl-overlap? p s '())) prods)]
+    [_ (covers-all prods)]))
+
+;; ---- widening: an exact shape as the ordinary type it inhabits ------
+(define (widen t) (if (sexp-type? t) (widen-shape (car (cdr t))) t))
+(define (widen-shape s)
+  (cond
+    [(lit? s)
+     (let ([d (car (cdr s))])
+       (cond [(symbol? d) 'Sym] [(fixnum? d) 'Int] [(string? d) 'Str]
+             [(boolean? d) 'Bool] [else '_]))]
+    [(sym-except? s) 'Sym]
+    [(slist? s)
+     (list 'List
+           (let loop ([es (cdr s)] [acc #f])
+             (if (null? es)
+                 (if acc acc '_)
+                 (let ([w (widen-shape (unstar (car es)))])
+                   (loop (cdr es) (if acc (type-join acc w) w))))))]
+    [else s]))
+
+;; a leaf's shape: an exact type contributes its shape, any other type
+;; is a leaf
+(define (leaf->shape t) (if (sexp-type? t) (car (cdr t)) t))
+;; a shape as the type a binder gets
+(define (shape->type s)
+  (cond [(or (lit? s) (slist? s)) (list '#%sexp s)]
+        [(sym-except? s) 'Sym]
+        [else s]))
+
+;; ---- rendering ------------------------------------------------------
+(define (render-datum d)
+  (cond [(symbol? d) (symbol->string (nm d))]
+        [(fixnum? d) (number->string d)]
+        [(string? d) (string-append "\"" (string-append d "\""))]
+        [(eq? d #t) "#t"]
+        [(eq? d #f) "#f"]
+        [else (format "~a" d)]))
+;; leaf renders a type leaf
+(define (render-shape s leaf)
+  (cond
+    [(lit? s) (render-datum (car (cdr s)))]
+    [(sym-except? s) (leaf 'Sym)]
+    [(slist? s)
+     (string-append
+      "("
+      (string-append
+       (string-join (map (lambda (e)
+                           (if (star? e)
+                               (string-append (render-shape (car (cdr e)) leaf) " ...")
+                               (render-shape e leaf)))
+                         (cdr s))
+                    " ")
+       ")"))]
+    [else (leaf s)]))
+(define (shape-has-leaf? s)
+  (cond [(lit? s) #f]
+        [(slist? s) (ormap (lambda (e) (shape-has-leaf? (unstar e))) (cdr s))]
+        [else #t]))
+;; a production as written (exhaustiveness reports)
+(define (render-prod s) (render-shape s (lambda (t) (format "~a" (ty t)))))
+;; an exact type, as the datum or template it came from
+(define (render-sexp-type s)
+  (if (shape-has-leaf? s)
+      (string-append "`" (render-shape s (lambda (t) (string-append "," (format "~a" (ty t))))))
+      (string-append "'" (render-shape s (lambda (t) (format "~a" (ty t)))))))
 
 ;; map over top-level forms with current-form-origin set per form
 ;; (for-each-form, keeping the results)
@@ -574,6 +858,12 @@
     [(eq? t2 '_) #t]
     [(tyvar? t1) #t]
     [(tyvar? t2) #t]
+    ;; s-expression types (docs/GRAMMARS.md): into a grammar or an
+    ;; exact shape is inclusion; an exact shape anywhere is inclusion
+    ;; too; a grammar used as an ordinary type needs only to overlap it
+    [(sexpy? t2) (sx-sub? t1 t2)]
+    [(sexp-type? t1) (sx-sub? t1 t2)]
+    [(gram-name t1) (sx-overlap? t1 t2)]
     [(and (symbol? t1) (symbol? t2)) (eq? t1 t2)]
     [(symbol? t1) #f]
     [(symbol? t2) #f]
@@ -620,7 +910,13 @@
   (cond
     [(tyvar? formal)
      (unless (or (hash-has-key? env formal) (eq? actual '_))
-       (hash-set! env formal actual))]
+       (hash-set! env formal (if (and (sexp-type? actual) (lit? (car (cdr actual))))
+                                 (widen actual)
+                                 actual)))]
+    ;; an exact shape: a type variable takes a list shape as is (above;
+    ;; it may be a grammar's term) and an atom as its base type; a
+    ;; structured formal reads the ordinary type it inhabits
+    [(sexp-type? actual) (instantiate! formal (widen actual) env)]
     [(and (pair? formal) (eq? (car formal) 'Mut))
      (match actual
        [`(Mut ,b) (instantiate! (car (cdr formal)) b env)]
@@ -652,6 +948,16 @@
 ;; join for match-clause / if results: equal stays, else _
 (define (type-join a b)
   (cond [(equal? a b) a]
+        [(eq? a '_) b]
+        [(eq? b '_) a]
+        ;; s-expression types: the larger when one includes the other,
+        ;; else _ (a widening would lose that both fit some grammar)
+        [(and (sexpy? a) (sexpy? b))
+         (cond [(sx-sub? a b) b]
+               [(sx-sub? b a) a]
+               [else '_])]
+        [(sexp-type? a) (type-join (widen a) b)]
+        [(sexp-type? b) (type-join a (widen b))]
         [(consistent? a b) (if (eq? a '_) b (if (eq? b '_) a '_))]
         [else '_]))
 
@@ -769,9 +1075,9 @@
      (define ctors (car (cdr ac)))
      (define ctor-orders (car (cdr (cdr ac))))
      (define ftypes (car (cdr (cdr (cdr ac)))))
-     ;; constructor-directed quasiquote: the program the checker sees
-     ;; (and returns, for desugar) has its templates elaborated
-     (define forms (elaborate-quasiquote forms0 ctors))
+     ;; quote and quasiquote are data at every depth (docs/GRAMMARS.md):
+     ;; nothing is rewritten, the checker types them by their shape
+     (define forms forms0)
      (define p (cons 'program forms))
      (define top (make-hash))
 
@@ -889,7 +1195,13 @@
                       '())
                     (list (cons s (if (eq? scrut-t '_) '_ scrut-t))))))]
          [(list 'quote _) '()]
-         [(list 'quasiquote tmpl) (qq-pattern-binds tmpl 1)]
+         ;; against an s-expression type, a template's binders take
+         ;; their types from the productions it matches (docs/GRAMMARS.md §5)
+         [(list 'quasiquote tmpl)
+          (if (sexpy? scrut-t)
+              (let ([bs (align tmpl (leaf->shape scrut-t) '())])
+                (if bs bs (qq-pattern-binds tmpl 1)))
+              (qq-pattern-binds tmpl 1))]
          [(? fixnum? _) '()]
          [(? boolean? _) '()]
          [(? string? _) '()]
@@ -902,7 +1214,11 @@
          [(cons 'vector ps)
           (let ([a (match scrut-t [`(Vec ,a) a] [`(Mut (Vec ,a)) a] [_ '_])])
             (append-map (lambda (p) (pattern-bindings p a)) ps))]
-         [(list '? _ p) (pattern-bindings p '_)]
+         ;; a type-test narrows, when the scrutinee is typed
+         [(list '? pred p)
+          (if (sexpy? scrut-t)
+              (pattern-bindings p (let ([b (pred-base pred)]) (if b b scrut-t)))
+              (pattern-bindings p '_))]
          [`(,cn ,ps ...) #:when (hash-has-key? ctors cn)
           (let ([info (hash-ref ctors cn)])
             (unless (eq? (length ps) (length (ctor-fields info)))
@@ -916,6 +1232,121 @@
               (fields-bindings ps (ctor-fields info) tenv)))]
          [_ '()]))
 
+     ;; --- templates against shapes (docs/GRAMMARS.md §5) ---
+     ;; align: the bindings a quasiquote pattern q (depth 1) makes
+     ;; against the shape or type s, or #f when no value of s can match
+     ;; it. vs: the grammars being expanded for this q (left
+     ;; recursion stops there).
+     (define (untyped-binds q) (qq-pattern-binds q 1))
+     (define (align q s vs)
+       (cond
+         [(and (pair? q) (eq? (car q) 'unquote) (pair? (cdr q)) (null? (cdr (cdr q))))
+          (pattern-bindings (car (cdr q)) (shape->type s))]
+         [(sexp-type? s) (align q (car (cdr s)) vs)]
+         [(gram-name s)
+          (if (member s vs)
+              #f
+              (let ([alts (filter-map (lambda (p) (align q p (cons s vs))) (gram-prods s))])
+                (if (null? alts) #f (merge-binds alts))))]
+         [(or (eq? s '_) (tyvar? s)) (untyped-binds q)]
+         [(null? q)
+          (cond [(slist? s) (if (andmap star? (cdr s)) '() #f)]
+                [(and (pair? s) (eq? (car s) 'List)) '()]
+                [else #f])]
+         [(pair? q)
+          (cond [(slist? s) (align-list q (cdr s) vs)]
+                [(and (pair? s) (or (eq? (car s) 'List) (eq? (car s) 'Pairof))) (untyped-binds q)]
+                [else #f])]
+         [else (if (lit-in? q s) '() #f)]))
+     ;; the alternatives' bindings, joined name by name
+     (define (merge-binds alts)
+       (map (lambda (b)
+              (cons (car b)
+                    (foldl (lambda (alt acc)
+                             (let ([hit (assoc (car b) alt)])
+                               (if hit (type-join acc (cdr hit)) '_)))
+                           (cdr b) (cdr alts))))
+            (car alts)))
+     (define (concat-binds bss)
+       (if (andmap (lambda (b) (if b #t #f)) bss) (foldr append '() bss) #f))
+     ;; a pattern list: prefix, an ellipsis element and what follows it,
+     ;; or a dotted ,tail
+     (define (align-list q fs vs)
+       (let* ([sp (split-qpat q)]
+              [pre (first sp)] [ell (second sp)] [post (third sp)] [tail (car (cdr (cdr (cdr sp))))]
+              [f3 (split-star fs)]
+              [pf (first f3)] [sf (second f3)] [qf (third f3)]
+              [lpre (length pre)] [lpf (length pf)] [lqf (length qf)])
+         (cond
+           [(eq? tail 'bad) (untyped-binds q)]
+           [tail
+            ;; (p ... . ,rest): the prefix against the leading fixed
+            ;; elements, rest against what remains
+            (cond [(and (not sf) (>= (length fs) lpre))
+                   (concat-binds
+                    (append (map2 (lambda (p f) (align p f vs)) pre (take fs lpre))
+                            (list (pattern-bindings tail (list '#%sexp (cons '#%list (drop fs lpre)))))))]
+                  [(and sf (<= lpre lpf))
+                   (concat-binds
+                    (append (map2 (lambda (p f) (align p f vs)) pre (take pf lpre))
+                            (list (pattern-bindings tail (list '#%sexp (cons '#%list (drop fs lpre)))))))]
+                  [else (untyped-binds q)])]
+           [(not ell)
+            (cond [(not sf)
+                   (if (eq? lpre (length fs))
+                       (concat-binds (map2 (lambda (p f) (align p f vs)) pre fs))
+                       #f)]
+                  [(>= lpre (+ lpf lqf))
+                   (concat-binds
+                    (append (map2 (lambda (p f) (align p f vs)) (take pre lpf) pf)
+                            (append (map (lambda (p) (align p sf vs)) (take (drop pre lpf) (- lpre (+ lpf lqf))))
+                                    (map2 (lambda (p f) (align p f vs)) (drop pre (- lpre lqf)) qf))))]
+                  [else #f])]
+           [(not (list? post)) (untyped-binds q)]
+           [(member '... post) (untyped-binds q)]
+           [else
+            (let ([lpost (length post)])
+              (cond
+                [(not sf)
+                 (if (<= (+ lpre lpost) (length fs))
+                     (let ([fixed (concat-binds
+                                   (append (map2 (lambda (p f) (align p f vs)) pre (take fs lpre))
+                                           (map2 (lambda (p f) (align p f vs)) post (drop fs (- (length fs) lpost)))))]
+                           [middle (take (drop fs lpre) (- (length fs) (+ lpre lpost)))])
+                       (if fixed
+                           (let ([eb (ell-binds ell middle vs #t)])
+                             (if eb (append fixed eb) #f))
+                           #f))
+                     #f)]
+                [else
+                 ;; the prefix runs into the star, the suffix back
+                 ;; from the end; the ellipsis element meets whatever
+                 ;; fixed elements neither reaches, and the star
+                 (let* ([pre-f (append (take pf (min lpre lpf))
+                                       (map (lambda (dummy) sf) (range 0 (max 0 (- lpre lpf)))))]
+                        [post-f (append (map (lambda (dummy) sf) (range 0 (max 0 (- lpost lqf))))
+                                        (drop qf (max 0 (- lqf lpost))))]
+                        [fixed (concat-binds
+                                (append (map2 (lambda (p f) (align p f vs)) pre pre-f)
+                                        (map2 (lambda (p f) (align p f vs)) post post-f)))]
+                        [cands (append (drop pf (min lpre lpf))
+                                       (cons sf (take qf (max 0 (- lqf lpost)))))])
+                   (if fixed
+                       (let ([eb (ell-binds ell cands vs #f)])
+                         (if eb (append fixed eb) #f))
+                       #f))]))])))
+     ;; the ellipsis element's binders, each a (List τ) of what it meets
+     ;; in cands; all? says every candidate is an element it must match
+     (define (ell-binds ell cands vs all?)
+       (let* ([alts (map (lambda (c) (align ell c vs)) cands)]
+              [ok (filter (lambda (b) (if b #t #f)) alts)])
+         (cond
+           [(and all? (not (andmap (lambda (b) (if b #t #f)) alts))) #f]
+           [(null? ok)
+            (if (and (not all?) (pair? cands))
+                #f
+                (map (lambda (b) (cons (car b) (list 'List '_))) (untyped-binds ell)))]
+           [else (map (lambda (b) (cons (car b) (list 'List (cdr b)))) (merge-binds ok))])))
      ;; --- bidirectional core: synth returns the expression's type ---
 
      (define (synth-cond clauses env)
@@ -939,44 +1370,36 @@
          [`(,pat ,kw ,guard ,body ...) #:when (eq? kw kw-when) (cons pat (cons guard body))]
          [`(,pat ,body ...) (cons pat (cons #f body))]))
 
-     ;; exhaustiveness over closed ADTs (docs/TYPES.md §2): when the
-     ;; scrutinee's type is a KNOWN ADT (a `_` scrutinee is exempt --
-     ;; the gradual guarantee), compute the constructor set the
-     ;; clauses cover. Conservative in the no-false-warnings
-     ;; direction: a wildcard/binder clause, a #:when-guarded
-     ;; catch-all, or any pattern we cannot prove partial (literals,
-     ;; quasiquote, cons/list/vector, ?-tests) counts as covering
-     ;; everything; a constructor pattern covers its constructor even
-     ;; under a guard. Missing constructors are a WARNING on stderr
-     ;; (strict-exhaustiveness promotes it to an error).
+     ;; exhaustiveness over grammars and define-types (docs/GRAMMARS.md
+     ;; §5): when the scrutinee's type is a KNOWN grammar (a `_`
+     ;; scrutinee is exempt -- the gradual guarantee), a production no
+     ;; clause can match is missing. Conservative in the
+     ;; no-false-warnings direction: guards are ignored, a clause that
+     ;; matches part of a production covers it, and a pattern the
+     ;; checker cannot analyze (cons, list, vector, an unknown
+     ;; predicate, a binder, _) covers everything. A define-type's
+     ;; report names its constructors; a grammar's spells the
+     ;; productions. A WARNING on stderr (strict-exhaustiveness
+     ;; promotes it to an error).
      (define (check-match-exhaustiveness st clauses)
-       (let ([name (cond [(and (symbol? st) (hash-has-key? adts st)) st]
-                         [(and (pair? st) (symbol? (car st)) (hash-has-key? adts (car st)))
-                          (car st)]
-                         [else #f])])
+       (let ([name (gram-name st)])
          (when name
-           (let* ([all (hash-ref/default ctor-orders name '())]
-                  [covered
-                   (foldl
-                    (lambda (cl cov)
-                      (let ([p (car (match-clause-parts cl))])
-                        (cond
-                          [(symbol? p)
-                           (let ([info (hash-ref/default ctors p #f)])
-                             (cond [(and info (eq? (ctor-owner info) name)) (set-add cov p)]
-                                   [info cov]
-                                   ;; wildcard or binder: covers everything
-                                   [else (set-union cov (list->set all))]))]
-                          [(and (pair? p) (symbol? (car p)) (hash-has-key? ctors (car p)))
-                           (set-add cov (car p))]
-                          ;; anything we cannot prove partial covers everything
-                          [else (set-union cov (list->set all))])))
-                    (set) clauses)]
-                  [missing (filter (lambda (c) (not (set-member? covered c))) all)])
+           (let* ([gi (hash-ref grammar-table name)]
+                  [prods (gram-prods st)]
+                  [covered (foldl (lambda (cl cov)
+                                    (set-union cov (list->set (pattern-cover (car (match-clause-parts cl)) prods ctors))))
+                                  (set) clauses)]
+                  [missing (filter (lambda (i) (not (set-member? covered i))) (covers-all prods))])
              (when (pair? missing)
                (let ([msg (format "match on ~a is not exhaustive: missing ~a"
                                   (nm name)
-                                  (string-join (map (lambda (c) (symbol->string (nm c))) missing) ", "))])
+                                  (string-join
+                                   (map (lambda (i)
+                                          (if (eq? (g-kind gi) 'type)
+                                              (symbol->string (nm (list-ref (g-ctors gi) i)))
+                                              (render-prod (list-ref (g-prods gi) i))))
+                                        missing)
+                                   ", "))])
                  ;; the warning renders the position itself; the
                  ;; strict error gets it from type-error -- same
                  ;; bytes either way
@@ -1086,8 +1509,14 @@
          [(? string? _) 'Str]
          [`(void) 'Void]
          [`(read) 'Int]
-         [`(quote ,d) (cond [(symbol? d) 'Sym] [(null? d) '(List _)] [else '_])]
-         [(list 'quasiquote _) '_]
+         ;; quoted data and templates have the exact type of their
+         ;; shape (docs/GRAMMARS.md §4); () stays (List _)
+         [`(quote ,d)
+          (if (null? d)
+              '(List _)
+              (let ([s (datum->shape d)]) (if s (list '#%sexp s) '_)))]
+         [(list 'quasiquote q)
+          (let ([s (qq->shape q env)]) (if s (list '#%sexp s) '_))]
          [(? symbol? x) (lookup env x)]
          ;; an editor assist's probe (system.puf probe-hook)
          [`(#%probe ,e0) #:when probe-hook
@@ -1137,6 +1566,44 @@
          [`(,op ,es ...) #:when (arith-op? op) (synth-arith op es env)]
          [`(,rator ,rands ...) (synth-app rator rands env)]
          [_ '_]))
+
+     ;; a template at depth 1 as a shape, or #f when it has none (two
+     ;; splices in one list, a dotted non-list tail, nested
+     ;; quasiquote). Every hole is synthesized either way.
+     (define (qq->shape q env)
+       (match q
+         [(list 'unquote e) (leaf->shape (synth e env))]
+         [(list 'quasiquote _) #f]
+         ['() (list '#%list)]
+         [(? pair? _) (qq-list->shape q env)]
+         [d (list '#%lit d)]))
+     ;; a list-typed tail or splice as shape elements, or #f
+     (define (tail-elems t)
+       (cond [(and (pair? t) (eq? (car t) 'List)) (list (list '#%star (leaf->shape (car (cdr t)))))]
+             [(and (sexp-type? t) (slist? (car (cdr t)))) (cdr (car (cdr t)))]
+             [(eq? t '_) (list (list '#%star '_))]
+             [else #f]))
+     (define (count-stars es) (length (filter star? es)))
+     (define (qq-list->shape q env)
+       (let loop ([q q] [acc '()] [stars 0] [ok #t])
+         (match q
+           ['() (if (and ok (<= stars 1)) (cons '#%list (reverse acc)) #f)]
+           ;; a dotted tail: `(a . ,e)
+           [(list 'unquote e)
+            (let ([els (tail-elems (synth e env))])
+              (if (and ok els (<= (+ stars (count-stars els)) 1))
+                  (cons '#%list (append (reverse acc) els))
+                  #f))]
+           [(list 'quasiquote _) #f]
+           [(cons (list 'unquote-splicing e) rest)
+            (let ([els (tail-elems (synth e env))])
+              (if els
+                  (loop rest (append (reverse els) acc) (+ stars (count-stars els)) ok)
+                  (loop rest acc stars #f)))]
+           [(cons a rest)
+            (let ([s (qq->shape a env)])
+              (loop rest (cons (if s s '_) acc) stars ok))]
+           [_ (loop '() acc stars #f)])))
 
      (define (synth-body body env)
        (let* ([names (filter-map
@@ -1373,6 +1840,7 @@
             (void)
         (match f
           [`(define-type ,_ ,_ ...) (void)]
+          [`(define-grammar ,_ ,_ ...) (void)]
           [`(define-type-alias ,_ ,_) (void)]
           [`(: ,_ ,_) (void)]
           [`(#%prelude: ,_ ,_) (void)]
@@ -1427,3 +1895,6 @@
       forms)
 
      p]))
+
+;; the recognizer a grammar's casts call (desugar.puf grammar-recognizer)
+(define (gram-pred-name n) (string->symbol (string-append "#%gram?-" (symbol->string n))))

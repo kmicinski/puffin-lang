@@ -1,0 +1,3 @@
+;; at most one ... per list level in a production
+(define-grammar Seq (seq Int ... Sym ...))
+(println 1)

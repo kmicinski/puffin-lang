@@ -1,0 +1,1 @@
+error: typecheck: match on Arith is not exhaustive: missing Sym, (- Arith Arith), (let ((Sym Arith) ...) Arith) [gram-exhaustive.puf:4]

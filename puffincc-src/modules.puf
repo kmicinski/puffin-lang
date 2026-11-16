@@ -100,8 +100,11 @@
        [`(define-type ,head ,ctors ...)
         (cons (match head [`(,n ,_ ...) n] [n n])
               (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
-       ;; a type alias binds its head, a type name like define-type's
+       ;; a type alias binds its head, a type name like define-type's;
+       ;; so does a grammar (docs/GRAMMARS.md)
        [`(define-type-alias ,head ,_)
+        (list (match head [`(,n ,_ ...) n] [n n]))]
+       [`(define-grammar ,head . ,_)
         (list (match head [`(,n ,_ ...) n] [n n]))]
        [_ (let ([n (module-defn-name f)]) (if n (list n) '()))])]))
 
@@ -163,7 +166,7 @@
 
 ;; names that change meaning if spliced in unqualified
 (define module-keyword-names
-  (list->set '(define-type define-type-alias ann :
+  (list->set '(define-type define-type-alias define-grammar ann :
                define lambda λ let let* letrec begin if cond case
                when unless match set! while quote quasiquote unquote
                unquote-splicing and or else _ ... require provide
@@ -366,6 +369,8 @@
                [`(define-type ,head ,_ ...)
                 (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
                [`(define-type-alias ,head ,_)
+                (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
+               [`(define-grammar ,head . ,_)
                 (set-add acc (match head [`(,n ,_ ...) n] [n n]))]
                [`(define-foreign-type ,n) (if (symbol? n) (set-add acc n) acc)]
                [_ acc]))
@@ -608,15 +613,12 @@
       name))
 
 ;; ---- the renamer -----------------------------------------------------------
-;; ren: hash name -> new name; qual: symbol -> resolved-or-#f;
-;; ctor-arity: hash RESOLVED constructor name -> field count, for
-;; the one place data positions carry names: constructor-directed
-;; quasiquote (docs/TYPES.md §2). In a template or quoted datum at
-;; depth 1, a list head that resolves to a constructor, and a bare
-;; symbol that resolves to a nullary constructor, are references and
-;; rename; every other template symbol stays data. The checker's
-;; elaboration (types.puf elaborate-quasiquote) reads exactly these
-;; positions, so the two agree on what a template spells.
+;; ren: hash name -> new name; qual: symbol -> resolved-or-#f.
+;; Quoted data and quasiquote templates are DATA at every depth
+;; (docs/GRAMMARS.md): only their escapes rename. A constructor builds
+;; the list headed by its source spelling, so a template that spells
+;; one needs no renaming to mean the same value. (ctor-arity is no
+;; longer consulted; the parameter stays for the callers.)
 
 (define (rename-module-forms forms ren qual ctor-arity)
   (define (rsym s)
@@ -626,14 +628,20 @@
   ;; a template head naming a constructor (any arity) / a bare
   ;; template symbol naming a nullary constructor: the resolved
   ;; spelling, else #f (the symbol is data)
-  (define (ctor-ref s)
-    (and (symbol? s)
-         (let ([t (rsym s)])
-           (and (hash-has-key? ctor-arity t) t))))
-  (define (nullary-ref s)
-    (and (symbol? s)
-         (let ([t (rsym s)])
-           (and (eq? (hash-ref/default ctor-arity t #f) 0) t))))
+  (define (ctor-ref s) #f)
+  (define (nullary-ref s) #f)
+  ;; a grammar's productions: only type names (capitalized, docs/
+  ;; GRAMMARS.md §2) are references; every other symbol is a literal
+  (define (rprod q)
+    (cond [(symbol? q)
+           (let ([str (symbol->string q)])
+             (if (and (> (string-length str) 0)
+                      (let ([b (string-byte str 0)]) (and (>= b 65) (<= b 90))))
+                 (rsym q)
+                 q))]
+          [(and (pair? q) (eq? (car q) 'quote)) q]
+          [(pair? q) (cons (rprod (car q)) (rprod (cdr q)))]
+          [else q]))
   ;; quasiquote templates: symbols are data; descend only into
   ;; escapes (matched with (list 'unquote e) -- both readers treat a
   ;; literal unquote head inside a quasiquote pattern as an escape)
@@ -725,6 +733,8 @@
       [_ cl]))
   (define (rexpr e)
     (match e
+      [`(define-grammar ,head . ,rest)
+       (cons 'define-grammar (cons (rprod head) (rprod rest)))]
       [`(quote ,d) (list 'quote (rquote d))]
       [`(quasiquote ,q) (list 'quasiquote (rqq q 1))]
       [`(match ,subj . ,clauses)

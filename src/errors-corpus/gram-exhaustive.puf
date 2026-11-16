@@ -1,0 +1,8 @@
+;; exhaustiveness over a grammar names the missing productions
+(define-grammar Arith #:keywords (+ - let) Int Sym (+ Arith Arith) (- Arith Arith)
+  (let ([Sym Arith] ...) Arith))
+(define (ev [e : Arith]) : Int
+  (match e
+    [(? fixnum? n) n]
+    [`(+ ,a ,b) (+ (ev a) (ev b))]))
+(println (ev '(+ 1 2)))

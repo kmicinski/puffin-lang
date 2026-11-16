@@ -120,6 +120,8 @@
       [`(define ,x ,_ ...) #:when (symbol? x) (str-cat "define:" (symbol->string x))]
       [`(define-type (,t . ,_) ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
       [`(define-type ,t ,_ ...) #:when (symbol? t) (str-cat "define-type:" (symbol->string t))]
+      [`(define-grammar (,t . ,_) ,_ ...) #:when (symbol? t) (str-cat "define-grammar:" (symbol->string t))]
+      [`(define-grammar ,t ,_ ...) #:when (symbol? t) (str-cat "define-grammar:" (symbol->string t))]
       [`(define-type-alias (,t . ,_) ,_) #:when (symbol? t) (str-cat "define-type-alias:" (symbol->string t))]
       [`(define-type-alias ,t ,_) #:when (symbol? t) (str-cat "define-type-alias:" (symbol->string t))]
       [`(: ,x ,_) #:when (symbol? x) (str-cat "sig:" (symbol->string x))]
@@ -192,9 +194,9 @@
                 [(and (member h '(let let* letrec)) (at 1) (lst? child)) (names-binding?)]
                 [(and (eq? h 'let) (at 1) (atom? child)) #t]
                 [(and (eq? h 'let) (at 2) (lst? child)) (names-binding?)]
-                ;; types: (ann e T), (: x T), (define-type ...)
+                ;; types: (ann e T), (: x T), (define-type ...), (define-grammar ...)
                 [(and (eq? h 'ann) (at 2)) #t]
-                [(member h '(: define-type)) #t]
+                [(member h '(: define-type define-grammar)) #t]
                 [else (loop (cdr p) (+ i 1))]))))))
 
 (define (in-match-pattern? path)
@@ -300,8 +302,9 @@
 ;; fresh binder names for field types: a base used twice, or one the
 ;; context already uses, is numbered (e1 e2)
 (define (field-names fts adt? avoid)
-  (let* ([bases (map (lambda (t) (binder-base t adt?)) fts)]
-         [count (lambda (b) (length (filter (lambda (x) (string=? x b)) bases)))])
+  (names-from-bases (map (lambda (t) (binder-base t adt?)) fts) avoid))
+(define (names-from-bases bases avoid)
+  (let* ([count (lambda (b) (length (filter (lambda (x) (string=? x b)) bases)))])
     (let loop ([bs bases] [seen (hash)] [acc '()])
       (if (null? bs)
           (reverse acc)
@@ -446,6 +449,8 @@
 
 (define (match-assists m path t) (match-assists-from m path t "type"))
 (define (match-assists-from m path t source)
+  (if (grammar-of t)
+      (grammar-match-assists m path t source)
   (let* ([ad (adt-of t)])
     (when ad
       (let* ([owner (car ad)] [args (cdr ad)]
@@ -475,7 +480,123 @@
                                (str-cat "Add missing cases: "
                                         (string-join (map (lambda (c) (symbol->string (nm c))) missing) ", "))
                                source
-                               (list (insert-clauses-edit m texts)))))))))))
+                               (list (insert-clauses-edit m texts))))))))))))
+
+;; ---- assist: fill match over a define-grammar (docs/GRAMMARS.md §7) -------------
+;; one clause per production no clause covers yet (coverage is the
+;; checker's own pattern-cover): a quasiquote pattern with a binder per
+;; leaf, a type-test for a base leaf, a quoted literal for a literal
+;; production. A leaf of the scrutinee's own type gets the recursive
+;; call when the match is over a parameter of the enclosing function.
+(define (grammar-of t)
+  (let ([n (gram-name t)])
+    (and n (eq? (g-kind (hash-ref grammar-table n)) 'grammar) n)))
+
+;; the leaves of production s in order: (type . under-ellipsis?)
+(define (prod-leaves s starred?)
+  (cond [(lit? s) '()]
+        [(slist? s)
+         (append-map (lambda (e)
+                       (if (star? e)
+                           (prod-leaves (car (cdr e)) #t)
+                           (prod-leaves e starred?)))
+                     (cdr s))]
+        [(sym-except? s) (list (cons 'Sym starred?))]
+        [else (list (cons s starred?))]))
+
+;; the pattern text for production s; names: the leaves' binders in
+;; order (consumed as the pattern is written)
+(define (prod-pattern s names)
+  (define rest names)
+  (define (take-name)
+    (let ([n (car rest)]) (begin (set! rest (cdr rest)) n)))
+  (define (base-test t n)
+    (cond [(eq? t 'Int) (str-cat "(? fixnum? " (str-cat n ")"))]
+          [(eq? t 'Sym) (str-cat "(? symbol? " (str-cat n ")"))]
+          [(eq? t 'Str) (str-cat "(? string? " (str-cat n ")"))]
+          [(eq? t 'Bool) (str-cat "(? boolean? " (str-cat n ")"))]
+          [else n]))
+  (define (inner s)
+    (cond [(lit? s) (render-datum (car (cdr s)))]
+          [(slist? s)
+           (str-cat "("
+                    (str-cat (string-join (map (lambda (e)
+                                                 (if (star? e)
+                                                     (str-cat (inner (car (cdr e))) " ...")
+                                                     (inner e)))
+                                               (cdr s))
+                                          " ")
+                             ")"))]
+          [else (str-cat "," (take-name))]))
+  (cond [(lit? s)
+         (let ([d (car (cdr s))])
+           (if (symbol? d) (str-cat "'" (render-datum d)) (render-datum d)))]
+        [(slist? s) (str-cat "`" (inner s))]
+        [(sym-except? s) (base-test 'Sym (take-name))]
+        [else (base-test s (take-name))]))
+
+;; what a production's TODO says: its head keyword, else the production
+(define (prod-label s)
+  (if (and (slist? s) (pair? (cdr s)) (lit? (car (cdr s))))
+      (render-datum (car (cdr (car (cdr s)))))
+      (render-prod s)))
+
+(define (grammar-match-assists m path t source)
+  (let* ([n (grammar-of t)]
+         [prods (gram-prods t)]
+         [shown (g-prods (hash-ref grammar-table n))]
+         [clauses (match-clauses m)]
+         [covered (foldl (lambda (cl acc)
+                           (set-union acc
+                                      (list->set
+                                       (pattern-cover (if (and (lst? cl) (pair? (lst-kids cl)))
+                                                          (syn->datum (car (lst-kids cl)))
+                                                          '_)
+                                                      prods (ctors)))))
+                         (set) clauses)]
+         [missing (filter (lambda (i) (not (set-member? covered i))) (covers-all prods))])
+    (when (pair? missing)
+      (let* ([fn (enclosing-function path)]
+             [scrut (car (cdr (lst-kids m)))]
+             [scrut-sym (and (atom? scrut) (symbol? (atom-datum scrut)) (atom-datum scrut))]
+             [param (and fn scrut-sym (member scrut-sym (cdr fn)) scrut-sym)]
+             [avoid (map symbol->string (append (if scrut-sym (list scrut-sym) '())
+                                                (if fn (cons (car fn) (cdr fn)) '())))]
+             [open (third (clause-insertion m))]
+             [close (if (eq? open 91) "]" ")")]
+             [opener (if (eq? open 91) "[" "(")]
+             [texts
+              (map (lambda (i)
+                     (let* ([s (list-ref shown i)]
+                            [leaves (prod-leaves (list-ref prods i) #f)]
+                            ;; a leaf under an ellipsis binds a list: its
+                            ;; element's name, plural (syms, es)
+                            [names (names-from-bases
+                                    (map (lambda (l)
+                                           (let ([b (binder-base (car l) adt-name?)])
+                                             (if (cdr l) (str-cat b "s") b)))
+                                         leaves)
+                                    avoid)]
+                            [calls (filter-map
+                                    (lambda (nl)
+                                      (and param (not (cdr (cdr nl))) (equal? (car (cdr nl)) t)
+                                           (rec-call fn param (car nl))))
+                                    (map2 cons names leaves))]
+                            [rec-calls (map2 (lambda (c i) (cons (str-cat "r" (number->string i)) c))
+                                             calls (range 1 (+ 1 (length calls))))])
+                       (str-cat opener
+                                (str-cat (prod-pattern s names)
+                                         (str-cat " " (str-cat (todo-body (prod-label s) rec-calls) close))))))
+                   missing)]
+             [tname (render-type t)])
+        (if (null? clauses)
+            (emit-assist "fill-match" (str-cat "Fill match on " tname) source
+                         (list (insert-clauses-edit m texts)))
+            (emit-assist "add-missing-cases"
+                         (str-cat "Add missing cases: "
+                                  (string-join (map (lambda (i) (render-prod (list-ref shown i))) missing) ", "))
+                         source
+                         (list (insert-clauses-edit m texts))))))))
 
 ;; ---- an untyped scrutinee: the type its clauses spell, or the program's one type ----
 
@@ -668,7 +789,7 @@
 
 (define special-forms
   '(define lambda λ let let* letrec if cond case match when unless begin while set!
-    quote quasiquote unquote and or not else ann : define-type define-type-alias require provide
+    quote quasiquote unquote and or not else ann : define-type define-grammar define-type-alias require provide
     foreign define-foreign-type list vector hash set))
 
 ;; names bound around the cursor by the forms on its path
@@ -818,7 +939,24 @@
 ;; a shape's case key, comparable with pattern-key's (so observed
 ;; shapes a match already handles are not offered again); #f when a
 ;; shape has no pattern
-(define (shape-key s)
+;; define-type instances are plain s-expressions (docs/GRAMMARS.md §3):
+;; an observed or literal (list C N) of a constructor C with N-1
+;; fields, or the symbol of a nullary constructor, is that
+;; constructor's instance
+(define (adt-shape s)
+  (match s
+    [(list 'list h n)
+     (let ([k (and (symbol? h) (ctor-by-source h))])
+       (if (and k n (eq? n (+ 1 (length (ctor-fields (hash-ref (ctors) k))))))
+           (list 'adt h)
+           s))]
+    [(list 'sym x)
+     (let ([k (ctor-by-source x)])
+       (if (and k (null? (ctor-fields (hash-ref (ctors) k)))) (list 'adt x) s))]
+    [_ s]))
+
+(define (shape-key s) (shape-key-raw (adt-shape s)))
+(define (shape-key-raw s)
   (match s
     ['Int "pred:fixnum?"] ['Str "pred:string?"] ['Bool "pred:boolean?"]
     ['Vec "pred:vector?"] ['Hash "pred:hash?"] ['Proc "pred:procedure?"]
@@ -855,7 +993,8 @@
 
 ;; the pattern text for a shape, with made-up binders: (list add 3)
 ;; gives `(add ,a ,b)
-(define (shape-pattern s avoid)
+(define (shape-pattern s avoid) (shape-pattern-raw (adt-shape s) avoid))
+(define (shape-pattern-raw s avoid)
   (match s
     ['Int "(? fixnum? n)"] ['Str "(? string? s)"] ['Bool "(? boolean? b)"]
     ['Vec "(? vector? v)"] ['Hash "(? hash? h)"] ['Proc "(? procedure? f)"]
@@ -877,7 +1016,8 @@
                             ")")]))]
     [_ #f]))
 
-(define (shape-label s)
+(define (shape-label s) (shape-label-raw (adt-shape s)))
+(define (shape-label-raw s)
   (match s
     [(list 'sym _) "Sym"]
     [(list 'list h _) (symbol->string h)]
@@ -1027,8 +1167,8 @@
 
 ;; the type a list of shapes supports, or _
 (define (shapes-type ss)
-  (let ([ts (map (lambda (s)
-                   (match s
+  (let ([ts (map (lambda (s0)
+                   (match (adt-shape s0)
                      ['Int 'Int] ['Str 'Str] ['Bool 'Bool]
                      [(list 'sym _) 'Sym]
                      [(list 'list _ _) 'list] ['Nil 'list] ['Pair 'list]

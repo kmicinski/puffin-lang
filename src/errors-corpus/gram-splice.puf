@@ -1,0 +1,4 @@
+;; a splice of any number of Exprs cannot fit a two-field production
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (f [xs : (List Expr)]) : Expr `(Add ,@xs))
+(println (f (list (Num 1) (Num 2))))

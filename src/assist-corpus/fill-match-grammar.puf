@@ -1,0 +1,16 @@
+;; assist: assists @ "(match e))" +7
+;; an empty match on a define-grammar parameter (docs/GRAMMARS.md): one
+;; clause per production -- a type-test for a base leaf, a quasiquote
+;; pattern with a binder per leaf, an ellipsis kept as an ellipsis --
+;; with the recursive calls placed on the grammar's own leaves
+(define-grammar Expr
+  #:keywords (+ let)
+  Int
+  Sym
+  (+ Expr Expr)
+  (let ([Sym Expr] ...) Expr))
+
+(define (ev [e : Expr]) : Int
+  (match e))
+
+(println (ev 1))

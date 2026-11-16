@@ -1,0 +1,5 @@
+;; a template whose shape fits no production of the declared grammar
+;; (Add takes two fields) is a static inclusion error
+(define-type Expr (Num Int) (Add Expr Expr))
+(define (f) : Expr `(Add (Num 1)))
+(println (f))

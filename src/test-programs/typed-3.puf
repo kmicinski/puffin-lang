@@ -1,7 +1,8 @@
-;; the dedicated ADT heap kind (docs/TYPES.md §2): constructor
-;; instances are NOT vectors -- they print as (Ctor field ...)
-;; (nullary constructors bare), adt? is the disjoint surface
-;; predicate, and equal? recurses structurally.
+;; constructor instances are plain s-expressions (docs/GRAMMARS.md §3):
+;; a list headed by the constructor's name, a nullary constructor its
+;; symbol -- they print as (Ctor field ...) (nullary constructors bare),
+;; they are the very data a quote spells, and equal? recurses
+;; structurally.
 (define-type (Option a)
   (None)
   (Some a))
@@ -20,20 +21,19 @@
 (println (vector (Some 1) None))           ;; #((Some 1) None)
 (display (Some 'sym)) (newline)            ;; (Some sym)
 
-;; the kind is disjoint: vector? says #f, adt? says #t
+;; instances are lists and symbols, never vectors
 (println (vector? (Some 1)))               ;; #f
-(println (adt? (Some 1)))                  ;; #t
-(println (adt? None))                      ;; #t
-(println (adt? (vector 1 2)))              ;; #f
-(println (adt? 42))                        ;; #f
-;; ('None itself IS the constructor: a quote spells constructors too,
-;; docs/TYPES.md §2 -- so make the symbol at run time)
-(println (adt? (string->symbol "None")))  ;; #f
+(println (list? (Some 1)))                 ;; #t
+(println (symbol? None))                   ;; #t
+(println (list? (vector 1 2)))             ;; #f
+(println (list? 42))                       ;; #f
+;; the symbol None, however it is made, IS the constructor's value
+(println (equal? (string->symbol "None") None))  ;; #t
 
-;; a real vector that merely looks like an instance is neither
-;; adt? nor a match for the constructor pattern
+;; a vector that merely looks like an instance is neither a list nor
+;; a match for the constructor pattern
 (define impostor (vector 'Circle 5))
-(println (adt? impostor))                  ;; #f
+(println (list? impostor))                 ;; #f
 (println (match impostor
            [(Circle r) r]
            [_ 'not-a-circle]))             ;; not-a-circle
@@ -46,7 +46,7 @@
 (println (eq? None None))                  ;; #t
 (println (eq? (Some 1) (Some 1)))          ;; #f
 (println (equal? (Some (list 1 2)) (Some (list 1 2)))) ;; #t
-(println (equal? (Some 1) (vector 'Some 1)))            ;; #f (kinds differ)
+(println (equal? (Some 1) (vector 'Some 1)))            ;; #f (a vector is not a list)
 
 ;; match still dispatches on constructor + nesting
 (define (area [s : Shape]) : Int

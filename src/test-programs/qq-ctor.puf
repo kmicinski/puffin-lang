@@ -1,8 +1,9 @@
-;; constructor-directed quasiquote (docs/TYPES.md §2): a quasiquote
-;; template whose head names a constructor in scope IS that
-;; constructor -- built in expressions, matched in patterns -- so the
-;; Racket idiom of writing a language as backquoted s-expressions
-;; carries over unchanged, and gets the type system for free.
+;; quasiquote over define-types (docs/GRAMMARS.md): a constructor builds
+;; the list a template spells, so a template naming a constructor IS
+;; that constructor's value -- built in expressions, matched in
+;; patterns -- and the Racket idiom of writing a language as backquoted
+;; s-expressions carries over unchanged, typed by the define-type's
+;; grammar.
 (define-type Expr
   (Num Int)
   (Add Expr Expr)
@@ -38,7 +39,7 @@
 (println (ev e1 '()))                                   ;; -11
 (println (simp '(Add (Num 0) (Mul (Num 1) (Var x)))))  ;; (Var x)
 (println (ev (double '(Var x)) (list (cons 'x 21))))    ;; 42
-(println (adt? e1))                                     ;; #t
+(println (list? e1))                                    ;; #t
 (println (equal? e1 (Add (Num 1) (Mul (Num 3) (Neg (Num 4))))))  ;; #t
 
 ;; nullary constructors: bare in templates and quotes

@@ -1,6 +1,6 @@
-;; modules-qq: constructor-directed quasiquote across modules. This
-;; module's own templates spell its own constructors (a non-entry
-;; module: every name here is mangled, templates included).
+;; modules-qq: define-types across modules. A non-entry module: every
+;; name here is mangled, but templates are data -- they spell the
+;; constructors' source names, which is what the constructors build.
 (provide Expr Num Add Mul mk-sum ev)
 
 (define-type Expr

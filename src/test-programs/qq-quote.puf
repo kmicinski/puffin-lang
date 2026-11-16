@@ -1,7 +1,7 @@
-;; quote spells constructors too (docs/TYPES.md §2) -- but a quote has
-;; no escapes: under quote, (unquote x) is a plain two-element list
-;; and ... a plain symbol, exactly as both readers read them. These
-;; are the shapes that must survive the rewrite around constructors.
+;; quote and define-types (docs/GRAMMARS.md): a quoted datum that spells
+;; a constructor is that constructor's value -- the same list. A quote
+;; has no escapes: under quote, (unquote x) is a plain two-element list
+;; and ... a plain symbol, exactly as both readers read them.
 (define-type Expr (Num Int) (Add Expr Expr))
 (define-type Color (Red) (Green))
 
@@ -13,7 +13,7 @@
 ;; constructors inside data, next to escape-shaped data
 (define d '(prog (Add (Num 1) (Num 2)) (unquote x) ... Red))
 (println d)
-(println (adt? (car (cdr d))))                            ;; #t: an instance
+(println (list? (car (cdr d))))                           ;; #t: an instance (a list)
 (println (equal? (car (cdr (cdr d))) (list 'unquote 'x)))  ;; #t: plain data
 (println (match d
            ['(prog (Add (Num 1) (Num 2)) (unquote x) ... Red) 'same]
@@ -26,12 +26,11 @@
            ['(a (b Green)) 'green]
            [_ 'neither]))
 
-;; nullary constructors in quoted data are instances; a non-nullary
-;; constructor's name in ELEMENT position is a symbol (at the head it
-;; would be the constructor, and '(Add Red) an arity error)
+;; nullary constructors in quoted data are instances (their symbols);
+;; a constructor's name anywhere in data is just that symbol
 (println (car (cdr '(x Red (Num 3)))))                    ;; Red
 (println (symbol? (car (cdr '(x Add Red)))))              ;; #t
-(println (adt? (car (cdr (cdr '(x Add Red))))))           ;; #t
+(println (eq? (car (cdr (cdr '(x Add Red)))) Red))        ;; #t
 
 ;; a quote with no constructor in it is the quote it always was
 (println '(let ([x 1]) (+ x 1)))

@@ -1,4 +1,0 @@
-;; a constructor has fixed fields: no ,@ into one
-(define-type Expr (Num Int) (Add Expr Expr))
-(define (f xs) `(Add ,@xs))
-(println (f (list (Num 1) (Num 2))))

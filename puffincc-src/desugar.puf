@@ -157,9 +157,20 @@
   ;; The blame label carries the declared boundary's source position
   ;; (system.puf origin-suffix) -- resolved HERE, at desugar time:
   ;; compile-time strings, no runtime cost change.
+;; a grammar or define-type annotation checks the WHOLE value with the
+  ;; grammar's recognizer (docs/GRAMMARS.md §6); a failure is the usual
+  ;; cast error, raised by a cast-check whose (adt <shown>) desc no value
+  ;; passes
+  (define (gram-guard x t blame)
+    `(if (,(gram-pred-name (gram-name t)) ,x)
+         ,x
+         (cast-check ,x (quote (adt ,(demangle-type t))) ,blame)))
   (define (cast-expr e t blame)
-    (let ([d (cast-desc t)])
-      (if d `(cast-check ,e (quote ,d) ,(string-append blame (origin-suffix))) e)))
+    (if (gram-name t)
+        (let ([v (gensym 'cast)])
+          `(let ([,v ,e]) ,(gram-guard v t (string-append blame (origin-suffix)))))
+        (let ([d (cast-desc t)])
+          (if d `(cast-check ,e (quote ,d) ,(string-append blame (origin-suffix))) e))))
   (define (cast-binding b)
     (match b
       [`(,x : ,t ,e)
@@ -175,23 +186,98 @@
       (filter-map
        (lambda (pr)
          (let* ([x (car pr)]
-                [d (cast-desc (cdr pr))])
-           (if d
-               `(cast-check ,x (quote ,d)
-                            ,(string-append owner (string-append "'s argument "
-                                                                 (string-append
-                                                                  (nm-str x)
-                                                                  (origin-suffix)))))
-               #f)))
+                [d (cast-desc (cdr pr))]
+                [blame (string-append owner (string-append "'s argument "
+                                                           (string-append
+                                                            (nm-str x)
+                                                            (origin-suffix))))])
+           (cond [(gram-name (cdr pr)) (gram-guard x (cdr pr) blame)]
+                 [d `(cast-check ,x (quote ,d) ,blame)]
+                 [else #f])))
        (map2 cons formal-names arg-ts)))
     (define rd (cast-desc rt))
+    (define rblame (string-append owner (string-append "'s result" (origin-suffix))))
     (define body+
-      (if rd
-          (list `(cast-check (let () ,@body) (quote ,rd)
-                             ,(string-append owner (string-append "'s result"
-                                                                  (origin-suffix)))))
-          body))
+      (cond [(gram-name rt)
+             (let ([v (gensym 'cast)])
+               (list `(let ([,v (let () ,@body)]) ,(gram-guard v rt rblame))))]
+            [rd (list `(cast-check (let () ,@body) (quote ,rd) ,rblame))]
+            [else body]))
     (append entry body+))
+;; ---- grammar recognizers (docs/GRAMMARS.md §6) ---------------------
+  ;; (define (#%gram?-G v) ...): does v belong to G? Built from the
+  ;; grammar table's shapes, in prims only (a user's top-level
+  ;; `length` or `member` can never capture it). Type parameters
+  ;; accept anything; ordinary leaf types are tested first-order, like
+  ;; a cast; grammar leaves call their own recognizer.
+  (define (grammar-recognizer n)
+    (let* ([gi (hash-ref grammar-table n)] [v (gensym 'gv)])
+      `(define (,(gram-pred-name n) ,v)
+         ,(gen-any (map (lambda (s) (gen-check s v (g-params gi))) (g-prods gi))))))
+  (define (gen-any cs) (if (null? cs) #f `(if ,(car cs) #t ,(gen-any (cdr cs)))))
+  (define (gen-check s x ps)
+    (cond
+      [(lit? s)
+       (let ([d (car (cdr s))])
+         (cond [(string? d) `(if (string? ,x) (string=? ,x ,d) #f)]
+               [(symbol? d) `(eq? ,x (quote ,d))]
+               [else `(eq? ,x ,d)]))]
+      [(sym-except? s)
+       `(if (symbol? ,x)
+            ,(foldr (lambda (k acc) `(if (eq? ,x (quote ,k)) #f ,acc)) #t (cdr s))
+            #f)]
+      [(slist? s)
+       (let* ([s3 (split-star (cdr s))] [pre (first s3)] [st (second s3)] [post (third s3)])
+         (gen-prefix pre x (lambda (r) (if st (gen-star st post r ps) (gen-fixed post r ps))) ps))]
+      [else (gen-type s x ps)]))
+  (define (gen-type t x ps)
+    (cond
+      [(or (eq? t '_) (tyvar? t) (and (symbol? t) (member t ps))) #t]
+      [(gram-name t) `(,(gram-pred-name (gram-name t)) ,x)]
+      [(eq? t 'Int) `(fixnum? ,x)]
+      [(eq? t 'Bool) `(boolean? ,x)]
+      [(eq? t 'Sym) `(symbol? ,x)]
+      [(eq? t 'Str) `(string? ,x)]
+      [(eq? t 'Void) `(void? ,x)]
+      [(pair? t)
+       (match t
+         [`(List ,_) `(if (null? ,x) #t (pair? ,x))]
+         [`(Pairof ,_ ,_) `(pair? ,x)]
+         [`(Vec ,_) `(vector? ,x)]
+         [`(Hash ,_ ,_) `(hash? ,x)]
+         [`(Set ,_) `(set? ,x)]
+         [`(Mut ,t0) (gen-type t0 x ps)]
+         [_ #t])]
+      [else #t]))
+  ;; the elements es, then the end of the list
+  (define (gen-fixed es x ps)
+    (gen-prefix es x (lambda (r) `(null? ,r)) ps))
+  ;; the elements es, then k on the rest
+  (define (gen-prefix es x k ps)
+    (if (null? es)
+        (k x)
+        (let ([y (gensym 'ge)] [z (gensym 'gr)])
+          `(if (pair? ,x)
+               (if (let ([,y (car ,x)]) ,(gen-check (car es) y ps))
+                   (let ([,z (cdr ,x)]) ,(gen-prefix (cdr es) z k ps))
+                   #f)
+               #f))))
+  ;; zero or more s, then the fixed elements post: count the pairs once,
+  ;; walk len - |post| elements against s, then post
+  (define (gen-star s post x ps)
+    (let ([cnt (gensym 'gcount)] [r (gensym 'gr)] [n (gensym 'gn)]
+          [lp (gensym 'gloop)] [m (gensym 'gm)] [y (gensym 'ge)])
+      `(let ([,m (- (let ,cnt ([,r ,x] [,n 0]) (if (pair? ,r) (,cnt (cdr ,r) (+ ,n 1)) ,n))
+                    ,(length post))])
+         (if (< ,m 0)
+             #f
+             (let ,lp ([,r ,x] [,n ,m])
+               (if (eq? ,n 0)
+                   ,(gen-fixed post r ps)
+                   (if (let ([,y (car ,r)]) ,(gen-check s y ps))
+                       (,lp (cdr ,r) (- ,n 1))
+                       #f)))))))
+
   ;; a (: f ...) declaration supplies the formal/result types a
   ;; define doesn't spell inline (inline annotations win per position)
   (define (declared-arrow f nargs)
@@ -322,18 +408,11 @@
   ;; constructors safe in patterns even before their define
   ;; initializes
   (define (compile-ctor-pattern c ps subject success fail-e bound)
-    (define (fields ps i success)
-      (match ps
-        ['() success]
-        [`(,p . ,rest)
-         (define x (gensym 'adt))
-         `(let ([,x (adt-ref ,subject ,i)])
-            ,(compile-pattern p x (fields rest (add1 i) success) fail-e bound))]))
-    `(if (if (adt? ,subject)
-             (eq? (adt-tag ,subject) (quote ,c))
-             #f)
-         ,(fields ps 0 success)
-         ,fail-e))
+    (let ([tag (module-demangle c)])
+      (if (null? ps)
+          `(if (eq? ,subject (quote ,tag)) ,success ,fail-e)
+          (compile-quasi (cons tag (map (lambda (p) (list 'unquote p)) ps))
+                         subject success fail-e bound))))
 
   (define (compile-pattern pat subject success fail-e bound)
     (match pat
@@ -896,25 +975,24 @@
     (match form
       ;; a type alias is the checker's alone (expanded away there)
       [`(define-type-alias ,_ ,_) '()]
-      [`(define-type ,_ ,ctors ...)
-       ;; builders allocate the dedicated ADT kind and initialize the
-       ;; fields (adt-alloc + adt-set!, mirroring how (vector ...)
-       ;; lowers); a nullary constructor is its 0-field singleton
-       (map (lambda (c)
-              (match c
-                [`(,cn) `(define ,cn (adt-alloc (quote ,cn) 0))]
-                [`(,cn ,fts ...)
-                 (let* ([xs (map (lambda (ft) (gensym 'fld)) fts)]
-                        [v (gensym 'adt)]
-                        [sets (let loop ([xs xs] [i 0])
-                                (if (null? xs)
-                                    '()
-                                    (cons `(adt-set! ,v ,i ,(car xs))
-                                          (loop (cdr xs) (+ i 1)))))])
-                   `(define (,cn ,@xs)
-                      (let ([,v (adt-alloc (quote ,cn) ,(length fts))])
-                        (begin ,@sets ,v))))]))
-            ctors)]
+      ;; a define-type is a grammar plus constructors that build its
+      ;; data (docs/GRAMMARS.md §3): (Cn x ...) is the list headed by the
+      ;; constructor's source spelling, a nullary constructor is that
+      ;; symbol. Both forms define the grammar's recognizer.
+      [`(define-type ,head ,ctors ...)
+       (cons (grammar-recognizer (match head [`(,n ,_ ...) n] [n n]))
+             (map (lambda (c)
+                    (match c
+                      [`(,cn) `(define ,cn (quote ,(module-demangle cn)))]
+                      [`(,cn ,fts ...)
+                       (let ([xs (map (lambda (ft) (gensym 'fld)) fts)])
+                         `(define (,cn ,@xs)
+                            ,(foldr (lambda (x acc) `(cons ,x ,acc))
+                                    ''()
+                                    (cons `(quote ,(module-demangle cn)) xs))))]))
+                  ctors))]
+      [`(define-grammar ,head . ,_)
+       (list (grammar-recognizer (match head [`(,n ,_ ...) n] [n n])))]
       [`(: ,(? symbol? _) ,_) '()]
       ;; prelude signatures: trusted -- typed by the checker, but no
       ;; casts (the same trust class as the manifest's prim types)

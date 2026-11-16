@@ -1,0 +1,10 @@
+;; a grammar annotation checks the WHOLE term at a dynamic boundary:
+;; the bad node is two levels down
+(define-grammar Arith #:keywords (+ *) Int (+ Arith Arith) (* Arith Arith))
+(define (ev [e : Arith]) : Int
+  (match e
+    [(? fixnum? n) n]
+    [`(+ ,a ,b) (+ (ev a) (ev b))]
+    [`(* ,a ,b) (* (ev a) (ev b))]))
+(define (run e) (ev e))
+(println (run '(+ 1 (* 2 (- 3 1)))))

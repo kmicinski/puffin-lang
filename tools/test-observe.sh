@@ -74,7 +74,10 @@ check "results" "Rdone"
 check "annotated body with internal define" "R12"
 check "variadic define still runs" "R6"
 check "interp shapes" "(interp 4 (((list add 3) (sym x) Int Str) (Nil Pair)))"
-check "constructor shapes" "(area 2 (((adt Circle) (adt Sq))))"
+# define-type instances are plain s-expressions (docs/GRAMMARS.md): the
+# observer sees lists; assist.puf adt-shape reads them
+# back as the constructors
+check "constructor shapes" "(area 2 (((list Circle 2) (list Sq 2))))"
 check "a tail-recursive observed loop" "(count-down 1000001 ((Int)))"
 check "trace: a call" "> (fact 2)"
 check "trace: nested" "| | > (fact 0)"

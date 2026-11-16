@@ -1,4 +1,4 @@
-;; quasiquote patterns are constructor patterns to the exhaustiveness check
+;; quasiquote patterns over a define-type are checked against its grammar's productions
 (define-type Expr (Num Int) (Add Expr Expr) (Mul Expr Expr))
 (define (ev [e : Expr]) : Int
   (match e

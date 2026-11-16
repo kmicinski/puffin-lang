@@ -1,1 +1,0 @@
-error: typecheck: constructor Add expects 2 fields, got 1 in pattern [qq-ctor-pattern-arity.puf:3]

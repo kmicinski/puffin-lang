@@ -128,8 +128,9 @@
        [`(define-type ,head ,ctors ...)
         (cons (match head [`(,n ,_ ...) n] [n n])
               (filter-map (λ (c) (match c [`(,cn ,_ ...) cn] [_ #f])) ctors))]
-       ;; a type alias binds its head, a type name like define-type's
-       [`(define-type-alias ,head ,_)
+       ;; a type alias binds its head, a type name like define-type's;
+       ;; so does a grammar (docs/GRAMMARS.md)
+       [`(,(or 'define-type-alias 'define-grammar) ,head ,_ ...)
         (list (match head [`(,n ,_ ...) n] [n n]))]
        [_ (let ([n (defn-name f)]) (if n (list n) '()))])]))
 
@@ -217,7 +218,7 @@
 ;; unqualified is an error (use #:as or #:rename); stdlib primitives
 ;; are checked separately so the message can say so.
 (define keyword-names
-  (seteq 'define-type 'define-type-alias 'ann ':
+  (seteq 'define-type 'define-type-alias 'define-grammar 'ann ':
          'define 'lambda 'λ 'let 'let* 'letrec 'begin 'if 'cond 'case
          'when 'unless 'match 'set! 'while 'quote 'quasiquote 'unquote
          'unquote-splicing 'and 'or 'else '_ '... 'require 'provide
@@ -371,7 +372,7 @@
                 (cons '-> (map norm (cdr t)))))))
   (define type-heads
     (for/seteq ([f forms]
-                #:when (match f [`(,(or 'define-type 'define-type-alias) ,_ ,_ ...) #t] [_ #f]))
+                #:when (match f [`(,(or 'define-type 'define-type-alias 'define-grammar) ,_ ,_ ...) #t] [_ #f]))
       (match f
         [`(,_ (,n ,_ ...) ,_ ...) n]
         [`(,_ ,n ,_ ...) n])))
@@ -540,14 +541,22 @@
   ;; a template head naming a constructor (any arity) / a bare
   ;; template symbol naming a nullary constructor: the resolved
   ;; spelling, else #f (the symbol is data)
-  (define (ctor-ref s)
-    (and (symbol? s)
-         (let ([t (sym s)])
-           (and (hash-has-key? ctor-arity t) t))))
-  (define (nullary-ref s)
-    (and (symbol? s)
-         (let ([t (sym s)])
-           (and (eqv? (hash-ref ctor-arity t #f) 0) t))))
+  ;; templates and quoted data are DATA at every depth now
+  ;; (docs/GRAMMARS.md): a constructor builds the list headed by its
+  ;; source spelling, so no template position renames
+  (define (ctor-ref s) #f)
+  (define (nullary-ref s) #f)
+  ;; a grammar's productions: only type names (capitalized, docs/
+  ;; GRAMMARS.md §2) are references; every other symbol is a literal
+  (define (prod q)
+    (cond [(symbol? q)
+           (let ([str (symbol->string q)])
+             (if (and (> (string-length str) 0) (char<=? #\A (string-ref str 0) #\Z))
+                 (sym q)
+                 q))]
+          [(and (pair? q) (eq? (car q) 'quote)) q]
+          [(pair? q) (cons (prod (car q)) (prod (cdr q)))]
+          [else q]))
   ;; quasiquote template: symbols are data; descend only into escapes
   ;; -- except the constructor positions above, at depth 1
   (define (qq q depth)
@@ -635,6 +644,7 @@
   (define (expr e)
     (match e
       [(? symbol? x) (sym x)]
+      [`(define-grammar ,head . ,rest) (list* 'define-grammar (prod head) (prod rest))]
       [(list 'quote d) (list 'quote (quoted d))]
       [(list 'quasiquote q) (list 'quasiquote (qq q 1))]
       [`(match ,subj ,clauses ...)

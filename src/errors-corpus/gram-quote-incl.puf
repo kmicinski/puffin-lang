@@ -1,0 +1,4 @@
+;; quoted data is checked against a grammar exactly like a template
+(define-grammar Arith #:keywords (+) Int (+ Arith Arith))
+(define (ev [e : Arith]) : Int 0)
+(println (ev '(+ 1 2 3)))

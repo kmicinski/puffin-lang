@@ -11,7 +11,10 @@
 ;;   (sym S)          the symbol S
 ;;   (list H N)       a proper list headed by the symbol H, N long
 ;;                    (N is #f past observe-scan elements)
-;;   (adt C)          an instance of constructor C
+;;   (adt C)          a value of the old ADT heap kind; define-type
+;;                    instances are lists and symbols now
+;;                    (docs/GRAMMARS.md), observed as (list C N) /
+;;                    (sym C) -- assist.puf adt-shape reads those back
 ;;
 ;; (#%observations) is the whole record, for `try` to print:
 ;;   ((f CALLS ((shape ...) (shape ...) ...)) ...)

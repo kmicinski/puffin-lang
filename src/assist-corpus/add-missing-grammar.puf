@@ -1,0 +1,14 @@
+;; assist: assists @ "[`(+ ,a ,b) 1]" +1
+;; a partial match over a grammar: the productions no clause can match,
+;; in declaration order
+(define-grammar Expr
+  #:keywords (+ -)
+  Int
+  (+ Expr Expr)
+  (- Expr Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [`(+ ,a ,b) 1]))
+
+(println (size '(+ 1 2)))

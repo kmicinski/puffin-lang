@@ -1,0 +1,25 @@
+== assists @ 265 (exit 0)
+== stdout
+{"id":"add-missing-cases","title":"Add missing cases: Int, (- Expr Expr)","source":"type","edits":[{"start":278,"end":278,"text":"\n    [(? fixnum? n) (error \"TODO: Int\")]\n    [`(- ,e1 ,e2) (let ([r1 (size e1)] [r2 (size e2)]) (error \"TODO: -\"))]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Expr is not exhaustive: missing Int, (- Expr Expr) [add-missing-grammar.puf:10]
+== apply 1: add-missing-cases
+;; assist: assists @ "[`(+ ,a ,b) 1]" +1
+;; a partial match over a grammar: the productions no clause can match,
+;; in declaration order
+(define-grammar Expr
+  #:keywords (+ -)
+  Int
+  (+ Expr Expr)
+  (- Expr Expr))
+
+(define (size [e : Expr]) : Int
+  (match e
+    [`(+ ,a ,b) 1]
+    [(? fixnum? n) (error "TODO: Int")]
+    [`(- ,e1 ,e2) (let ([r1 (size e1)] [r2 (size e2)]) (error "TODO: -"))]))
+
+(println (size '(+ 1 2)))
+== check (exit 0)
+{"ok":true}

@@ -1,0 +1,4 @@
+;; a capitalized production symbol must name a type (quote it for the
+;; literal): typos are caught
+(define-grammar Expr Int (+ Expr Exprr))
+(println 1)

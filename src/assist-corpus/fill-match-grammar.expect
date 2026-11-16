@@ -1,0 +1,29 @@
+== assists @ 453 (exit 0)
+== stdout
+{"id":"fill-match","title":"Fill match on Expr","source":"type","edits":[{"start":454,"end":454,"text":"\n    [(? fixnum? n) (error \"TODO: Int\")]\n    [(? symbol? sym) (error \"TODO: Sym\")]\n    [`(+ ,e1 ,e2) (let ([r1 (ev e1)] [r2 (ev e2)]) (error \"TODO: +\"))]\n    [`(let ((,syms ,es) ...) ,e1) (let ([r1 (ev e1)]) (error \"TODO: let\"))]"}]}
+{"done":true}
+== stderr
+typecheck warning: match on Expr is not exhaustive: missing Int, Sym, (+ Expr Expr), (let ((Sym Expr) ...) Expr) [fill-match-grammar.puf:13]
+== apply 1: fill-match
+;; assist: assists @ "(match e))" +7
+;; an empty match on a define-grammar parameter (docs/GRAMMARS.md): one
+;; clause per production -- a type-test for a base leaf, a quasiquote
+;; pattern with a binder per leaf, an ellipsis kept as an ellipsis --
+;; with the recursive calls placed on the grammar's own leaves
+(define-grammar Expr
+  #:keywords (+ let)
+  Int
+  Sym
+  (+ Expr Expr)
+  (let ([Sym Expr] ...) Expr))
+
+(define (ev [e : Expr]) : Int
+  (match e
+    [(? fixnum? n) (error "TODO: Int")]
+    [(? symbol? sym) (error "TODO: Sym")]
+    [`(+ ,e1 ,e2) (let ([r1 (ev e1)] [r2 (ev e2)]) (error "TODO: +"))]
+    [`(let ((,syms ,es) ...) ,e1) (let ([r1 (ev e1)]) (error "TODO: let"))]))
+
+(println (ev 1))
+== check (exit 0)
+{"ok":true}

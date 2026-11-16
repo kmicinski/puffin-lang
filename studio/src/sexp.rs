@@ -222,14 +222,15 @@ pub fn form_at(text: &str, pos: usize) -> Option<Form> {
     all.into_iter().find(|form| form.start >= pos && form.start < line_end)
 }
 
-/// Whether a form declares a type: `define-type` or `define-type-alias`.
-/// A REPL unit carries every one of them (repl.rs).
+/// Whether a form declares a type: `define-type`, `define-grammar`
+/// (docs/GRAMMARS.md) or `define-type-alias`. A REPL unit carries every
+/// one of them (repl.rs).
 pub fn type_form(form: &Form) -> bool {
-    matches!(form.head.as_deref(), Some("define-type" | "define-type-alias"))
+    matches!(form.head.as_deref(), Some("define-type" | "define-grammar" | "define-type-alias"))
 }
 
-/// The `define-type` and `define-type-alias` forms of `text`: (type
-/// name, form text).
+/// The `define-type`, `define-grammar` and `define-type-alias` forms of
+/// `text`: (type name, form text).
 pub fn define_types(text: &str) -> Vec<(String, String)> {
     forms(text)
         .into_iter()
@@ -560,6 +561,14 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(&text[found[0].0..found[0].1], "??");
         assert_eq!(line_of(text, found[0].0), 2);
+    }
+
+    #[test]
+    fn grammars_are_type_forms() {
+        let text = "(define-grammar Expr #:keywords (+) Int (+ Expr Expr))\n(define-grammar (Tree a) leaf (node (Tree a) a (Tree a)))\n(define (f x) x)";
+        let names: Vec<String> = define_types(text).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(names, ["Expr", "Tree"]);
+        assert_eq!(forms(text)[0].key(), "define-grammar:Expr");
     }
 
     #[test]
