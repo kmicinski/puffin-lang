@@ -75,7 +75,9 @@ to fix them, at most twice per instruction from the author.
 
 ## 3. What the author sees
 
-The editor, alone and centered: the REPL, the file tree, the tabs and the
+The editor, alone and centered — this is how the studio opens (the
+microphone waits for a click; "Show all panes" in ⋯ brings the rest
+back, and is remembered): the REPL, the file tree, the tabs and the
 header's buttons step aside while voice mode is on. Everything else
 appears only while it matters, floating over the margins:
 

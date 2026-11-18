@@ -169,7 +169,7 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     item("Run the properties", () => control("run-properties"));
     item("Conversation", () => { talkCard.hidden = false; talkList.scrollTop = talkList.scrollHeight; });
     item("Start a new conversation", () => control("new-conversation"));
-    item("Leave voice mode", () => toggle(false));
+    item("Show all panes", () => toggle(false));
   }
 
   function setFollow(value) {
@@ -392,6 +392,7 @@ export function createVoice({ editor, files, send, note, button, stage }) {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   function renderMic() {
+    store({ ...load(), listening });
     mic.classList.toggle("live", listening);
     mic.title = listening ? "Listening — click to pause (or say “stop listening”)" : "Paused — click to listen";
   }
@@ -597,7 +598,9 @@ export function createVoice({ editor, files, send, note, button, stage }) {
 
   // ---- On and off ----------------------------------------------------------------------
 
-  function toggle(value = !on) {
+  // `listen`: start the microphone too (a click does; opening the page
+  // starts it only if it was listening when the page was left)
+  function toggle(value = !on, listen = true) {
     on = value;
     document.body.classList.toggle("voice-on", on);
     layer.hidden = !on;
@@ -606,7 +609,8 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     if (on) {
       renderCrumb();
       send({ t: "voice-state" });
-      startListening();
+      if (listen) startListening();
+      else show("Click the dot to start listening.", "quiet");
     } else {
       stopListening();
       closeCards();
@@ -626,7 +630,9 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     }
   });
   window.addEventListener("resize", () => on && view?.layout());
-  if (saved.on) setTimeout(() => toggle(true), 0);
+  // the focused editor is how the studio opens; "Show all panes" in ⋯
+  // (or the 🎙 button) brings the rest back, and is remembered
+  if (saved.on ?? true) setTimeout(() => toggle(true, saved.listening ?? false), 0);
 
   return {
     receive: (event) => receive(event),
