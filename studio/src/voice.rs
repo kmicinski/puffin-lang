@@ -335,7 +335,7 @@ impl Studio {
         if control != "none" {
             match control {
                 // the browser's own: listening and speaking
-                "mute" | "unmute" | "sleep" | "follow" | "unfollow" | "next" | "previous" => {
+                "mute" | "unmute" | "sleep" | "follow" | "unfollow" | "next" | "previous" | "run" | "show-output" | "hide-output" => {
                     self.voice_event("client", json!({ "command": control }));
                 }
                 other => self.control(other).await,
@@ -1043,7 +1043,7 @@ fn router_schema() -> Value {
                     "urgency": { "type": "string", "enum": ["none", "interrupt", "queue"] },
                 },
             },
-            "control": { "type": "string", "enum": ["none", "stop", "undo", "run-properties", "new-conversation", "mute", "unmute", "sleep", "follow", "unfollow"] },
+            "control": { "type": "string", "enum": ["none", "stop", "undo", "run-properties", "new-conversation", "mute", "unmute", "sleep", "follow", "unfollow", "run", "show-output", "hide-output"] },
             "reply": { "type": "string" },
         },
     })
@@ -1081,7 +1081,8 @@ property: ...\") become an instruction to add that property. urgency:
 
 control: stop (stop the builder now), undo (revert the builder's last edit), run-properties, \
 new-conversation (forget the builder's context), mute/unmute (the studio's voice), sleep (stop \
-listening), follow/unfollow (whether the view follows the builder's edits), or none.
+listening), follow/unfollow (whether the view follows the builder's edits), run (run the program), \
+show-output / hide-output (the program's output and REPL), or none.
 
 reply: what the studio says back, aloud, in a few words -- or empty. Acknowledge build instructions \
 briefly (\"On it.\", \"Switching to a hash.\"); stay silent for pure navigation (the view moving is the \

@@ -20,6 +20,7 @@ import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
 import { createRename } from "./rename.js";
 import { createVoice } from "./voice.js";
+import { createFocus } from "./focus.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -42,6 +43,8 @@ function note(message) {
 
 // made once the files are: the editor's events may come first
 let session = null;
+// the focused layout (focus.js), made once the files are
+let focus = null;
 let holes = null;
 let rename = null;
 // the traced function names, and what the toolchain can do (the studio's)
@@ -76,12 +79,16 @@ const files = createFiles({
     lint?.refresh();
     proposals?.refresh();
     versions?.opened();
+    focus?.changed();
   },
   onTexts: () => {
     proposals?.refresh();
     session?.changed();
   },
-  onFiles: () => tree?.changed(),
+  onFiles: () => {
+    tree?.changed();
+    focus?.changed();
+  },
 });
 // every message waits behind the edits already made, so it sees them
 const send = files.send;
@@ -127,7 +134,8 @@ const lint = createLint({ editor, files });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
-const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane") });
+focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
+const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane"), layout: focus, run: () => load(null) });
 
 const repl = createRepl({
   transcript: $("transcript"),
@@ -395,7 +403,10 @@ const handlers = {
   },
   lane: renderLane,
   features: renderFeatures,
-  entry: repl.receive.entry,
+  entry(entry) {
+    repl.receive.entry(entry);
+    focus?.entry(entry);
+  },
   "entry-out": repl.receive["entry-out"],
   "entry-done"(message) {
     repl.receive["entry-done"](message);

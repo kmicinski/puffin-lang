@@ -57,7 +57,7 @@ function wordAt(line, column) {
   return line.slice(start, end + 1);
 }
 
-export function createVoice({ editor, files, send, note, button, stage }) {
+export function createVoice({ editor, files, send, note, button, stage, layout, run }) {
   const saved = load();
   const settings = { speak: saved.speak ?? true, follow: saved.follow ?? true };
   let on = false;
@@ -75,16 +75,6 @@ export function createVoice({ editor, files, send, note, button, stage }) {
   let captionTimer = 0;
 
   // ---- What is on the screen ---------------------------------------------------------
-
-  // the shown file's name, above the editor; a click lists the others
-  const crumb = el("button", "voice-crumb");
-  crumb.title = "The files (say “open machine.puf”)";
-  const fileList = el("div", "voice-files voice-float");
-  fileList.hidden = true;
-  crumb.addEventListener("click", () => {
-    fileList.hidden = !fileList.hidden;
-    if (!fileList.hidden) renderFiles();
-  });
 
   // the properties: a badge once there are any, a list when asked or failing
   const badge = el("button", "voice-badge");
@@ -142,18 +132,17 @@ export function createVoice({ editor, files, send, note, button, stage }) {
   });
   document.addEventListener("click", (event) => {
     if (!menu.contains(event.target)) menu.hidden = true;
-    if (!fileList.contains(event.target) && event.target !== crumb) fileList.hidden = true;
   });
   pill.append(mic, caption, typed, activity, stopButton, more);
 
-  const top = el("div", "voice-top");
-  top.append(crumb, badge);
+  // the badge lives in the focused layout's bar (focus.js)
+  layout.slot.append(badge);
   const layer = el("div", "voice-layer");
   layer.hidden = true;
   // the right-hand rail: what has accumulated, stacked
   const rail = el("div", "voice-rail");
   rail.append(propCard, lensCard, talkCard);
-  layer.append(top, fileList, rail, menu, pill);
+  layer.append(rail, menu, pill);
   stage.append(layer);
 
   function renderMenu() {
@@ -166,6 +155,8 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     item("Follow the builder's edits", () => setFollow(!settings.follow), settings.follow);
     item("Speak replies aloud", () => setSpeak(!settings.speak), settings.speak);
     item("Undo the builder's last edit", () => control("undo"));
+    item("Run the program", () => run());
+    item("Output", () => layout.showOutput(true));
     item("Run the properties", () => control("run-properties"));
     item("Conversation", () => { talkCard.hidden = false; talkList.scrollTop = talkList.scrollHeight; });
     item("Start a new conversation", () => control("new-conversation"));
@@ -180,21 +171,6 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     settings.speak = value;
     store({ ...load(), speak: value });
     if (!value) window.speechSynthesis?.cancel();
-  }
-
-  function renderFiles() {
-    fileList.replaceChildren();
-    for (const path of files.paths()) {
-      const row = el("button", `voice-file${path === files.active() ? " current" : ""}`, path);
-      row.addEventListener("click", () => { fileList.hidden = true; lastUserMove = Date.now(); files.open(path); renderCrumb(); });
-      fileList.append(row);
-    }
-  }
-
-  function renderCrumb() {
-    const count = files.paths().length;
-    crumb.textContent = files.active() ?? "";
-    crumb.classList.toggle("many", count > 1);
   }
 
   // A line under the editor: what was heard, what came back. It fades.
@@ -220,7 +196,6 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     // the author's own moves hold the view for a while
     view.onMouseDown(() => { lastUserMove = Date.now(); });
     view.onKeyDown(() => { lastUserMove = Date.now(); });
-    view.onDidChangeModel(() => renderCrumb());
   }
 
   function flash(from, to, className = "voice-flash") {
@@ -241,7 +216,6 @@ export function createVoice({ editor, files, send, note, button, stage }) {
   function go(file, line, to = line, className) {
     if (!files.paths().includes(file)) return note(`no file ${file}`);
     if (files.active() !== file) files.open(file);
-    renderCrumb();
     if (view) {
       view.revealLineInCenter(line);
       view.setPosition({ lineNumber: line, column: 1 });
@@ -470,6 +444,9 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     if (/^(close|close that|dismiss|clear)$/.test(said)) return closeCards(), true;
     if (/^(show (the )?conversation|what did you say)$/.test(said)) return (talkCard.hidden = false), true;
     if (/^(show (the )?properties)$/.test(said)) return (propCard.hidden = false), true;
+    if (/^(run|run it|run the program|run this)$/.test(said)) return run(), true;
+    if (/^(show (the )?(output|repl))$/.test(said)) return layout.showOutput(true), true;
+    if (/^(hide (the )?(output|repl)|close (the )?(output|repl))$/.test(said)) return layout.showOutput(false), true;
     m = said.match(/^scroll (up|down)$/);
     if (m && view) {
       const lines = view.getVisibleRanges()[0];
@@ -482,7 +459,7 @@ export function createVoice({ editor, files, send, note, button, stage }) {
   }
 
   function closeCards() {
-    for (const card of [lensCard, propCard, talkCard, menu, fileList]) card.hidden = true;
+    for (const card of [lensCard, propCard, talkCard, menu]) card.hidden = true;
   }
 
   function context() {
@@ -577,6 +554,9 @@ export function createVoice({ editor, files, send, note, button, stage }) {
       case "sleep": return stopListening();
       case "follow": return setFollow(true);
       case "unfollow": return setFollow(false);
+      case "run": return run();
+      case "show-output": return layout.showOutput(true);
+      case "hide-output": return layout.showOutput(false);
       default: return undefined;
     }
   }
@@ -607,13 +587,14 @@ export function createVoice({ editor, files, send, note, button, stage }) {
     button.classList.toggle("on", on);
     store({ ...load(), on });
     if (on) {
-      renderCrumb();
+      layout.enter();
       send({ t: "voice-state" });
       if (listen) startListening();
       else show("Click the dot to start listening.", "quiet");
     } else {
       stopListening();
       closeCards();
+      layout.leave();
       window.speechSynthesis?.cancel();
     }
     // the editor's box changed: let it measure again

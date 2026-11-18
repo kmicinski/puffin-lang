@@ -3,26 +3,114 @@
 
 #voice-toggle.on { background: var(--violet); color: #fdf6e3; border-color: var(--violet); }
 
-/* ---- The layout: one editor, centered --------------------------------------- */
+/* ---- The layout: one editor, centered (focus.js) --------------------------- */
 
-body.voice-on .right-pane,
+body.voice-on .header,
 body.voice-on #divider,
 body.voice-on #files,
 body.voice-on .file-tabs,
 body.voice-on #clock,
-body.voice-on #load,
-body.voice-on #reset,
-body.voice-on #gist,
-body.voice-on #history,
 body.voice-on #check.good { display: none !important; }
-body.voice-on .header { background: var(--base3); border-bottom-color: transparent; }
 body.voice-on .editor-pane { flex: 1 1 100% !important; justify-content: center; }
 body.voice-on .editor-column {
-  flex: 0 1 960px;
-  max-width: 960px;
-  padding: 40px 0 84px;
+  flex: 0 1 var(--focus-width, 960px);
+  max-width: var(--focus-width, 960px);
+  padding: 46px 0 84px;
 }
-body.voice-on #editor-wrap { border-radius: 6px; }
+
+/* the output: hidden until something runs, then floating */
+body.voice-on .right-pane { display: none; }
+body.voice-on.focus-output .right-pane {
+  display: flex;
+  position: fixed;
+  right: 18px;
+  bottom: 86px;
+  width: min(560px, calc(100vw - 36px));
+  height: min(52vh, 560px);
+  min-width: 0;
+  z-index: 40;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(7, 54, 66, 0.16);
+  overflow: hidden;
+  animation: focus-rise 0.18s ease-out;
+}
+@keyframes focus-rise { from { opacity: 0; transform: translateY(8px); } }
+.focus-close { display: none; }
+body.voice-on .right-pane .pane-title { display: flex; justify-content: space-between; align-items: center; }
+body.voice-on .focus-close { display: inline-flex; border: none; background: transparent; color: var(--base1); padding: 0 4px; font-size: 12px; }
+body.voice-on .focus-close:hover { color: var(--strong); }
+
+/* the bar above the editor: project, files, run */
+.focus-bar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(var(--focus-width, 960px), calc(100% - 32px));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 31;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+.focus-bar:hover, .focus-bar:focus-within { opacity: 1; }
+.focus-left, .focus-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.focus-left { flex: 1; }
+.focus-left .project-name { font-size: 12px; }
+.focus-files { display: flex; align-items: center; gap: 2px; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+.focus-file {
+  border: none;
+  background: transparent;
+  font: 400 12.5px var(--mono);
+  color: var(--muted);
+  padding: 3px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+.focus-file:hover { color: var(--strong); background: var(--base2); }
+.focus-file.current { color: var(--strong); background: var(--base2); }
+.focus-add { border: none; background: transparent; color: var(--base1); font-size: 15px; padding: 0 8px; border-radius: 12px; }
+.focus-add:hover { color: var(--strong); background: var(--base2); }
+.focus-name {
+  font: 12.5px var(--mono);
+  padding: 2px 8px;
+  border: 1px solid var(--violet);
+  border-radius: 12px;
+  background: var(--base3);
+  color: var(--strong);
+  outline: none;
+}
+.focus-right .check { font-size: 11.5px; }
+.focus-slot { display: contents; }
+.focus-run {
+  border: none;
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--green-dark);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+.focus-run:hover { background: #eef2d6; }
+
+/* beside a hovered form: evaluate it, or try it in the REPL */
+.focus-chip {
+  position: absolute;
+  z-index: 32;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 12px;
+  background: var(--base3);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(7, 54, 66, 0.08);
+}
+.focus-chip button { border: none; background: transparent; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; color: var(--muted); }
+.focus-chip button:first-child { color: var(--green-dark); }
+.focus-chip button:hover { background: var(--base2); color: var(--strong); }
 
 .voice-layer { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
 .voice-layer > *, .voice-rail > * { pointer-events: auto; }
@@ -34,41 +122,6 @@ body.voice-on #editor-wrap { border-radius: 6px; }
   font-size: 12.5px;
 }
 
-/* the file's name above the editor, and the badge beside it */
-.voice-top {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(960px, calc(100% - 32px));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  pointer-events: none;
-}
-.voice-top > * { pointer-events: auto; }
-.voice-crumb {
-  border: none;
-  background: transparent;
-  font: 500 12.5px var(--mono);
-  color: var(--muted);
-  padding: 3px 6px;
-}
-.voice-crumb.many::after { content: " ▾"; font-size: 10px; }
-.voice-crumb:hover { color: var(--strong); background: var(--base2); }
-.voice-files {
-  position: absolute;
-  top: 36px;
-  left: max(16px, calc(50% - 480px));
-  min-width: 200px;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-}
-.voice-file { border: none; background: transparent; text-align: left; font: 12.5px var(--mono); font-weight: 400; padding: 4px 8px; color: var(--text); }
-.voice-file:hover { background: var(--base2); }
-.voice-file.current { color: var(--violet); }
-
 .voice-badge {
   border: none;
   background: transparent;
@@ -76,6 +129,7 @@ body.voice-on #editor-wrap { border-radius: 6px; }
   color: var(--green-dark);
   padding: 3px 8px;
   border-radius: 10px;
+  white-space: nowrap;
 }
 .voice-badge:hover { background: var(--base2); }
 .voice-badge.bad { color: #fdf6e3; background: var(--red); }
@@ -178,10 +232,10 @@ body.voice-on #editor-wrap { border-radius: 6px; }
 
 .voice-rail {
   position: absolute;
-  top: 40px;
+  top: 46px;
   right: 16px;
   bottom: 84px;
-  width: min(340px, calc((100% - 960px) / 2 - 24px));
+  width: min(340px, calc((100% - var(--focus-width, 960px)) / 2 - 24px));
   min-width: 260px;
   display: flex;
   flex-direction: column;

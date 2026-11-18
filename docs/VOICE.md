@@ -75,30 +75,35 @@ to fix them, at most twice per instruction from the author.
 
 ## 3. What the author sees
 
-The editor, alone and centered — this is how the studio opens (the
-microphone waits for a click; "Show all panes" in ⋯ brings the rest
-back, and is remembered): the REPL, the file tree, the tabs and the
-header's buttons step aside while voice mode is on. Everything else
-appears only while it matters, floating over the margins:
+No fixed layout: the editor, alone and centered (about 105 characters
+wide, near full height), and components that float in when they are used
+(`studio/web/focus.js`, `voice.js`). This is how the studio opens; the
+microphone waits for a click. "Show all panes" in ⋯ brings back the
+classic layout (tree, tabs, REPL), remembered per browser.
 
+- **The bar** above the editor, faint until the mouse comes near: the
+  project (its menu opens or makes others), the files as chips (one file:
+  just its name), **+** for a new module, a double-click on a name to
+  rename it; on the right the check (only when it fails), the properties
+  badge (once there are any), and ▸ Run.
+- **The output**: the REPL, floating, appears when something runs (Run,
+  an evaluation, "run it") or when asked ("show the output", ⋯); ✕ or Esc
+  hides it.
+- **Beside a hovered form**: ▸ evaluates it; REPL opens the prompt, with
+  `(f ` already typed for a function.
 - **The pill**, at the foot: the microphone (red while listening) and one
-  line — what is being heard, then the studio's reply — that fades. While
-  the builder works, what it is doing and a Stop. Type into it to do what
-  speaking does. Behind its ⋯: follow, speak aloud, undo, run the
-  properties, the conversation, leave voice mode.
-- **The file's name**, above the editor; a click lists the others.
+  line — what is being heard, then the reply — that fades. While the
+  builder works, what it is doing and a Stop. Type into it to do what
+  speaking does. Behind ⋯: follow, speak aloud, undo, run the program or
+  the properties, the output, the conversation, show all panes.
 - **Places**, when a navigation finds more than one (a definition and its
   uses, search matches): a card of one line each, grouped by file, so an
   abstraction that spans modules reads as one picture. "next" /
   "previous" step through; it closes on Esc, "close", or when unused.
-- **Properties**: a badge beside the file's name once there are any
-  ("✓ 3 properties"); the list opens by itself only when one starts
-  failing, with the English statement and the counterexample.
+- **Properties**: the list opens by itself only when one starts failing,
+  with the English statement and the counterexample.
 - **Follow**: each builder edit moves the view to the changed lines and
   flashes them, unless the author moved the view in the last 8 seconds.
-- **The conversation** (what was heard, what the router did with it and
-  in how many ms, what was said back) is in the ⋯ menu, or "show the
-  conversation".
 
 ## 4. Properties
 
