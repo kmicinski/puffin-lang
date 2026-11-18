@@ -127,7 +127,7 @@ const lint = createLint({ editor, files });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
-const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), wrap: $("editor-wrap"), column: document.querySelector(".editor-column") });
+const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane") });
 
 const repl = createRepl({
   transcript: $("transcript"),

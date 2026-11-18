@@ -75,22 +75,28 @@ to fix them, at most twice per instruction from the author.
 
 ## 3. What the author sees
 
-- **The dock**, under the editor: the microphone (red while listening),
-  the live caption of what is being heard, the builder's activity
-  ("working · editing machine.puf"), a text box that does what speaking
-  does, and Stop, Undo, Follow, Voice (speak replies aloud).
-- **The Focus lens**, beside the editor: the places the last navigation
-  found — a definition and all its uses, search matches — as excerpts,
-  grouped by file, so an abstraction that spans modules reads as one
-  picture. The editor shows the current one; "next" / "previous" step
-  through; a click jumps.
+The editor, alone and centered: the REPL, the file tree, the tabs and the
+header's buttons step aside while voice mode is on. Everything else
+appears only while it matters, floating over the margins:
+
+- **The pill**, at the foot: the microphone (red while listening) and one
+  line — what is being heard, then the studio's reply — that fades. While
+  the builder works, what it is doing and a Stop. Type into it to do what
+  speaking does. Behind its ⋯: follow, speak aloud, undo, run the
+  properties, the conversation, leave voice mode.
+- **The file's name**, above the editor; a click lists the others.
+- **Places**, when a navigation finds more than one (a definition and its
+  uses, search matches): a card of one line each, grouped by file, so an
+  abstraction that spans modules reads as one picture. "next" /
+  "previous" step through; it closes on Esc, "close", or when unused.
+- **Properties**: a badge beside the file's name once there are any
+  ("✓ 3 properties"); the list opens by itself only when one starts
+  failing, with the English statement and the counterexample.
 - **Follow**: each builder edit moves the view to the changed lines and
-  flashes them, unless the author moved the view themselves in the last
-  8 seconds.
-- **Properties**: every property, its English statement, its status, and
-  any counterexample; a click opens it.
-- **Conversation**: what was heard, what the router did with it (and in
-  how many ms), what the studio and the builder said.
+  flashes them, unless the author moved the view in the last 8 seconds.
+- **The conversation** (what was heard, what the router did with it and
+  in how many ms, what was said back) is in the ⋯ menu, or "show the
+  conversation".
 
 ## 4. Properties
 

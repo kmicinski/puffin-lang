@@ -5,13 +5,20 @@
 // is looking at: the shown file, the cursor, the word under the mouse. The
 // studio routes it (navigate, build, control) and answers with events:
 //   heard / routed / reply   the conversation, spoken replies aloud
-//   focus                    places to look: the lens, the editor moves there
+//   focus                    places to look: the editor moves there
 //   edited                   the builder changed lines: the view follows
 //   activity                 what the builder is doing now
 //   properties               the spec's status
 //   client                   a command for this tab (next, mute, sleep, ...)
 // A few phrases never leave the tab, so they are instant: "line 40",
 // "next", "previous", "back", "stop", "undo", "scroll down".
+//
+// The screen is the editor, alone and centered. Everything else shows only
+// while it matters: the caption while something is being said, the
+// builder's status while it works, the places a search found while there
+// is more than one, the properties once there are any (opened by
+// themselves only when one starts failing). The rest -- the conversation,
+// the toggles -- is behind the ⋯ menu.
 
 import { markdown } from "./markdown.js";
 
@@ -19,6 +26,10 @@ const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
 const USER_HOLD_MS = 8000;
 const HOVER_FRESH_MS = 15000;
+// how long a caption or a reply stays on screen
+const CAPTION_MS = 7000;
+// how long a list of places stays without being used
+const LENS_IDLE_MS = 45000;
 
 function load() {
   try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { return {}; }
@@ -46,7 +57,7 @@ function wordAt(line, column) {
   return line.slice(start, end + 1);
 }
 
-export function createVoice({ editor, files, send, note, button, wrap, column }) {
+export function createVoice({ editor, files, send, note, button, stage }) {
   const saved = load();
   const settings = { speak: saved.speak ?? true, follow: saved.follow ?? true };
   let on = false;
@@ -56,93 +67,143 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
   let lastUserMove = 0;
   let hover = null; // { file, line, word, at }
   let lens = { label: "", targets: [], index: -1 };
+  let lensTimer = 0;
   let backStack = [];
   let properties = { properties: [] };
-  let flashes = [];
+  let failingBefore = new Set();
+  let busy = false;
+  let captionTimer = 0;
 
-  // ---- The panel and the dock -------------------------------------------------
+  // ---- What is on the screen ---------------------------------------------------------
 
-  const panel = el("aside", "voice-panel");
-  panel.id = "voice-panel";
-  panel.hidden = true;
-  const lensBox = el("section", "voice-section voice-lens");
-  const lensHead = el("div", "voice-head");
-  const lensTitle = el("span", "", "Focus");
-  const lensList = el("div", "voice-lens-list");
-  lensHead.append(lensTitle);
-  lensBox.append(lensHead, lensList);
+  // the shown file's name, above the editor; a click lists the others
+  const crumb = el("button", "voice-crumb");
+  crumb.title = "The files (say “open machine.puf”)";
+  const fileList = el("div", "voice-files voice-float");
+  fileList.hidden = true;
+  crumb.addEventListener("click", () => {
+    fileList.hidden = !fileList.hidden;
+    if (!fileList.hidden) renderFiles();
+  });
 
-  const propBox = el("section", "voice-section voice-props");
-  const propHead = el("div", "voice-head");
-  const propTitle = el("span", "", "Properties");
-  const propRun = el("button", "quiet small", "Run");
-  propRun.title = "Run every property (or say “run the properties”)";
-  propRun.addEventListener("click", () => send({ t: "voice-control", command: "run-properties" }));
-  propHead.append(propTitle, propRun);
-  const propList = el("div", "voice-prop-list");
-  propBox.append(propHead, propList);
+  // the properties: a badge once there are any, a list when asked or failing
+  const badge = el("button", "voice-badge");
+  badge.hidden = true;
+  const propCard = el("div", "voice-props voice-float");
+  propCard.hidden = true;
+  badge.addEventListener("click", () => { propCard.hidden = !propCard.hidden; });
 
-  const talkBox = el("section", "voice-section voice-talk");
-  const talkHead = el("div", "voice-head");
-  talkHead.append(el("span", "", "Conversation"));
-  const fresh = el("button", "quiet small", "New");
-  fresh.title = "Forget the builder's conversation and start a new one";
-  fresh.addEventListener("click", () => send({ t: "voice-control", command: "new-conversation" }));
-  talkHead.append(fresh);
+  // the places a search found, when there is more than one
+  const lensCard = el("div", "voice-lens voice-float");
+  lensCard.hidden = true;
+
+  // the conversation, only when asked for
+  const talkCard = el("div", "voice-talk voice-float");
+  talkCard.hidden = true;
   const talkList = el("div", "voice-talk-list");
-  talkBox.append(talkHead, talkList);
-  panel.append(lensBox, propBox, talkBox);
-  wrap.append(panel);
+  const talkHead = el("div", "voice-card-head");
+  const talkClose = el("button", "voice-x", "✕");
+  talkClose.addEventListener("click", () => { talkCard.hidden = true; });
+  talkHead.append(el("span", "", "Conversation"), talkClose);
+  talkCard.append(talkHead, talkList);
 
-  const dock = el("div", "voice-dock");
-  dock.hidden = true;
-  const mic = el("button", "voice-mic", "●");
-  mic.title = "Listening: click to pause (or say “stop listening”)";
+  // the pill at the foot: the microphone, the caption, the builder while it works
+  const pill = el("div", "voice-pill");
+  const mic = el("button", "voice-mic");
   mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
   const caption = el("div", "voice-caption");
-  const activity = el("div", "voice-activity");
   const typed = el("input", "voice-typed");
-  typed.placeholder = "…or type to the studio";
+  typed.placeholder = "Speak, or type here";
   typed.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && typed.value.trim()) {
       utter(typed.value.trim());
       typed.value = "";
     }
+    if (event.key === "Escape") {
+      typed.blur();
+      closeCards();
+    }
     event.stopPropagation();
   });
-  const stopButton = el("button", "small secondary", "Stop");
+  const activity = el("div", "voice-activity");
+  activity.hidden = true;
+  const stopButton = el("button", "voice-stop", "Stop");
+  stopButton.hidden = true;
   stopButton.title = "Stop the builder (say “stop”)";
   stopButton.addEventListener("click", () => control("stop"));
-  const undoButton = el("button", "small secondary", "Undo");
-  undoButton.title = "Undo the builder's last edit (say “undo”)";
-  undoButton.addEventListener("click", () => control("undo"));
-  const followButton = el("button", "small secondary voice-toggle-btn");
-  followButton.addEventListener("click", () => setFollow(!settings.follow));
-  const speakButton = el("button", "small secondary voice-toggle-btn");
-  speakButton.addEventListener("click", () => setSpeak(!settings.speak));
-  dock.append(mic, caption, activity, typed, stopButton, undoButton, followButton, speakButton);
-  column.append(dock);
+  const more = el("button", "voice-more", "⋯");
+  more.title = "More";
+  const menu = el("div", "voice-menu voice-float");
+  menu.hidden = true;
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) renderMenu();
+  });
+  document.addEventListener("click", (event) => {
+    if (!menu.contains(event.target)) menu.hidden = true;
+    if (!fileList.contains(event.target) && event.target !== crumb) fileList.hidden = true;
+  });
+  pill.append(mic, caption, typed, activity, stopButton, more);
 
-  function renderToggles() {
-    followButton.textContent = settings.follow ? "Follow ✓" : "Follow";
-    followButton.title = "Move the view to each edit the builder makes (say “follow” / “don't follow”)";
-    followButton.classList.toggle("on", settings.follow);
-    speakButton.textContent = settings.speak ? "Voice ✓" : "Voice";
-    speakButton.title = "Speak replies aloud (say “mute” / “unmute”)";
-    speakButton.classList.toggle("on", settings.speak);
+  const top = el("div", "voice-top");
+  top.append(crumb, badge);
+  const layer = el("div", "voice-layer");
+  layer.hidden = true;
+  // the right-hand rail: what has accumulated, stacked
+  const rail = el("div", "voice-rail");
+  rail.append(propCard, lensCard, talkCard);
+  layer.append(top, fileList, rail, menu, pill);
+  stage.append(layer);
+
+  function renderMenu() {
+    menu.replaceChildren();
+    const item = (label, action, checked) => {
+      const row = el("button", `voice-menu-item${checked ? " checked" : ""}`, label);
+      row.addEventListener("click", () => { menu.hidden = true; action(); });
+      menu.append(row);
+    };
+    item("Follow the builder's edits", () => setFollow(!settings.follow), settings.follow);
+    item("Speak replies aloud", () => setSpeak(!settings.speak), settings.speak);
+    item("Undo the builder's last edit", () => control("undo"));
+    item("Run the properties", () => control("run-properties"));
+    item("Conversation", () => { talkCard.hidden = false; talkList.scrollTop = talkList.scrollHeight; });
+    item("Start a new conversation", () => control("new-conversation"));
+    item("Leave voice mode", () => toggle(false));
   }
+
   function setFollow(value) {
     settings.follow = value;
     store({ ...load(), follow: value });
-    renderToggles();
   }
   function setSpeak(value) {
     settings.speak = value;
     store({ ...load(), speak: value });
-    if (!value) speechSynthesis?.cancel();
-    renderToggles();
+    if (!value) window.speechSynthesis?.cancel();
   }
-  renderToggles();
+
+  function renderFiles() {
+    fileList.replaceChildren();
+    for (const path of files.paths()) {
+      const row = el("button", `voice-file${path === files.active() ? " current" : ""}`, path);
+      row.addEventListener("click", () => { fileList.hidden = true; lastUserMove = Date.now(); files.open(path); renderCrumb(); });
+      fileList.append(row);
+    }
+  }
+
+  function renderCrumb() {
+    const count = files.paths().length;
+    crumb.textContent = files.active() ?? "";
+    crumb.classList.toggle("many", count > 1);
+  }
+
+  // A line under the editor: what was heard, what came back. It fades.
+  function show(text, kind = "") {
+    caption.textContent = text;
+    caption.className = `voice-caption ${kind}`;
+    clearTimeout(captionTimer);
+    if (text) captionTimer = setTimeout(() => { caption.textContent = ""; caption.className = "voice-caption"; }, CAPTION_MS);
+  }
 
   // ---- The editor: hover, flashes, moving the view --------------------------------
 
@@ -159,6 +220,7 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     // the author's own moves hold the view for a while
     view.onMouseDown(() => { lastUserMove = Date.now(); });
     view.onKeyDown(() => { lastUserMove = Date.now(); });
+    view.onDidChangeModel(() => renderCrumb());
   }
 
   function flash(from, to, className = "voice-flash") {
@@ -168,22 +230,18 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     const last = model.getLineCount();
     const range = new monaco.Range(Math.min(from, last), 1, Math.min(Math.max(to, from), last), 1);
     const ids = model.deltaDecorations([], [{ range, options: { isWholeLine: true, className, linesDecorationsClassName: `${className}-gutter` } }]);
-    flashes.push({ model, ids });
-    setTimeout(() => {
-      model.deltaDecorations(ids, []);
-      flashes = flashes.filter((f) => f.ids !== ids);
-    }, 2600);
+    setTimeout(() => model.deltaDecorations(ids, []), 2600);
   }
 
   function here() {
     return { file: files.active(), line: view?.getPosition()?.lineNumber ?? 1 };
   }
 
-  // Show `file` at `line`, the way the voice does: no keyboard focus taken
-  // from the dock, a flash where it landed.
+  // Show `file` at `line`, with a flash where it landed.
   function go(file, line, to = line, className) {
     if (!files.paths().includes(file)) return note(`no file ${file}`);
     if (files.active() !== file) files.open(file);
+    renderCrumb();
     if (view) {
       view.revealLineInCenter(line);
       view.setPosition({ lineNumber: line, column: 1 });
@@ -193,43 +251,34 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     flash(line, to, className);
   }
 
-  // ---- The lens: the places a focus showed ------------------------------------------
-
-  function excerpt(target) {
-    const text = files.texts()[target.file] ?? "";
-    const lines = text.split("\n");
-    const from = Math.max(1, target.line - 1);
-    const to = Math.min(lines.length, target.line + 2);
-    const out = [];
-    for (let n = from; n <= to; n++) out.push({ n, text: lines[n - 1] ?? "", here: n === target.line });
-    return out;
-  }
+  // ---- The places a search found ----------------------------------------------------------
 
   function renderLens() {
-    lensTitle.textContent = lens.targets.length ? `Focus · ${lens.label} · ${lens.index + 1}/${lens.targets.length}` : "Focus";
-    lensList.replaceChildren();
-    if (!lens.targets.length) {
-      lensList.append(el("div", "hint", "Say “where is eval used”, “show me the definition of step”, “line 40”…"));
-      return;
-    }
-    // grouped by file: a multi-file abstraction reads as one picture
+    clearTimeout(lensTimer);
+    lensCard.hidden = lens.targets.length < 2;
+    if (lensCard.hidden) return;
+    lensTimer = setTimeout(() => { lensCard.hidden = true; }, LENS_IDLE_MS);
+    lensCard.replaceChildren();
+    const head = el("div", "voice-card-head");
+    const close = el("button", "voice-x", "✕");
+    close.title = "Close (Esc)";
+    close.addEventListener("click", () => { lensCard.hidden = true; });
+    head.append(el("span", "", `${lens.label} · ${lens.index + 1} of ${lens.targets.length}`), close);
+    lensCard.append(head);
+    const list = el("div", "voice-lens-list");
     let lastFile = null;
     lens.targets.forEach((target, index) => {
       if (target.file !== lastFile) {
-        lensList.append(el("div", "voice-lens-file", target.file));
+        list.append(el("div", "voice-lens-file", target.file));
         lastFile = target.file;
       }
-      const card = el("button", `voice-lens-card ${target.role ?? ""}${index === lens.index ? " current" : ""}`);
-      for (const line of excerpt(target)) {
-        const row = el("div", `voice-lens-line${line.here ? " here" : ""}`);
-        row.append(el("span", "voice-lens-n", String(line.n)), el("span", "voice-lens-code", line.text));
-        card.append(row);
-      }
-      card.title = `${target.file}:${target.line}${target.role ? ` (${target.role})` : ""}`;
-      card.addEventListener("click", () => step(index - lens.index, true));
-      lensList.append(card);
+      const row = el("button", `voice-lens-row ${target.role ?? ""}${index === lens.index ? " current" : ""}`);
+      row.append(el("span", "voice-lens-n", String(target.line)), el("span", "voice-lens-code", target.text ?? ""));
+      row.addEventListener("click", () => step(index - lens.index, true));
+      list.append(row);
     });
-    lensList.querySelector(".current")?.scrollIntoView({ block: "nearest" });
+    lensCard.append(list, el("div", "voice-card-hint", "“next” · “previous” · “back”"));
+    list.querySelector(".current")?.scrollIntoView({ block: "nearest" });
   }
 
   function focus(label, targets, fromBuilder) {
@@ -239,8 +288,7 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     lens = { label, targets, index: 0 };
     if (!fromBuilder) lastUserMove = Date.now();
     renderLens();
-    const first = targets[0];
-    go(first.file, first.line, first.line, "voice-focus");
+    go(targets[0].file, targets[0].line, targets[0].line, "voice-focus");
   }
 
   function step(delta, user = true) {
@@ -264,34 +312,45 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
 
   function renderProperties() {
     const list = properties.properties ?? [];
-    const passing = list.filter((p) => p.status === "ok").length;
-    propTitle.textContent = list.length ? `Properties · ${passing}/${list.length} pass` : "Properties";
-    propBox.classList.toggle("failing", list.some((p) => p.status !== "ok" && p.status !== "pending"));
-    propList.replaceChildren();
-    if (properties.error) propList.append(el("div", "voice-prop-error", properties.error));
-    if (!list.length) {
-      propList.append(el("div", "hint", "State what the program must do: “it should always…”, “a property: …”"));
-      return;
-    }
+    const failing = list.filter((p) => p.status !== "ok" && p.status !== "pending");
+    badge.hidden = !list.length && !properties.error;
+    badge.className = `voice-badge${failing.length || properties.error ? " bad" : ""}`;
+    badge.textContent = properties.error
+      ? "properties don't run"
+      : failing.length
+        ? `✗ ${failing.length} of ${list.length} ${list.length === 1 ? "property" : "properties"} failing`
+        : `✓ ${list.length} ${list.length === 1 ? "property" : "properties"}`;
+    badge.title = "The properties (say “run the properties”)";
+    propCard.replaceChildren();
+    const head = el("div", "voice-card-head");
+    const close = el("button", "voice-x", "✕");
+    close.addEventListener("click", () => { propCard.hidden = true; });
+    head.append(el("span", "", "Properties"), close);
+    propCard.append(head);
+    if (properties.error) propCard.append(el("div", "voice-prop-error", properties.error));
     for (const property of list) {
       const row = el("button", `voice-prop ${property.status}`);
       const mark = { ok: "✓", fail: "✗", crashed: "!", "not-run": "·", pending: "…" }[property.status] ?? "?";
-      const top = el("span", "voice-prop-top");
-      top.append(el("span", "voice-prop-mark", mark), el("span", "voice-prop-name", property.name));
-      row.append(top);
-      if (property.statement) row.append(el("span", "voice-prop-statement", property.statement));
+      const line = el("span", "voice-prop-top");
+      line.append(el("span", "voice-prop-mark", mark), el("span", "voice-prop-text", property.statement || property.name));
+      row.append(line);
       if (property.detail && property.status !== "ok") row.append(el("span", "voice-prop-detail", property.detail));
-      row.title = `${property.status}${property.detail ? `: ${property.detail}` : ""}`;
+      row.title = property.name;
       row.addEventListener("click", () => property.line && go("properties.puf", property.line));
-      propList.append(row);
+      propCard.append(row);
     }
+    // open by itself only when something starts failing
+    const now = new Set(failing.map((p) => p.name));
+    if ([...now].some((name) => !failingBefore.has(name)) || (properties.error && !failingBefore.has("#error"))) propCard.hidden = false;
+    if (!failing.length && !properties.error) propCard.hidden = true;
+    failingBefore = properties.error ? new Set([...now, "#error"]) : now;
   }
 
-  // ---- The conversation ----------------------------------------------------------------
+  // ---- The conversation (behind ⋯) -------------------------------------------------------
 
-  function say(kind, text, extra) {
+  function log(kind, text, extra) {
     const row = el("div", `voice-line ${kind}`);
-    const who = { author: "you", studio: "studio", builder: "builder", error: "!", local: "you", routed: "" }[kind] ?? "";
+    const who = { author: "you", studio: "studio", builder: "builder", error: "!", local: "you" }[kind] ?? "";
     if (who) row.append(el("span", "voice-who", who));
     const body = el(kind === "builder" ? "div" : "span", "voice-text");
     // the builder writes Markdown (names in backticks, short lists)
@@ -320,24 +379,31 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
 
   function renderActivity(a) {
     const state = a?.state ?? "idle";
+    busy = state !== "idle";
+    activity.hidden = !busy;
+    stopButton.hidden = !busy;
+    const words = { starting: "starting", thinking: "thinking", working: "working", talking: "writing", queued: "queued", redirecting: "redirecting" };
+    activity.textContent = a?.text || words[state] || state;
     activity.className = `voice-activity ${state}`;
-    const words = { idle: "builder idle", starting: "starting", thinking: "thinking", working: "working", talking: "writing", queued: "queued", redirecting: "redirecting" };
-    activity.textContent = [words[state] ?? state, a?.text].filter(Boolean).join(" · ");
-    stopButton.disabled = state === "idle";
   }
 
   // ---- Listening ---------------------------------------------------------------------------
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+  function renderMic() {
+    mic.classList.toggle("live", listening);
+    mic.title = listening ? "Listening — click to pause (or say “stop listening”)" : "Paused — click to listen";
+  }
+
   function startListening() {
     if (!Recognition) {
-      caption.textContent = "This browser has no speech recognition (use Chrome, Edge or Safari) — type below instead.";
+      show("No speech recognition in this browser (Chrome, Edge or Safari have it): type instead.", "quiet");
+      typed.focus();
       return;
     }
     listening = true;
-    mic.classList.add("live");
-    mic.title = "Listening: click to pause (or say “stop listening”)";
+    renderMic();
     if (!recognition) {
       recognition = new Recognition();
       recognition.continuous = true;
@@ -350,13 +416,12 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
           if (result.isFinal) utter(result[0].transcript.trim());
           else interim += result[0].transcript;
         }
-        caption.textContent = interim;
-        caption.classList.toggle("interim", Boolean(interim));
+        if (interim) show(interim, "interim");
       };
       recognition.onerror = (event) => {
         if (event.error === "not-allowed" || event.error === "service-not-allowed") {
           stopListening();
-          caption.textContent = "The microphone is blocked: allow it for this site, then click ●.";
+          show("The microphone is blocked: allow it for this site, then click the dot.", "bad");
         }
       };
       // recognizers stop on silence: start again while listening
@@ -372,10 +437,8 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
 
   function stopListening() {
     listening = false;
-    mic.classList.remove("live");
-    mic.title = "Paused: click to listen";
+    renderMic();
     recognition?.abort();
-    caption.textContent = "";
   }
 
   // ---- An utterance ---------------------------------------------------------------------
@@ -403,6 +466,9 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     if (/^(stop listening|go to sleep|sleep)$/.test(said)) return stopListening(), true;
     if (/^(mute|be quiet|quiet)$/.test(said)) return setSpeak(false), true;
     if (/^(unmute|talk to me)$/.test(said)) return setSpeak(true), true;
+    if (/^(close|close that|dismiss|clear)$/.test(said)) return closeCards(), true;
+    if (/^(show (the )?conversation|what did you say)$/.test(said)) return (talkCard.hidden = false), true;
+    if (/^(show (the )?properties)$/.test(said)) return (propCard.hidden = false), true;
     m = said.match(/^scroll (up|down)$/);
     if (m && view) {
       const lines = view.getVisibleRanges()[0];
@@ -412,6 +478,10 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
       return true;
     }
     return false;
+  }
+
+  function closeCards() {
+    for (const card of [lensCard, propCard, talkCard, menu, fileList]) card.hidden = true;
   }
 
   function context() {
@@ -431,8 +501,9 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
 
   function utter(text) {
     if (!text) return;
+    show(text, "heard");
     if (local(text)) {
-      say("local", text, "↵ here");
+      log("local", text, "here");
       return;
     }
     files.flush?.();
@@ -445,12 +516,12 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
 
   // ---- The studio's events -------------------------------------------------------------
 
-  function receive(event) {
+  function receive(event, replaying = false) {
     // a tab not in voice mode keeps its view: another tab is the one talking
     if (!on && ["focus", "edited", "client"].includes(event.kind)) return;
     switch (event.kind) {
       case "heard":
-        say("author", event.text);
+        log("author", event.text);
         break;
       case "routed": {
         const did = (event.did ?? []).join(" · ");
@@ -459,14 +530,18 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
         break;
       }
       case "reply":
-        say(event.from === "builder" ? "builder" : "studio", event.text);
-        if (event.speak) speak(event.text);
+        log(event.from === "builder" ? "builder" : "studio", event.text);
+        if (!replaying) {
+          show(event.text, "reply");
+          if (event.speak) speak(event.text);
+        }
         break;
       case "builder":
-        say("builder", event.text);
+        log("builder", event.text);
         break;
       case "error":
-        say("error", event.message);
+        log("error", event.message);
+        if (!replaying) show(event.message, "bad");
         break;
       case "focus":
         focus(event.label, event.targets, event.from === "builder");
@@ -509,13 +584,15 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     talkList.replaceChildren();
     for (const event of state.log ?? []) {
       // the past, without moving the view or speaking again
-      if (["focus", "edited", "client"].includes(event.kind)) continue;
-      receive({ ...event, speak: false });
+      if (["focus", "edited", "client", "properties"].includes(event.kind)) continue;
+      receive(event, true);
     }
     properties = state.properties ?? { properties: [] };
+    // what failed before this tab opened is not news
+    failingBefore = new Set((properties.properties ?? []).filter((p) => p.status !== "ok").map((p) => p.name));
     renderProperties();
     renderActivity(state.activity);
-    if (state.unavailable) say("error", state.unavailable);
+    if (state.unavailable) show(state.unavailable, "bad");
   }
 
   // ---- On and off ----------------------------------------------------------------------
@@ -523,19 +600,20 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
   function toggle(value = !on) {
     on = value;
     document.body.classList.toggle("voice-on", on);
-    panel.hidden = !on;
-    dock.hidden = !on;
+    layer.hidden = !on;
     button.classList.toggle("on", on);
     store({ ...load(), on });
     if (on) {
+      renderCrumb();
       send({ t: "voice-state" });
-      renderLens();
       startListening();
     } else {
       stopListening();
-      speechSynthesis?.cancel();
+      closeCards();
+      window.speechSynthesis?.cancel();
     }
-    view?.layout();
+    // the editor's box changed: let it measure again
+    setTimeout(() => view?.layout(), 0);
   }
 
   button.addEventListener("click", () => toggle());
@@ -543,12 +621,15 @@ export function createVoice({ editor, files, send, note, button, wrap, column })
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "v") {
       event.preventDefault();
       toggle();
+    } else if (on && event.key === "Escape") {
+      closeCards();
     }
   });
+  window.addEventListener("resize", () => on && view?.layout());
   if (saved.on) setTimeout(() => toggle(true), 0);
 
   return {
-    receive,
+    receive: (event) => receive(event),
     receiveState,
     toggle,
     on: () => on,
