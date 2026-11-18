@@ -1,0 +1,164 @@
+/* Voice mode (voice.js): the dock under the editor, the panel beside it. */
+
+#voice-toggle.on { background: var(--violet); color: #fdf6e3; border-color: var(--violet); }
+
+.voice-dock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--violet-tint);
+  flex: none;
+  min-height: 40px;
+}
+.voice-mic {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--muted);
+  font-size: 14px;
+  flex: none;
+}
+.voice-mic.live { color: #fdf6e3; background: var(--red); border-color: var(--red); animation: voice-pulse 1.6s ease-in-out infinite; }
+@keyframes voice-pulse { 50% { box-shadow: 0 0 0 5px rgba(220, 50, 47, 0.18); } }
+.voice-caption {
+  flex: 1;
+  min-width: 80px;
+  font-size: 14px;
+  color: var(--strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-caption.interim { color: var(--muted); font-style: italic; }
+.voice-activity {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 0 1 auto;
+  min-width: 90px;
+  max-width: 40%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 10px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+}
+.voice-activity:not(.idle) { color: var(--violet); border-color: var(--violet); }
+.voice-activity.thinking, .voice-activity.working, .voice-activity.starting { animation: voice-busy 1.4s ease-in-out infinite; }
+@keyframes voice-busy { 50% { opacity: 0.55; } }
+.voice-typed {
+  width: 200px;
+  font: 13px var(--sans);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--base3);
+  color: var(--text);
+}
+.voice-dock button { white-space: nowrap; flex: none; }
+.voice-toggle-btn.on { color: var(--violet); border-color: var(--violet); }
+
+/* voice mode is about the code: the REPL gives up room to it */
+body.voice-on .right-pane { flex: 1 1 24%; min-width: 260px; }
+body.voice-on .editor-pane { flex: 4 1 76%; }
+
+.voice-panel {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--base3);
+  font-size: 12px;
+  min-height: 0;
+}
+.voice-section { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+.voice-lens { flex: 3; }
+.voice-props { flex: 2; }
+.voice-talk { flex: 3; border-bottom: none; }
+.voice-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: var(--strong);
+  padding: 4px 8px;
+  background: var(--base2);
+  flex: none;
+}
+.voice-lens-list, .voice-prop-list, .voice-talk-list { overflow: auto; padding: 4px 6px; flex: 1; min-height: 0; }
+.voice-section .hint { padding: 6px 2px; }
+
+.voice-lens-file { font: 600 11px var(--mono); color: var(--blue); padding: 6px 2px 2px; }
+.voice-lens-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 3px 4px;
+  margin: 2px 0;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--base3);
+  font: 11.5px/1.45 var(--mono);
+  font-weight: 400;
+  color: var(--muted);
+  cursor: pointer;
+}
+.voice-lens-card.definition { border-left: 3px solid var(--blue); }
+.voice-lens-card.current { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet); background: var(--violet-tint); }
+.voice-lens-line { display: flex; gap: 6px; white-space: pre; overflow: hidden; }
+.voice-lens-line.here { color: var(--strong); }
+.voice-lens-n { width: 28px; text-align: right; color: var(--base1); flex: none; }
+.voice-lens-code { overflow: hidden; text-overflow: ellipsis; }
+
+.voice-props.failing .voice-head { color: var(--red); }
+.voice-prop {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 3px 4px;
+  margin: 1px 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.voice-prop:hover { background: var(--base2); }
+.voice-prop-top { display: flex; gap: 6px; align-items: baseline; }
+.voice-prop-mark { width: 12px; font-weight: 700; }
+.voice-prop.ok .voice-prop-mark { color: var(--green); }
+.voice-prop.fail .voice-prop-mark, .voice-prop.crashed .voice-prop-mark { color: var(--red); }
+.voice-prop-name { font: 600 11.5px var(--mono); color: var(--strong); }
+.voice-prop-statement { padding-left: 18px; color: var(--text); }
+.voice-prop-detail { padding-left: 18px; font: 11px var(--mono); color: var(--red); white-space: pre-wrap; word-break: break-word; }
+.voice-prop-error { color: var(--red); font: 11px var(--mono); white-space: pre-wrap; padding: 4px 2px; }
+
+.voice-line { padding: 3px 2px; line-height: 1.4; }
+.voice-who { display: inline-block; min-width: 50px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+.voice-line.author .voice-text, .voice-line.local .voice-text { color: var(--strong); font-weight: 600; }
+.voice-line.studio .voice-who { color: var(--cyan); }
+.voice-line.builder .voice-who { color: var(--violet); }
+.voice-line.builder .voice-text { margin: 1px 0 0 0; }
+.voice-line.builder .voice-text p { margin: 0 0 4px; }
+.voice-line.builder .voice-text ul, .voice-line.builder .voice-text ol { margin: 2px 0 4px; padding-left: 18px; }
+.voice-line.builder .voice-text code { font: 11.5px var(--mono); background: var(--base2); padding: 0 3px; border-radius: 3px; }
+.voice-line.error { color: var(--red); }
+.voice-extra { display: block; margin-left: 54px; font-size: 10.5px; color: var(--muted); }
+
+/* where the voice moved the view, and where the builder just wrote */
+.voice-focus { background: rgba(108, 113, 196, 0.16); transition: background 2s; }
+.voice-focus-gutter { border-left: 3px solid var(--violet); }
+.voice-edit { background: rgba(133, 153, 0, 0.16); }
+.voice-edit-gutter { border-left: 3px solid var(--green); }
+.voice-flash { background: rgba(181, 137, 0, 0.14); }
+.voice-flash-gutter { border-left: 3px solid var(--yellow); }

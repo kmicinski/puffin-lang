@@ -212,6 +212,9 @@ pub enum Event {
     Journal,
     /// The studio now serves another project: reload.
     Reopen,
+    /// Voice mode (voice.rs): what was heard, where to look, what the
+    /// builder is doing.
+    Voice(crate::voice::VoiceEvent),
 }
 
 /// Why an edit was not taken.
@@ -327,6 +330,8 @@ pub struct Studio {
     /// with `--trace` for it (trace.rs).
     pub(crate) traced: Mutex<BTreeSet<String>>,
     pub agent: Agent,
+    /// Voice mode: the router, the builder, the properties (voice.rs).
+    pub voice: crate::voice::Voice,
     port: OnceLock<u16>,
 }
 
@@ -386,6 +391,7 @@ impl Studio {
             observations_due: Arc::new(Notify::new()),
             traced: Mutex::new(BTreeSet::new()),
             agent: Agent::new(mcp_token),
+            voice: crate::voice::Voice::new(),
             port: OnceLock::new(),
         });
         Ok(studio)
@@ -399,6 +405,7 @@ impl Studio {
         self.watch_proposals();
         self.watch_observations();
         self.watch_journal();
+        self.watch_properties();
         self.record("session", json!({}));
         let studio = self.clone();
         tokio::spawn(async move {

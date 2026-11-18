@@ -114,7 +114,7 @@ assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
-        "tree.js", "projects.js", "replay.js", "gist.js",
+        "tree.js", "projects.js", "replay.js", "gist.js", "voice.js", "voice.css",
 );
 
 fn asset_text(name: &str) -> String {
@@ -271,6 +271,16 @@ enum Request {
     },
     /// Serve the project `name` under the home.
     OpenProject { name: String },
+    /// Voice mode (voice.rs): the author said `text`, seeing `context`.
+    Voice {
+        text: String,
+        #[serde(default)]
+        context: crate::voice::Context,
+    },
+    /// A voice-panel button: stop, undo, run-properties, new-conversation.
+    VoiceControl { command: String },
+    /// What voice mode has said and found so far, for a tab turning it on.
+    VoiceState,
 }
 
 /// Messages for one tab only; everything else is a broadcast `Event`.
@@ -594,6 +604,12 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
             };
             reply(json(&Reply::Asked { thread, message: &message, error }));
         }
+        Request::Voice { text, context } => match studio.voice.unavailable() {
+            Some(why) => notice(&direct, Err(why)),
+            None => studio.hear(text, context),
+        },
+        Request::VoiceControl { command } => studio.voice_control(&command),
+        Request::VoiceState => reply(studio.voice_state().to_string()),
         Request::StopThread { thread } => {
             studio.stop_thread(thread);
         }

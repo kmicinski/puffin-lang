@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod ask;
+pub mod claude_api;
 pub mod facts;
 pub mod holes;
 pub mod knowledge;
@@ -13,6 +14,7 @@ pub mod lane;
 pub mod mcp;
 pub mod pin;
 pub mod project;
+pub mod props;
 pub mod repl;
 pub mod review;
 pub mod session;
@@ -21,6 +23,7 @@ pub mod studio;
 pub mod toolchain;
 pub mod trace;
 pub mod versions;
+pub mod voice;
 pub mod web;
 
 #[cfg(test)]

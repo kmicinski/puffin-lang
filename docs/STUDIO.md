@@ -11,7 +11,8 @@ corpus; `puffin-vm --serve`; the Emacs commands `puffin-assist`
 (C-c C-a) and `puffin-type-at-point` (C-c C-t); and the studio
 (`studio/`, Rust + vanilla JS): editor with structured editing, live
 checks, the assist menu, the live REPL lane, ask mode with checked
-proposals, and per-file versions. §9 lists where the studio differs
+proposals, and per-file versions. Voice mode, an experiment in
+building a program by talking, is docs/VOICE.md. §9 lists where the studio differs
 from this design.
 
 Puffin Studio replaces the console REPL (`src/repl.rkt`, the Racket

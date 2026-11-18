@@ -284,6 +284,12 @@ pub fn mentions(text: &str) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// Every atom of `text` (outside comments and strings), as byte ranges:
+/// where a name is written, for voice mode's "usages of foo" (voice.rs).
+pub fn atoms(text: &str) -> Vec<(usize, usize)> {
+    tokens(text).into_iter().filter(|(kind, ..)| matches!(kind, Token::Atom)).map(|(_, start, end)| (start, end)).collect()
+}
+
 /// A function define's parameters: `f` and `a`, `b` of `(define (f a [b :
 /// T]) ...)`, each with its byte offset in `text`. None for any other form.
 pub fn params(text: &str, form: &Form) -> Option<(String, Vec<(String, usize)>)> {

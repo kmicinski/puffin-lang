@@ -1,0 +1,71 @@
+;; prop.puf -- property-based testing for Puffin, kept by Puffin Studio
+;; (voice mode writes it beside properties.puf; edits here are overwritten).
+;;
+;; A generator is a function of a size: (lambda (size) value). A property
+;; is (for-all (list GEN ...) PREDICATE): check-property draws arguments
+;; from the generators at growing sizes, so the first counterexample
+;; found tends to be a small one, and prints one line per property:
+;;   #prop NAME ok TRIALS
+;;   #prop NAME fail TRIAL (ARG ...)
+(provide check-property check-example for-all prop-trials
+         random-int gen-int gen-nat gen-small gen-bool gen-symbol gen-string
+         gen-list gen-nonempty-list gen-vector gen-pair gen-one-of gen-elements
+         gen-map gen-bind gen-const gen-sized gen-frequency)
+
+(define prop-trials 100)
+(define prop-seed 20261118)
+
+;; a uniform-enough integer in [0, n)
+(define (random-int n)
+  (set! prop-seed (modulo (+ (* prop-seed 1103515245) 12345) 2147483648))
+  (if (<= n 0) 0 (modulo (arithmetic-shift prop-seed -7) n)))
+
+(define (gen-int size) (- (random-int (+ (* 2 size) 1)) size))
+(define (gen-nat size) (random-int (+ size 1)))
+(define (gen-small size) (random-int 10))
+(define (gen-bool size) (eq? (random-int 2) 0))
+(define (gen-symbol size) (list-ref '(a b c d x y z f g h) (random-int 10)))
+(define (gen-string size)
+  (let loop ([n (random-int (+ size 1))] [acc ""])
+    (if (eq? n 0) acc (loop (- n 1) (string-append acc (list-ref '("a" "b" "c" "x" "y" " ") (random-int 6)))))))
+(define (gen-const v) (lambda (size) v))
+(define (gen-list g)
+  (lambda (size)
+    (let loop ([n (random-int (+ size 1))] [acc '()])
+      (if (eq? n 0) acc (loop (- n 1) (cons (g size) acc))))))
+(define (gen-nonempty-list g)
+  (lambda (size) (cons (g size) ((gen-list g) size))))
+(define (gen-vector g) (lambda (size) (list->vector ((gen-list g) size))))
+(define (gen-pair a b) (lambda (size) (cons (a size) (b size))))
+(define (gen-one-of . gs) (lambda (size) ((list-ref gs (random-int (length gs))) size)))
+(define (gen-elements xs) (lambda (size) (list-ref xs (random-int (length xs)))))
+(define (gen-map f g) (lambda (size) (f (g size))))
+;; draw from g, then from the generator (k value) makes
+(define (gen-bind g k) (lambda (size) ((k (g size)) size)))
+;; a generator for recursive data: (k smaller-size) at a shrinking size
+(define (gen-sized k) (lambda (size) ((k size) size)))
+;; weighted choice: (gen-frequency (list (cons 3 g1) (cons 1 g2)))
+(define (gen-frequency pairs)
+  (lambda (size)
+    (let pick ([n (random-int (foldl + 0 (map car pairs)))] [ps pairs])
+      (if (or (null? (cdr ps)) (< n (car (car ps))))
+          ((cdr (car ps)) size)
+          (pick (- n (car (car ps))) (cdr ps))))))
+
+(define (for-all gens pred) (cons gens pred))
+
+(define (check-property name spec)
+  (display "#prop-start ") (display name) (newline)
+  (let loop ([trial 0])
+    (if (>= trial prop-trials)
+        (begin (display "#prop ") (display name) (display " ok ") (display prop-trials) (newline))
+        (let* ([size (+ 1 (quotient (* trial 30) prop-trials))]
+               [args (map (lambda (g) (g size)) (car spec))])
+          (if (apply (cdr spec) args)
+              (loop (+ trial 1))
+              (begin (display "#prop ") (display name) (display " fail ") (display trial) (display " ")
+                     (display (value->string args)) (newline)))))))
+
+;; a single example: (check-example 'name (equal? (f 1) 2))
+(define (check-example name ok)
+  (display "#prop ") (display name) (display (if ok " ok 1" " fail 0 ()")) (newline))

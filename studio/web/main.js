@@ -19,6 +19,7 @@ import { createSession, functionDefine } from "./session.js";
 import { createHoles } from "./holes.js";
 import { createLint } from "./lint.js";
 import { createRename } from "./rename.js";
+import { createVoice } from "./voice.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -126,6 +127,7 @@ const lint = createLint({ editor, files });
 holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
+const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), wrap: $("editor-wrap"), column: document.querySelector(".editor-column") });
 
 const repl = createRepl({
   transcript: $("transcript"),
@@ -420,6 +422,8 @@ const handlers = {
   projects: projects.receive.projects,
   reopen: projects.receive.reopen,
   notice: ({ message }) => note(message),
+  voice: (event) => voice.receive(event),
+  "voice-state": (state) => voice.receiveState(state),
 };
 
 function connect() {
