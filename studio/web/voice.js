@@ -28,6 +28,8 @@ const USER_HOLD_MS = 8000;
 const HOVER_FRESH_MS = 15000;
 // how long a caption or a reply stays on screen
 const CAPTION_MS = 7000;
+// replies are read, not heard: they stay longer
+const REPLY_MS = 15000;
 // how long a list of places stays without being used
 const LENS_IDLE_MS = 45000;
 
@@ -59,7 +61,9 @@ function wordAt(line, column) {
 
 export function createVoice({ editor, files, send, note, button, stage, layout, run }) {
   const saved = load();
-  const settings = { speak: saved.speak ?? true, follow: saved.follow ?? true };
+  // replies are written, not spoken, unless asked for (its own key: an
+  // older `speak` was the old default, on)
+  const settings = { speak: saved.aloud ?? false, follow: saved.follow ?? true };
   let on = false;
   let listening = false;
   let speaking = false;
@@ -174,16 +178,16 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   }
   function setSpeak(value) {
     settings.speak = value;
-    store({ ...load(), speak: value });
+    store({ ...load(), aloud: value });
     if (!value) window.speechSynthesis?.cancel();
   }
 
   // A line under the editor: what was heard, what came back. It fades.
-  function show(text, kind = "") {
+  function show(text, kind = "", ms = CAPTION_MS) {
     caption.textContent = text;
     caption.className = `voice-caption ${kind}`;
     clearTimeout(captionTimer);
-    if (text) captionTimer = setTimeout(() => { caption.textContent = ""; caption.className = "voice-caption"; }, CAPTION_MS);
+    if (text) captionTimer = setTimeout(() => { caption.textContent = ""; caption.className = "voice-caption"; }, ms);
   }
 
   // ---- The editor: hover, flashes, moving the view --------------------------------
@@ -548,7 +552,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       case "reply":
         log(event.from === "builder" ? "builder" : "studio", event.text);
         if (!replaying) {
-          show(event.text, "reply");
+          show(event.text, "reply", REPLY_MS);
           if (event.speak) speak(event.text);
         }
         break;
