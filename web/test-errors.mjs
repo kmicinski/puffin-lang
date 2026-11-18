@@ -16,7 +16,10 @@
 //     host them, but every path in their expected messages would need
 //     rewriting to the virtual /-rooted spellings -- the native
 //     five-route matrix in tools/test-errors.sh already pins those
-//     messages, and the wasm VM runs the same puffincc bytes.
+//     messages, and the wasm VM runs the same puffincc bytes;
+//   * runtime cases that load a C library via `foreign` are SKIPPED:
+//     the browser refuses FFI by design (test-vm-compile pins that
+//     refusal). Compile-time FFI rejections (tc-ffi-*) still run.
 //
 // Path convention: the editor's program is always /main.puf in the
 // browser, so positioned diagnostics say [main.puf:N]; the .expect
@@ -93,7 +96,7 @@ function expectationFor(name, route) {
   return null;
 }
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 for (const name of cases) {
   const src = readFileSync(join(corpusDir, `${name}.puf`), 'utf8');
   const strict = flagsOf(name).includes('strict');
@@ -112,6 +115,14 @@ for (const name of cases) {
     ranNote = 'compile';
   } else {
     route = 'pcc-vm';                    // runtime failure
+    if (/\(foreign\b/.test(src)) {
+      // the browser refuses every foreign library by design (pinned by
+      // test-vm-compile's ffi-refusal case), so an FFI runtime case can't
+      // reach its native blame message here; tools/test-errors.sh owns it
+      skipped++;
+      console.log(`skip ${name} [runtime: FFI, not available in the browser]`);
+      continue;
+    }
     const run = await runUnit({ files: { '/out.pbc': outPbc }, args: ['/out.pbc'] });
     got = run.output.trimEnd();
     ranNote = 'runtime';
@@ -135,5 +146,6 @@ for (const name of cases) {
     console.log(`FAIL ${name} [${ranNote}]:\n  expected: ${JSON.stringify(want)}\n  got:      ${JSON.stringify(got)}`);
   }
 }
-console.log(`\n${pass}/${pass + fail} error-corpus cases match through the wasm VM`);
+console.log(`\n${pass}/${pass + fail} error-corpus cases match through the wasm VM` +
+  (skipped ? ` (${skipped} FFI runtime case(s) skipped)` : ''));
 process.exit(fail ? 1 : 0);
