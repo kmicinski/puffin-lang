@@ -10,6 +10,11 @@
 //   entry arrives) or when asked; ✕ or Esc hides it.
 // - Hovering a top-level form shows a chip beside it: ▸ evaluates the
 //   form, REPL opens the prompt (with `(f ` for a function).
+// - The canvas: a project with no code yet shows no editor at all, only
+//   the pill, centered, waiting for a description; the editor fades in
+//   when the first code lands. A new visit (a tab that has not been here)
+//   to a project that has code starts on the canvas too, with a way back
+//   to that project: the first description then makes a new project.
 //
 // The header's own pieces (project menu, check, lane, Stop) are moved into
 // the bar while focused, and put back when the full layout returns.
@@ -28,10 +33,27 @@ const el = (tag, className, text) => {
   return node;
 };
 
+// A tab that has been here before (this session): it reloads into its work.
+const SEEN = "puffin-tab";
+function firstVisit() {
+  try {
+    const seen = sessionStorage.getItem(SEEN);
+    sessionStorage.setItem(SEEN, "1");
+    return !seen;
+  } catch {
+    return false;
+  }
+}
+
+// Whether a file holds code: anything but comments and blank space.
+const hasCode = (text) => text.split("\n").some((line) => line.replace(/;.*$/, "").trim() !== "");
+
 export function createFocus({ editor, files, run, evalAt, stage }) {
   const view = editor.raw?.editor;
   const monaco = editor.raw?.monaco;
   let on = false;
+  // a new visit: the canvas, even over a project with code, until left
+  let fresh = firstVisit();
   const moved = []; // [node, parent, nextSibling]
 
   // ---- The top bar ---------------------------------------------------------------
@@ -199,6 +221,38 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     view.layout();
   }
 
+  // ---- The canvas ----------------------------------------------------------------------
+
+  const away = el("button", "focus-continue");
+  away.addEventListener("click", () => { fresh = false; update(); });
+  stage.append(away);
+
+  function empty() {
+    return !Object.entries(files.texts()).some(([path, text]) => !HIDDEN.has(path) && hasCode(text ?? ""));
+  }
+
+  // "new": a description makes a new project; "here": it builds in this
+  // one; null: not on the canvas
+  function canvasMode() {
+    if (!on) return null;
+    if (empty()) return "here";
+    return fresh ? "new" : null;
+  }
+
+  // while the canvas shows, look again each second: code can arrive by
+  // any of several events, in any order
+  setInterval(() => { if (document.body.classList.contains("focus-canvas")) update(); }, 1000);
+
+  function update() {
+    const mode = canvasMode();
+    document.body.classList.toggle("focus-canvas", Boolean(mode));
+    const project = document.getElementById("project")?.textContent.trim();
+    away.hidden = mode !== "new";
+    away.textContent = `or continue ${project || "the open project"} →`;
+    if (!mode) setTimeout(() => view?.layout(), 0);
+    api.onCanvas?.(mode);
+  }
+
   // ---- On and off --------------------------------------------------------------------
 
   // the header's pieces that live in the bar while focused
@@ -216,6 +270,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
       else right.insertBefore(node, slot);
     }
     renderFiles();
+    update();
     setTimeout(measure, 0);
   }
 
@@ -227,6 +282,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     for (const [node, parent, next] of moved.reverse()) parent.insertBefore(node, next);
     moved.length = 0;
     showOutput(false);
+    document.body.classList.remove("focus-canvas");
     document.body.style.removeProperty("--focus-width");
     setTimeout(() => view?.layout(), 0);
   }
@@ -236,15 +292,24 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   });
   window.addEventListener("resize", () => on && setTimeout(() => view?.layout(), 0));
 
-  return {
+  const api = {
+    onCanvas: null,
     enter,
     leave,
     slot,
     showOutput,
     // a transcript entry began: something ran, so the output shows
     entry() { if (on) showOutput(true); },
-    // the files or the shown file changed
-    changed() { if (on && !editing) renderFiles(); },
+    // the files, their text, or the shown file changed
+    changed() {
+      if (!on) return;
+      if (!editing) renderFiles();
+      update();
+    },
+    canvasMode,
+    // the author asked to build something new: off the canvas once it lands
+    started() { fresh = false; },
     on: () => on,
   };
+  return api;
 }

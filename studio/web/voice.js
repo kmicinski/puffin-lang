@@ -103,7 +103,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
   const caption = el("div", "voice-caption");
   const typed = el("input", "voice-typed");
-  typed.placeholder = "Speak, or type here";
+  typed.placeholder = "Describe what you want to build";
   typed.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && typed.value.trim()) {
       utter(typed.value.trim());
@@ -137,6 +137,11 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
 
   // the badge lives in the focused layout's bar (focus.js)
   layout.slot.append(badge);
+  // on the canvas the pill asks for a description; after, for anything
+  layout.onCanvas = (mode) => {
+    const talk = listening ? "" : " (click ○ to talk)";
+    typed.placeholder = mode ? `Describe what you want to build${talk}` : `Speak, or type here${talk}`;
+  };
   const layer = el("div", "voice-layer");
   layer.hidden = true;
   // the right-hand rail: what has accumulated, stacked
@@ -367,6 +372,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
 
   function renderMic() {
     store({ ...load(), listening });
+    layout.onCanvas?.(layout.canvasMode());
     mic.classList.toggle("live", listening);
     mic.title = listening ? "Listening — click to pause (or say “stop listening”)" : "Paused — click to listen";
   }
@@ -477,11 +483,43 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     };
   }
 
+  // A name for a project from what it was described as: its few telling
+  // words ("scaffold me a CESK star machine" -> cesk-star-machine).
+  const FILLER = new Set("a an the me my us we i you it this that these please can could would will should let lets let's make build write create scaffold start set up give implement implements implementing project program app application thing something which with from for of in on to and or by using use like want need some simple small little new called named".split(" "));
+  function projectName(text) {
+    const words = text.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((w) => w && !FILLER.has(w));
+    return words.slice(0, 3).join("-").slice(0, 32) || null;
+  }
+
+  // the description that is making a new project, said again once it is open
+  const PENDING = "puffin-voice-pending";
+  let naming = null; // the name asked for, while the studio makes the project
+
+  function startProject(text) {
+    try { sessionStorage.setItem(PENDING, text); } catch { /* no session storage: it is said again by hand */ }
+    naming = projectName(text);
+    layout.started();
+    show("Starting a new project…", "reply");
+    send({ t: "new-project", name: naming });
+  }
+
+  // a name already taken: a random one instead
+  function notice(message) {
+    if (naming && /exists already/.test(message)) {
+      naming = null;
+      send({ t: "new-project", name: null });
+    }
+  }
+
   function utter(text) {
     if (!text) return;
     show(text, "heard");
     if (local(text)) {
       log("local", text, "here");
+      return;
+    }
+    if (layout.canvasMode() === "new") {
+      startProject(text);
       return;
     }
     files.flush?.();
@@ -526,6 +564,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
         break;
       case "edited":
         if (!event.file) break;
+        layout.changed();
         if (settings.follow && Date.now() - lastUserMove > USER_HOLD_MS) go(event.file, event.from, event.to, "voice-edit");
         else if (files.active() === event.file) flash(event.from, event.to, "voice-edit");
         break;
@@ -574,6 +613,16 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     renderProperties();
     renderActivity(state.activity);
     if (state.unavailable) show(state.unavailable, "bad");
+    // the description that made this project: now it can be built
+    let pending = null;
+    try {
+      pending = sessionStorage.getItem(PENDING);
+      sessionStorage.removeItem(PENDING);
+    } catch { /* none */ }
+    if (pending) {
+      files.flush?.();
+      send({ t: "voice", text: pending, context: context() });
+    }
   }
 
   // ---- On and off ----------------------------------------------------------------------
@@ -592,7 +641,6 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       layout.enter();
       send({ t: "voice-state" });
       if (listen) startListening();
-      else show("Click the dot to start listening.", "quiet");
     } else {
       stopListening();
       closeCards();
@@ -619,6 +667,9 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
 
   return {
     receive: (event) => receive(event),
+    notice,
+    // the socket is (again) open: what voice mode has said so far
+    connected() { if (on) send({ t: "voice-state" }); },
     receiveState,
     toggle,
     on: () => on,

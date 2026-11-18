@@ -84,6 +84,7 @@ const files = createFiles({
   onTexts: () => {
     proposals?.refresh();
     session?.changed();
+    focus?.changed();
   },
   onFiles: () => {
     tree?.changed();
@@ -361,6 +362,8 @@ function renderConnection(on) {
 
 const handlers = {
   init(snapshot) {
+    // (re)connected: voice mode asks for its state now that it can
+    setTimeout(() => voice.connected(), 0);
     document.title = `${snapshot.project} — Puffin`;
     $("project").textContent = snapshot.project;
     $("project").title = snapshot.directory;
@@ -432,7 +435,10 @@ const handlers = {
   "files-at": replay.receive["files-at"],
   projects: projects.receive.projects,
   reopen: projects.receive.reopen,
-  notice: ({ message }) => note(message),
+  notice: ({ message }) => {
+    note(message);
+    voice.notice(message);
+  },
   voice: (event) => voice.receive(event),
   "voice-state": (state) => voice.receiveState(state),
 };

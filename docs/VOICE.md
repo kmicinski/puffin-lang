@@ -81,6 +81,13 @@ wide, near full height), and components that float in when they are used
 microphone waits for a click. "Show all panes" in ⋯ brings back the
 classic layout (tree, tabs, REPL), remembered per browser.
 
+- **The canvas**: a project with no code yet shows no editor at all —
+  only the pill, centered, asking what to build; the editor fades in when
+  the first code lands. A new visit (a browser tab new to the studio)
+  starts there too, over a project that has code, with "or continue
+  PROJECT"; the first description then makes a new project named from
+  its words (`cesk-star-machine`), and is given to the builder there.
+  Reloading a tab returns to its work.
 - **The bar** above the editor, faint until the mouse comes near: the
   project (its menu opens or makes others), the files as chips (one file:
   just its name), **+** for a new module, a double-click on a name to

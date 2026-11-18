@@ -324,3 +324,33 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 .voice-edit-gutter { border-left: 3px solid var(--green); }
 .voice-flash { background: rgba(181, 137, 0, 0.14); }
 .voice-flash-gutter { border-left: 3px solid var(--yellow); }
+
+/* ---- The canvas: nothing yet but the question (focus.js) ------------------- */
+
+.editor-column { transition: opacity 0.5s ease; }
+body.focus-canvas .editor-column { opacity: 0; pointer-events: none; }
+body.focus-canvas .focus-files,
+body.focus-canvas .focus-right,
+body.focus-canvas .focus-chip { visibility: hidden; }
+.voice-pill { transition: bottom 0.5s ease, width 0.5s ease, padding 0.5s ease; }
+body.focus-canvas .voice-pill {
+  bottom: calc(50% - 28px);
+  width: min(640px, calc(100% - 32px));
+  padding: 12px 14px 12px 18px;
+  border-radius: 30px;
+}
+body.focus-canvas .voice-typed, body.focus-canvas .voice-caption { font-size: 17px; }
+.focus-continue {
+  position: absolute;
+  top: calc(50% + 46px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: none;
+  background: transparent;
+  color: var(--base1);
+  font-size: 12.5px;
+  font-weight: 400;
+  z-index: 31;
+}
+.focus-continue:hover { color: var(--strong); }
+body:not(.focus-canvas) .focus-continue { display: none; }
