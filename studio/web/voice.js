@@ -585,7 +585,9 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     document.body.classList.toggle("voice-on", on);
     layer.hidden = !on;
     button.classList.toggle("on", on);
-    store({ ...load(), on });
+    // remembered under its own name: an older "voice off" (`on`) predates
+    // the focused layout being the default, and does not count
+    store({ ...load(), layout: on ? "focus" : "panes" });
     if (on) {
       layout.enter();
       send({ t: "voice-state" });
@@ -613,7 +615,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   window.addEventListener("resize", () => on && view?.layout());
   // the focused editor is how the studio opens; "Show all panes" in ⋯
   // (or the 🎙 button) brings the rest back, and is remembered
-  if (saved.on ?? true) setTimeout(() => toggle(true, saved.listening ?? false), 0);
+  if (saved.layout !== "panes") setTimeout(() => toggle(true, saved.listening ?? false), 0);
 
   return {
     receive: (event) => receive(event),
