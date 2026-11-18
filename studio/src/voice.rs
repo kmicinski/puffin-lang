@@ -41,7 +41,7 @@ pub const VOICE_HEADER: &str = "x-studio-voice";
 /// sees the program as it is.
 pub const VOICE_THREAD: u32 = u32::MAX - 1;
 /// How many voice events a tab that opens later is shown.
-const LOG: usize = 200;
+const LOG: usize = 1000;
 /// How many lines of conversation the router and builder see.
 const CONVERSATION: usize = 12;
 /// How many times a builder is sent back on its own to fix failing
@@ -101,6 +101,11 @@ struct State {
     /// The author said stop: the run in flight ends, the queue empties.
     stopped: bool,
     auto_fixes: u32,
+    /// The builder's run in flight, numbered from 1 (0: none yet); every
+    /// step and edit it makes carries it, so the trace groups them.
+    turn: u64,
+    /// Each tool call in flight: its id -> its tool's name.
+    calls: std::collections::HashMap<String, String>,
     /// What the builder is doing, as the tabs show it.
     activity: Value,
     log: VecDeque<Value>,
@@ -481,7 +486,16 @@ impl Studio {
         }
         let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{BUILDER}", crate::knowledge::reference(&self.root));
         let mut resume = self.voice.state().session.clone();
+        let turn = {
+            let mut state = self.voice.state();
+            state.turn += 1;
+            state.calls.clear();
+            state.turn
+        };
+        let began = Instant::now();
+        self.voice_event("turn", json!({ "turn": turn, "instructions": batch, "interrupted": interrupted }));
         self.set_activity(json!({ "state": "starting", "text": crate::agent::title_of(batch.last().map(String::as_str).unwrap_or("")) }));
+        let mut outcome = "done";
         loop {
             let mut args: Vec<String> = vec![
                 "-p".into(), prompt.clone(),
@@ -504,6 +518,9 @@ impl Studio {
             }
             let mut child = match Command::new("claude")
                 .args(&args)
+                // every tool loaded up front: deferred behind tool search, a
+                // direct call to one fails ("No such tool available")
+                .env("ENABLE_TOOL_SEARCH", "false")
                 .current_dir(&self.directory)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -543,6 +560,7 @@ impl Studio {
                 (state.interrupted, state.stopped)
             };
             if cut || stopped {
+                outcome = if stopped { "stopped" } else { "interrupted" };
                 break;
             }
             let failed = !got_result && !status.is_some_and(|status| status.success());
@@ -556,12 +574,14 @@ impl Studio {
                 continue;
             }
             if failed {
+                outcome = "failed";
                 let last = stderr_text.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("no output").to_owned();
                 self.voice_event("error", json!({ "message": format!("the builder stopped: {last}") }));
             }
             break;
         }
         let _ = std::fs::remove_file(&config);
+        self.voice_event("turn-end", json!({ "turn": turn, "ms": began.elapsed().as_millis() as u64, "outcome": outcome }));
     }
 
     /// Show one stream-json event of the builder; whether it was the result.
@@ -591,7 +611,8 @@ impl Studio {
                         Some("text") => {
                             let text = block["text"].as_str().unwrap_or("").trim();
                             if !text.is_empty() {
-                                self.voice_event("builder", json!({ "text": text }));
+                                let turn = self.voice.state().turn;
+                                self.voice_event("builder", json!({ "text": text, "turn": turn }));
                                 self.converse(format!("builder: {}", toolchain::clip(text, 400)));
                             }
                         }
@@ -599,10 +620,51 @@ impl Studio {
                             let name = block["name"].as_str().unwrap_or("").rsplit("__").next().unwrap_or("").to_owned();
                             let input = &block["input"];
                             let what = input["file"].as_str().or(input["name"].as_str()).or(input["query"].as_str()).unwrap_or("");
-                            self.set_activity(json!({ "state": "working", "tool": name, "text": describe_tool(&name, what) }));
+                            let text = describe_tool(&name, what);
+                            let id = block["id"].as_str().unwrap_or("").to_owned();
+                            let turn = {
+                                let mut state = self.voice.state();
+                                state.calls.insert(id.clone(), name.clone());
+                                state.turn
+                            };
+                            // `say` and `show` speak for themselves in the trace
+                            if !matches!(name.as_str(), "say" | "show") {
+                                let mut step = json!({ "turn": turn, "id": id, "tool": name, "text": text });
+                                if let Some(file) = input["file"].as_str() {
+                                    step["file"] = json!(file);
+                                }
+                                if let Some(detail) = step_input(&name, input) {
+                                    step["input"] = json!(detail);
+                                }
+                                self.voice_event("step", step);
+                            }
+                            self.set_activity(json!({ "state": "working", "tool": name, "text": text }));
                         }
                         _ => {}
                     }
+                }
+            }
+            Some("user") => {
+                for block in event["message"]["content"].as_array().into_iter().flatten() {
+                    if block["type"] != "tool_result" {
+                        continue;
+                    }
+                    let id = block["tool_use_id"].as_str().unwrap_or("").to_owned();
+                    let (turn, name) = {
+                        let state = self.voice.state();
+                        (state.turn, state.calls.get(&id).cloned().unwrap_or_default())
+                    };
+                    if matches!(name.as_str(), "say" | "show") {
+                        continue;
+                    }
+                    let text = match &block["content"] {
+                        Value::String(text) => text.clone(),
+                        Value::Array(parts) => parts.iter().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n"),
+                        _ => String::new(),
+                    };
+                    let error = block["is_error"].as_bool().unwrap_or(false);
+                    let (ok, summary) = step_outcome(&name, &text, error);
+                    self.voice_event("step-done", json!({ "turn": turn, "id": id, "ok": ok, "summary": summary }));
                 }
             }
             Some("result") => {
@@ -832,7 +894,9 @@ impl Studio {
                 state.undo.drain(..len - 100);
             }
         }
-        self.voice_event("edited", json!({ "file": file, "from": from, "to": to, "note": note }));
+        let code: String = after.get(file).map(|text| text.lines().skip(from.saturating_sub(1)).take((to + 1 - from).min(40)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        let turn = self.voice.state().turn;
+        self.voice_event("edited", json!({ "file": file, "from": from, "to": to, "note": note, "code": code, "turn": turn }));
         let report = self.check_program(&after, &[file.to_owned()]).await;
         let mut answer = json!({ "applied": true, "lines": [from, to] });
         if report.passes() && !report.holed() {
@@ -1000,6 +1064,61 @@ fn changed_lines(before: &str, after: &str) -> (usize, usize) {
     (from, to)
 }
 
+/// What a step was asked, worth showing beside it: the expression run,
+/// the question researched.
+fn step_input(name: &str, input: &Value) -> Option<String> {
+    let text = match name {
+        "evaluate" | "trace" => input["expr"].as_str()?.to_owned(),
+        "research" => input["question"].as_str()?.to_owned(),
+        "search_docs" => input["query"].as_str()?.to_owned(),
+        "add_property" => input["statement"].as_str()?.to_owned(),
+        "edit" | "write_file" => input["note"].as_str().filter(|n| !n.is_empty())?.to_owned(),
+        _ => return None,
+    };
+    Some(toolchain::clip(&text, 300))
+}
+
+/// Whether a step went well, and a line saying how.
+fn step_outcome(name: &str, text: &str, error: bool) -> (bool, String) {
+    let first = |text: &str| {
+        // the CLI wraps its own errors in <tool_use_error> tags
+        let text = text.replace("<tool_use_error>", "").replace("</tool_use_error>", "");
+        toolchain::clip(text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim(), 200)
+    };
+    if error {
+        return (false, first(text));
+    }
+    let value: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    match name {
+        "edit" | "write_file" | "add_property" => {
+            let check = value["check"].as_str().unwrap_or("");
+            let failing = check.starts_with("FAILS");
+            let mut line = if failing { first(check.trim_start_matches("FAILS the check -- fix it next:")) } else { check.to_owned() };
+            if let Some(properties) = value["properties"].as_str() {
+                line = format!("{line}{}{}", if line.is_empty() { "" } else { " · " }, first(properties));
+            }
+            (!failing, if line.is_empty() { "applied".to_owned() } else { line })
+        }
+        "check" => {
+            let ok = value["ok"].as_bool().unwrap_or(false) || value["passes"].as_bool().unwrap_or(false);
+            (ok, if ok { "passes".to_owned() } else { first(value["diagnostics"].as_str().unwrap_or("fails")) })
+        }
+        "run_properties" => {
+            let properties = value["properties"].as_str().unwrap_or("");
+            let bad = properties.contains("[fail]") || properties.contains("[crashed]") || properties.starts_with("properties did not run");
+            (!bad, first(properties))
+        }
+        "evaluate" | "evaluate_program" | "trace" => {
+            let shown = ["result", "output", "stdout", "value", "error"].iter().find_map(|k| value[*k].as_str().filter(|s| !s.is_empty()).map(str::to_owned));
+            let failed = value["error"].as_str().is_some_and(|e| !e.is_empty()) || value["ok"] == false;
+            (!failed, first(&shown.unwrap_or_else(|| text.to_owned())))
+        }
+        "research" => (true, toolchain::clip(value["answer"].as_str().unwrap_or(text).trim(), 400)),
+        "get_file" | "list_files" | "search_docs" | "read_doc" | "type_at" | "facts_at" | "holes" | "assists_at" | "lint" => (true, String::new()),
+        _ => (true, first(text)),
+    }
+}
+
 fn describe_tool(name: &str, what: &str) -> String {
     let what = if what.is_empty() { String::new() } else { format!(" {what}") };
     match name {
@@ -1106,8 +1225,12 @@ passes the check up to the first hole.
 going on.
 - The author may interrupt at any moment; you are then resumed with their new words, and what you \
 applied stays. Drop work that the new words make moot; do not argue for the old plan.
-- Speak with `say`: one short sentence when you start something substantial, when you finish, or when \
-you need a decision. They are listening, not reading. Never read code aloud. Do not narrate every step.
+- Narrate as you go, in text: before each step or small group of steps, one short line saying what you \
+are about to do and why (\"Next: the step function, one clause per transition rule.\", \"The check \
+failed on an unbound name; adding the require.\"). These lines are the author's trace of your \
+reasoning, shown beside the code; keep each to one sentence.
+- Use `say` sparingly: one short sentence when you start something substantial, when you finish, or \
+when you need a decision. Never put code in it.
 - Your text replies appear in a side panel; keep them to a line or two.
 
 Specifications are properties. The author states what the program must do as properties, in English \

@@ -88,6 +88,17 @@ classic layout (tree, tabs, REPL), remembered per browser.
   PROJECT"; the first description then makes a new project named from
   its words (`cesk-star-machine`), and is given to the builder there.
   Reloading a tab returns to its work.
+- **What happened**, in the left margin: every exchange — what was said,
+  what the router did with it and how long it took, the reply — and under
+  it each builder turn, step by step as it happens: the builder's
+  one-line notes of what it is about to do and why, each read, edit
+  (file:lines, a click to show them, ▾ for the new code), check, run,
+  property and lookup, with how it went; a live line at its foot. Older
+  turns fold to a summary line. "show history" / "hide history", or ‹.
+- **The microphone** button in the pill: red while listening, with a ring
+  as loud as the microphone hears, so it is plain the browser hears you;
+  every recognition error is written out (blocked, no microphone, no
+  network, no recognizer in this browser).
 - **The bar** above the editor, faint until the mouse comes near: the
   project (its menu opens or makes others), the files as chips (one file:
   just its name), **+** for a new module, a double-click on a name to

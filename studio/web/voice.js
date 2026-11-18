@@ -20,7 +20,7 @@
 // themselves only when one starts failing). The rest -- the conversation,
 // the toggles -- is behind the ⋯ menu.
 
-import { markdown } from "./markdown.js";
+import { createTimeline } from "./timeline.js";
 
 const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
@@ -92,18 +92,11 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   lensCard.hidden = true;
 
   // the conversation, only when asked for
-  const talkCard = el("div", "voice-talk voice-float");
-  talkCard.hidden = true;
-  const talkList = el("div", "voice-talk-list");
-  const talkHead = el("div", "voice-card-head");
-  const talkClose = el("button", "voice-x", "✕");
-  talkClose.addEventListener("click", () => { talkCard.hidden = true; });
-  talkHead.append(el("span", "", "Conversation"), talkClose);
-  talkCard.append(talkHead, talkList);
 
   // the pill at the foot: the microphone, the caption, the builder while it works
   const pill = el("div", "voice-pill");
   const mic = el("button", "voice-mic");
+  mic.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>';
   mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
   const caption = el("div", "voice-caption");
   const typed = el("input", "voice-typed");
@@ -143,14 +136,14 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   layout.slot.append(badge);
   // on the canvas the pill asks for a description; after, for anything
   layout.onCanvas = (mode) => {
-    const talk = listening ? "" : " (click ○ to talk)";
+    const talk = listening ? "" : " — or click the mic and talk";
     typed.placeholder = mode ? `Describe what you want to build${talk}` : `Speak, or type here${talk}`;
   };
   const layer = el("div", "voice-layer");
   layer.hidden = true;
   // the right-hand rail: what has accumulated, stacked
   const rail = el("div", "voice-rail");
-  rail.append(propCard, lensCard, talkCard);
+  rail.append(propCard, lensCard);
   layer.append(rail, menu, pill);
   stage.append(layer);
 
@@ -167,7 +160,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     item("Run the program", () => run());
     item("Output", () => layout.showOutput(true));
     item("Run the properties", () => control("run-properties"));
-    item("Conversation", () => { talkCard.hidden = false; talkList.scrollTop = talkList.scrollHeight; });
+    item("What happened", () => timeline.toggle(), !timeline.collapsed());
     item("Start a new conversation", () => control("new-conversation"));
     item("Show all panes", () => toggle(false));
   }
@@ -329,22 +322,15 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     failingBefore = properties.error ? new Set([...now, "#error"]) : now;
   }
 
-  // ---- The conversation (behind ⋯) -------------------------------------------------------
+  // ---- What happened (timeline.js) -------------------------------------------------------
 
-  function log(kind, text, extra) {
-    const row = el("div", `voice-line ${kind}`);
-    const who = { author: "you", studio: "studio", builder: "builder", error: "!", local: "you" }[kind] ?? "";
-    if (who) row.append(el("span", "voice-who", who));
-    const body = el(kind === "builder" ? "div" : "span", "voice-text");
-    // the builder writes Markdown (names in backticks, short lists)
-    if (kind === "builder") body.innerHTML = markdown(text);
-    else body.textContent = text;
-    row.append(body);
-    if (extra) row.append(el("span", "voice-extra", extra));
-    talkList.append(row);
-    while (talkList.childElementCount > 300) talkList.firstChild.remove();
-    talkList.scrollTop = talkList.scrollHeight;
-  }
+  const timeline = createTimeline({
+    host: layer,
+    go: (file, from, to) => {
+      lastUserMove = Date.now();
+      go(file, from, to, "voice-edit");
+    },
+  });
 
   function speak(text) {
     if (!settings.speak || !window.speechSynthesis || !text) return;
@@ -378,23 +364,85 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     store({ ...load(), listening });
     layout.onCanvas?.(layout.canvasMode());
     mic.classList.toggle("live", listening);
-    mic.title = listening ? "Listening — click to pause (or say “stop listening”)" : "Paused — click to listen";
+    mic.title = listening ? "Listening — click to stop (or say “stop listening”)" : "Click to talk";
   }
+
+  // The microphone's level, drawn as a ring around the button, so the
+  // author sees the browser hears them before any words come back.
+  let meter = null; // { stream, context, frame }
+  async function startMeter() {
+    if (meter || !navigator.mediaDevices?.getUserMedia) return;
+    // made in the click itself: an audio context made later starts
+    // suspended (the browser's autoplay rule) and hears only silence
+    const context = new (window.AudioContext || window.webkitAudioContext)();
+    context.resume?.();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!listening) {
+        stream.getTracks().forEach((track) => track.stop());
+        context.close();
+        return;
+      }
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      context.createMediaStreamSource(stream).connect(analyser);
+      const samples = new Uint8Array(analyser.fftSize);
+      meter = { stream, context, frame: 0 };
+      const draw = () => {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const s of samples) sum += ((s - 128) / 128) ** 2;
+        const level = Math.min(1, Math.sqrt(sum / samples.length) * 6);
+        mic.style.setProperty("--level", level.toFixed(3));
+        meter.frame = requestAnimationFrame(draw);
+      };
+      draw();
+    } catch (error) {
+      context.close();
+      const why = error?.name === "NotAllowedError" ? "The microphone is blocked: allow it for this site (the icon in the address bar), then click the mic."
+        : error?.name === "NotFoundError" ? "No microphone was found."
+        : `The microphone could not start: ${error?.message ?? error}`;
+      show(why, "bad", 30000);
+    }
+  }
+  function stopMeter() {
+    if (!meter) return;
+    cancelAnimationFrame(meter.frame);
+    meter.stream.getTracks().forEach((track) => track.stop());
+    meter.context.close();
+    meter = null;
+    mic.style.removeProperty("--level");
+  }
+
+  const ERRORS = {
+    "not-allowed": "The microphone is blocked: allow it for this site (the icon in the address bar), then click the mic.",
+    "service-not-allowed": "This browser will not run speech recognition here (Safari: turn on Siri / Dictation in System Settings).",
+    "audio-capture": "No microphone was found.",
+    network: "Speech recognition could not reach its service (Chrome sends the audio to Google): check the connection.",
+    "language-not-supported": "Speech recognition does not support this browser's language.",
+  };
+  let failures = 0;
 
   function startListening() {
     if (!Recognition) {
-      show("No speech recognition in this browser (Chrome, Edge or Safari have it): type instead.", "quiet");
+      show("This browser has no speech recognition (Chrome, Edge and Safari do; Firefox does not): type instead.", "bad", 30000);
       typed.focus();
       return;
     }
     listening = true;
+    failures = 0;
     renderMic();
+    startMeter();
     if (!recognition) {
       recognition = new Recognition();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = navigator.language || "en-US";
+      recognition.onstart = () => {
+        if (!caption.textContent || caption.classList.contains("quiet")) show("Listening…", "quiet", 4000);
+      };
       recognition.onresult = (event) => {
+        failures = 0;
         let interim = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
@@ -404,13 +452,17 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
         if (interim) show(interim, "interim");
       };
       recognition.onerror = (event) => {
-        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-          stopListening();
-          show("The microphone is blocked: allow it for this site, then click the dot.", "bad");
-        }
+        // silence and our own stops are not failures
+        if (event.error === "no-speech" || event.error === "aborted") return;
+        failures++;
+        show(ERRORS[event.error] ?? `Speech recognition failed: ${event.error}`, "bad", 30000);
+        if (event.error in ERRORS || failures >= 3) stopListening();
       };
-      // recognizers stop on silence: start again while listening
-      recognition.onend = () => { if (listening && !speaking) restart(); };
+      // recognizers stop on silence: start again while listening (after a
+      // pause when something went wrong, so a failure cannot spin)
+      recognition.onend = () => {
+        if (listening && !speaking) setTimeout(restart, failures ? 1500 : 0);
+      };
     }
     restart();
   }
@@ -423,6 +475,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   function stopListening() {
     listening = false;
     renderMic();
+    stopMeter();
     recognition?.abort();
   }
 
@@ -452,7 +505,8 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     if (/^(mute|be quiet|quiet)$/.test(said)) return setSpeak(false), true;
     if (/^(unmute|talk to me)$/.test(said)) return setSpeak(true), true;
     if (/^(close|close that|dismiss|clear)$/.test(said)) return closeCards(), true;
-    if (/^(show (the )?conversation|what did you say)$/.test(said)) return (talkCard.hidden = false), true;
+    if (/^(show (the )?(conversation|history|trace)|what happened|what did you do)$/.test(said)) return timeline.show(), true;
+    if (/^(hide (the )?(conversation|history|trace))$/.test(said)) return timeline.hide(), true;
     if (/^(show (the )?properties)$/.test(said)) return (propCard.hidden = false), true;
     if (/^(run|run it|run the program|run this)$/.test(said)) return run(), true;
     if (/^(show (the )?(output|repl))$/.test(said)) return layout.showOutput(true), true;
@@ -469,7 +523,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   }
 
   function closeCards() {
-    for (const card of [lensCard, propCard, talkCard, menu]) card.hidden = true;
+    for (const card of [lensCard, propCard, menu]) card.hidden = true;
   }
 
   function context() {
@@ -519,13 +573,16 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     if (!text) return;
     show(text, "heard");
     if (local(text)) {
-      log("local", text, "here");
+      timeline.you(text, true);
       return;
     }
     if (layout.canvasMode() === "new") {
       startProject(text);
       return;
     }
+    // whatever is said now is work in this project: the canvas never
+    // again offers a new one in this tab
+    layout.started();
     files.flush?.();
     send({ t: "voice", text, context: context() });
   }
@@ -541,39 +598,52 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     if (!on && ["focus", "edited", "client"].includes(event.kind)) return;
     switch (event.kind) {
       case "heard":
-        log("author", event.text);
+        timeline.you(event.text);
         break;
-      case "routed": {
-        const did = (event.did ?? []).join(" · ");
-        const last = talkList.lastElementChild;
-        if (last?.classList.contains("author")) last.append(el("span", "voice-extra", `${did || "—"} · ${event.ms} ms`));
+      case "routed":
+        timeline.routed(event.did ?? [], event.ms ?? 0);
         break;
-      }
       case "reply":
-        log(event.from === "builder" ? "builder" : "studio", event.text);
+        timeline.reply(event.text, event.from === "builder");
         if (!replaying) {
           show(event.text, "reply", REPLY_MS);
           if (event.speak) speak(event.text);
         }
         break;
       case "builder":
-        log("builder", event.text);
+        timeline.note(event.turn ?? 0, event.text);
+        break;
+      case "turn":
+        timeline.turn(event);
+        break;
+      case "step":
+        timeline.step(event);
+        break;
+      case "step-done":
+        timeline.stepDone(event);
+        break;
+      case "turn-end":
+        timeline.turnEnd(event);
         break;
       case "error":
-        log("error", event.message);
+        timeline.error(event.message);
         if (!replaying) show(event.message, "bad");
         break;
       case "focus":
-        focus(event.label, event.targets, event.from === "builder");
+        if (event.from !== "builder") timeline.focus(event.label, event.targets, () => focus(event.label, event.targets, false));
+        if (!replaying) focus(event.label, event.targets, event.from === "builder");
         break;
       case "edited":
         if (!event.file) break;
+        timeline.edited(event);
+        if (replaying) break;
         layout.changed();
         if (settings.follow && Date.now() - lastUserMove > USER_HOLD_MS) go(event.file, event.from, event.to, "voice-edit");
         else if (files.active() === event.file) flash(event.from, event.to, "voice-edit");
         break;
       case "activity":
         renderActivity(event);
+        timeline.activity(event);
         break;
       case "properties":
         properties = event.results ?? { properties: [] };
@@ -605,12 +675,13 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   }
 
   function receiveState(state) {
-    talkList.replaceChildren();
+    timeline.clear();
     for (const event of state.log ?? []) {
-      // the past, without moving the view or speaking again
-      if (["focus", "edited", "client", "properties"].includes(event.kind)) continue;
+      // the past, into the trace, without moving the view or speaking again
+      if (["client", "properties"].includes(event.kind)) continue;
       receive(event, true);
     }
+    timeline.activity(state.activity);
     properties = state.properties ?? { properties: [] };
     // what failed before this tab opened is not news
     failingBefore = new Set((properties.properties ?? []).filter((p) => p.status !== "ok").map((p) => p.name));
