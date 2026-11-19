@@ -159,6 +159,8 @@ const palette = createPalette({
     const onBoard = board.shown();
     add("Board", onBoard ? "Show the editor" : "Show the module board", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
     add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
+    const planned = board.outline().flatMap((m) => m.items.filter((i) => i.opaque)).length;
+    if (planned) add("Board", `Build the plan: write the ${planned} planned bod${planned === 1 ? "y" : "ies"}`, () => board.buildPlan(), { icon: "▸", keywords: "implement fill holes dive in", rank: 1 });
     if (onBoard) {
       add("Board", "Fit the board to the window", () => board.fit(), { icon: "⤢", keys: "0" });
       add("Board", "Tidy the board: re-pack the cards for this window", () => board.tidy(), { icon: "▤", keys: "t", keywords: "arrange layout pack" });

@@ -402,3 +402,8 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
   outline: none;
 }
 .board-add-hint { flex-basis: 100%; padding-left: 20px; font: 10.5px var(--sans); color: var(--muted); }
+
+/* from plan to code: asked to be built, until the body arrives */
+.board-build { color: var(--green) !important; }
+.board-item.building > .board-item-line { background: linear-gradient(90deg, var(--green-tint), transparent 70%); background-size: 200% 100%; animation: board-building 1.4s ease-in-out infinite; }
+@keyframes board-building { 0% { background-position: 100% 0; } 50% { background-position: 0 0; } 100% { background-position: 100% 0; } }

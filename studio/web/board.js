@@ -73,6 +73,8 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   // the card a signature is being typed on (designing on the board)
   let adding = null;
   let addText = "";
+  // rows the builder was asked to build, until their body arrives
+  const building = new Set();
 
   function load(key) {
     try { return localStorage.getItem(key); } catch { return null; }
@@ -113,7 +115,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   zoomIn.title = "Zoom in (+)";
   zoomLabel.title = "Fit the board to the window (0)";
   const keysHelp = el("button", "board-zoom board-help", "?");
-  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · n note · h hide · f focus · e edit · t tidy · Esc clear · + − 0 zoom";
+  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · n note · b build · h hide · f focus · e edit · t tidy · Esc clear · + − 0 zoom";
   const tools = el("div", "board-hud-tools");
   tools.append(filter, zoomOut, zoomLabel, zoomIn, keysHelp);
   hud.append(progress, bar, tools);
@@ -528,6 +530,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       isHidden && "is-hidden",
       focused && "focused",
       fresh.has(key) && "fresh",
+      building.has(key) && item.opaque && "building",
       cursor === key && "cursor",
     ].filter(Boolean).join(" ");
     const row = el("div", classes);
@@ -590,6 +593,12 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       line.append(badge);
     }
     const actions = el("span", "board-tools");
+    if (item.opaque || item.holes) {
+      const build = el("button", "board-build", "▸");
+      build.title = "Build it: the builder writes this body, honoring the decisions on it (b)";
+      build.addEventListener("click", (event) => { event.stopPropagation(); buildIt(m.path, item.name); });
+      actions.append(build);
+    }
     const noteButton = el("button", "", "✎");
     noteButton.title = "A decision or comment on this (n)";
     noteButton.addEventListener("click", (event) => { event.stopPropagation(); startNote(m.path, item.name); });
@@ -655,6 +664,30 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     box.append(el("span", "board-kind", "+"), input);
     box.append(el("div", "board-add-hint", "↵ plans it (its body a hole) · Esc closes · A * B -> C takes two arguments"));
     return box;
+  }
+
+  // ---- from plan to code -------------------------------------------------------------------
+
+  // the builder writes one planned body (the author's "dive in")
+  function buildIt(file, name) {
+    const decided = notesOn(file, name).filter((n) => n.kind === "decision").length;
+    send({
+      t: "voice",
+      text: `Dive into ${name} in ${file}: write its body, replacing the hole${decided ? `, and honor the ${decided === 1 ? "decision" : "decisions"} on it` : ""}. Leave the other planned definitions as they are.`,
+      context: { file, hover: null },
+    });
+    const key = keyOf(file, name);
+    building.add(key);
+    // the shimmer ends when the body arrives (noteChanges), or gives up
+    setTimeout(() => { if (building.delete(key) && shown()) render(); }, 180000);
+    render();
+  }
+
+  // every planned body, in dependency order (the palette's "Build the plan")
+  function buildPlan() {
+    const planned = outline.filter((m) => m.path !== "properties.puf").flatMap((m) => m.items.filter((i) => i.opaque || i.holes).map((i) => `${i.name} (${m.path})`));
+    if (!planned.length) return;
+    send({ t: "voice", text: `Build the plan: write the bodies of ${planned.join(", ")}, one at a time in dependency order, honoring every decision; check and run the properties as you go.`, context: {} });
   }
 
   // ---- notes: the author's decisions and comments on the design --------------------------
@@ -1184,6 +1217,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       0: () => fit(),
       t: () => tidy(),
       n: () => found?.item && found.m.path !== DECISIONS && startNote(found.m.path, found.item.name),
+      b: () => found?.item && (found.item.opaque || found.item.holes) && buildIt(found.m.path, found.item.name),
     }[event.key];
     if (act) {
       event.preventDefault();
@@ -1284,6 +1318,11 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       if (fresh.size) setTimeout(() => shown() && render(), FRESH_MS + 50);
     }
     seen = now;
+    for (const key of [...building]) {
+      const [path, name] = key.split("\u001f");
+      const item = modules.find((m) => m.path === path)?.items.find((i) => i.name === name);
+      if (!item || !item.opaque) building.delete(key);
+    }
   }
 
   return {
@@ -1320,6 +1359,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     fit,
     tidy,
     // the welcome's "plan it yourself": the field on `path`'s card, open
+    buildPlan,
     startAdding(path) {
       adding = path;
       addText = "";
