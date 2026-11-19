@@ -652,14 +652,6 @@ export function createBoard({ editor, files, send, stage, onShow }) {
         root.focus({ preventScroll: true });
       }
     });
-    input.addEventListener("blur", () => {
-      setTimeout(() => {
-        if (adding === m.path && !input.value.trim() && document.activeElement !== input) {
-          adding = null;
-          render();
-        }
-      }, 150);
-    });
     box.append(el("span", "board-kind", "+"), input);
     box.append(el("div", "board-add-hint", "↵ plans it (its body a hole) · Esc closes · A * B -> C takes two arguments"));
     return box;
@@ -1246,6 +1238,14 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     }
   });
   root.addEventListener("dragleave", () => root.classList.remove("dropping"));
+  // the signature field closes on a click elsewhere (or Esc), not on a
+  // re-render (the definition just planned arriving)
+  root.addEventListener("pointerdown", (event) => {
+    if (adding && !event.target.closest(".board-add-box") && !event.target.closest(".board-add")) {
+      adding = null;
+      render();
+    }
+  });
   root.addEventListener("drop", (event) => {
     root.classList.remove("dropping");
     const path = event.dataTransfer?.getData("text/x-puffin-module");
@@ -1319,6 +1319,13 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     bringOut: (path) => change((b) => { ensureCard(b, path); }),
     fit,
     tidy,
+    // the welcome's "plan it yourself": the field on `path`'s card, open
+    startAdding(path) {
+      adding = path;
+      addText = "";
+      render();
+      setTimeout(() => canvas.querySelector(".board-add-input")?.focus(), 60);
+    },
     outline: () => outline,
     editAt,
     // focus on a definition and what touches it (the palette, f)

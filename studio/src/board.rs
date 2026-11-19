@@ -164,33 +164,47 @@ fn source(t: &T) -> String {
 }
 
 /// A type, ML-style: `(-> A B C)` is `A * B -> C`, `(List a)` is `List a`.
+/// Application binds tightest, then `*`, then `->` (right-associative):
+/// `List Int -> Int`, `(Int -> Int) * List Int -> List Int`.
 fn render(t: &T) -> String {
-    render_at(t, false)
+    render_at(t, Prec::Top)
 }
 
-fn render_at(t: &T, nested: bool) -> String {
-    let wrap = |s: String| if nested { format!("({s})") } else { s };
+#[derive(Clone, Copy, PartialEq)]
+enum Prec {
+    /// anywhere: nothing needs parentheses
+    Top,
+    /// an argument of an arrow (a factor of `*`): an arrow needs them
+    Factor,
+    /// an argument of an application: an application or an arrow needs them
+    Atom,
+}
+
+fn render_at(t: &T, at: Prec) -> String {
     match t {
         T::Atom(a) => a.clone(),
         T::List(items) if items.is_empty() => "()".to_owned(),
         T::List(items) => match atom(&items[0]) {
             Some("->") if items.len() >= 2 => {
                 let args = &items[1..items.len() - 1];
-                let result = render_at(&items[items.len() - 1], false);
-                let from = if args.is_empty() { "unit".to_owned() } else { args.iter().map(|a| render_at(a, true)).collect::<Vec<_>>().join(" * ") };
-                wrap(format!("{from} -> {result}"))
+                let result = render_at(&items[items.len() - 1], Prec::Top);
+                let from = if args.is_empty() { "unit".to_owned() } else { args.iter().map(|a| render_at(a, Prec::Factor)).collect::<Vec<_>>().join(" * ") };
+                let text = format!("{from} -> {result}");
+                if at == Prec::Top { text } else { format!("({text})") }
             }
             Some("->*") if items.len() == 4 => {
-                let fixed = match &items[1] {
-                    T::List(xs) => xs.iter().map(|a| render_at(a, true)).collect::<Vec<_>>(),
-                    other => vec![render_at(other, true)],
+                let mut from = match &items[1] {
+                    T::List(xs) => xs.iter().map(|a| render_at(a, Prec::Factor)).collect::<Vec<_>>(),
+                    other => vec![render_at(other, Prec::Factor)],
                 };
-                let mut from = fixed;
-                from.push(format!("{}...", render_at(&items[2], true)));
-                wrap(format!("{} -> {}", from.join(" * "), render_at(&items[3], false)))
+                from.push(format!("{}...", render_at(&items[2], Prec::Atom)));
+                let text = format!("{} -> {}", from.join(" * "), render_at(&items[3], Prec::Top));
+                if at == Prec::Top { text } else { format!("({text})") }
             }
-            Some(_) => wrap(items.iter().map(|a| render_at(a, true)).collect::<Vec<_>>().join(" ")),
-            None => wrap(items.iter().map(|a| render_at(a, true)).collect::<Vec<_>>().join(" ")),
+            _ => {
+                let text = items.iter().map(|a| render_at(a, Prec::Atom)).collect::<Vec<_>>().join(" ");
+                if at == Prec::Atom { format!("({text})") } else { text }
+            }
         },
     }
 }
@@ -353,7 +367,7 @@ fn function_or_value(name: &str, parts: &[T], declared: Option<&T>) -> (String, 
                                 }
                             }
                             T::Atom(a) => from.push(a.clone()),
-                            T::List(xs) if xs.len() == 3 && atom(&xs[1]) == Some(":") => from.push(render_at(&xs[2], true)),
+                            T::List(xs) if xs.len() == 3 && atom(&xs[1]) == Some(":") => from.push(render_at(&xs[2], Prec::Factor)),
                             other => from.push(source(other)),
                         }
                     }
@@ -385,7 +399,7 @@ fn type_sig(parts: &[T]) -> String {
         .map(|c| match c {
             T::Atom(a) => a.clone(),
             T::List(xs) if xs.len() == 1 => source(&xs[0]),
-            T::List(xs) => format!("{} of {}", source(&xs[0]), xs[1..].iter().map(|f| render_at(f, true)).collect::<Vec<_>>().join(" * ")),
+            T::List(xs) => format!("{} of {}", source(&xs[0]), xs[1..].iter().map(|f| render_at(f, Prec::Factor)).collect::<Vec<_>>().join(" * ")),
         })
         .collect();
     if ctors.is_empty() { format!("type {head}") } else { format!("type {head} = {}", ctors.join(" | ")) }
@@ -1117,7 +1131,10 @@ mod tests {
         assert_eq!(sig("limit").sig, "val limit");
         assert_eq!(sig("varargs").sig, "val varargs : a * more... -> _");
         assert_eq!(m.effects, 1);
-        assert_eq!(render(&read_all("(-> (-> Int Int) (List Int) Bool)")[0]), "(Int -> Int) * (List Int) -> Bool");
+        assert_eq!(render(&read_all("(-> (-> Int Int) (List Int) Bool)")[0]), "(Int -> Int) * List Int -> Bool");
+        assert_eq!(render(&read_all("(-> (List Token) Int)")[0]), "List Token -> Int");
+        assert_eq!(render(&read_all("(List (List Int))")[0]), "List (List Int)");
+        assert_eq!(render(&read_all("(-> Int (-> Int Int))")[0]), "Int -> Int -> Int");
     }
 
     #[test]

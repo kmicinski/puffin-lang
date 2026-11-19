@@ -249,6 +249,55 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   away.addEventListener("click", () => { fresh = false; update(); });
   stage.append(away);
 
+  // the welcome above the pill: what this is, a few ways to start, and
+  // the other path -- design it on the board yourself, no code yet
+  const EXAMPLES = [
+    "A stack calculator, with properties that it agrees with a reference evaluator",
+    "The CESK* machine from Van Horn and Might -- plan mode, signatures first",
+    "A JSON parser and printer, round-trip as a property",
+  ];
+  const welcome = el("div", "focus-welcome");
+  const headline = el("div", "focus-welcome-title", "What shall we build?");
+  const sub = el("div", "focus-welcome-sub", "Describe it — say it, or type it below. The design lands on the board as signatures; the bodies come after.");
+  const examples = el("div", "focus-welcome-examples");
+  for (const text of EXAMPLES) {
+    const chip = el("button", "focus-example", text);
+    chip.title = "Use this as the description (you can edit it before sending)";
+    chip.addEventListener("click", () => api.onExample?.(text));
+    examples.append(chip);
+  }
+  const planHere = el("button", "focus-plan-here", "or plan it yourself on the board — signatures, notes, decisions, no code yet →");
+  planHere.addEventListener("click", () => {
+    planning = true;
+    fresh = false;
+    update();
+    api.onPlanHere?.();
+  });
+  welcome.append(headline, sub, examples);
+  stage.append(welcome, planHere);
+
+  // The welcome sits above the pill and the links below it, wherever the
+  // pill is and however tall it has grown (a caption, a long description).
+  function placeWelcome() {
+    const pill = document.querySelector(".voice-pill");
+    if (!pill || !document.body.classList.contains("focus-canvas")) return;
+    const host = stage.getBoundingClientRect();
+    const box = pill.getBoundingClientRect();
+    welcome.style.top = `${Math.max(12, box.top - host.top - welcome.offsetHeight - 22)}px`;
+    const below = `${box.bottom - host.top + 14}px`;
+    away.style.top = below;
+    planHere.style.top = below;
+  }
+  const watchPill = () => {
+    const pill = document.querySelector(".voice-pill");
+    if (pill) new ResizeObserver(placeWelcome).observe(pill);
+    else setTimeout(watchPill, 200);
+  };
+  watchPill();
+  window.addEventListener("resize", placeWelcome);
+  // the author chose to design on the board: no canvas, even with no code
+  let planning = false;
+
   function empty() {
     return !Object.entries(files.texts()).some(([path, text]) => !HIDDEN.has(path) && hasCode(text ?? ""));
   }
@@ -256,7 +305,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   // "new": a description makes a new project; "here": it builds in this
   // one; null: not on the canvas
   function canvasMode() {
-    if (!on) return null;
+    if (!on || planning) return null;
     if (empty()) return "here";
     return fresh ? "new" : null;
   }
@@ -270,6 +319,10 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     document.body.classList.toggle("focus-canvas", Boolean(mode));
     const project = document.getElementById("project")?.textContent.trim();
     away.hidden = mode !== "new";
+    welcome.hidden = !mode;
+    planHere.hidden = mode !== "here";
+    headline.textContent = mode === "new" ? "What shall we build next?" : "What shall we build?";
+    if (mode) requestAnimationFrame(placeWelcome);
     away.textContent = `or continue ${project || "the open project"} →`;
     if (!mode) setTimeout(() => view?.layout(), 0);
     api.onCanvas?.(mode);

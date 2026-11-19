@@ -502,3 +502,52 @@ body.focus-canvas .timeline, body.focus-canvas .timeline-tab { display: none; }
   .focus-palette, .focus-right .pill-quiet { display: none; }
   .voice-pill { width: calc(100% - 16px); bottom: 8px; }
 }
+
+/* ---- the welcome, above the pill on the canvas ---- */
+.focus-welcome { display: none; }
+body.focus-canvas .focus-welcome {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100% - 32px));
+  text-align: center;
+  z-index: 31;
+  font-family: var(--sans);
+  animation: welcome-in 0.5s ease-out;
+}
+@keyframes welcome-in { from { opacity: 0; } }
+.focus-welcome-title { font-size: 26px; font-weight: 600; color: var(--strong); letter-spacing: -0.01em; margin-bottom: 6px; }
+.focus-welcome-sub { font-size: 14px; color: var(--muted); margin-bottom: 18px; line-height: 1.45; }
+.focus-welcome-examples { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.focus-example {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 7px 14px;
+  font: 13px var(--sans);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, transform 0.15s;
+}
+.focus-example::before { content: "→ "; color: var(--muted); }
+.focus-example:hover { border-color: var(--violet); color: var(--violet); transform: translateX(2px); }
+.focus-plan-here {
+  display: none;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  border: 0;
+  background: none;
+  color: var(--violet);
+  font: 13px var(--sans);
+  cursor: pointer;
+  z-index: 31;
+}
+body.focus-canvas .focus-plan-here:not([hidden]) { display: block; }
+.focus-plan-here:hover { text-decoration: underline; }
+@media (max-height: 700px) { .focus-welcome-examples { display: none; } }

@@ -154,6 +154,13 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   // the badge lives in the focused layout's bar (focus.js)
   layout.slot.append(badge);
   // on the canvas the pill asks for a description; after, for anything
+  // a welcome example: into the text box, to send or edit first
+  layout.onExample = (text) => {
+    typed.value = text;
+    fit();
+    typed.focus();
+    typed.setSelectionRange(text.length, text.length);
+  };
   layout.onCanvas = (mode) => {
     const talk = listening ? "" : " — or click the mic and talk";
     typed.placeholder = mode ? `Describe what you want to build${talk}` : `Speak, or type here${talk}`;

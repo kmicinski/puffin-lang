@@ -140,6 +140,14 @@ rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
 const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on) });
 focus.attachBoard(board);
+// the welcome's other path: design on the board, plan mode, the first
+// module's "+ plan a definition" open
+focus.onPlanHere = () => {
+  board.setMode("plan");
+  board.setView("board");
+  const first = files.paths().filter((p) => /\.puf$/.test(p) && !["prop.puf", "properties.puf"].includes(p)).sort()[0];
+  if (first) setTimeout(() => board.startAdding(first), 350);
+};
 const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane"), layout: focus, board, run: () => load(null) });
 
 // ⌘K: every action, every file, every definition
