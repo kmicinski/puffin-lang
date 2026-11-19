@@ -72,6 +72,9 @@ pub struct Context {
     /// The first and last visible lines.
     #[serde(default)]
     pub visible: Option<(usize, usize)>,
+    /// The selection's first and last lines, if any.
+    #[serde(default)]
+    pub selection_lines: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -123,6 +126,8 @@ struct State {
     /// of a sentence the author is still saying. The next phrase is routed
     /// with them, and they are dropped once a phrase does something.
     fragments: Vec<(Instant, String)>,
+    /// The excursion open, if one is (excursion.rs).
+    excursion: Option<crate::excursion::Excursion>,
 }
 
 pub struct Voice {
@@ -170,14 +175,37 @@ impl Voice {
 }
 
 impl Studio {
-    fn voice_event(&self, kind: &str, data: Value) {
+    /// The open excursion's slot, under the voice lock.
+    pub(crate) fn voice_excursion<T>(&self, f: impl FnOnce(&mut Option<crate::excursion::Excursion>) -> T) -> T {
+        f(&mut self.voice.state().excursion)
+    }
+
+    pub(crate) fn voice_api(&self) -> Option<&Api> {
+        self.voice.api.as_ref()
+    }
+
+    /// Every tab is shown the excursion as it is now (or that it closed).
+    pub(crate) fn publish_excursion(&self) {
+        let view = self.excursion_view();
+        self.voice_event("excursion", json!({ "excursion": view }));
+    }
+
+    fn excursion_view(&self) -> Value {
+        let open = self.voice.state().excursion.clone();
+        match open {
+            Some(excursion) => excursion.view(&self.files()),
+            None => Value::Null,
+        }
+    }
+
+    pub(crate) fn voice_event(&self, kind: &str, data: Value) {
         let mut entry = data.clone();
         entry["kind"] = json!(kind);
         entry["at"] = json!(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0));
         {
             let mut state = self.voice.state();
             // the log replays the conversation, not every flicker of activity
-            if !matches!(kind, "activity" | "interim") {
+            if !matches!(kind, "activity" | "interim" | "excursion") {
                 state.log.push_back(entry.clone());
                 while state.log.len() > LOG {
                     state.log.pop_front();
@@ -203,6 +231,7 @@ impl Studio {
     /// What a tab opening voice mode is shown: the conversation so far,
     /// the properties, what the builder is doing.
     pub fn voice_state(&self) -> Value {
+        let excursion = self.excursion_view();
         let state = self.voice.state();
         json!({
             "t": "voice-state",
@@ -210,6 +239,7 @@ impl Studio {
             "properties": state.properties,
             "activity": state.activity,
             "unavailable": self.voice.unavailable(),
+            "excursion": excursion,
             "model": self.voice.model,
         })
     }
@@ -285,6 +315,7 @@ impl Studio {
             "run-properties" => {
                 self.run_properties().await;
             }
+            "close-excursion" => self.close_excursion(),
             "new-conversation" => {
                 let mut state = self.voice.state();
                 state.session = None;
@@ -334,9 +365,27 @@ impl Studio {
                 let _ = writeln!(user, "The form at the cursor ({file}:{}): {}", form.line, toolchain::clip(&text[form.start..form.end], 600));
             }
         }
-        let (activity, conversation, properties) = {
+        if let Some(file) = &context.file
+            && let Some(text) = files.get(file)
+        {
+            // the shown file line by line, so a clause inside a definition
+            // ("the fix case", "where it extends the environment") can be
+            // found and named by its lines
+            let shown = crate::excursion::numbered(text, 1);
+            if shown.len() <= 16_000 {
+                let _ = writeln!(user, "\nThe shown file, {file}, numbered:\n{shown}");
+            }
+        }
+        let (activity, running, queued, conversation, properties, excursion) = {
             let state = self.voice.state();
-            (state.activity.clone(), state.conversation.iter().cloned().collect::<Vec<_>>(), state.properties.describe())
+            (
+                state.activity.clone(),
+                state.running,
+                state.pending.len(),
+                state.conversation.iter().cloned().collect::<Vec<_>>(),
+                state.properties.describe(),
+                state.excursion.as_ref().map(crate::excursion::Excursion::describe),
+            )
         };
         let board = self.board();
         let _ = writeln!(
@@ -356,7 +405,24 @@ impl Studio {
         if !open_questions.is_empty() {
             let _ = writeln!(user, "The builder's open questions to the author:\n{}", open_questions.join("\n"));
         }
-        let _ = writeln!(user, "\nThe builder: {activity}");
+        if running {
+            let doing = activity["text"].as_str().or(activity["state"].as_str()).unwrap_or("working");
+            let _ = writeln!(user, "\nThe builder is WORKING ({doing}){}.", if queued > 0 { format!("; {queued} instruction(s) queued after it") } else { String::new() });
+        } else {
+            let _ = writeln!(
+                user,
+                "\nThe builder is IDLE: nothing is being built and nothing is queued. Unless your answer has a build \
+                 instruction, nothing will be built."
+            );
+        }
+        match &excursion {
+            Some(open) => {
+                let _ = writeln!(user, "{open}");
+            }
+            None => {
+                let _ = writeln!(user, "No excursion is open.");
+            }
+        }
         let _ = writeln!(user, "Properties:\n{properties}");
         if !conversation.is_empty() {
             let _ = writeln!(user, "\nThe conversation so far, oldest first:\n{}", conversation.join("\n"));
@@ -387,6 +453,8 @@ impl Studio {
         let instruction = build["instruction"].as_str().unwrap_or("").trim().to_owned();
         let urgency = build["urgency"].as_str().unwrap_or("none");
         let reply = decision["reply"].as_str().unwrap_or("").trim().to_owned();
+        let explain = &decision["explain"];
+        let explain_kind = explain["action"].as_str().unwrap_or("none");
         let mut did = Vec::new();
         if nav_kind != "none" {
             did.push(format!("navigate {nav_kind}"));
@@ -402,6 +470,11 @@ impl Studio {
         }
         if answer_to != 0 {
             did.push(format!("answer #{answer_to}"));
+        }
+        match explain_kind {
+            "ask" => did.push("explain".to_owned()),
+            "close" => did.push("close the excursion".to_owned()),
+            _ => {}
         }
         self.voice_event("routed", json!({ "text": utterance, "did": did, "ms": ms, "decision": decision }));
         if !reply.is_empty() {
@@ -420,6 +493,9 @@ impl Studio {
         }
         if answer_to != 0 && !answer_text.is_empty() {
             self.answer(answer_to, answer_text.clone());
+        }
+        if explain_kind != "none" {
+            self.explain(explain, context);
         }
         if control != "none" {
             match control {
@@ -1092,6 +1168,7 @@ fn inert(decision: &Value) -> bool {
         && none(&decision["arrange"]["action"])
         && decision["answer"]["question"].as_u64().unwrap_or(0) == 0
         && decision["reply"].as_str().is_none_or(|s| s.trim().is_empty())
+        && none(&decision["explain"]["action"])
 }
 
 pub fn tools() -> Value {
@@ -1299,7 +1376,7 @@ fn step_outcome(name: &str, text: &str, error: bool) -> (bool, String) {
             (!bad, first(properties))
         }
         "evaluate" | "evaluate_program" | "trace" => {
-            let shown = ["result", "output", "stdout", "value", "error"].iter().find_map(|k| value[*k].as_str().filter(|s| !s.is_empty()).map(str::to_owned));
+            let shown = ["result", "output", "stdout", "value", "error", "errors"].iter().find_map(|k| value[*k].as_str().filter(|s| !s.is_empty()).map(str::to_owned));
             let failed = value["error"].as_str().is_some_and(|e| !e.is_empty()) || value["ok"] == false;
             (!failed, first(&shown.unwrap_or_else(|| text.to_owned())))
         }
@@ -1331,7 +1408,7 @@ fn router_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["navigate", "build", "control", "arrange", "answer", "reply"],
+        "required": ["navigate", "build", "control", "arrange", "answer", "explain", "reply"],
         "properties": {
             "navigate": {
                 "type": "object",
@@ -1377,6 +1454,20 @@ fn router_schema() -> Value {
                     "text": { "type": "string" },
                 },
             },
+            "explain": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["action", "question", "file", "from", "to", "label", "fresh"],
+                "properties": {
+                    "action": { "type": "string", "enum": ["none", "ask", "close"] },
+                    "question": { "type": "string" },
+                    "file": { "type": "string" },
+                    "from": { "type": "integer" },
+                    "to": { "type": "integer" },
+                    "label": { "type": "string" },
+                    "fresh": { "type": "boolean" },
+                },
+            },
             "reply": { "type": "string" },
         },
     })
@@ -1395,7 +1486,10 @@ navigate -- move their view, instantly. kind:
 which one they mean.
 - usages: show the definition of `name` and every place it is used (\"where is foo used\", \"who calls \
 this\").
-- line: `line` in `file` (empty file = the shown one).
+- line: `line` in `file` (empty file = the shown one). Also for a part INSIDE a definition -- a clause, a \
+case, a branch (\"the fix clause\", \"where it extends the environment\", \"the if case of eval\"): find it in \
+the numbered shown file (or by its definition's line) and give its first line. Never answer with the \
+enclosing definition when they named a part of it.
 - file: open `file`.
 - text: lines containing `query`.
 - next / previous: step through the places last shown. back: return to where they were.
@@ -1403,7 +1497,10 @@ Resolve \"this\", \"this function\", \"here\" from the mouse (hover) first, then
 \"none\" when they are not asking to look somewhere. Navigation and building can both happen: \"go to \
 eval-step and make it handle let\" navigates AND builds.
 
-build -- an instruction for the builder. Rewrite their words as a complete, self-contained instruction: \
+build -- an instruction for the builder. A request to make, add, change, plan or design anything -- a \
+program, a module, a definition, properties -- IS a build instruction, even when it also switches mode: \
+\"start in plan mode and lay out the modules\" is arrange plan-mode AND build (interrupt) in one answer. A \
+long description ending in \"go\" / \"please\" / \"thanks\" is a build. Rewrite their words as a complete, self-contained instruction: \
 resolve every \"this\"/\"that\"/\"here\" to the actual name, file and line, keep every requirement they \
 stated, and keep it short. Properties they state (\"it should always...\", \"make sure that...\", \"a \
 property: ...\") become an instruction to add that property. urgency:
@@ -1430,14 +1527,30 @@ need garbage collection later\" -- a decision constrains the design, nothing is 
 exact definition names from the file list, `modules` file names; `text` is empty for every other \
 action. Leave action \"none\" otherwise. Arranging and building can both happen.
 
+explain -- an excursion: the author wants to UNDERSTAND code, not change it (\"explain the fix clause\", \
+\"how does apply-fn work\", \"why is the environment a hash\", \"walk me through eval\"). action ask: \
+`question` is their question, self-contained (resolve this/that/here to names); `file`, `from`, `to` the \
+lines it is about, found in the numbered shown file or the definitions list (from 0 when it is about the \
+open excursion as a whole, or the program at large; one line that opens a clause or definition is widened \
+to the whole of it); `label` a few words naming those lines (\"the fix clause\", \"apply-fn\"). fresh: true \
+when it starts a new topic, false when it follows up the open excursion (\"and what does extend do\", \"why \
+there\", \"go on\", \"what calls it\") -- a follow-up about other code pulls that code into the same \
+excursion. close: \"close the excursion\", \"done explaining\", \"back to building\". A question about how \
+code works is an excursion, never a build, and an excursion edits nothing. \"Show me X and explain it\" \
+navigates AND explains. Leave action \"none\" otherwise (question and label empty, from/to 0, fresh false).
+
 answer -- when the builder has an open question (listed above) and these words answer it, `question` is its \
 number and `text` the answer in full, self-contained (resolve \"yes\"/\"the second one\" against the \
 question). Otherwise question 0, text empty. An answer is not also a build instruction.
 
 reply: what the studio says back, aloud, in a few words -- or empty. Acknowledge build instructions \
 briefly (\"On it.\", \"Switching to a hash.\"); stay silent for pure navigation (the view moving is the \
-answer); answer a question about the program or the builder's state from what you see here, in one \
-sentence. If the words are clearly not meant for the studio (talking to someone else, filler, a \
+answer) and for an excursion (its panel answers); answer a question about the program or the builder's \
+state from what you see here, in one sentence. NEVER say work is happening, will happen or is done unless \
+it is: \"On it\", \"Got it\", \"Planning...\", \"Building...\" only with a build instruction in this same \
+answer. Asked about progress (\"are we making progress?\", \"what are you doing?\"), answer from the \
+builder's state above, truthfully: when it is idle say so plainly (\"Nothing is building right now -- tell \
+me what to build.\"). If the words are clearly not meant for the studio (talking to someone else, filler, a \
 half-sentence), do nothing: all none, reply empty.";
 
 /// Added to a builder run's prompt while the board is in plan mode.
@@ -1553,6 +1666,7 @@ mod tests {
             "control": "none",
             "arrange": { "action": "none" },
             "answer": { "question": 0, "text": "" },
+            "explain": { "action": "none", "question": "", "file": "", "from": 0, "to": 0, "label": "", "fresh": false },
             "reply": ""
         });
         assert!(inert(&nothing));
@@ -1562,6 +1676,9 @@ mod tests {
         let mut replying = nothing.clone();
         replying["reply"] = json!("I'm here.");
         assert!(!inert(&replying));
+        let mut asking = nothing.clone();
+        asking["explain"]["action"] = json!("ask");
+        assert!(!inert(&asking));
         let mut looking = nothing;
         looking["navigate"]["kind"] = json!("definition");
         assert!(!inert(&looking));

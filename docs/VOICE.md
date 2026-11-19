@@ -3,7 +3,7 @@
 Status, 2026-11-18: an experimental MVP on the `voice` branch (built on
 `experimental`, so grammar types are there; the voice code is its own
 modules and touches the rest of the studio only at the seams listed in
-§6). Turn it on with the 🎙 Voice button in Puffin Studio's header, or
+§7). Turn it on with the 🎙 Voice button in Puffin Studio's header, or
 ⌘⇧V.
 
 The idea: the author talks, continuously, hands off the keyboard, and the
@@ -172,7 +172,41 @@ counterexample found tends to be small. The studio runs the properties
 builder after each of its runs. A run that crashes marks the property it
 was in.
 
-## 5. Running it
+## 5. Excursions
+
+Going off to understand a fragment of the program, by voice, without
+changing it (`studio/src/excursion.rs`, `studio/web/excursion.js`).
+
+- **Starting one.** "Explain the fix clause", "how does apply-fn work",
+  "walk me through eval" -- or select some code and say "explain this".
+  The router's `explain` (action `ask`) names the question and the lines
+  it is about: from the numbered shown file (the router sees it whole, so
+  a clause inside a definition is found by its lines), the selection, or
+  else the form at the cursor. One line that opens a clause or definition
+  widens to the whole form.
+- **What shows.** A panel docks at the right and the editor moves aside to
+  make room: the fragments, each with its code (coloured, numbered, a click
+  on a line goes there), and under them the questions and answers. The
+  fragments are marked in the editor (a violet bar). Each answer moves the
+  view to the lines it centers on and marks them in the panel; `file:line`
+  in an answer is a way there.
+- **Growing it.** A follow-up ("and what does extend do?", "why a hash
+  there?", "go on") stays in the excursion. One about other code pulls
+  that code in as another fragment; and an answer that leans on code not
+  yet in view pulls it in itself (at most two a time, with why: "pulled
+  in: what happens when the recursive closure is called"). So the picture
+  is built a piece at a time, every piece still in view. A new topic
+  (`fresh`) starts a new excursion.
+- **Answers** are one structured Messages API call
+  (`claude-sonnet-5-5`, `PUFFIN_EXPLAIN_MODEL` to change) that sees the
+  whole program numbered, the fragments, and the thread so far; it
+  answers in markdown for the panel, a one-sentence gist for the caption
+  (spoken when replies are), the lines to highlight, and what to pull in.
+  The builder is not involved and nothing is edited; an excursion and a
+  build can run at once.
+- **Ending it.** ✕, or "close the excursion" / "back to building".
+
+## 6. Running it
 
 The studio needs Claude API credentials in its environment for the router
 and research: `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` (with
@@ -182,9 +216,9 @@ the deployment's `puffin-ai` broker works unchanged), and `claude` on
 Google's recognizer; Safari's runs on the device. The page must be served
 over https (or localhost) for the microphone.
 
-## 6. Where it touches the rest of the studio
+## 7. Where it touches the rest of the studio
 
-- `studio/src/voice.rs`, `props.rs`, `prop.puf`, `claude_api.rs`;
+- `studio/src/voice.rs`, `props.rs`, `prop.puf`, `claude_api.rs`, `excursion.rs`;
   `studio/web/voice.js`, `voice.css` — all new.
 - `studio.rs`: an `Event::Voice` variant, a `voice` field, and
   `watch_properties` started with the other watchers.
@@ -194,13 +228,13 @@ over https (or localhost) for the microphone.
 - `sexp.rs`: `atoms`, every atom's span.
 - `index.html` / `main.js`: the button, the stylesheet, two handlers.
 
-## 7. Planning
+## 8. Planning
 
 The module board (signatures with bodies opaque, arranged by voice),
 plan mode (bodies left as typed holes, checked and run past), and the
 builder's questions with their slices are docs/PLANNING.md.
 
-## 8. Not yet
+## 9. Not yet
 
 - Navigation by binding: usages are by name (every atom spelled the
   same), not by the compiler's scopes; a local that shadows a top-level

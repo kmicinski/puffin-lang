@@ -96,6 +96,10 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
     let text = |key: &str| arguments[key].as_str().map(str::to_owned).ok_or_else(|| format!("missing string argument `{key}`"));
     let note = arguments["note"].as_str().unwrap_or("").to_owned();
     let fork = || studio.fork_of(thread);
+    // what runs runs past the typed holes (plan mode leaves bodies as `??`):
+    // each one raises "??" when reached, as the check and the properties
+    // already treat them, instead of failing the compile as unbound
+    let runnable = || -> toolchain::Files { fork().iter().map(|(path, text)| (path.clone(), crate::sexp::stub_holes(text).0)).collect() };
     let file_text = |fork: &toolchain::Files, file: &str| fork.get(file).cloned().ok_or_else(|| format!("there is no file {file}"));
     match name {
         "list_files" => {
@@ -219,10 +223,10 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
                 Value::String(name) => name.split_whitespace().map(str::to_owned).collect(),
                 _ => return Err("missing `names`: the functions to trace, e.g. [\"eval-expr\"]".to_owned()),
             };
-            studio.trace_try(&fork(), &names, &text("expr")?).await
+            studio.trace_try(&runnable(), &names, &text("expr")?).await
         }
         "evaluate_program" => {
-            let files = fork();
+            let files = runnable();
             let file = match arguments["file"].as_str() {
                 Some(file) => file.to_owned(),
                 None => toolchain::entries(&files).into_iter().next().ok_or("the program has no file to run")?,
@@ -323,7 +327,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "trace",
-            "description": "See what a function actually does: run `expr` against the author's live session with each function of `names` traced, as Racket's trace does -- `> (f args)` on each call, `< value` on its return, one `| ` per level of depth -- and keep nothing (try). Each named define is taken from the files as your proposals leave them (or, for a function the author defined only at the prompt, the session's own text), with the definitions it and `expr` need that the session lacks, so a proposed fix can be traced before the author accepts it. Returns the first 200 lines of the trace, the counts of lines and calls, and the results; a failing or runaway run still returns the trace up to where it stopped. Effects outside the session are refused, as in evaluate.",
+            "description": "See what a function actually does: run `expr` against the author's live session with each function of `names` traced, as Racket's trace does -- `> (f args)` on each call, `< value` on its return, one `| ` per level of depth -- and keep nothing (try). Each named define is taken from the files as your proposals leave them (or, for a function the author defined only at the prompt, the session's own text), with the definitions it and `expr` need that the session lacks, so a proposed fix can be traced before the author accepts it. Returns the first 200 lines of the trace, the counts of lines and calls, and the results; a failing or runaway run still returns the trace up to where it stopped. Effects outside the session are refused, as in evaluate. Typed holes (`??`) raise \"??\" when reached.",
             "inputSchema": object(json!({
                 "names": { "type": "array", "items": { "type": "string" }, "description": "Functions to trace, each defined at the top level of a file: (define (f a ...) ...)." },
                 "expr": { "type": "string", "description": "What to run, e.g. `(interp '(app (lam x x) 1) '())`." },
@@ -331,7 +335,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "evaluate_program",
-            "description": "Compile one file of the program, as your proposals leave it, as a whole program, and run it on a throwaway VM (10 s limit): its output and exit status, or the compile errors.",
+            "description": "Compile one file of the program, as your proposals leave it, as a whole program, and run it on a throwaway VM (10 s limit): its output and exit status, or the compile errors. Typed holes (`??`) run: reaching one raises \"??\", so the parts that are written can be tried in plan mode.",
             "inputSchema": object(json!({ "file": { "type": "string", "description": "The file to run (default: the first entry)." } }), &[]),
         },
         {

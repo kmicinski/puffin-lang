@@ -8,6 +8,7 @@ pub mod board;
 pub mod agent;
 pub mod ask;
 pub mod claude_api;
+pub mod excursion;
 pub mod facts;
 pub mod holes;
 pub mod knowledge;

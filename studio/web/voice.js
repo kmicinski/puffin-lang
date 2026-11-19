@@ -22,6 +22,7 @@
 
 import { createTimeline } from "./timeline.js";
 import { createProgress } from "./progress.js";
+import { createExcursion } from "./excursion.js";
 
 const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
@@ -355,6 +356,20 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     failingBefore = properties.error ? new Set([...now, "#error"]) : now;
   }
 
+  // ---- An excursion (excursion.js): code being explained, docked at the right -----------
+
+  const excursion = createExcursion({
+    host: rail,
+    view,
+    monaco,
+    files,
+    go: (file, from, to) => {
+      lastUserMove = Date.now();
+      go(file, from, to, "voice-focus");
+    },
+    close: () => control("close-excursion"),
+  });
+
   // ---- What happened (timeline.js) -------------------------------------------------------
 
   const timeline = createTimeline({
@@ -610,6 +625,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       line: position?.lineNumber,
       hover: hover && Date.now() - hover.at < HOVER_FRESH_MS ? { file: hover.file, line: hover.line, word: hover.word } : null,
       selection: selected,
+      selection_lines: selection && !selection.isEmpty() ? [selection.startLineNumber, selection.endLineNumber] : null,
       visible: visible ? [visible.startLineNumber, visible.endLineNumber] : null,
     };
   }
@@ -738,6 +754,10 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       case "client":
         clientCommand(event.command);
         break;
+      case "excursion":
+        excursion.receive(event.excursion, replaying);
+        setTimeout(() => { view?.layout(); keepClear(); }, 0);
+        break;
       default:
         break;
     }
@@ -769,6 +789,8 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       receive(event, true);
     }
     timeline.activity(state.activity);
+    excursion.receive(state.excursion ?? null, true);
+    setTimeout(() => { view?.layout(); keepClear(); }, 0);
     properties = state.properties ?? { properties: [] };
     // what failed before this tab opened is not news
     failingBefore = new Set((properties.properties ?? []).filter((p) => p.status !== "ok").map((p) => p.name));

@@ -18,6 +18,8 @@ use std::time::Duration;
 pub const FAST_MODEL: &str = "claude-haiku-5-5";
 /// The frontier model: research over the web.
 pub const DEEP_MODEL: &str = "claude-opus-5-5";
+/// Explaining code on an excursion (excursion.rs): good and quick.
+pub const EXPLAIN_MODEL: &str = "claude-sonnet-5-5";
 
 const VERSION: &str = "2023-06-01";
 /// What OAuth tokens need on the Messages API.

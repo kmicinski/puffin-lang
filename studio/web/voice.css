@@ -634,3 +634,50 @@ body.focus-canvas .voice-progress-said { display: block; padding: 3px 0 0 16px; 
 .timeline.clear-pill, .voice-rail.clear-pill { bottom: var(--pill-clear, 84px); }
 .voice-menu.clear-pill { bottom: var(--pill-clear, 68px); }
 body.voice-on.focus-output .right-pane.clear-pill { bottom: var(--pill-clear-fixed, 86px); }
+
+/* ---- An excursion (excursion.js): docked at the right, the editor aside ---- */
+
+body.voice-on { --excursion-w: min(500px, 40vw); }
+body.voice-on.excursion-open .editor-column { margin-right: calc(var(--excursion-w) + 28px); transition: margin 0.3s ease; }
+body.voice-on.excursion-open .voice-rail { width: var(--excursion-w); }
+.voice-rail > .voice-excursion { flex: 1 1 auto; min-height: 120px; }
+.voice-excursion-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-excursion-body { overflow: auto; min-height: 0; flex: 1; padding: 0 10px 10px; }
+.voice-excursion-fragment { margin: 4px 0 10px; }
+.voice-excursion-fragment.arrived { animation: excursion-arrive 1.2s ease-out; }
+@keyframes excursion-arrive { from { background: var(--violet-tint); } }
+.voice-excursion-where {
+  display: flex; gap: 8px; align-items: baseline; width: 100%;
+  border: none; background: transparent; padding: 2px 2px; text-align: left; cursor: pointer;
+}
+.voice-excursion-label { font-weight: 600; color: var(--strong); font-size: 12.5px; }
+.voice-excursion-place { font: 11px var(--mono); color: var(--blue); }
+.voice-excursion-where:hover .voice-excursion-label { color: var(--violet); }
+.voice-excursion-why { font-size: 11.5px; color: var(--muted); font-style: italic; padding: 0 2px 3px; }
+.voice-excursion-code {
+  font: 12px/1.45 var(--mono);
+  background: var(--base2);
+  border-radius: 6px;
+  padding: 5px 0;
+  overflow-x: auto;
+}
+.voice-excursion-line { display: flex; white-space: pre; cursor: pointer; padding-right: 8px; }
+.voice-excursion-line:hover { background: rgba(108, 113, 196, 0.08); }
+.voice-excursion-line.hot { background: rgba(181, 137, 0, 0.16); }
+.voice-excursion-n { flex: none; width: 34px; padding-right: 8px; text-align: right; color: var(--base1); user-select: none; }
+.voice-excursion-src { flex: 1; }
+.voice-excursion-thread { border-top: 1px solid var(--border); padding-top: 6px; }
+.voice-excursion-exchange { margin: 6px 0 12px; }
+.voice-excursion-q { font-weight: 600; color: var(--strong); font-size: 12.5px; margin-bottom: 3px; }
+.voice-excursion-q::before { content: "you · "; font-weight: 400; color: var(--muted); }
+.voice-excursion-a { font-size: 13px; line-height: 1.5; color: var(--text); }
+.voice-excursion-a p { margin: 0 0 6px; }
+.voice-excursion-a ul, .voice-excursion-a ol { margin: 0 0 6px; padding-left: 18px; }
+.voice-excursion-a code { font-size: 11.5px; background: var(--base2); padding: 0 3px; border-radius: 3px; }
+.voice-excursion-a.bad { color: var(--red); }
+.voice-excursion-cite { color: var(--blue); cursor: pointer; }
+.voice-excursion-cite:hover { text-decoration: underline; }
+.voice-excursion-wait { color: var(--violet); font-size: 12.5px; animation: voice-busy 1.4s ease-in-out infinite; }
+/* in the editor: what the excursion is about */
+.voice-excursion-range { background: rgba(108, 113, 196, 0.07); }
+.voice-excursion-gutter { border-left: 3px solid var(--violet); }
