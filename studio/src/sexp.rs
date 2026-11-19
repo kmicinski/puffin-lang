@@ -343,6 +343,48 @@ pub fn holes(text: &str) -> Vec<(usize, usize)> {
     tokens(text).into_iter().filter(|(kind, start, end)| *kind == Token::Atom && &text[*start..*end] == "??").map(|(_, s, e)| (s, e)).collect()
 }
 
+/// What a typed hole becomes when a program with holes must check or
+/// run past them (docs/EXCEPTIONS.md): an expression of any type that
+/// raises when reached, with the message `??`.
+pub const HOLE_STUB: &str = "(error \"??\")";
+
+/// `text` with every `??` replaced by HOLE_STUB, and the byte offsets
+/// (in `text`) of the holes replaced, in order.
+pub fn stub_holes(text: &str) -> (String, Vec<usize>) {
+    let holes = holes(text);
+    if holes.is_empty() {
+        return (text.to_owned(), Vec::new());
+    }
+    let mut out = String::with_capacity(text.len() + holes.len() * HOLE_STUB.len());
+    let mut at = 0;
+    for &(start, end) in &holes {
+        out.push_str(&text[at..start]);
+        out.push_str(HOLE_STUB);
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    (out, holes.iter().map(|(s, _)| *s).collect())
+}
+
+/// A byte offset in a stubbed text back to the original text: the
+/// offsets of the holes stubbed (`stub_holes`); an offset inside a stub
+/// is its hole's.
+pub fn unstub_offset(holes: &[usize], pos: usize) -> usize {
+    let grow = HOLE_STUB.len() - 2;
+    let mut shift = 0;
+    for &hole in holes {
+        let stub_start = hole + shift;
+        if pos < stub_start {
+            break;
+        }
+        if pos < stub_start + HOLE_STUB.len() {
+            return hole;
+        }
+        shift += grow;
+    }
+    pos - shift
+}
+
 /// The constructors the `define-type` forms of `text` declare: `Num` and
 /// `Add` of `(define-type Expr (Num Int) (Add Expr Expr))`, and a bare
 /// atom variant such as `None`.

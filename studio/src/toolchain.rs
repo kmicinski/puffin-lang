@@ -13,10 +13,11 @@
 //! --trace NAME`, §3.2). A binary being replaced underneath us fails to
 //! start, or dies by a signal; such runs are tried again.
 //!
-//! A typed hole (`??`, §5 item 6) is an unbound name outside assists, so a
-//! program with one fails the check at its first hole. That diagnostic is
-//! a hole, not an error: the program passes, holes aside, though nothing
-//! past the first hole was checked.
+//! A typed hole (`??`, §5 item 6) is an unbound name outside assists, so
+//! the check replaces each with a stub of any type (sexp::HOLE_STUB) and
+//! checks the whole program past them; a program whose only shortfall is
+//! holes fails with one "hole" diagnostic at its first hole and passes,
+//! holes aside.
 
 use crate::sexp;
 use serde::Serialize;
@@ -84,9 +85,8 @@ impl Report {
         self.diagnostics.iter().any(|d| d.severity == "hole")
     }
 
-    /// Whether the program passes the check, holes aside: it checks, or the
-    /// checker stopped at a hole with no error before it. Nothing past the
-    /// first hole was checked.
+    /// Whether the program passes the check, holes aside: it checks, or
+    /// its only shortfall is typed holes (checked past, `Toolchain::check`).
     pub fn passes(&self) -> bool {
         self.ok || (self.holed() && !self.diagnostics.iter().any(|d| d.severity == "error"))
     }
@@ -508,7 +508,42 @@ impl Toolchain {
 
     /// Check `entry` of `files`: `--assist check`, or the bytecode compile
     /// when `--assist` is not there.
+    ///
+    /// Typed holes are checked past (docs/EXCEPTIONS.md): every `??` is
+    /// replaced by a stub of any type (sexp::HOLE_STUB) for the checker,
+    /// and positions are mapped back. A program whose only shortfall is
+    /// holes then fails with one "hole" diagnostic, at its first hole --
+    /// every other part of it was checked.
     pub async fn check(&self, files: &Files, entry: &str) -> Report {
+        let mut stubbed = Files::new();
+        let mut holes_of: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (path, text) in files {
+            let (text, holes) = sexp::stub_holes(text);
+            if !holes.is_empty() {
+                holes_of.insert(path.clone(), holes);
+            }
+            stubbed.insert(path.clone(), text);
+        }
+        let mut report = self.check_text(&stubbed, files, &holes_of, entry).await;
+        let first = program_files(files, entry)
+            .into_iter()
+            .find_map(|path| holes_of.get(&path).and_then(|holes| holes.first()).map(|&pos| (path, pos)));
+        if let Some((path, pos)) = first {
+            let text = &files[&path];
+            report.ok = false;
+            report.diagnostics.push(Diagnostic {
+                line: sexp::line_of(text, pos),
+                severity: "hole",
+                message: HOLE_MESSAGE.to_owned(),
+                start: Some(sexp::utf16_of_byte(text, pos)),
+                end: Some(sexp::utf16_of_byte(text, pos + 2)),
+                file: path,
+            });
+        }
+        report
+    }
+
+    async fn check_text(&self, files: &Files, original: &Files, holes_of: &BTreeMap<String, Vec<usize>>, entry: &str) -> Report {
         let workspace = match self.workspace(files) {
             Ok(workspace) => workspace,
             Err(error) => return Report::failure(error),
@@ -524,11 +559,14 @@ impl Toolchain {
             Ok(output) => {
                 let resolve = |base: &str| resolve(files, entry, base);
                 let mut diagnostics = diagnostics(output.success, &output.stdout, &output.stderr, &resolve);
-                // spans arrive as byte offsets; the editor counts UTF-16 units
+                // spans arrive as byte offsets of the stubbed text; the
+                // editor counts UTF-16 units of the text as written
                 for d in &mut diagnostics {
-                    if let (Some(start), Some(end), Some(text)) = (d.start, d.end, files.get(&d.file)) {
-                        d.start = Some(sexp::utf16_of_byte(text, start));
-                        d.end = Some(sexp::utf16_of_byte(text, end));
+                    if let (Some(start), Some(end), Some(text)) = (d.start, d.end, original.get(&d.file)) {
+                        let holes = holes_of.get(&d.file).map(Vec::as_slice).unwrap_or(&[]);
+                        let (start, end) = (sexp::unstub_offset(holes, start), sexp::unstub_offset(holes, end));
+                        d.start = Some(sexp::utf16_of_byte(text, start.min(text.len())));
+                        d.end = Some(sexp::utf16_of_byte(text, end.min(text.len()).max(start)));
                     }
                 }
                 Report { ok: output.success, diagnostics }
@@ -763,6 +801,38 @@ pub fn resolve(files: &Files, entry: &str, base: &str) -> String {
         return entry.to_owned();
     }
     files.keys().find(|path| base_of(path) == base).cloned().unwrap_or_else(|| base.to_owned())
+}
+
+/// `entry` and every module it requires, transitively, entry first.
+pub fn program_files(files: &Files, entry: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut todo = vec![entry.to_owned()];
+    while let Some(path) = todo.pop() {
+        if out.contains(&path) || !files.contains_key(&path) {
+            continue;
+        }
+        let dir = path.rsplit_once('/').map(|(d, _)| d.to_owned()).unwrap_or_default();
+        for required in sexp::requires(&files[&path]) {
+            todo.push(normalize_path(&if dir.is_empty() { required } else { format!("{dir}/{required}") }));
+        }
+        out.push(path);
+    }
+    out
+}
+
+/// `a/./b/../c.puf` -> `a/c.puf`
+fn normalize_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    parts.join("/")
 }
 
 /// The modules of `files` no other module requires: what a whole-program

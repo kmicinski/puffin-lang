@@ -307,6 +307,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 .voice-prop-mark { width: 10px; font-weight: 700; flex: none; }
 .voice-prop.ok .voice-prop-mark { color: var(--green); }
 .voice-prop.fail .voice-prop-mark, .voice-prop.crashed .voice-prop-mark { color: var(--red); }
+.voice-prop.open .voice-prop-mark { color: var(--violet); }
 .voice-prop-detail { padding-left: 17px; font: 11px var(--mono); color: var(--red); white-space: pre-wrap; word-break: break-word; }
 .voice-prop-error { color: var(--red); font: 11px var(--mono); white-space: pre-wrap; padding: 2px 12px 6px; }
 

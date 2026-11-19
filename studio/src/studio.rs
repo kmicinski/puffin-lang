@@ -81,6 +81,8 @@ pub struct Snapshot {
     pub features: Features,
     /// Why the assistant cannot run here, if it cannot.
     pub agent_unavailable: Option<String>,
+    /// The module board and the outline (board.rs).
+    pub board: Value,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -215,6 +217,8 @@ pub enum Event {
     /// Voice mode (voice.rs): what was heard, where to look, what the
     /// builder is doing.
     Voice(crate::voice::VoiceEvent),
+    /// The module board (board.rs): its view state and the outline.
+    Board { board: Value, outline: Value },
 }
 
 /// Why an edit was not taken.
@@ -332,6 +336,8 @@ pub struct Studio {
     pub agent: Agent,
     /// Voice mode: the router, the builder, the properties (voice.rs).
     pub voice: crate::voice::Voice,
+    /// The module board's view state (board.rs).
+    pub board: Mutex<Value>,
     port: OnceLock<u16>,
 }
 
@@ -392,6 +398,7 @@ impl Studio {
             traced: Mutex::new(BTreeSet::new()),
             agent: Agent::new(mcp_token),
             voice: crate::voice::Voice::new(),
+            board: Mutex::new(crate::board::empty()),
             port: OnceLock::new(),
         });
         Ok(studio)
@@ -406,6 +413,8 @@ impl Studio {
         self.watch_observations();
         self.watch_journal();
         self.watch_properties();
+        *self.board.lock().expect("board lock") = self.load_board();
+        self.watch_board();
         self.record("session", json!({}));
         let studio = self.clone();
         tokio::spawn(async move {
@@ -476,6 +485,7 @@ impl Studio {
             traced,
             features,
             agent_unavailable: Agent::unavailable(),
+            board: self.board_view(),
         }
     }
 

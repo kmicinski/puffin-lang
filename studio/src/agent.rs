@@ -60,8 +60,8 @@ the checker's types where there are any. Assists with source `observed` are buil
 your answer rests on them. The lint tool lists the matches the session saw take a shape no \
 clause handles; the add-missing-cases assist with source observed, at the match, adds them.
 - Typed holes: `??` marks a missing expression, and the holes tool lists each with its goal \
-type. A program's check stops at its first hole, so a program whose only failure is holes \
-passes the proposal check, though nothing past the first hole was checked. You may leave a \
+type. The check checks the whole program around its holes, so a program whose only \
+shortfall is holes passes the proposal check. You may leave a \
 `??` in a proposal when the right expression is genuinely the author's call (a design \
 decision, a value only they know); say so in the note. When asked to fill holes, prefer the \
 compiler's candidates: assists_at on the hole lists fill-hole edits (a local of the goal \

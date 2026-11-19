@@ -3,7 +3,7 @@
 //!
 //! - typed holes (docs/STUDIO.md §5 item 6): each `??` of a module, with
 //!   the goal type `--assist facts` gives at it. Outside assists `??` is an
-//!   unbound name, so the check stops at the first hole and reports it as a
+//!   unbound name; the check stubs every hole and reports the first one as a
 //!   hole (toolchain.rs); the holes after it are found by scanning;
 //! - the observation lint (§3.1): each match with no catch-all whose
 //!   parameter the live session saw take a shape no clause handles, from

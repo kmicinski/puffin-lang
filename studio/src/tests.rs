@@ -756,3 +756,117 @@ async fn files_move_with_their_requires_and_folders_come_and_go() {
     assert!(studio.files().is_empty());
     assert!(studio.delete_file("main.puf").is_err());
 }
+
+#[test]
+fn hole_stubs_map_positions_back() {
+    let text = "(define (f x) ??)\n(define (g y) (+ ?? y))\n";
+    let (stubbed, holes) = crate::sexp::stub_holes(text);
+    assert_eq!(holes, vec![14, 35]);
+    assert!(stubbed.contains("(define (f x) (error \"??\"))"));
+    assert_eq!(stubbed.lines().count(), text.lines().count());
+    // before, inside and after a stub
+    assert_eq!(crate::sexp::unstub_offset(&holes, 3), 3);
+    assert_eq!(crate::sexp::unstub_offset(&holes, 16), 14);
+    let g = stubbed.find("(define (g").unwrap();
+    assert_eq!(crate::sexp::unstub_offset(&holes, g), text.find("(define (g").unwrap());
+    let y = stubbed.rfind("y)").unwrap();
+    assert_eq!(crate::sexp::unstub_offset(&holes, y), text.rfind("y)").unwrap());
+}
+
+#[tokio::test]
+async fn the_check_reaches_past_holes() {
+    // the error is AFTER two holes: the old check stopped at the first
+    let text = "(: step (-> Int Int))\n(define (step s) ??)\n(define (run n) (step ??))\n(define (bad) (string-append (step 1) \"x\"))\n";
+    let Some(studio) = studio("past-holes", &[("m.puf", text)]) else { return };
+    let report = studio.toolchain.check(&studio.files(), "m.puf").await;
+    let error = report.diagnostics.iter().find(|d| d.severity == "error").expect("the error after the holes");
+    assert_eq!(error.line, 4, "{report:?}");
+    assert!(!report.passes());
+    // without it, holes are all that is missing
+    let fine = text.replace("(define (bad) (string-append (step 1) \"x\"))\n", "");
+    let Some(studio) = studio_files("past-holes-ok", &[("m.puf", &fine)]) else { return };
+    let report = studio.toolchain.check(&studio.files(), "m.puf").await;
+    assert!(report.holed() && report.passes(), "{report:?}");
+    let hole = report.diagnostics.iter().find(|d| d.severity == "hole").unwrap();
+    assert_eq!(hole.line, 2);
+}
+
+fn studio_files(name: &str, files: &[(&str, &String)]) -> Option<Fixture> {
+    let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+    studio(name, &files)
+}
+
+#[tokio::test]
+async fn a_property_that_crashes_or_waits_on_a_hole_stops_only_itself() {
+    let code = "(provide step half)\n(define (step n) ??)\n(define (half n) (quotient 10 n))\n";
+    let props = "(require \"prop.puf\")\n(require \"m.puf\")\n\
+;; @property open-one: step is the identity\n(check-example 'open-one (equal? (step 1) 1))\n\
+;; @property crash-one: half never divides by zero\n(check-property 'crash-one (for-all (list gen-nat) (lambda (n) (> (half n) -1))))\n\
+;; @property fine: 1 is 1\n(check-example 'fine (equal? 1 1))\n";
+    let Some(studio) = studio("props-guarded", &[("m.puf", code), ("properties.puf", props), ("prop.puf", crate::props::HARNESS_TEXT)]) else { return };
+    let results = crate::props::run(&studio, &studio.files()).await;
+    assert!(results.error.is_none(), "{results:?}");
+    let status: Vec<(&str, &str)> = results.properties.iter().map(|p| (p.name.as_str(), p.status.as_str())).collect();
+    assert_eq!(status, vec![("open-one", "open"), ("crash-one", "crashed"), ("fine", "ok")], "{results:?}");
+    assert!(results.properties[1].detail.contains("division by zero"), "{results:?}");
+    // open is not failing: it is undecided
+    assert_eq!(results.failing().len(), 1);
+}
+
+const PLAN_STORE: &str = "(provide alloc store-ref)\n(define (alloc s) (fresh s))\n(define (fresh s) (+ 1 (biggest s)))\n(define (biggest s) ??)\n(define (store-ref s a) ??)\n(define (unused-a x) x)\n(define (unused-b x) x)\n";
+const PLAN_MACHINE: &str = "(require \"store.puf\")\n(define (step s) (alloc s))\n(define (inject e) ??)\n";
+
+fn names_in(board: &Value, path: &str, list: &str) -> Vec<String> {
+    let card = board["cards"].as_array().unwrap().iter().find(|c| c["path"] == json!(path)).expect("the card");
+    card[list].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect()
+}
+
+#[tokio::test]
+async fn the_board_arranges_by_name() {
+    let Some(studio) = studio("board-arrange", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
+    studio.arrange(&json!({ "action": "hide", "names": ["unused-a", "unused-b"] })).unwrap();
+    assert_eq!(names_in(&studio.board(), "store.puf", "hidden"), vec!["unused-a", "unused-b"]);
+    assert_eq!(studio.board()["view"], "board");
+    studio.arrange(&json!({ "action": "open", "names": ["alloc"] })).unwrap();
+    assert_eq!(names_in(&studio.board(), "store.puf", "open"), vec!["alloc"]);
+    assert_eq!(names_in(&studio.board(), "store.puf", "pinned"), vec!["alloc"]);
+    // a slice: alloc, what it uses, what uses it
+    studio.arrange(&json!({ "action": "slice", "names": ["alloc"] })).unwrap();
+    let items: Vec<String> = studio.board()["focus"]["items"].as_array().unwrap().iter().map(|p| p[1].as_str().unwrap().to_owned()).collect();
+    assert_eq!(items, vec!["alloc", "fresh", "step"]);
+    studio.arrange(&json!({ "action": "clear" })).unwrap();
+    assert!(studio.board()["focus"].is_null());
+    assert!(studio.arrange(&json!({ "action": "only", "names": ["no-such"] })).is_err());
+    // the board is kept with the project
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(studio.directory.join(crate::board::BOARD_FILE)).unwrap()).unwrap();
+    assert_eq!(saved, studio.board());
+}
+
+#[tokio::test]
+async fn after_a_turn_the_board_hides_what_it_did_not_touch() {
+    let Some(studio) = studio("board-auto", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
+    studio.arrange(&json!({ "action": "plan-mode" })).unwrap();
+    studio.arrange(&json!({ "action": "unhide", "names": ["unused-b"] })).unwrap(); // pinned by the author
+    // the builder edited alloc (line 2 of store.puf)
+    studio.auto_arrange(&[("store.puf".to_owned(), 2, 2)]);
+    let hidden = names_in(&studio.board(), "store.puf", "hidden");
+    // alloc and what it uses directly (fresh) stay, the provided store-ref
+    // stays, the author's pin stays; biggest is two steps away and folds
+    assert_eq!(hidden, vec!["biggest", "unused-a"], "{hidden:?}");
+    // plan mode: no body opened
+    assert!(names_in(&studio.board(), "store.puf", "open").is_empty());
+}
+
+#[tokio::test]
+async fn a_question_shows_its_slice() {
+    let Some(studio) = studio("board-ask", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
+    let asked = studio.voice_call("ask", &json!({ "question": "Should alloc be deterministic?", "about": ["alloc"], "why": "runs must be reproducible" })).await.unwrap();
+    assert_eq!(asked["asked"], 1);
+    let board = studio.board();
+    assert_eq!(board["focus"]["question"], 1);
+    assert_eq!(board["questions"][0]["text"], "Should alloc be deterministic?");
+    assert_eq!(board["questions"][0]["answered"], false);
+    let items: Vec<String> = board["focus"]["items"].as_array().unwrap().iter().map(|p| p[1].as_str().unwrap().to_owned()).collect();
+    assert_eq!(items, vec!["alloc", "fresh", "step"]);
+    assert_eq!(board["view"], "board");
+}

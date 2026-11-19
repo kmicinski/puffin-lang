@@ -27,7 +27,8 @@ pub struct Property {
     /// The English it was stated in, if a `;; @property` comment says.
     pub statement: String,
     pub line: usize,
-    /// "ok", "fail", "crashed", "not-run", or "pending" (not yet run).
+    /// "ok", "fail", "crashed", "open" (it reached a typed hole: the
+    /// definition it needs is not written yet), "not-run", or "pending".
     pub status: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
@@ -43,8 +44,10 @@ pub struct Results {
 }
 
 impl Results {
+    /// The properties that do not hold: an open one (waiting on a hole)
+    /// is not failing, it is not decided yet.
     pub fn failing(&self) -> Vec<&Property> {
-        self.properties.iter().filter(|p| p.status != "ok").collect()
+        self.properties.iter().filter(|p| p.status != "ok" && p.status != "open").collect()
     }
 
     /// One line a property, for the builder.
@@ -101,6 +104,30 @@ pub fn declared(text: &str) -> Vec<Property> {
     out
 }
 
+/// `text` (properties.puf) with each property form run inside the
+/// harness's prop-guard, so a crash or a hole ends only that property:
+/// `(check-example 'n E)` -> `(prop-guard 'n (lambda () (check-example 'n E)))`.
+/// Line numbers are kept (the wrapper adds no newline).
+pub fn guarded(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 256);
+    let mut at = 0;
+    let names = declared(text);
+    let mut named = names.iter();
+    for form in sexp::forms(text) {
+        if !matches!(form.head.as_deref(), Some("check-property" | "check-example")) {
+            continue;
+        }
+        let Some(property) = named.next() else { break };
+        out.push_str(&text[at..form.start]);
+        out.push_str(&format!("(prop-guard '{} (lambda () ", property.name));
+        out.push_str(&text[form.start..form.end]);
+        out.push_str("))");
+        at = form.end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
 /// The harness and a properties file with nothing in it yet, requiring
 /// the program's modules (`requires`).
 pub fn new_file(requires: &[String]) -> String {
@@ -122,7 +149,10 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
         return Results::default();
     };
     let mut declared = declared(text);
-    let mut files = files.clone();
+    // every module's holes become stubs that raise "??", so a property
+    // that needs an unwritten definition is open, not a compile error
+    let mut files: Files = files.iter().map(|(path, text)| (path.clone(), sexp::stub_holes(text).0)).collect();
+    files.insert(PROPERTIES.to_owned(), guarded(&files[PROPERTIES]));
     files.insert(HARNESS.to_owned(), HARNESS_TEXT.to_owned());
     let ran = studio.toolchain.build_and_run(&files, PROPERTIES, LIMIT).await;
     let ms = || started.elapsed().as_millis() as u64;
@@ -143,6 +173,8 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
         started_last = None;
         let detail = match status {
             "ok" => format!("{detail} trials"),
+            "open" => "reaches a definition not written yet (??)".to_owned(),
+            "crashed" => detail.to_owned(),
             _ => match detail.split_once(' ') {
                 Some((trial, args)) => format!("counterexample {args} (trial {trial})"),
                 None => detail.to_owned(),

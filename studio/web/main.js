@@ -21,6 +21,7 @@ import { createLint } from "./lint.js";
 import { createRename } from "./rename.js";
 import { createVoice } from "./voice.js";
 import { createFocus } from "./focus.js";
+import { createBoard } from "./board.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -136,7 +137,9 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane"), layout: focus, run: () => load(null) });
+const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on) });
+focus.attachBoard(board);
+const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane"), layout: focus, board, run: () => load(null) });
 
 const repl = createRepl({
   transcript: $("transcript"),
@@ -312,12 +315,12 @@ function renderCheck() {
   if (stopped && holesHere && !errors.length) {
     const quiet = status.appendChild(document.createElement("span"));
     quiet.className = "pill-quiet";
-    quiet.textContent = " · checked up to the first hole";
+    quiet.textContent = " · the rest checks";
   }
   const lines = here.map((d) => `${d.severity}: ${d.message}${d.line ? ` [line ${d.line}]` : ""}`);
   if (holeTotal) {
     lines.push(`typed holes (??): ${[...holeCounts].map(([path, n]) => `${path} ${n}`).join(", ")} · F8 goes to the next`);
-    if (stopped) lines.push("the checker stops at the first hole, so nothing after it is checked");
+    if (stopped) lines.push("everything around the holes checks; each hole is an unwritten expression");
   }
   status.title = lines.join("\n") || `${active ?? ""} passes the check`;
   // an error with no line in the shown file still shows
@@ -368,6 +371,7 @@ const handlers = {
     $("project").textContent = snapshot.project;
     $("project").title = snapshot.directory;
     files.receive.init(snapshot);
+    if (snapshot.board) board.receive(snapshot.board);
     tree.receive.init(snapshot);
     reports = snapshot.diagnostics;
     proposals.update(snapshot.review);
@@ -440,6 +444,7 @@ const handlers = {
     voice.notice(message);
   },
   voice: (event) => voice.receive(event),
+  board: (view) => board.receive(view),
   "voice-state": (state) => voice.receiveState(state),
 };
 

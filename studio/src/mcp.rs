@@ -283,7 +283,7 @@ pub fn tools() -> Value {
         },
         {
             "name": "holes",
-            "description": "Every typed hole (??) in the program as your proposals leave it: file, line, byte pos, and its goal type (the type the expression there must have). A program with holes fails to compile; its check stops at the first hole.",
+            "description": "Every typed hole (??) in the program as your proposals leave it: file, line, byte pos, and its goal type (the type the expression there must have). The check checks the whole program around its holes (each is an expression of any type that raises if reached); a run reaching one raises '??'.",
             "inputSchema": object(json!({}), &[]),
         },
         {

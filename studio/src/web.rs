@@ -114,7 +114,7 @@ assets!(
     "index.html", "studio.css", "assist.css", "diff.css", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
-        "tree.js", "projects.js", "replay.js", "gist.js", "voice.js", "voice.css", "focus.js", "timeline.js",
+        "tree.js", "projects.js", "replay.js", "gist.js", "voice.js", "voice.css", "focus.js", "timeline.js", "board.js", "board.css",
 );
 
 fn asset_text(name: &str) -> String {
@@ -281,6 +281,10 @@ enum Request {
     VoiceControl { command: String },
     /// What voice mode has said and found so far, for a tab turning it on.
     VoiceState,
+    /// The module board's view state, as the tab changed it (board.rs).
+    BoardSet { board: Value },
+    /// The author's typed answer to the builder's question `id`.
+    Answer { id: u64, text: String },
 }
 
 /// Messages for one tab only; everything else is a broadcast `Event`.
@@ -675,6 +679,8 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
                 notice(&direct, outcome);
             });
         }
+        Request::BoardSet { board } => studio.set_board(board),
+        Request::Answer { id, text } => studio.answer(id, text),
         Request::OpenProject { name } => {
             let web = web.clone();
             tokio::spawn(async move {

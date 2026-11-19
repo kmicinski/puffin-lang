@@ -7,7 +7,11 @@
 ;; found tends to be a small one, and prints one line per property:
 ;;   #prop NAME ok TRIALS
 ;;   #prop NAME fail TRIAL (ARG ...)
-(provide check-property check-example for-all prop-trials
+;;   #prop NAME open                  it reached a typed hole (??)
+;;   #prop NAME crashed MESSAGE       it raised (docs/EXCEPTIONS.md)
+;; The studio runs each property inside prop-guard, so one that crashes
+;; or reaches an unwritten definition does not stop the others.
+(provide check-property check-example for-all prop-trials prop-guard
          random-int gen-int gen-nat gen-small gen-bool gen-symbol gen-string
          gen-list gen-nonempty-list gen-vector gen-pair gen-one-of gen-elements
          gen-map gen-bind gen-const gen-sized gen-frequency)
@@ -65,6 +69,19 @@
               (loop (+ trial 1))
               (begin (display "#prop ") (display name) (display " fail ") (display trial) (display " ")
                      (display (value->string args)) (newline)))))))
+
+;; run one property's form; a raise becomes its line instead of ending
+;; the run (a hole's stub raises with the message "??")
+(define (prop-guard name thunk)
+  (with-handlers ([(lambda (e) #t)
+                   (lambda (e)
+                     (let ([msg (if (exn? e) (exn-message e) (value->string e))])
+                       (display "#prop ") (display name)
+                       (if (equal? msg "??")
+                           (display " open")
+                           (begin (display " crashed ") (display msg)))
+                       (newline)))])
+    (thunk)))
 
 ;; a single example: (check-example 'name (equal? (f 1) 2))
 (define (check-example name ok)

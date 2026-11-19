@@ -113,6 +113,9 @@ struct State {
     properties: Results,
     /// (file, its text before) of each builder edit, newest last.
     undo: Vec<(String, Option<String>)>,
+    /// (file, from, to) of each builder edit this turn: what the board
+    /// arranges itself around when the turn ends (board.rs auto_arrange).
+    touched: Vec<(String, usize, usize)>,
 }
 
 pub struct Voice {
@@ -302,6 +305,24 @@ impl Studio {
             let state = self.voice.state();
             (state.activity.clone(), state.conversation.iter().cloned().collect::<Vec<_>>(), state.properties.describe())
         };
+        let board = self.board();
+        let _ = writeln!(
+            user,
+            "\nThe view: {} (mode: {}){}",
+            board["view"].as_str().unwrap_or("editor"),
+            board["mode"].as_str().unwrap_or("build"),
+            board["focus"]["label"].as_str().map(|l| format!("; focused on: {l}")).unwrap_or_default()
+        );
+        let open_questions: Vec<String> = board["questions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|q| q["answered"] != json!(true))
+            .map(|q| format!("#{} (about {}): {}", q["id"], q["about"], q["text"].as_str().unwrap_or("")))
+            .collect();
+        if !open_questions.is_empty() {
+            let _ = writeln!(user, "The builder's open questions to the author:\n{}", open_questions.join("\n"));
+        }
         let _ = writeln!(user, "\nThe builder: {activity}");
         let _ = writeln!(user, "Properties:\n{properties}");
         if !conversation.is_empty() {
@@ -313,6 +334,10 @@ impl Studio {
 
     async fn act(self: &Arc<Self>, utterance: &str, decision: Value, context: &Context, ms: u64) {
         let control = decision["control"].as_str().unwrap_or("none");
+        let arrange = &decision["arrange"];
+        let arrange_kind = arrange["action"].as_str().unwrap_or("none");
+        let answer_to = decision["answer"]["question"].as_u64().unwrap_or(0);
+        let answer_text = decision["answer"]["text"].as_str().unwrap_or("").trim().to_owned();
         let navigate = &decision["navigate"];
         let nav_kind = navigate["kind"].as_str().unwrap_or("none");
         let build = &decision["build"];
@@ -329,6 +354,12 @@ impl Studio {
         if control != "none" {
             did.push(control.to_owned());
         }
+        if arrange_kind != "none" {
+            did.push(format!("arrange {arrange_kind}"));
+        }
+        if answer_to != 0 {
+            did.push(format!("answer #{answer_to}"));
+        }
         self.voice_event("routed", json!({ "text": utterance, "did": did, "ms": ms, "decision": decision }));
         if !reply.is_empty() {
             self.voice_event("reply", json!({ "text": reply, "speak": true }));
@@ -336,6 +367,16 @@ impl Studio {
         }
         if nav_kind != "none" {
             self.navigate(navigate, context);
+        }
+        if arrange_kind != "none" {
+            match self.arrange(arrange) {
+                Ok(said) if !said.is_empty() && reply.is_empty() => self.voice_event("reply", json!({ "text": said, "speak": true })),
+                Ok(_) => {}
+                Err(why) => self.voice_event("reply", json!({ "text": why, "speak": true })),
+            }
+        }
+        if answer_to != 0 && !answer_text.is_empty() {
+            self.answer(answer_to, answer_text.clone());
         }
         if control != "none" {
             match control {
@@ -490,6 +531,7 @@ impl Studio {
             let mut state = self.voice.state();
             state.turn += 1;
             state.calls.clear();
+            state.touched.clear();
             state.turn
         };
         let began = Instant::now();
@@ -581,6 +623,8 @@ impl Studio {
             break;
         }
         let _ = std::fs::remove_file(&config);
+        let touched = std::mem::take(&mut self.voice.state().touched);
+        self.auto_arrange(&touched);
         self.voice_event("turn-end", json!({ "turn": turn, "ms": began.elapsed().as_millis() as u64, "outcome": outcome }));
     }
 
@@ -628,7 +672,7 @@ impl Studio {
                                 state.turn
                             };
                             // `say` and `show` speak for themselves in the trace
-                            if !matches!(name.as_str(), "say" | "show") {
+                            if !matches!(name.as_str(), "say" | "show" | "arrange") {
                                 let mut step = json!({ "turn": turn, "id": id, "tool": name, "text": text });
                                 if let Some(file) = input["file"].as_str() {
                                     step["file"] = json!(file);
@@ -736,7 +780,69 @@ impl Studio {
         if !conversation.is_empty() {
             let _ = writeln!(out, "Recent conversation:\n{}", conversation.join("\n"));
         }
+        let board = self.board();
+        if board["mode"] == json!("plan") {
+            out.push_str(PLAN_MODE);
+        }
+        let open: Vec<String> = board["questions"].as_array().into_iter().flatten().filter(|q| q["answered"] != json!(true)).map(|q| format!("#{}: {}", q["id"], q["text"].as_str().unwrap_or(""))).collect();
+        if !open.is_empty() {
+            let _ = writeln!(out, "Your questions the author has not answered yet:\n{}", open.join("\n"));
+        }
         out
+    }
+
+    // ---- Questions (docs/PLANNING.md §4) ----------------------------------------
+
+    /// The builder asks the author `question` about the definitions
+    /// `about`: the board shows their slice, the question is said.
+    fn ask_author(&self, question: &str, about: &[String], why: &str) -> u64 {
+        let outline = crate::board::outline(&self.files());
+        let props = self.text_of(props::PROPERTIES).unwrap_or_default();
+        let items = crate::board::slice(&outline, about, &props);
+        let mut id = 0;
+        self.update_board(|board| {
+            id = board["questions"].as_array().map(|qs| qs.iter().filter_map(|q| q["id"].as_u64()).max().unwrap_or(0)).unwrap_or(0) + 1;
+            if !board["questions"].is_array() {
+                board["questions"] = json!([]);
+            }
+            board["questions"].as_array_mut().unwrap().push(json!({ "id": id, "text": question, "about": about, "why": why, "answered": false }));
+            for (file, _) in &items {
+                if !board["cards"].as_array().into_iter().flatten().any(|c| c["path"] == json!(file)) {
+                    board["cards"].as_array_mut().unwrap().push(json!({ "path": file, "x": null, "y": null, "open": [], "hidden": [], "pinned": [] }));
+                }
+            }
+            board["focus"] = json!({ "items": items, "question": id, "label": format!("question #{id}") });
+            board["view"] = json!("board");
+        });
+        id
+    }
+
+    /// The author answered question `id`: it is closed, the focus goes, and
+    /// the builder is told to record the decision.
+    pub fn answer(self: &Arc<Self>, id: u64, text: String) {
+        let mut question = String::new();
+        self.update_board(|board| {
+            for q in board["questions"].as_array_mut().into_iter().flatten() {
+                if q["id"] == json!(id) {
+                    q["answered"] = json!(true);
+                    q["answer"] = json!(text);
+                    question = q["text"].as_str().unwrap_or("").to_owned();
+                }
+            }
+            if board["focus"]["question"] == json!(id) {
+                board["focus"] = Value::Null;
+            }
+        });
+        if question.is_empty() {
+            return;
+        }
+        self.voice_event("reply", json!({ "text": format!("Noted for question {id}."), "speak": false }));
+        self.converse(format!("author (answering #{id} \"{question}\"): {text}"));
+        self.instruct(
+            format!("The author answered your question #{id} (\"{question}\"): \"{text}\". Record the decision in the program -- as a property (add_property) when it says what must happen, or in the types and signatures when it says how things are built -- then carry on."),
+            false,
+            Context::default(),
+        );
     }
 
     // ---- Properties -------------------------------------------------------------
@@ -846,6 +952,19 @@ impl Studio {
                 let answer = api.research(&question).await?;
                 Ok(json!({ "answer": answer }))
             }
+            "ask" => {
+                let question = text("question")?;
+                let about: Vec<String> = arguments["about"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+                let why = arguments["why"].as_str().unwrap_or("").to_owned();
+                let id = self.ask_author(&question, &about, &why);
+                self.voice_event("reply", json!({ "text": question, "speak": true, "from": "builder" }));
+                self.converse(format!("builder (asked #{id}): {question}"));
+                Ok(json!({ "asked": id, "note": "The author sees the question with exactly the definitions it is about. Their answer will reach you as a new instruction; continue with work that does not depend on it, or stop." }))
+            }
+            "arrange" => {
+                let said = self.arrange(arguments)?;
+                Ok(json!({ "arranged": true, "said": said }))
+            }
             "say" => {
                 let words = text("text")?;
                 self.voice_event("reply", json!({ "text": words, "speak": true, "from": "builder" }));
@@ -888,6 +1007,7 @@ impl Studio {
         self.replace(file, text, "voice", note);
         {
             let mut state = self.voice.state();
+            state.touched.push((file.to_owned(), from, to));
             state.undo.push((file.to_owned(), before));
             let len = state.undo.len();
             if len > 100 {
@@ -902,7 +1022,7 @@ impl Studio {
         if report.passes() && !report.holed() {
             answer["check"] = json!("the program passes the check");
         } else if report.passes() {
-            answer["check"] = json!("passes up to the first typed hole (??); nothing past it was checked");
+            answer["check"] = json!("passes the check; the typed holes (??) are the only parts not written yet");
         } else {
             answer["check"] = json!(format!("FAILS the check -- fix it next:\n{}", report.describe()));
         }
@@ -956,6 +1076,18 @@ pub fn tools() -> Value {
             "Speak one short sentence aloud to the author (they are listening, not reading): what you are starting on, what you finished, or a question you need answered. No code, no lists.",
             json!({ "text": {"type": "string"} }),
             &["text"],
+        ),
+        tool(
+            "ask",
+            "Ask the author a design question you cannot settle yourself and that matters (\"Should alloc be deterministic, so runs are reproducible?\"). `about` names the definitions it concerns: the studio lays out exactly those, what they use and what uses them, and the properties that mention them, says the question, and waits for the answer, which comes back to you as a new instruction. One question at a time, answerable in a sentence. Keep working on what does not depend on it, or stop.",
+            json!({ "question": {"type": "string"}, "about": {"type": "array", "items": {"type": "string"}, "description": "top-level names the question is about"}, "why": {"type": "string", "description": "one sentence: what depends on the answer"} }),
+            &["question", "about"],
+        ),
+        tool(
+            "arrange",
+            "Arrange the module board the author sees (they may also say it). action: open/close (show or fold definitions' bodies), hide/unhide (rows on their cards), only (just these definitions), slice (these and what touches them), clear, bring/put-away (modules' cards), show-board/show-editor. Use it to put what you are talking about in front of them.",
+            json!({ "action": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}, "modules": {"type": "array", "items": {"type": "string"}} }),
+            &["action"],
         ),
         tool(
             "show",
@@ -1131,6 +1263,8 @@ fn describe_tool(name: &str, what: &str) -> String {
         "research" => "researching".to_owned(),
         "search_docs" | "read_doc" => "reading Puffin's docs".to_owned(),
         "say" => "speaking".to_owned(),
+        "ask" => "asking you".to_owned(),
+        "arrange" => "arranging the board".to_owned(),
         other => other.replace('_', " "),
     }
 }
@@ -1139,7 +1273,7 @@ fn router_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["navigate", "build", "control", "reply"],
+        "required": ["navigate", "build", "control", "arrange", "answer", "reply"],
         "properties": {
             "navigate": {
                 "type": "object",
@@ -1163,6 +1297,27 @@ fn router_schema() -> Value {
                 },
             },
             "control": { "type": "string", "enum": ["none", "stop", "undo", "run-properties", "new-conversation", "mute", "unmute", "sleep", "follow", "unfollow", "run", "show-output", "hide-output"] },
+            "arrange": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["action", "names", "modules", "near", "side"],
+                "properties": {
+                    "action": { "type": "string", "enum": ["none", "show-board", "show-editor", "plan-mode", "build-mode", "open", "close", "hide", "unhide", "only", "slice", "clear", "bring", "put-away", "place"] },
+                    "names": { "type": "array", "items": { "type": "string" } },
+                    "modules": { "type": "array", "items": { "type": "string" } },
+                    "near": { "type": "string" },
+                    "side": { "type": "string", "enum": ["right", "left", "below", "above"] },
+                },
+            },
+            "answer": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["question", "text"],
+                "properties": {
+                    "question": { "type": "integer" },
+                    "text": { "type": "string" },
+                },
+            },
             "reply": { "type": "string" },
         },
     })
@@ -1203,11 +1358,34 @@ new-conversation (forget the builder's context), mute/unmute (the studio's voice
 listening), follow/unfollow (whether the view follows the builder's edits), run (run the program), \
 show-output / hide-output (the program's output and REPL), or none.
 
+arrange -- the module board (the program as cards of ML-style signatures, bodies hidden until opened), \
+instantly, no builder. action: show-board / show-editor (\"show me the board\", \"back to the code\"); \
+plan-mode / build-mode (plan mode: the builder writes signatures and leaves bodies as holes); open / close \
+(a definition's body: \"open step\", \"fold alloc\"); hide / unhide (rows: \"hide the store helpers\" -- \
+name each definition); only (\"just show step and inject\"); slice (\"show me what step depends on\", \
+\"what touches alloc\"); clear (\"show everything\"); bring / put-away (whole modules' cards); place \
+(module cards `modules` next to `near`, on `side`). `names` are exact definition names from the file \
+list, `modules` file names. Leave action \"none\" otherwise. Arranging and building can both happen.
+
+answer -- when the builder has an open question (listed above) and these words answer it, `question` is its \
+number and `text` the answer in full, self-contained (resolve \"yes\"/\"the second one\" against the \
+question). Otherwise question 0, text empty. An answer is not also a build instruction.
+
 reply: what the studio says back, aloud, in a few words -- or empty. Acknowledge build instructions \
 briefly (\"On it.\", \"Switching to a hash.\"); stay silent for pure navigation (the view moving is the \
 answer); answer a question about the program or the builder's state from what you see here, in one \
 sentence. If the words are clearly not meant for the studio (talking to someone else, filler, a \
 half-sentence), do nothing: all none, reply empty.";
+
+/// Added to a builder run's prompt while the board is in plan mode.
+const PLAN_MODE: &str = "\n\
+PLAN MODE is on. Build the program's design, not its code: modules (require/provide), data definitions \
+(define-type, define-type-alias, define-grammar), and for every function a typed signature `(: f (-> A B))` \
+with its body a single typed hole: `(define (f x) ??)`. The check checks everything around the holes, and \
+properties that reach a hole show as open, not failing. Write a body only when the author says to dive in, \
+implement or fill in a definition -- then that one alone. Keep each module's provide list current. When a \
+design decision matters and you cannot settle it from what the author said, `ask` (one question, about \
+the definitions it concerns) rather than guessing.\n";
 
 /// The builder's role (a fixed system prompt, after the Puffin reference).
 const BUILDER: &str = "\
@@ -1220,7 +1398,7 @@ How this differs from ordinary coding:
 sees each one land. Make progress visible: work in small, frequent edits rather than one huge one. \
 Scaffold first -- the modules, the data definitions, the function signatures, with typed holes `??` for \
 bodies you have not written yet -- then fill the holes in. A program whose only failures are holes \
-passes the check up to the first hole.
+passes the check: everything around the holes is checked.
 - Keep the program passing the check. Each edit's answer says whether it does; fix a failure before \
 going on.
 - The author may interrupt at any moment; you are then resumed with their new words, and what you \
@@ -1240,6 +1418,16 @@ affect them. Never weaken or delete a property to make it pass unless the author
 wrong, say so with `say`. When you build something substantial, propose a property or two of your own \
 in your reply, but add them only if asked. Properties run in the program's own modules: a module must \
 `provide` what properties.puf uses, and properties.puf must `require` it (add_property's `requires`).
+
+Questions. When a design decision matters and you cannot settle it from the author's words or the \
+source -- an interface, a representation, what a function must guarantee -- call `ask` with the question \
+and the definitions it is about. The author sees exactly those on the board and answers aloud; the \
+answer comes back as an instruction, and you write it down: as a property when it says what must hold, \
+in the types and signatures when it says how things are built. Answers are how the spec grows.
+
+The board. The author may be looking at the module board instead of the editor: module cards of \
+signatures, bodies folded. Write a one-line comment above each definition saying what it is for -- the \
+board shows it under the signature. Use `arrange` to put what you are talking about in front of them.
 
 Sources. When the author points at a paper, a spec or a page (\"the CESK* machine from Van Horn and \
 Might\"), use `research` once to get its exact content -- the grammar, the states, the transition rules \

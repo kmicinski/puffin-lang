@@ -172,7 +172,13 @@ over https (or localhost) for the microphone.
 - `sexp.rs`: `atoms`, every atom's span.
 - `index.html` / `main.js`: the button, the stylesheet, two handlers.
 
-## 7. Not yet
+## 7. Planning
+
+The module board (signatures with bodies opaque, arranged by voice),
+plan mode (bodies left as typed holes, checked and run past), and the
+builder's questions with their slices are docs/PLANNING.md.
+
+## 8. Not yet
 
 - Navigation by binding: usages are by name (every atom spelled the
   same), not by the compiler's scopes; a local that shadows a top-level

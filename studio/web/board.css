@@ -1,0 +1,165 @@
+/* The module board (board.js): module cards of ML-style signatures,
+   dense on purpose -- the design, not the code, fills the screen. */
+
+.board {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  overflow: auto;
+  background:
+    radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0 / 22px 22px,
+    var(--page);
+}
+body.board-on .focus-chip { display: none; }
+/* the canvas (a new visit, or a project with no code) comes first */
+body.focus-canvas .board { display: none; }
+.board-canvas { position: relative; min-width: 100%; min-height: 100%; }
+.board-wires { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.board-wire { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: 0.7; }
+.board.focusing .board-wire { opacity: 0.15; }
+body.focus-canvas .board-question { display: none; }
+.board-empty {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--muted);
+  font: 14px var(--sans);
+  pointer-events: none;
+}
+
+.board-card {
+  position: absolute;
+  width: max-content;
+  min-width: 220px;
+  max-width: 560px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: 0 2px 10px rgba(7, 54, 66, 0.08);
+  font: 12px/1.45 var(--mono);
+  color: var(--text);
+  transition: opacity 0.25s, filter 0.25s;
+}
+.board-card.dragging { box-shadow: 0 10px 30px rgba(7, 54, 66, 0.2); z-index: 5; }
+.board-card.faded { opacity: 0.32; filter: saturate(0.4); }
+.board-card.faded:hover { opacity: 0.8; }
+
+.board-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+  border-radius: 7px 7px 0 0;
+  cursor: grab;
+  user-select: none;
+}
+.board-card.dragging .board-card-head { cursor: grabbing; }
+.board-card-title { font: 600 12.5px var(--sans); color: var(--strong); }
+.board-card-meta { flex: 1; color: var(--muted); font-size: 11px; }
+.board-holes { color: var(--violet); }
+.board-requires { padding: 3px 10px 0; color: var(--muted); font-size: 11px; }
+.board-items { padding: 4px 0; }
+
+.board-x, .board-tools button, .board-more {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 3px;
+}
+.board-x:hover, .board-tools button:hover, .board-more:hover { color: var(--strong); }
+
+.board-item-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 8px 1px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.board-item-line:hover { background: var(--chrome); }
+.board-kind { width: 1em; color: var(--muted); text-align: center; flex: none; }
+.kind-type .board-kind, .kind-alias .board-kind, .kind-grammar .board-kind { color: var(--yellow); }
+.kind-fun .board-kind { color: var(--blue); }
+.board-sig { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.board-sig-kw { color: var(--muted); }
+.board-sig-name { color: var(--strong); font-weight: 600; }
+.board-sig-rest { color: var(--text); }
+.board-opaque { color: var(--violet); flex: none; }
+.board-item.opaque .board-sig-name { color: var(--violet); }
+.board-item.is-hidden { opacity: 0.55; }
+.board-statement { font: 12px var(--sans); color: var(--strong); white-space: normal; }
+.board-prop.ok { color: var(--green); }
+.board-prop.fail, .board-prop.crashed { color: var(--red); }
+.board-prop.open { color: var(--violet); }
+.board-item.focused .board-item-line { background: var(--violet-tint); box-shadow: inset 2px 0 0 var(--violet); }
+.board-tools { visibility: hidden; flex: none; }
+.board-item-line:hover .board-tools { visibility: visible; }
+.board-doc {
+  padding: 0 10px 2px 30px;
+  color: var(--muted);
+  font: italic 11px var(--sans);
+  white-space: normal;
+  max-width: 520px;
+}
+.board-body {
+  margin: 2px 8px 6px 26px;
+  padding: 6px 8px;
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 11.5px/1.45 var(--mono);
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 340px;
+}
+.board-more { display: block; width: 100%; text-align: left; padding: 2px 10px 6px 30px; font-size: 11px; }
+.board-effects { padding: 0 10px 6px 30px; color: var(--muted); font-size: 11px; }
+
+/* a question and its slice */
+.board-question {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(640px, calc(100% - 32px));
+  z-index: 27;
+  background: var(--surface);
+  border: 1px solid var(--violet);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(108, 113, 196, 0.25);
+  padding: 10px 12px;
+  font: 13.5px/1.45 var(--sans);
+  color: var(--strong);
+}
+.board-question-head { display: flex; gap: 10px; align-items: baseline; }
+.board-question-mark { color: var(--violet); font-weight: 700; font-size: 16px; }
+.board-question-text { flex: 1; }
+.board-question-why { margin: 4px 0 0 26px; color: var(--text); font-size: 12.5px; }
+.board-answer {
+  margin: 8px 0 0 26px;
+  width: calc(100% - 26px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  font: 13px var(--sans);
+  background: var(--page);
+  color: var(--text);
+}
+
+/* the bar's controls for the board */
+.focus-board, .focus-mode {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font: 12px var(--sans);
+  cursor: pointer;
+}
+.focus-board.on, .focus-mode.on { border-color: var(--violet); color: var(--violet); }
+.focus-file[draggable="true"] { cursor: grab; }

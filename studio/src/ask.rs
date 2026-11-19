@@ -240,7 +240,7 @@ impl Studio {
         let id = self.review.lock().expect("review lock").propose(&files, thread, change, note)?;
         self.publish_review();
         let checks = if report.holed() {
-            format!("the program as your proposals leave it has {holes} typed hole(s) (??); it passes the check up to the first hole, and nothing past that hole was checked")
+            format!("the program as your proposals leave it has {holes} typed hole(s) (??); everything around them passes the check")
         } else {
             "the program as your proposals leave it passes the check".to_owned()
         };

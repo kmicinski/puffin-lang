@@ -59,7 +59,7 @@ function wordAt(line, column) {
   return line.slice(start, end + 1);
 }
 
-export function createVoice({ editor, files, send, note, button, stage, layout, run }) {
+export function createVoice({ editor, files, send, note, button, stage, layout, board, run }) {
   const saved = load();
   // replies are written, not spoken, unless asked for (its own key: an
   // older `speak` was the old default, on)
@@ -287,15 +287,20 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   // ---- Properties ---------------------------------------------------------------------
 
   function renderProperties() {
+    board?.setProperties(properties);
     const list = properties.properties ?? [];
-    const failing = list.filter((p) => p.status !== "ok" && p.status !== "pending");
+    // open: it reaches a definition not written yet (??) -- undecided, not failing
+    const failing = list.filter((p) => !["ok", "pending", "open"].includes(p.status));
+    const open = list.filter((p) => p.status === "open");
     badge.hidden = !list.length && !properties.error;
     badge.className = `voice-badge${failing.length || properties.error ? " bad" : ""}`;
     badge.textContent = properties.error
       ? "properties don't run"
       : failing.length
         ? `✗ ${failing.length} of ${list.length} ${list.length === 1 ? "property" : "properties"} failing`
-        : `✓ ${list.length} ${list.length === 1 ? "property" : "properties"}`;
+        : open.length
+          ? `✓ ${list.length - open.length} · ◌ ${open.length} open`
+          : `✓ ${list.length} ${list.length === 1 ? "property" : "properties"}`;
     badge.title = "The properties (say “run the properties”)";
     propCard.replaceChildren();
     const head = el("div", "voice-card-head");
@@ -306,7 +311,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     if (properties.error) propCard.append(el("div", "voice-prop-error", properties.error));
     for (const property of list) {
       const row = el("button", `voice-prop ${property.status}`);
-      const mark = { ok: "✓", fail: "✗", crashed: "!", "not-run": "·", pending: "…" }[property.status] ?? "?";
+      const mark = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run": "·", pending: "…" }[property.status] ?? "?";
       const line = el("span", "voice-prop-top");
       line.append(el("span", "voice-prop-mark", mark), el("span", "voice-prop-text", property.statement || property.name));
       row.append(line);
@@ -508,6 +513,11 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     if (/^(show (the )?(conversation|history|trace)|what happened|what did you do)$/.test(said)) return timeline.show(), true;
     if (/^(hide (the )?(conversation|history|trace))$/.test(said)) return timeline.hide(), true;
     if (/^(show (the )?properties)$/.test(said)) return (propCard.hidden = false), true;
+    // the module board (board.js)
+    if (board && /^(show (me )?(the )?board|board( view)?|show (me )?(the )?(modules|signatures|design))$/.test(said)) return board.setView("board"), true;
+    if (board && /^(show (me )?(the )?(editor|code|source)|editor( view)?|back to (the )?(editor|code))$/.test(said)) return board.setView("editor"), true;
+    if (board && /^(plan mode|planning mode|let'?s plan|start planning)$/.test(said)) return board.setMode("plan"), true;
+    if (board && /^(build mode|building mode|stop planning|let'?s build)$/.test(said)) return board.setMode("build"), true;
     if (/^(run|run it|run the program|run this)$/.test(said)) return run(), true;
     if (/^(show (the )?(output|repl))$/.test(said)) return layout.showOutput(true), true;
     if (/^(hide (the )?(output|repl)|close (the )?(output|repl))$/.test(said)) return layout.showOutput(false), true;
