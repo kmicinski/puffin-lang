@@ -1006,6 +1006,14 @@ impl Studio {
                     targets.insert(entry);
                 }
             }
+            // a module checked on its own before (it was shown) that
+            // requires this one: its report would be stale otherwise
+            let checked: Vec<String> = self.diagnostics.lock().expect("diagnostics lock").keys().cloned().collect();
+            for module in checked {
+                if module != *file && program.contains_key(&module) && toolchain::closure(&program, &module).contains(file) {
+                    targets.insert(module);
+                }
+            }
         }
         if targets.is_empty() {
             return;

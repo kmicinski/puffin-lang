@@ -870,3 +870,19 @@ async fn a_question_shows_its_slice() {
     assert_eq!(items, vec!["alloc", "fresh", "step"]);
     assert_eq!(board["view"], "board");
 }
+
+#[tokio::test]
+async fn a_change_rechecks_the_modules_that_require_it() {
+    let lib = "(provide f)\n(define (f [x : Int]) : Int x)\n";
+    let user = "(require \"lib.puf\")\n(provide g)\n(define (g) (f \"no\"))\n";
+    let Some(studio) = studio("recheck-dependents", &[("lib.puf", lib), ("user.puf", user), ("main.puf", "(require \"user.puf\")\n(g)\n")]) else { return };
+    // user.puf is checked on its own (shown in a tab) and fails
+    studio.check_files(&["user.puf".to_owned()]).await;
+    // what the page shows for user.puf: every report's errors located there
+    let failing = |studio: &Studio| studio.diagnostics_of("user.puf").iter().any(|d| d.severity == "error");
+    assert!(failing(&studio));
+    // lib.puf changes so that the call is fine: user.puf's report follows
+    studio.replace("lib.puf", "(provide f)\n(define (f x) x)\n".to_owned(), "test", "loosen f");
+    studio.check_files(&["lib.puf".to_owned()]).await;
+    assert!(!failing(&studio), "{:?}", studio.diagnostics_of("user.puf"));
+}
