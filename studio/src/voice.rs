@@ -51,6 +51,9 @@ const AUTO_FIXES: u32 = 2;
 const MAX_TURNS: u32 = 80;
 /// Most places a focus shows.
 const MAX_TARGETS: usize = 40;
+/// Words the router did nothing with (not yet a request: the recognizer
+/// ends a phrase at every pause) are read with what comes next, for this long.
+const FRAGMENT_TTL: Duration = Duration::from_secs(45);
 
 /// What the browser knows when the author speaks.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -116,6 +119,10 @@ struct State {
     /// (file, from, to) of each builder edit this turn: what the board
     /// arranges itself around when the turn ends (board.rs auto_arrange).
     touched: Vec<(String, usize, usize)>,
+    /// Phrases the router found nothing in, when, oldest first: the start
+    /// of a sentence the author is still saying. The next phrase is routed
+    /// with them, and they are dropped once a phrase does something.
+    fragments: Vec<(Instant, String)>,
 }
 
 pub struct Voice {
@@ -125,6 +132,9 @@ pub struct Voice {
     effort: String,
     /// The latest change to the program; properties run once it settles.
     changed: Mutex<Option<Instant>>,
+    /// Phrases are routed one at a time, in order, so each sees what the
+    /// one before it came to (its fragments, the conversation).
+    routing: tokio::sync::Mutex<()>,
 }
 
 impl Default for Voice {
@@ -142,6 +152,7 @@ impl Voice {
             model: env("PUFFIN_VOICE_MODEL", claude_api::DEEP_MODEL),
             effort: env("PUFFIN_VOICE_EFFORT", "medium"),
             changed: Mutex::new(None),
+            routing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -214,7 +225,21 @@ impl Studio {
         let studio = self.clone();
         tokio::spawn(async move {
             let started = Instant::now();
-            match studio.route(&utterance, &context).await {
+            let decision = {
+                let _turn = studio.voice.routing.lock().await;
+                let before = studio.fragments();
+                let decision = studio.route(&utterance, &before, &context).await;
+                if let Ok(decision) = &decision {
+                    let mut state = studio.voice.state();
+                    if inert(decision) {
+                        state.fragments.push((Instant::now(), utterance.clone()));
+                    } else {
+                        state.fragments.clear();
+                    }
+                }
+                decision
+            };
+            match decision {
                 Ok(decision) => {
                     let ms = started.elapsed().as_millis() as u64;
                     studio.converse(format!("author: {utterance}"));
@@ -264,6 +289,7 @@ impl Studio {
                 let mut state = self.voice.state();
                 state.session = None;
                 state.conversation.clear();
+                state.fragments.clear();
                 drop(state);
                 self.voice_event("reply", json!({ "text": "Starting a fresh conversation with the builder.", "speak": true }));
             }
@@ -273,7 +299,14 @@ impl Studio {
 
     // ---- The router -------------------------------------------------------------
 
-    async fn route(&self, utterance: &str, context: &Context) -> Result<Value, String> {
+    /// The fragments still fresh enough to be the start of what comes next.
+    fn fragments(&self) -> Vec<String> {
+        let mut state = self.voice.state();
+        state.fragments.retain(|(at, _)| at.elapsed() < FRAGMENT_TTL);
+        state.fragments.iter().map(|(_, text)| text.clone()).collect()
+    }
+
+    async fn route(&self, utterance: &str, before: &[String], context: &Context) -> Result<Value, String> {
         let api = self.voice.api.as_ref().ok_or("no Claude API credentials")?;
         let files = self.files();
         let mut user = String::new();
@@ -327,6 +360,16 @@ impl Studio {
         let _ = writeln!(user, "Properties:\n{properties}");
         if !conversation.is_empty() {
             let _ = writeln!(user, "\nThe conversation so far, oldest first:\n{}", conversation.join("\n"));
+        }
+        if !before.is_empty() {
+            let quoted: Vec<String> = before.iter().map(|text| format!("\"{text}\"")).collect();
+            let _ = writeln!(
+                user,
+                "\nJust before, the author said {} -- you did nothing with it then, as not yet a whole request. \
+                 It is likely the start of what they say now (the speech recognizer ends a phrase at every pause): \
+                 read it and the new words as ONE utterance, and keep everything it asked for in any instruction.",
+                quoted.join(", then ")
+            );
         }
         let _ = writeln!(user, "\nThe author just said: \"{utterance}\"");
         api.structured(claude_api::FAST_MODEL, "low", ROUTER, &user, router_schema(), 1200, Duration::from_secs(20)).await
@@ -1039,6 +1082,18 @@ impl Studio {
 
 /// The tools a voice builder has: the assistant's reads and checks, and
 /// its own writes (applied at once).
+/// A routing that does nothing at all: no navigation, build, control,
+/// arrangement, answer or reply -- words that were not yet a request.
+fn inert(decision: &Value) -> bool {
+    let none = |v: &Value| v.as_str().is_none_or(|s| s == "none");
+    none(&decision["navigate"]["kind"])
+        && (none(&decision["build"]["urgency"]) || decision["build"]["instruction"].as_str().is_none_or(|s| s.trim().is_empty()))
+        && none(&decision["control"])
+        && none(&decision["arrange"]["action"])
+        && decision["answer"]["question"].as_u64().unwrap_or(0) == 0
+        && decision["reply"].as_str().is_none_or(|s| s.trim().is_empty())
+}
+
 pub fn tools() -> Value {
     const READS: [&str; 13] = [
         "list_files", "get_file", "check", "assists_at", "holes", "lint", "type_at", "facts_at", "evaluate", "trace", "evaluate_program", "search_docs", "read_doc",
@@ -1488,6 +1543,28 @@ mod tests {
         for action in ["note", "decide", "slice", "only", "plan-mode", "build-mode"] {
             assert!(actions.contains(&action), "{action}");
         }
+    }
+
+    #[test]
+    fn a_routing_that_does_nothing_is_inert() {
+        let nothing = json!({
+            "navigate": { "kind": "none", "name": "", "file": "", "line": 0, "query": "" },
+            "build": { "instruction": "", "urgency": "none" },
+            "control": "none",
+            "arrange": { "action": "none" },
+            "answer": { "question": 0, "text": "" },
+            "reply": ""
+        });
+        assert!(inert(&nothing));
+        let mut building = nothing.clone();
+        building["build"] = json!({ "instruction": "Build an STLC checker", "urgency": "interrupt" });
+        assert!(!inert(&building));
+        let mut replying = nothing.clone();
+        replying["reply"] = json!("I'm here.");
+        assert!(!inert(&replying));
+        let mut looking = nothing;
+        looking["navigate"]["kind"] = json!("definition");
+        assert!(!inert(&looking));
     }
 
     #[test]

@@ -21,6 +21,7 @@
 // the toggles -- is behind the ⋯ menu.
 
 import { createTimeline } from "./timeline.js";
+import { createProgress } from "./progress.js";
 
 const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
@@ -131,8 +132,6 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     }
     event.stopPropagation();
   });
-  const activity = el("div", "voice-activity");
-  activity.hidden = true;
   const stopButton = el("button", "voice-stop", "Stop");
   stopButton.hidden = true;
   stopButton.title = "Stop the builder (say “stop”)";
@@ -149,7 +148,10 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   document.addEventListener("click", (event) => {
     if (!menu.contains(event.target)) menu.hidden = true;
   });
-  pill.append(mic, caption, typed, activity, stopButton, more);
+  pill.append(mic, caption, typed, stopButton, more);
+  // did it hear, and is anything happening: a card above the pill, only
+  // while something said is in flight (progress.js)
+  const progress = createProgress({ host: pill });
 
   // the badge lives in the focused layout's bar (focus.js)
   layout.slot.append(badge);
@@ -380,11 +382,8 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   function renderActivity(a) {
     const state = a?.state ?? "idle";
     busy = state !== "idle";
-    activity.hidden = !busy;
+    // what it is doing is the progress card's (progress.js); the pill keeps Stop
     stopButton.hidden = !busy;
-    const words = { starting: "starting", thinking: "thinking", working: "working", talking: "writing", queued: "queued", redirecting: "redirecting" };
-    activity.textContent = a?.text || words[state] || state;
-    activity.className = `voice-activity ${state}`;
   }
 
   // ---- Listening ---------------------------------------------------------------------------
@@ -593,7 +592,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     try { sessionStorage.setItem(PENDING, text); } catch { /* no session storage: it is said again by hand */ }
     naming = projectName(text);
     layout.started();
-    show("Starting a new project…", "reply");
+    progress.starting(text);
     send({ t: "new-project", name: naming });
   }
 
@@ -620,6 +619,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     // again offers a new one in this tab
     layout.started();
     files.flush?.();
+    progress.asked(text);
     send({ t: "voice", text, context: context() });
   }
 
@@ -635,9 +635,11 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     switch (event.kind) {
       case "heard":
         timeline.you(event.text);
+        progress.asked(event.text, event.at);
         break;
       case "routed":
         timeline.routed(event.did ?? [], event.ms ?? 0);
+        progress.routed(event, replaying);
         break;
       case "reply":
         timeline.reply(event.text, event.from === "builder");
@@ -648,22 +650,30 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
         break;
       case "builder":
         timeline.note(event.turn ?? 0, event.text);
+        progress.note(event);
         break;
       case "turn":
         timeline.turn(event);
+        progress.turn(event);
         break;
       case "step":
         timeline.step(event);
+        progress.step(event);
         break;
       case "step-done":
         timeline.stepDone(event);
+        progress.stepDone(event);
         break;
       case "turn-end":
         timeline.turnEnd(event);
+        progress.turnEnd(event, replaying);
         break;
       case "error":
         timeline.error(event.message);
-        if (!replaying) show(event.message, "bad");
+        if (!replaying) {
+          show(event.message, "bad");
+          progress.error(event.message);
+        } else progress.settled();
         break;
       case "focus":
         if (event.from !== "builder") timeline.focus(event.label, event.targets, () => focus(event.label, event.targets, false));
@@ -672,6 +682,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       case "edited":
         if (!event.file) break;
         timeline.edited(event);
+        progress.edited(event);
         if (replaying) break;
         layout.changed();
         if (settings.follow && Date.now() - lastUserMove > USER_HOLD_MS) go(event.file, event.from, event.to, "voice-edit");
@@ -680,6 +691,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       case "activity":
         renderActivity(event);
         timeline.activity(event);
+        progress.activity(event);
         break;
       case "properties":
         properties = event.results ?? { properties: [] };
@@ -712,6 +724,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
 
   function receiveState(state) {
     timeline.clear();
+    progress.reset();
     for (const event of state.log ?? []) {
       // the past, into the trace, without moving the view or speaking again
       if (["client", "properties"].includes(event.kind)) continue;
@@ -723,6 +736,10 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     failingBefore = new Set((properties.properties ?? []).filter((p) => p.status !== "ok").map((p) => p.name));
     renderProperties();
     renderActivity(state.activity);
+    // a run the log no longer shows the end of, or words never answered:
+    // what the studio says now is what counts
+    if ((state.activity?.state ?? "idle") === "idle") progress.reset();
+    else progress.activity(state.activity);
     if (state.unavailable) show(state.unavailable, "bad");
     // the description that made this project: now it can be built
     let pending = null;
@@ -732,6 +749,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     } catch { /* none */ }
     if (pending) {
       files.flush?.();
+      progress.asked(pending);
       send({ t: "voice", text: pending, context: context() });
     }
   }

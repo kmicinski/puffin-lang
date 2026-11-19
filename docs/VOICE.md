@@ -47,6 +47,13 @@ and its line, the selection, the visible lines.
      navigation: the view moving is the answer; empty for talk that is
      not meant for the studio).
 
+   Phrases are routed one at a time, in order. The recognizer ends a
+   phrase at every pause, so a request often arrives in pieces ("so
+   let's build out" … "a checker for the simply typed lambda calculus").
+   Words the router does nothing with are kept (`fragments`, 45 s) and
+   given to the router with the next phrase, to read as one utterance;
+   the first phrase that does something clears them.
+
 ## 2. The builder
 
 A long-running `claude -p` agent (`claude-opus-5-5` by default,
@@ -95,6 +102,16 @@ classic layout (tree, tabs, REPL), remembered per browser.
   (file:lines, a click to show them, ▾ for the new code), check, run,
   property and lookup, with how it went; a live line at its foot. Older
   turns fold to a summary line. "show history" / "hide history", or ‹.
+- **Progress** (`studio/web/progress.js`), a card just above the pill,
+  there only while something said is in flight: the phrase at once with
+  "understanding…" and a running clock; then what the router made of it
+  ("On it: <the instruction>", "next: …" when queued, or a faint "go on…"
+  for words kept as the start of a sentence); then, while the builder
+  works, its latest note, what it is doing now, the last steps and the
+  edits so far; at the end "done · 1m 12s · 4 edits", for a moment. On the
+  canvas, where there is no code to watch yet, it is larger and the
+  welcome steps aside; over code it is one line, since the edits are on
+  screen.
 - **The microphone** button in the pill: red while listening, with a ring
   as loud as the microphone hears, so it is plain the browser hears you;
   every recognition error is written out (blocked, no microphone, no

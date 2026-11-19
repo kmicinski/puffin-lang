@@ -153,7 +153,7 @@ export function createTimeline({ host, go }) {
     // what the router made of it
     routed(did, ms) {
       if (!exchange) return;
-      exchange.meta.textContent = `${did.length ? did.join(" · ") : "nothing to do"} · ${seconds(ms)}`;
+      exchange.meta.textContent = `${did.length ? did.join(" · ") : "kept: waiting for the rest"} · ${seconds(ms)}`;
     },
     reply(text, fromBuilder) {
       const node = el("div", `timeline-reply${fromBuilder ? " builder" : ""}`);

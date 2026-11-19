@@ -551,3 +551,80 @@ body.focus-canvas .focus-welcome {
 body.focus-canvas .focus-plan-here:not([hidden]) { display: block; }
 .focus-plan-here:hover { text-decoration: underline; }
 @media (max-height: 700px) { .focus-welcome-examples { display: none; } }
+
+/* ---- Progress (progress.js): did it hear, is anything happening ----------- */
+
+/* rides just above the pill, wherever the pill is */
+.voice-progress {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(100% + 8px);
+  padding: 7px 12px 8px;
+  border-radius: 12px;
+  background: var(--base3);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(7, 54, 66, 0.08);
+  font: 12.5px/1.4 var(--sans);
+  color: var(--text);
+  animation: progress-in 0.18s ease-out;
+  pointer-events: none;
+}
+@keyframes progress-in { from { opacity: 0; transform: translateY(4px); } }
+.voice-progress-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.voice-progress-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--violet);
+  align-self: center;
+  animation: voice-busy 1.2s ease-in-out infinite;
+}
+.voice-progress-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-progress-time { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.voice-progress-now {
+  color: var(--violet);
+  padding-left: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.voice-progress-past { display: none; }
+.voice-progress-step { color: var(--muted); padding-left: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; }
+.voice-progress-step::before { content: "✓ "; color: var(--green); }
+.voice-progress-step.bad::before { content: "✗ "; color: var(--red); }
+/* a passing word: nothing running, so nothing pulses */
+.voice-progress.waiting, .voice-progress.done, .voice-progress.queued, .voice-progress.bad { animation: progress-in 0.18s ease-out; }
+.voice-progress.waiting .voice-progress-dot { background: var(--base1); animation: none; }
+.voice-progress.waiting .voice-progress-title { font-weight: 400; color: var(--muted); font-style: italic; }
+.voice-progress.done .voice-progress-dot { background: var(--green); animation: none; }
+.voice-progress.queued .voice-progress-dot { background: var(--yellow); animation: none; }
+.voice-progress.bad .voice-progress-dot { background: var(--red); animation: none; }
+.voice-progress.bad .voice-progress-title { color: var(--red); font-weight: 400; white-space: normal; }
+
+/* the canvas: no code to watch yet, so this is the whole show -- the
+   welcome steps aside and the card grows: the request in full, the steps */
+body.voice-working.focus-canvas .focus-welcome,
+body.voice-working.focus-canvas .focus-plan-here,
+body.voice-working.focus-canvas .focus-continue { display: none !important; }
+body.focus-canvas .voice-progress {
+  bottom: calc(100% + 16px);
+  left: 0;
+  right: 0;
+  padding: 12px 16px 12px;
+  font-size: 14px;
+}
+body.focus-canvas .voice-progress-title { white-space: normal; font-size: 16px; line-height: 1.35; max-height: 4.1em; overflow: hidden; }
+body.focus-canvas .voice-progress-now { padding-top: 4px; white-space: normal; }
+body.focus-canvas .voice-progress-past { display: block; padding-top: 2px; }
+.voice-progress-said { display: none; }
+body.focus-canvas .voice-progress-said { display: block; padding: 3px 0 0 16px; color: var(--text); font-style: italic; }
