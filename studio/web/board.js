@@ -31,6 +31,8 @@ const PROP_MARK = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run"
 const GRID = { x: 28, y: 92, w: 380, gap: 24 };
 const FRESH_MS = 2600;
 const ZOOM_KEY = "puffin-board-zoom";
+// narrower than this, the board stacks its cards (a phone)
+const COMPACT = 700;
 const SVG = "http://www.w3.org/2000/svg";
 
 const el = (tag, className, text) => {
@@ -103,7 +105,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   zoomIn.title = "Zoom in (+)";
   zoomLabel.title = "Fit the board to the window (0)";
   const keysHelp = el("button", "board-zoom board-help", "?");
-  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · h hide · f focus · e edit · Esc clear · + − 0 zoom";
+  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · h hide · f focus · e edit · t tidy · Esc clear · + − 0 zoom";
   const tools = el("div", "board-hud-tools");
   tools.append(filter, zoomOut, zoomLabel, zoomIn, keysHelp);
   hud.append(progress, bar, tools);
@@ -303,7 +305,19 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     // A focus (a question's slice, "just show ..."): only the cards it
     // names, packed under the question in dependency order. The author's
     // own layout is untouched and comes back when the focus clears.
-    if (focus) {
+    // a narrow window (a phone): the cards out, stacked in dependency
+    // order, whatever their saved places; the saved layout is untouched
+    const compact = root.clientWidth > 0 && root.clientWidth < COMPACT;
+    root.classList.toggle("compact", compact);
+    if (compact && !focus) {
+      for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
+      const below = hud.hidden ? GRID.y : (hud.offsetTop + hud.offsetHeight) / zoom + 14;
+      for (const [path, spot] of shelves(board.cards.filter((c) => nodeOf(c.path)), sizeOf, Math.max(GRID.y, below))) {
+        const node = nodeOf(path);
+        node.style.left = `${spot.x}px`;
+        node.style.top = `${spot.y}px`;
+      }
+    } else if (focus) {
       const focused = board.cards.filter((c) => (moduleOf(c.path)?.items ?? []).some((i) => focus.has(keyOf(c.path, i.name))));
       for (const card of board.cards) {
         const node = nodeOf(card.path);
@@ -709,6 +723,15 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     }
   }
 
+  // re-pack every card in dependency order for this window (t, the palette)
+  function tidy() {
+    change((b) => {
+      const spots = shelves(b.cards.filter((c) => nodeOf(c.path)), sizeOf, GRID.y);
+      for (const card of b.cards) Object.assign(card, spots.get(card.path) ?? {});
+    });
+    root.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+  }
+
   // ---- zoom ------------------------------------------------------------------------------------
 
   function applyZoom() {
@@ -846,6 +869,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       "=": () => setZoom(zoom + 0.1),
       "-": () => setZoom(zoom - 0.1),
       0: () => fit(),
+      t: () => tidy(),
     }[event.key];
     if (act) {
       event.preventDefault();
@@ -862,7 +886,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   // ---- dragging ------------------------------------------------------------------------------
 
   function startDrag(event, node, card) {
-    if (event.button !== 0 || event.target.closest("button") || board.focus) return;
+    if (event.button !== 0 || event.target.closest("button") || board.focus || root.classList.contains("compact")) return;
     event.preventDefault();
     const start = { x: event.clientX, y: event.clientY, left: card.x, top: card.y };
     dragging = { path: card.path };
@@ -962,6 +986,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     // a module brought out (a chip clicked while the board shows)
     bringOut: (path) => change((b) => { ensureCard(b, path); }),
     fit,
+    tidy,
     outline: () => outline,
     editAt,
     // focus on a definition and what touches it (the palette, f)

@@ -491,3 +491,14 @@ body.focus-canvas .timeline, body.focus-canvas .timeline-tab { display: none; }
   white-space: pre;
   color: var(--strong);
 }
+
+/* ---- narrow windows (a phone): the bar keeps to one line ---- */
+@media (max-width: 700px) {
+  .focus-bar { width: calc(100% - 16px); gap: 6px; opacity: 1; }
+  .focus-left { min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: none; }
+  .focus-left::-webkit-scrollbar { display: none; }
+  .focus-files { flex-wrap: nowrap; }
+  .focus-right { flex: none; gap: 4px; }
+  .focus-palette, .focus-right .pill-quiet { display: none; }
+  .voice-pill { width: calc(100% - 16px); bottom: 8px; }
+}

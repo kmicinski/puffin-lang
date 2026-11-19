@@ -66,7 +66,8 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   const slot = el("span", "focus-slot"); // voice mode's badge
   // the module board (board.js) and plan mode
   let board = null;
-  const boardButton = el("button", "focus-board", "▦ Board");
+  const boardButton = el("button", "focus-board");
+  boardButton.append(el("span", "focus-icon", "▦"), el("span", "focus-label", " Board"));
   boardButton.title = "The module board: signatures, bodies opaque (⌘⇧B, or say “show the board”)";
   boardButton.addEventListener("click", () => board?.toggle());
   const modeButton = el("button", "focus-mode", "Plan");

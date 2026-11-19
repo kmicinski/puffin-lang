@@ -271,3 +271,17 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .focus-palette { color: var(--muted); font-size: 11px; }
 .focus-board.on, .focus-mode.on { border-color: var(--violet); color: var(--violet); }
 .focus-file[draggable="true"] { cursor: grab; }
+
+/* ---- narrow windows (a phone) ---- */
+.board.compact .board-card { max-width: calc(100vw - 40px); }
+.board.compact .board-card-head { cursor: default; }
+.board.compact .board-sig { white-space: normal; }
+.board.compact .board-item-line { white-space: normal; align-items: flex-start; }
+@media (max-width: 700px) {
+  .board-hud { flex-wrap: wrap; border-radius: 14px; gap: 6px 10px; top: 44px; left: 10px; max-width: calc(100% - 20px); }
+  .board-progress { flex-wrap: wrap; gap: 4px 10px; }
+  .board-hud-tools .board-zoom, .board-help { display: none; }
+  .board-filter { width: 110px; }
+  .board-question { top: 120px; }
+  .focus-bar .focus-label { display: none; }
+}

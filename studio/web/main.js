@@ -153,6 +153,7 @@ const palette = createPalette({
     add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
     if (onBoard) {
       add("Board", "Fit the board to the window", () => board.fit(), { icon: "⤢", keys: "0" });
+      add("Board", "Tidy the board: re-pack the cards for this window", () => board.tidy(), { icon: "▤", keys: "t", keywords: "arrange layout pack" });
       add("Board", "Filter the board", () => board.focusFilter(), { icon: "⌕", keys: "/" });
       if (board.state().focus) add("Board", "Show everything (clear the focus)", () => board.clearFocus(), { icon: "◎", keys: "Esc" });
     }
