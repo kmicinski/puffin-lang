@@ -140,6 +140,88 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board-prop.ok { color: var(--green); }
 .board-prop.fail, .board-prop.crashed { color: var(--red); }
 .board-prop.open { color: var(--violet); }
+.board-decision.open { color: var(--violet); font-weight: 700; }
+.board-decision.decided { color: var(--green); }
+.board-answer-text { font-style: normal; color: var(--text); }
+
+/* ---- notes: decisions and comments on the design ---- */
+.board-note-count { flex: none; font: 10.5px var(--sans); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; }
+.board-note-count.decided { color: var(--violet); border-color: var(--violet); }
+.board-card-note { font-size: 12px; }
+.board-module-notes { padding: 4px 6px 0; }
+.board-note {
+  margin: 3px 6px 6px 22px;
+  padding: 5px 9px 6px;
+  border-left: 2px solid var(--border-strong);
+  background: var(--page);
+  border-radius: 0 6px 6px 0;
+  font: 12px/1.45 var(--sans);
+  white-space: normal;
+  max-width: 520px;
+  animation: board-open 0.18s ease-out;
+}
+.board-note.decision { border-left-color: var(--violet); background: var(--violet-tint); }
+.board-note.ask { border-left-color: var(--cyan); }
+.board-note-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 1px; }
+.board-note-kind { font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
+.board-note.decision .board-note-kind { color: var(--violet); }
+.board-note-by { font-size: 10.5px; color: var(--muted); font-style: italic; }
+.board-note-tools { margin-left: auto; visibility: hidden; }
+.board-note:hover .board-note-tools { visibility: visible; }
+.board-note-tools button { border: 0; background: none; color: var(--muted); cursor: pointer; font: 11px var(--sans); padding: 0 3px; }
+.board-note-tools button:hover { color: var(--strong); }
+.board-note-text { color: var(--strong); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.board-note-editor {
+  margin: 4px 6px 8px 22px;
+  padding: 8px;
+  border: 1px solid var(--violet);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgba(108, 113, 196, 0.18);
+  max-width: 540px;
+  white-space: normal;
+  font-family: var(--sans);
+  animation: board-open 0.15s ease-out;
+}
+.board-note-kinds { display: flex; gap: 4px; margin-bottom: 6px; }
+.board-note-chip {
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font: 11.5px var(--sans);
+  cursor: pointer;
+}
+.board-note-chip.on.decision { border-color: var(--violet); color: var(--violet); background: var(--violet-tint); }
+.board-note-chip.on.comment { border-color: var(--strong); color: var(--strong); }
+.board-note-chip.on.ask { border-color: var(--cyan); color: var(--cyan); }
+.board-note-text-input {
+  width: 100%;
+  min-height: 54px;
+  resize: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 12.5px/1.45 var(--sans);
+  color: var(--strong);
+  background: var(--page);
+  outline: none;
+}
+.board-note-text-input:focus { border-color: var(--violet); }
+.board-note-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.board-note-hint { flex: 1; font-size: 11px; color: var(--muted); }
+.board-note-save, .board-note-cancel {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 12px;
+  font: 12px var(--sans);
+  cursor: pointer;
+  background: var(--page);
+  color: var(--text);
+}
+.board-note-save { background: var(--violet); border-color: var(--violet); color: var(--on-accent); }
 
 /* the keyboard's row */
 .board-item.cursor > .board-item-line { background: var(--chrome); box-shadow: inset 0 0 0 1px var(--border-strong); }
@@ -285,3 +367,4 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
   .board-question { top: 120px; }
   .focus-bar .focus-label { display: none; }
 }
+.board-card[data-path="#decisions"] { max-width: 460px; }

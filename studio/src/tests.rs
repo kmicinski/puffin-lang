@@ -886,3 +886,24 @@ async fn a_change_rechecks_the_modules_that_require_it() {
     studio.check_files(&["lib.puf".to_owned()]).await;
     assert!(!failing(&studio), "{:?}", studio.diagnostics_of("user.puf"));
 }
+
+#[tokio::test]
+async fn notes_on_the_design_reach_the_builder() {
+    let Some(studio) = studio("board-notes", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
+    // by voice: a decision on a definition, a comment on a module
+    assert_eq!(studio.arrange(&json!({ "action": "decide", "names": ["alloc"], "text": "hand out the next unused integer" })).unwrap(), "Decided.");
+    studio.arrange(&json!({ "action": "note", "modules": ["machine"], "text": "follow the paper rule by rule" })).unwrap();
+    assert!(studio.arrange(&json!({ "action": "note", "names": ["alloc"], "text": "  " })).is_err());
+    let board = studio.board();
+    let notes = board["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 2);
+    assert_eq!((notes[0]["kind"].as_str(), notes[0]["name"].as_str(), notes[0]["file"].as_str()), (Some("decision"), Some("alloc"), Some("store.puf")));
+    assert_eq!((notes[1]["kind"].as_str(), notes[1]["name"].as_str(), notes[1]["file"].as_str()), (Some("comment"), None, Some("machine.puf")));
+    // the builder reads decisions as binding, comments as context
+    let told = crate::board::describe_notes(&board);
+    let decisions = told.find("DECISIONS").unwrap();
+    let comments = told.find("comments").unwrap();
+    assert!(decisions < comments, "{told}");
+    assert!(told.contains("- on alloc (store.puf): hand out the next unused integer"), "{told}");
+    assert!(told.contains("- on the module machine.puf: follow the paper rule by rule"), "{told}");
+}

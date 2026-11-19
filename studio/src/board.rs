@@ -458,7 +458,7 @@ fn property_lines(text: &str) -> Vec<(usize, String)> {
 // ---- The board's state, and the studio's side of it ------------------------------
 
 pub fn empty() -> Value {
-    json!({ "view": "editor", "mode": "build", "cards": [], "focus": null, "questions": [] })
+    json!({ "view": "editor", "mode": "build", "cards": [], "focus": null, "questions": [], "notes": [] })
 }
 
 impl Studio {
@@ -621,6 +621,31 @@ impl Studio {
                 board["view"] = json!("board");
                 String::new()
             }
+            // the author's notes on the design (docs/PLANNING.md §5): a
+            // decision binds the builder, a comment informs it
+            "note" | "decide" => {
+                let text = a["text"].as_str().unwrap_or("").trim().to_owned();
+                if text.is_empty() {
+                    return Err("What should the note say?".to_owned());
+                }
+                // on definitions by name, else on modules
+                let anchors: Vec<(String, Option<String>)> = if !found.is_empty() {
+                    found.iter().map(|(f, n)| (f.clone(), Some(n.clone()))).collect()
+                } else {
+                    need("what to put it on", modules.is_empty())?;
+                    modules.iter().map(|m| (m.clone(), None)).collect()
+                };
+                let kind = if action == "decide" { "decision" } else { "comment" };
+                let by = a["by"].as_str().unwrap_or("author");
+                for (file, name) in anchors {
+                    let id = add_note(&mut board, &file, name.as_deref(), kind, &text);
+                    if let Some(note) = board["notes"].as_array_mut().and_then(|ns| ns.iter_mut().find(|n| n["id"] == json!(id))) {
+                        note["by"] = json!(by);
+                    }
+                }
+                board["view"] = json!("board");
+                if action == "decide" { "Decided.".to_owned() } else { "Noted.".to_owned() }
+            }
             "clear" => {
                 board["focus"] = Value::Null;
                 for card in board["cards"].as_array_mut().into_iter().flatten() {
@@ -735,6 +760,46 @@ impl Studio {
             }
         });
     }
+}
+
+/// A note on `file` (and definition `name`, or the whole module).
+pub fn add_note(board: &mut Value, file: &str, name: Option<&str>, kind: &str, text: &str) -> u64 {
+    if !board["notes"].is_array() {
+        board["notes"] = json!([]);
+    }
+    let id = board["notes"].as_array().unwrap().iter().filter_map(|n| n["id"].as_u64()).max().unwrap_or(0) + 1;
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    board["notes"].as_array_mut().unwrap().push(json!({ "id": id, "file": file, "name": name, "kind": kind, "text": text, "at": at }));
+    id
+}
+
+/// The author's notes and the answered questions, as the builder reads
+/// them: decisions first (they bind), then comments.
+pub fn describe_notes(board: &Value) -> String {
+    let mut decisions = Vec::new();
+    let mut comments = Vec::new();
+    for note in board["notes"].as_array().into_iter().flatten() {
+        let place = match note["name"].as_str() {
+            Some(name) => format!("{name} ({})", note["file"].as_str().unwrap_or("")),
+            None => format!("the module {}", note["file"].as_str().unwrap_or("")),
+        };
+        let line = format!("- on {place}: {}", note["text"].as_str().unwrap_or("").trim());
+        match note["kind"].as_str() {
+            Some("decision") => decisions.push(line),
+            _ => comments.push(line),
+        }
+    }
+    for q in board["questions"].as_array().into_iter().flatten().filter(|q| q["answered"] == json!(true)) {
+        decisions.push(format!("- {} -> {}", q["text"].as_str().unwrap_or(""), q["answer"].as_str().unwrap_or("")));
+    }
+    let mut out = String::new();
+    if !decisions.is_empty() {
+        out.push_str(&format!("The author's DECISIONS about the design -- binding: build to them, and keep them true when you change things:\n{}\n", decisions.join("\n")));
+    }
+    if !comments.is_empty() {
+        out.push_str(&format!("The author's comments on the design (context, not commands):\n{}\n", comments.join("\n")));
+    }
+    out
 }
 
 /// The card of `path` on `board`, made (unplaced) if it is not out.

@@ -26,7 +26,9 @@
 // every change here is sent back whole with `board-set`. The zoom, the
 // filter and the cursor are this tab's own.
 
-const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?" };
+const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?", decision: "◇" };
+// the card of the builder's questions and the author's answers
+const DECISIONS = "#decisions";
 const PROP_MARK = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run": "·", pending: "…" };
 const GRID = { x: 28, y: 92, w: 380, gap: 24 };
 const FRESH_MS = 2600;
@@ -65,6 +67,9 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   let seen = null; // key -> what each row was, to see what the builder changed
   const fresh = new Map(); // key -> until when it glows
   let zoom = Number(load(ZOOM_KEY)) || 1;
+  // the note being written: { file, name (null: the module), id (editing
+  // one), kind, text }
+  let writing = null;
 
   function load(key) {
     try { return localStorage.getItem(key); } catch { return null; }
@@ -105,7 +110,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   zoomIn.title = "Zoom in (+)";
   zoomLabel.title = "Fit the board to the window (0)";
   const keysHelp = el("button", "board-zoom board-help", "?");
-  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · h hide · f focus · e edit · t tidy · Esc clear · + − 0 zoom";
+  keysHelp.title = "Keys: type or / filter · ↑↓ rows · ←→ cards · ↵ open · n note · h hide · f focus · e edit · t tidy · Esc clear · + − 0 zoom";
   const tools = el("div", "board-hud-tools");
   tools.append(filter, zoomOut, zoomLabel, zoomIn, keysHelp);
   hud.append(progress, bar, tools);
@@ -133,7 +138,48 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     save();
   }
 
-  const moduleOf = (path) => outline.find((m) => m.path === path);
+  // the decisions: a card like a module's, one row per question asked;
+  // `uses` are the definitions it was about, so the lens shows what an
+  // answer shaped
+  function decisions() {
+    const qs = board.questions ?? [];
+    const decided = (board.notes ?? []).filter((n) => n.kind === "decision");
+    if (!qs.length && !decided.length) return null;
+    return {
+      path: DECISIONS,
+      requires: [],
+      provides: null,
+      effects: 0,
+      items: qs.map((q) => ({
+        name: `#${q.id}`,
+        kind: "decision",
+        sig: q.text,
+        doc: q.answered ? `→ ${q.answer ?? ""}` : q.why ?? "",
+        line: 0,
+        end_line: 0,
+        holes: 0,
+        opaque: !q.answered,
+        uses: q.about ?? [],
+        question: q,
+      })).concat(decided.map((n) => ({
+        name: `note${n.id}`,
+        kind: "decision",
+        sig: n.text,
+        doc: `on ${n.name ?? `the ${short(n.file)} module`}${n.name ? ` · ${short(n.file)}` : ""}`,
+        line: 0,
+        end_line: 0,
+        holes: 0,
+        opaque: false,
+        uses: n.name ? [n.name] : [],
+        note: n,
+      }))),
+    };
+  }
+  const allModules = () => {
+    const d = decisions();
+    return d ? [...outline, d] : outline;
+  };
+  const moduleOf = (path) => allModules().find((m) => m.path === path);
   const itemOf = (key) => {
     const [path, name] = key.split("\u001f");
     const m = moduleOf(path);
@@ -154,7 +200,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   function neighbours(name) {
     const uses = new Set();
     const users = new Set();
-    for (const m of outline) {
+    for (const m of allModules()) {
       for (const i of m.items) {
         if (i.name === name) for (const u of i.uses) uses.add(u);
         if (i.uses.includes(name) && i.name !== name) users.add(keyOf(m.path, i.name));
@@ -187,7 +233,9 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   // board's width; `size(path)` measures; returns path -> {x, y}
   function shelves(cards, size, top) {
     const depthOf = depths(cards);
-    const order = [...cards].sort((a, b) => depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path));
+    // the program in dependency order, then the spec, then the decisions
+    const tail = (path) => (path === DECISIONS ? 2 : path === "properties.puf" ? 1 : 0);
+    const order = [...cards].sort((a, b) => tail(a.path) - tail(b.path) || depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path));
     const limit = Math.max(root.clientWidth / zoom - GRID.x, GRID.w * 2);
     const out = new Map();
     let x = GRID.x;
@@ -261,7 +309,22 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     if (view === "board") setTimeout(() => root.focus({ preventScroll: true }), 0);
   }
 
+  // a re-render (the builder's edit arriving) must not take the cursor
+  // out of a note being written
   function render() {
+    const active = document.activeElement;
+    const typingNote = active?.classList?.contains("board-note-text-input") ? [active.selectionStart, active.selectionEnd] : null;
+    renderBoard();
+    if (typingNote) {
+      const box = canvas.querySelector(".board-note-text-input");
+      if (box) {
+        box.focus({ preventScroll: true });
+        box.setSelectionRange(...typingNote);
+      }
+    }
+  }
+
+  function renderBoard() {
     // nothing out yet: every module, once the outline has arrived
     if (shown() && !board.cards.length && outline.length) {
       const next = clone(board);
@@ -300,7 +363,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
         node.style.top = card.y == null ? "0px" : `${card.y}px`;
       }
     }
-    if (placeUnplaced()) return render();
+    if (placeUnplaced()) return renderBoard();
     renderQuestion();
     // A focus (a question's slice, "just show ..."): only the cards it
     // names, packed under the question in dependency order. The author's
@@ -324,13 +387,18 @@ export function createBoard({ editor, files, send, stage, onShow }) {
         if (node) node.hidden = !focused.includes(card);
       }
       const top = (question.hidden ? 0 : (question.offsetTop + question.offsetHeight) / zoom) + 24;
-      for (const [path, spot] of shelves(focused, sizeOf, Math.max(GRID.y, top))) {
+      const spots = shelves(focused, sizeOf, Math.max(GRID.y, top));
+      // centered under the question
+      const right = Math.max(0, ...[...spots].map(([path, spot]) => spot.x + sizeOf(path).w));
+      const shift = Math.max(0, (root.clientWidth / zoom - right - GRID.x) / 2);
+      for (const [path, spot] of spots) {
         const node = nodeOf(path);
-        node.style.left = `${spot.x}px`;
+        node.style.left = `${spot.x + shift}px`;
         node.style.top = `${spot.y}px`;
       }
     } else {
       for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
+      settle();
     }
     let maxX = 0;
     let maxY = 0;
@@ -370,7 +438,13 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     const meta = el("span", "board-card-meta");
     const funs = m.items.filter((i) => i.kind === "fun" || i.kind === "val");
     const planned = funs.filter((i) => i.opaque).length;
-    if (m.path === "properties.puf") {
+    if (m.path === DECISIONS) {
+      title.textContent = "decisions";
+      title.title = "The builder's questions and your answers — drag to move";
+      const open = m.items.filter((i) => i.opaque).length;
+      meta.textContent = `${m.items.length - open} decided`;
+      if (open) meta.append(el("span", "board-holes", ` · ? ${open} open`));
+    } else if (m.path === "properties.puf") {
       const counts = countProperties(m);
       meta.textContent = `${m.items.length} propert${m.items.length === 1 ? "y" : "ies"}`;
       if (counts.ok) meta.append(el("span", "board-meta-ok", ` · ✓ ${counts.ok}`));
@@ -389,12 +463,23 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       event.stopPropagation();
       change((b) => { b.cards = b.cards.filter((c) => c.path !== m.path); });
     });
-    head.append(title, meta, close);
+    const noteButton = el("button", "board-x board-card-note", "✎");
+    noteButton.title = m.path === DECISIONS ? "" : "A decision or comment on the whole module";
+    noteButton.addEventListener("click", (event) => { event.stopPropagation(); startNote(m.path, null); });
+    if (m.path === DECISIONS) noteButton.hidden = true;
+    head.append(title, meta, noteButton, close);
     head.addEventListener("pointerdown", (event) => startDrag(event, node, card));
     head.addEventListener("dblclick", () => editAt(m.path, 1));
     node.append(head);
     const requires = m.requires.filter((r) => r !== "prop.puf");
     if (requires.length) node.append(el("div", "board-requires", `requires ${requires.map(short).join(", ")}`));
+    const moduleNotes = notesOn(m.path, null);
+    if (moduleNotes.length || (writing && writing.file === m.path && writing.name == null)) {
+      const block = el("div", "board-module-notes");
+      for (const note of moduleNotes) block.append(renderNote(note));
+      if (writing && writing.file === m.path && writing.name == null && writing.id == null) block.append(noteEditor());
+      node.append(block);
+    }
 
     const hidden = new Set(card.hidden);
     const open = new Set(card.open);
@@ -443,6 +528,37 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     const row = el("div", classes);
     row.dataset.key = key;
     const line = el("div", "board-item-line");
+    if (item.kind === "decision" && item.note) {
+      const n = item.note;
+      line.append(el("span", "board-kind board-decision decided", "◆"));
+      line.append(el("span", "board-sig board-statement", item.sig));
+      line.title = "Your decision — click to see what it governs";
+      line.addEventListener("click", (event) => {
+        event.stopImmediatePropagation();
+        cursor = key;
+        if (n.name) reopenQuestion({ answered: true, text: n.text, answer: "", about: [n.name] });
+      });
+      line.addEventListener("pointerenter", () => setLens(key));
+      line.addEventListener("pointerleave", () => setLens(null));
+      row.append(line, el("div", "board-doc", item.doc));
+      return row;
+    }
+    if (item.kind === "decision") {
+      const q = item.question;
+      line.append(el("span", `board-kind board-decision ${q.answered ? "decided" : "open"}`, q.answered ? "✓" : "?"));
+      line.append(el("span", "board-sig board-statement", item.sig));
+      line.title = q.answered ? `Decided: ${q.answer ?? ""}` : "Open — click to put the question in front of you again";
+      line.addEventListener("click", (event) => {
+        event.stopImmediatePropagation();
+        cursor = key;
+        reopenQuestion(q);
+      });
+      line.addEventListener("pointerenter", () => setLens(key));
+      line.addEventListener("pointerleave", () => setLens(null));
+      row.append(line);
+      if (item.doc) row.append(el("div", `board-doc${q.answered ? " board-answer-text" : ""}`, item.doc));
+      return row;
+    }
     if (item.kind === "property") {
       const st = propertyStatus.get(item.name);
       const mark = el("span", `board-kind board-prop ${st?.status ?? "pending"}`, PROP_MARK[st?.status] ?? "?");
@@ -462,7 +578,17 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       hole.title = `${item.holes} hole${item.holes === 1 ? "" : "s"} left in the body`;
       line.append(hole);
     }
+    const notes = notesOn(m.path, item.name);
+    if (notes.length) {
+      const badge = el("span", `board-note-count${notes.some((n) => n.kind === "decision") ? " decided" : ""}`, `✎${notes.length}`);
+      badge.title = `${notes.length} note${notes.length === 1 ? "" : "s"}`;
+      line.append(badge);
+    }
     const actions = el("span", "board-tools");
+    const noteButton = el("button", "", "✎");
+    noteButton.title = "A decision or comment on this (n)";
+    noteButton.addEventListener("click", (event) => { event.stopPropagation(); startNote(m.path, item.name); });
+    actions.append(noteButton);
     const edit = el("button", "", "↗");
     edit.title = "Edit it (e)";
     edit.addEventListener("click", (event) => { event.stopPropagation(); editAt(m.path, item.line); });
@@ -480,8 +606,114 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     line.addEventListener("pointerleave", () => setLens(null));
     row.append(line);
     if (item.doc) row.append(el("div", "board-doc", item.doc));
+    for (const note of notes) row.append(renderNote(note));
+    if (writing && writing.file === m.path && writing.name === item.name && writing.id == null) row.append(noteEditor());
     if (isOpen) row.append(body(m, item));
     return row;
+  }
+
+  // ---- notes: the author's decisions and comments on the design --------------------------
+
+  const notesOn = (file, name) => (board.notes ?? []).filter((n) => n.file === file && (n.name ?? null) === (name ?? null));
+  const NOTE_KINDS = [
+    ["decision", "Decision", "binding: the builder builds to it"],
+    ["comment", "Comment", "context for whoever builds it"],
+    ["ask", "Ask the builder", "sent to the builder now"],
+  ];
+
+  function startNote(file, name, note) {
+    writing = note ? { file, name, id: note.id, kind: note.kind, text: note.text } : { file, name: name ?? null, id: null, kind: "decision", text: "" };
+    render();
+    setTimeout(() => {
+      const box = canvas.querySelector(".board-note-editor textarea");
+      box?.focus();
+      box?.setSelectionRange(box.value.length, box.value.length);
+    }, 20);
+  }
+
+  function renderNote(note) {
+    if (writing?.id === note.id) return noteEditor();
+    const node = el("div", `board-note ${note.kind}`);
+    const head = el("div", "board-note-head");
+    head.append(el("span", "board-note-kind", { decision: "◆ decision", comment: "comment", ask: "asked the builder" }[note.kind] ?? note.kind));
+    if (note.by === "builder") head.append(el("span", "board-note-by", "from the builder"));
+    const tools = el("span", "board-note-tools");
+    const edit = el("button", "", "edit");
+    edit.addEventListener("click", (event) => { event.stopPropagation(); startNote(note.file, note.name, note); });
+    const drop = el("button", "", "✕");
+    drop.title = "Delete this note";
+    drop.addEventListener("click", (event) => {
+      event.stopPropagation();
+      change((b) => { b.notes = (b.notes ?? []).filter((n) => n.id !== note.id); });
+    });
+    tools.append(edit, drop);
+    head.append(tools);
+    node.append(head, el("div", "board-note-text", note.text));
+    return node;
+  }
+
+  function noteEditor() {
+    const node = el("div", "board-note-editor");
+    node.addEventListener("click", (event) => event.stopPropagation());
+    node.addEventListener("pointerdown", (event) => event.stopPropagation());
+    const kinds = el("div", "board-note-kinds");
+    for (const [kind, label, hint] of NOTE_KINDS) {
+      const chip = el("button", `board-note-chip ${kind}${writing.kind === kind ? " on" : ""}`, label);
+      chip.title = hint;
+      chip.addEventListener("click", () => {
+        writing.kind = kind;
+        for (const c of kinds.children) c.classList.toggle("on", c === chip);
+      });
+      kinds.append(chip);
+    }
+    const box = el("textarea", "board-note-text-input");
+    box.value = writing.text;
+    box.rows = 3;
+    box.placeholder = writing.name ? `About ${writing.name}: what must hold, what to keep in mind, what is still open…` : `About the ${short(writing.file)} module…`;
+    const fit = () => {
+      box.style.height = "auto";
+      box.style.height = `${Math.min(box.scrollHeight + 2, 320)}px`;
+    };
+    box.addEventListener("input", () => { writing.text = box.value; fit(); });
+    setTimeout(fit, 0);
+    box.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); saveNote(); }
+      else if (event.key === "Escape") { event.preventDefault(); writing = null; render(); root.focus({ preventScroll: true }); }
+    });
+    const foot = el("div", "board-note-foot");
+    const save = el("button", "board-note-save", writing.id == null ? "Add" : "Save");
+    save.addEventListener("click", saveNote);
+    const cancel = el("button", "board-note-cancel", "Cancel");
+    cancel.addEventListener("click", () => { writing = null; render(); });
+    foot.append(el("span", "board-note-hint", "⌘↵ to save · Esc to cancel"), cancel, save);
+    node.append(kinds, box, foot);
+    return node;
+  }
+
+  function saveNote() {
+    const w = writing;
+    if (!w) return;
+    const text = w.text.trim();
+    writing = null;
+    if (!text) return render();
+    change((b) => {
+      b.notes ??= [];
+      if (w.id != null) {
+        const n = b.notes.find((x) => x.id === w.id);
+        if (n) Object.assign(n, { kind: w.kind, text });
+      } else {
+        const id = Math.max(0, ...b.notes.map((n) => n.id ?? 0)) + 1;
+        b.notes.push({ id, file: w.file, name: w.name, kind: w.kind, text, at: Date.now(), by: "author" });
+      }
+      if (w.kind === "decision") ensureCard(b, DECISIONS);
+    });
+    // a question goes to the builder now, about its place
+    if (w.kind === "ask" && w.id == null) {
+      const place = w.name ? `${w.name} in ${w.file}` : `the module ${w.file}`;
+      send({ t: "voice", text: `About ${place}: ${text}`, context: {} });
+    }
+    root.focus({ preventScroll: true });
   }
 
   function toggleOpen(path, name, isOpen) {
@@ -723,6 +955,25 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     }
   }
 
+  // Cards grow (a body opened, a note written) into the cards below them:
+  // push those down, as shown -- the saved places are not changed, so a
+  // card that shrinks again lets them come back.
+  function settle() {
+    const nodes = [...canvas.querySelectorAll(".board-card:not([hidden])")]
+      .filter((n) => !n.classList.contains("unplaced") && !(dragging && n.dataset.path === dragging.path))
+      .map((n) => ({ n, x: parseFloat(n.style.left), y: parseFloat(n.style.top), w: n.offsetWidth, h: n.offsetHeight }))
+      .sort((a, b) => a.y - b.y || a.x - b.x);
+    for (let i = 0; i < nodes.length; i++) {
+      const c = nodes[i];
+      for (let j = 0; j < i; j++) {
+        const p = nodes[j];
+        const across = c.x < p.x + p.w + 8 && p.x < c.x + c.w + 8;
+        if (across && c.y < p.y + p.h + GRID.gap * 0.6 && c.y + c.h > p.y) c.y = p.y + p.h + GRID.gap * 0.6;
+      }
+      c.n.style.top = `${c.y}px`;
+    }
+  }
+
   // re-pack every card in dependency order for this window (t, the palette)
   function tidy() {
     change((b) => {
@@ -839,6 +1090,23 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     renderLens();
   }
 
+  // a question back in front of the author: open, its slice; decided,
+  // the definitions it was about and what touches them
+  function reopenQuestion(q) {
+    const keys = new Set();
+    for (const name of q.about ?? []) {
+      for (const m of outline) for (const i of m.items) if (i.name === name) keys.add(keyOf(m.path, i.name));
+      const { uses, users } = neighbours(name);
+      for (const k of [...uses, ...users]) if (!k.startsWith(DECISIONS)) keys.add(k);
+    }
+    const items = [...keys].map((k) => k.split("\u001f"));
+    change((b) => {
+      b.focus = q.answered
+        ? { items, label: `decided: ${q.text} → ${q.answer ?? ""}`, question: null }
+        : { items, label: `question #${q.id}`, question: q.id };
+    });
+  }
+
   // f on a row: it, what it uses and what uses it (board.rs slice, here)
   function sliceAt(key) {
     const found = itemOf(key);
@@ -870,6 +1138,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       "-": () => setZoom(zoom - 0.1),
       0: () => fit(),
       t: () => tidy(),
+      n: () => found?.item && found.m.path !== DECISIONS && startNote(found.m.path, found.item.name),
     }[event.key];
     if (act) {
       event.preventDefault();
@@ -966,7 +1235,17 @@ export function createBoard({ editor, files, send, stage, onShow }) {
 
   return {
     receive({ board: next, outline: modules }) {
+      const before = board.questions?.length ?? 0;
+      const decidedBefore = (board.notes ?? []).filter((n) => n.kind === "decision").length;
       if (next) board = next;
+      // a new question brings the decisions card out (once; ✕ puts it away)
+      const decided = (board.notes ?? []).filter((n) => n.kind === "decision").length;
+      if (((board.questions?.length ?? 0) > before || decided > decidedBefore) && seen && !board.cards.some((c) => c.path === DECISIONS)) {
+        const b = clone(board);
+        ensureCard(b, DECISIONS);
+        board = b;
+        save();
+      }
       if (modules) {
         noteChanges(modules);
         outline = modules;

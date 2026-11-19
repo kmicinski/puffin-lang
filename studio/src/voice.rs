@@ -784,6 +784,7 @@ impl Studio {
         if board["mode"] == json!("plan") {
             out.push_str(PLAN_MODE);
         }
+        out.push_str(&crate::board::describe_notes(&board));
         let open: Vec<String> = board["questions"].as_array().into_iter().flatten().filter(|q| q["answered"] != json!(true)).map(|q| format!("#{}: {}", q["id"], q["text"].as_str().unwrap_or(""))).collect();
         if !open.is_empty() {
             let _ = writeln!(out, "Your questions the author has not answered yet:\n{}", open.join("\n"));
@@ -962,7 +963,9 @@ impl Studio {
                 Ok(json!({ "asked": id, "note": "The author sees the question with exactly the definitions it is about. Their answer will reach you as a new instruction; continue with work that does not depend on it, or stop." }))
             }
             "arrange" => {
-                let said = self.arrange(arguments)?;
+                let mut arguments = arguments.clone();
+                arguments["by"] = json!("builder");
+                let said = self.arrange(&arguments)?;
                 Ok(json!({ "arranged": true, "said": said }))
             }
             "say" => {
@@ -1085,8 +1088,8 @@ pub fn tools() -> Value {
         ),
         tool(
             "arrange",
-            "Arrange the module board the author sees (they may also say it). action: open/close (show or fold definitions' bodies), hide/unhide (rows on their cards), only (just these definitions), slice (these and what touches them), clear, bring/put-away (modules' cards), show-board/show-editor. Use it to put what you are talking about in front of them.",
-            json!({ "action": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}, "modules": {"type": "array", "items": {"type": "string"}} }),
+            "Arrange the module board the author sees (they may also say it). action: open/close (show or fold definitions' bodies), hide/unhide (rows on their cards), only (just these definitions), slice (these and what touches them), clear, bring/put-away (modules' cards), show-board/show-editor, note (leave a comment, in `text`, on `names` or `modules` -- e.g. a design trade-off you noticed). Use it to put what you are talking about in front of them.",
+            json!({ "action": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}, "modules": {"type": "array", "items": {"type": "string"}}, "text": {"type": "string"} }),
             &["action"],
         ),
         tool(
@@ -1300,9 +1303,10 @@ fn router_schema() -> Value {
             "arrange": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["action", "names", "modules", "near", "side"],
+                "required": ["action", "names", "modules", "near", "side", "text"],
                 "properties": {
-                    "action": { "type": "string", "enum": ["none", "show-board", "show-editor", "plan-mode", "build-mode", "open", "close", "hide", "unhide", "only", "slice", "clear", "bring", "put-away", "place"] },
+                    "action": { "type": "string", "enum": ["none", "show-board", "show-editor", "plan-mode", "build-mode", "open", "close", "hide", "unhide", "only", "slice", "clear", "bring", "put-away", "place", "note", "decide"] },
+                    "text": { "type": "string" },
                     "names": { "type": "array", "items": { "type": "string" } },
                     "modules": { "type": "array", "items": { "type": "string" } },
                     "near": { "type": "string" },
@@ -1364,8 +1368,12 @@ plan-mode / build-mode (plan mode: the builder writes signatures and leaves bodi
 (a definition's body: \"open step\", \"fold alloc\"); hide / unhide (rows: \"hide the store helpers\" -- \
 name each definition); only (\"just show step and inject\"); slice (\"show me what step depends on\", \
 \"what touches alloc\"); clear (\"show everything\"); bring / put-away (whole modules' cards); place \
-(module cards `modules` next to `near`, on `side`). `names` are exact definition names from the file \
-list, `modules` file names. Leave action \"none\" otherwise. Arranging and building can both happen.
+(module cards `modules` next to `near`, on `side`); note / decide (the author's comment, or binding \
+decision, on definitions `names` or whole `modules`, worded in `text` as they said it but self-contained: \
+\"decide on alloc: it hands out the next unused integer\", \"a note on the store module: this will \
+need garbage collection later\" -- a decision constrains the design, nothing is built now). `names` are \
+exact definition names from the file list, `modules` file names; `text` is empty for every other \
+action. Leave action \"none\" otherwise. Arranging and building can both happen.
 
 answer -- when the builder has an open question (listed above) and these words answer it, `question` is its \
 number and `text` the answer in full, self-contained (resolve \"yes\"/\"the second one\" against the \

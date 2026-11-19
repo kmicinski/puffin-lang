@@ -139,7 +139,54 @@ property (`add_property`) when it says what must hold, in the types and
 signatures when it says how things are built. Answering questions is how
 the spec grows; the questions and their answers stay in `board.json`.
 
-## 5. Not yet
+## 5. Notes: decisions and comments on the design
+
+Before any code is written, the author can attach notes to any part of
+the design: ✎ on a row (or `n`) for a definition, ✎ on a card's title for
+a whole module. A note is as long as it needs to be (it keeps its line
+breaks) and stays under what it is about, with a ✎N count on the row:
+
+- **Decision** — binding. Every builder run gets the decisions in its
+  prompt as rules to build to and keep true (`board::describe_notes`), so
+  in plan mode the signatures it writes honor them.
+- **Comment** — context for whoever builds it.
+- **Ask the builder** — sent to the builder at once, about its place
+  (through the router, like a spoken instruction), and kept as a note.
+
+By voice the router's `arrange` takes `note` and `decide` with the words
+in `text`: "decide on alloc: it hands out the next unused integer", "a
+note on the store module: this will need a collector later". The builder
+can leave comments too (`arrange` `note`, marked "from the builder").
+
+The **decisions card** is the spec ledger: the author's decisions and
+the builder's questions — open (?) or decided (✓, with the answer) — one
+row each. Like every row it has the lens: hover a decision and wires run
+to the definitions it governs. Clicking one puts its slice in front of
+you again (an open question comes back with its answer box). It comes out
+by itself when the first decision or question arrives; ✕ puts it away.
+
+## 6. Reading the board
+
+- **The lens.** Hover a row (or move the keyboard's cursor to it): wires
+  run to everything it uses (blue) and from everything that uses it
+  (violet, dashed), across cards; the module wiring dims.
+- **The HUD** (top left): modules, types, definitions written / partly
+  written / planned (with a bar), the properties' state, plan mode; a
+  filter (start typing anywhere on the board, or /; ↵ makes the matches a
+  focus) and the zoom (− 100% +, 0 fits, ⌘/ctrl-wheel).
+- **Keys.** ↑↓ (j k) rows, ←→ cards, ↵ open or fold, n note, h hide, f
+  focus on a definition and what touches it, e edit, t tidy, Esc clears.
+- **Liveness.** Rows the builder just wrote or changed glow for a moment;
+  cards glide between layouts; a card that grows pushes the ones below it
+  down as shown (the saved places are unchanged); clicking a planned
+  row's ◌ opens the editor with its hole selected.
+- **Tidy** (t, or ⌘K) re-packs the cards for the window at hand. Narrower
+  than 700px (a phone) the board stacks its cards in one column.
+- **⌘K** finds any command, file or definition (⇧↵: a definition's slice
+  on the board). The studio follows the system's light or dark (Solarized
+  dark), or the palette's Theme command.
+
+## 7. Not yet
 
 - A slice is one step out each way, by name (the outline's `uses` is
   every top-level name a definition mentions, so a shadowing local
