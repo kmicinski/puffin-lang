@@ -25,9 +25,11 @@ Design goals, in order:
    the 309-check golden corpus are the invariants; the VM bends
    around them, never the reverse.
 4. **Boring technology.** No dependence on wasm proposals that
-   aren't universally shipped (no wasm-GC, no exception-handling
-   section, no wasm tail calls), and one toolchain the project
-   already uses (clang).
+   aren't universally shipped (no wasm-GC, no wasm tail calls), and
+   one toolchain the project already uses (clang). One deliberate
+   exception: catching Puffin exceptions uses the wasm
+   exception-handling feature in its legacy (try/catch) encoding,
+   universally shipped since 2022 (docs/EXCEPTIONS.md §6).
 
 ## Architecture at a glance
 
@@ -369,6 +371,15 @@ the wasm exception-handling proposal:
 
 This is strictly better than native semantics require, and it costs
 one import.
+
+Catching an exception *inside* a program (`with-handlers`,
+docs/EXCEPTIONS.md) is a different matter: the VM longjmps from a
+failing primitive back into its dispatch loop, which on wasm is LLVM's
+setjmp lowering onto the exception-handling feature (legacy encoding;
+the Makefile's `WASM_SJLJ`, the one exception to principle 4,
+docs/EXCEPTIONS.md §6). The abort path above is unchanged: the
+lowering catches only its own longjmp tag, so `host_abort`'s JS
+exception still unwinds every wasm frame.
 
 ### The host shim
 

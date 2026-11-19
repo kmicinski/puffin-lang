@@ -41,13 +41,19 @@ static const char *cstr_of(pf v) {
   return (const char *)(pf_heap_ptr(v) + 1); // NUL-terminated by layout
 }
 
+// a file I/O failure: catchable; uncaught, stderr "error: MSG", exit 1
+__attribute__((noreturn)) static void io_fail(const char *fmt, const char *path) {
+  char msg[1200];
+  snprintf(msg, sizeof msg, fmt, path);
+  pf_fail(PF_EXN_IO, msg);
+}
+
 // (read-file path): the file's bytes as a string; errors if unreadable
 pf pf_read_file(pf path) {
   const char *p = cstr_of(path);
   FILE *f = fopen(p, "rb");
   if (!f) {
-    fprintf(stderr, "error: read-file: cannot open %s\n", p);
-    exit(1);
+    io_fail("read-file: cannot open %s", p);
   }
   fseek(f, 0, SEEK_END);
   long n = ftell(f);
@@ -55,8 +61,7 @@ pf pf_read_file(pf path) {
   char *buf = malloc(n > 0 ? (size_t)n : 1);
   if (!buf) pf_fatal("read-file: out of memory");
   if (n > 0 && fread(buf, 1, (size_t)n, f) != (size_t)n) {
-    fprintf(stderr, "error: read-file: short read on %s\n", p);
-    exit(1);
+    io_fail("read-file: short read on %s", p);
   }
   fclose(f);
   pf s = pf_string_from_bytes(buf, (int64_t)n);
@@ -70,13 +75,11 @@ pf pf_write_file(pf path, pf contents) {
   pf_expect_kind(contents, PF_KIND_STRING);
   FILE *f = fopen(p, "wb");
   if (!f) {
-    fprintf(stderr, "error: write-file: cannot open %s\n", p);
-    exit(1);
+    io_fail("write-file: cannot open %s", p);
   }
   int64_t n = pf_len_of(contents);
   if (n > 0 && fwrite(pf_heap_ptr(contents) + 1, 1, (size_t)n, f) != (size_t)n) {
-    fprintf(stderr, "error: write-file: short write on %s\n", p);
-    exit(1);
+    io_fail("write-file: short write on %s", p);
   }
   fclose(f);
   return PF_VOID;

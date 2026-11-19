@@ -56,6 +56,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+// Catching exceptions (docs/EXCEPTIONS.md) longjmps out of a failing
+// prim back into the dispatch loop. Native builds always can; the wasm
+// builds do through LLVM's setjmp/longjmp lowering onto the wasm
+// exception-handling feature (src/vm/Makefile WASM_SJLJ, which defines
+// PUFFIN_WASM_SJLJ; docs/EXCEPTIONS.md §6). A wasm build without it
+// still works: call-with-handler is then a clear runtime error.
+#if !defined(__wasm__) || defined(PUFFIN_WASM_SJLJ)
+#define VM_CAN_CATCH 1
+#include <setjmp.h>
+#else
+#define VM_CAN_CATCH 0
+#endif
 #include "../runtime/puffin.h"
 
 #if !defined(PVM_REACTOR) && !defined(__wasi__)
@@ -449,6 +461,7 @@ typedef struct {
   size_t cap;    // allocated slot count (>= funcs[func].nlocals)
   VChunk *chunk;
   size_t top_before;
+  u8 catcher;    // a call-with-handler's thunk: returning pops its handler
 } CFrame;
 
 static CFrame *cstack = NULL;
@@ -465,11 +478,73 @@ static CFrame *cpush(void) {
   return &cstack[cdepth++];
 }
 
+// ---------------------------------------------------------------
+// Exceptions (docs/EXCEPTIONS.md): call-with-handler's handler stack
+// ---------------------------------------------------------------
+//
+// (call-with-handler thunk handler) is a PRIM call the dispatch loop
+// intercepts: it pushes a handler record and calls the thunk in a new
+// frame marked `catcher`; that frame returning (normally, by RET --
+// a tail call keeps the mark) pops the record and its value is the
+// PRIM's result. While any record is on the stack, pf_raise_hook is
+// vm_raise, so every failure -- raise, (error v), a runtime error in
+// a prim or in the loop -- longjmps back into vm_run, which pops the
+// innermost record, frees the frames above its owner, and calls the
+// handler on the raised value as if the owner had called it at the
+// PRIM, result to the PRIM's destination.
+//
+// The handler closure is NOT copied here: it stays in the owner's
+// staging slot (`hslot`), which nothing writes while the owner waits,
+// so it stays a GC root without the control stack holding pf values.
+
+typedef struct {
+  size_t depth;  // cdepth at the PRIM: the owner is frame depth-1, the
+                 // thunk's frame (and all above) go when it is caught
+  u32 dst;       // the PRIM's destination slot in the owner
+  u32 ret_ip;    // where the owner resumes after the PRIM
+  u32 hslot;     // the owner slot holding the handler closure
+} VMHandler;
+
+static VMHandler *hstack = NULL;
+static size_t hdepth = 0, hcap = 0;
+static u32 prim_call_with_handler = (u32)-1;
+#if VM_CAN_CATCH
+static pf vm_raised;              // in flight between vm_raise and recovery
+static jmp_buf *vm_catch = NULL;  // the running vm_run's recovery point
+
+static void vm_raise(pf v) {
+  vm_raised = v;
+  longjmp(*vm_catch, 1);
+}
+#else
+static void vm_raise(pf v) { (void)v; }
+#endif
+
+static void vm_handlers_reset(void) {
+  hdepth = 0;
+  pf_raise_hook = NULL;
+}
+
+static void hpush(VMHandler h) {
+  if (hdepth == hcap) {
+    hcap = hcap ? hcap * 2 : 64;
+    hstack = realloc(hstack, hcap * sizeof(VMHandler));
+    if (!hstack) vm_die("out of memory (handler stack)");
+  }
+  hstack[hdepth++] = h;
+  pf_raise_hook = vm_raise;
+}
+
+static void hpop(void) {
+  if (hdepth && --hdepth == 0) pf_raise_hook = NULL;
+}
+
 // Reset execution state between session evals: a previous eval may
 // have aborted mid-run (docs/WASM-VM.md §3.4 -- the heap, cells, and
 // interned symbols survive; frames do not).
 static void reset_exec_state(void) {
   cdepth = 0;
+  vm_handlers_reset();
   chunk_cur = chunk_head;
   if (chunk_cur) chunk_cur->top = 0;
 }
@@ -594,6 +669,7 @@ static pf vm_run(u32 entry_gidx) {
   cf->func = entry_gidx;
   cf->ret_ip = 0;
   cf->dst = 0;
+  cf->catcher = 0;
   cf->slots = frame_alloc(fn->nlocals, &cf->chunk, &cf->top_before);
   cf->cap = fn->nlocals;
   memset(cf->slots, 0, fn->nlocals * sizeof(pf));
@@ -603,6 +679,53 @@ static pf vm_run(u32 entry_gidx) {
   pf areg = PF_FIX(0); // the arity register (native r10/x12)
 
   PVM_SAFEPOINT(); // settle any debt run up since the last vm_run
+
+  if (prim_call_with_handler == (u32)-1) {
+    prim_call_with_handler = (u32)-2; // none: no prim has that name
+    for (u32 i = 0; i < VM_PRIM_COUNT; i++)
+      if (strcmp(vm_prims[i].name, "call-with-handler") == 0) prim_call_with_handler = i;
+  }
+
+  // the recovery point for a raise caught by a call-with-handler of
+  // this run (see "Exceptions" above): every local the loop uses is
+  // set again from the control stack before it continues
+#if VM_CAN_CATCH
+  jmp_buf catch_point;
+  jmp_buf *outer_catch = vm_catch;
+  vm_catch = &catch_point;
+  if (setjmp(catch_point)) {
+    VMHandler h = hstack[hdepth - 1];
+    hpop();
+    while (cdepth > h.depth) {
+      CFrame *dead = &cstack[cdepth - 1];
+      frame_free(dead->chunk, dead->top_before);
+      cdepth--;
+    }
+    cf = &cstack[cdepth - 1];
+    cf->ret_ip = h.ret_ip;
+    pf handler = cf->slots[h.hslot];
+    if (!pf_is_kind(handler, PF_KIND_CLOSURE)) pf_fatal("application of a non-procedure");
+    u32 fi = (u32)PF_UNFIX(pf_heap_ptr(handler)[1]);
+    if (fi >= total_funcs) pf_fatal("application of a non-procedure");
+    const VMFunc *g = &funcs[fi];
+    CFrame *nf = cpush();
+    cf = &cstack[cdepth - 2];
+    nf->func = fi;
+    nf->dst = h.dst;
+    nf->catcher = 0;
+    nf->slots = frame_alloc(g->nlocals, &nf->chunk, &nf->top_before);
+    nf->cap = g->nlocals;
+    memset(nf->slots, 0, g->nlocals * sizeof(pf));
+    nf->slots[0] = handler;
+    nf->slots[1] = vm_raised;
+    areg = PF_FIX(2);
+    cf = nf;
+    fn = g;
+    un = g->unit;
+    code = un->code + g->code_off;
+    ip = 0;
+  }
+#endif
 
 #define RD8()  (code[ip++])
 #define RD16() (ip += 2, (u16)(code[ip-2] | ((u16)code[ip-1] << 8)))
@@ -671,6 +794,7 @@ static pf vm_run(u32 entry_gidx) {
       cf = &cstack[cdepth - 2]; // cpush may realloc
       nf->func = fi;
       nf->dst = d;
+      nf->catcher = 0;
       nf->slots = frame_alloc(g->nlocals, &nf->chunk, &nf->top_before);
       nf->cap = g->nlocals;
       memset(nf->slots, 0, g->nlocals * sizeof(pf));
@@ -724,6 +848,36 @@ static pf vm_run(u32 entry_gidx) {
       const vm_prim *pr = &vm_prims[p];
       pf *a = cf->slots + b;
       pf res;
+      if (p == prim_call_with_handler) {
+        // (call-with-handler thunk handler): push the handler, call the
+        // thunk in a catcher frame (see "Exceptions" above)
+        PVM_SAFEPOINT();
+        if (!VM_CAN_CATCH)
+          pf_fatal("call-with-handler: this VM build cannot catch exceptions (the browser VM; docs/EXCEPTIONS.md)");
+        pf thunk = a[0];
+        if (!pf_is_kind(thunk, PF_KIND_CLOSURE)) pf_fatal("application of a non-procedure");
+        u32 fi = (u32)PF_UNFIX(pf_heap_ptr(thunk)[1]);
+        if (fi >= total_funcs) pf_fatal("application of a non-procedure");
+        const VMFunc *g = &funcs[fi];
+        hpush((VMHandler){ .depth = cdepth, .dst = d, .ret_ip = ip, .hslot = (u32)(b + 1) });
+        cf->ret_ip = ip;
+        CFrame *nf = cpush();
+        cf = &cstack[cdepth - 2]; // cpush may realloc
+        nf->func = fi;
+        nf->dst = d;
+        nf->catcher = 1;
+        nf->slots = frame_alloc(g->nlocals, &nf->chunk, &nf->top_before);
+        nf->cap = g->nlocals;
+        memset(nf->slots, 0, g->nlocals * sizeof(pf));
+        nf->slots[0] = thunk;
+        areg = PF_FIX(1);
+        cf = nf;
+        fn = g;
+        un = g->unit;
+        code = un->code + g->code_off;
+        ip = 0;
+        break;
+      }
       switch (n) {
       case 0: res = ((fn0)pr->fn)(); break;
       case 1: res = ((fn1)pr->fn)(a[0]); break;
@@ -771,10 +925,16 @@ static pf vm_run(u32 entry_gidx) {
     case OP_RET: {
       u16 s = RD16();
       pf v = cf->slots[s];
+      if (cf->catcher) hpop();
       frame_free(cf->chunk, cf->top_before);
       u32 rd = cf->dst;
       cdepth--;
-      if (cdepth == 0) return v;
+      if (cdepth == 0) {
+#if VM_CAN_CATCH
+        vm_catch = outer_catch;
+#endif
+        return v;
+      }
       cf = &cstack[cdepth - 1];
       cf->slots[rd] = v;
       fn = &funcs[cf->func];

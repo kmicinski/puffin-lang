@@ -1,0 +1,23 @@
+(42 -1)
+(raised oops)
+(error bad thing)
+(error a-symbol)
+(runtime index out of range)
+(runtime quotient: division by zero)
+(runtime +: expected Int, got two)
+no-failure
+outer got a string
+200
+bottom
+done
+5000
+(1 bad a bad)
+caught
+1
+#t
+#<exn: kept>
+kept
+(#f #t)
+(with-handlers ((p h)) body)
+(with-handlers in a template)
+0

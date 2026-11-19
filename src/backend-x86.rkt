@@ -96,6 +96,7 @@
 ;; ---------------------------------------------------------------------
 
 (define (select-instructions-x86 p)
+  (reject-native-handlers! p)
   (define-values (symbol-table string-table) (scan-literals p))
   ;; Translate an atom to an operand (tagging literals)
   (define (h-atom a)

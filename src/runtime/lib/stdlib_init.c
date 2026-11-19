@@ -14,6 +14,7 @@ void pf_lib_hamt_init(void);
 void pf_lib_adt_init(void);
 void pf_lib_io_init(void);
 void pf_lib_foreign_init(void);
+void pf_lib_exn_init(void);
 
 void pf_stdlib_init(void) {
   pf_lib_pairs_init();
@@ -25,4 +26,5 @@ void pf_stdlib_init(void) {
   pf_lib_adt_init();
   pf_lib_io_init();
   pf_lib_foreign_init();
+  pf_lib_exn_init();
 }

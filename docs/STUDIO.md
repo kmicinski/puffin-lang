@@ -71,7 +71,8 @@ Eval-from-buffer sends a form from a module to the same session.
 
 ### 2.1 `puffincc --assist`
 
-Puffin has no exception handling: a reader error or a type error
+puffincc itself does not catch (it predates exceptions,
+docs/EXCEPTIONS.md, and its seed cannot compile them): a reader error or a type error
 calls `error`, which exits the process. A long-running server would
 die on the first half-typed buffer. So the assist lane runs one
 puffincc process per request, and a fatal error becomes an error

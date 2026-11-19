@@ -1,0 +1,80 @@
+;; Exceptions (docs/EXCEPTIONS.md): raise, error and runtime errors
+;; caught by with-handlers, on every route but the native backends.
+
+(define (dyn x) x)   ; hides a value's type from the checker
+
+;; a typed function whose failure path is a handler
+(: parse (-> Str Int))
+(define (parse s)
+  (with-handlers ([exn? (lambda (e) -1)])
+    (let ([n (string->number s)])
+      (if n n (error (string-append "not a number: " s))))))
+(println (list (parse "42") (parse "x")))
+
+;; clauses are tried in order; the first predicate that holds handles it
+(define (classify thunk)
+  (with-handlers ([symbol? (lambda (s) (list 'raised s))]
+                  [exn? (lambda (e) (list (exn-kind e) (exn-message e)))])
+    (thunk)))
+(println (classify (lambda () (raise 'oops))))
+(println (classify (lambda () (error "bad thing"))))
+(println (classify (lambda () (error 'a-symbol))))
+(println (classify (lambda () (vector-ref (vector 1 2) 7))))
+(println (classify (lambda () (quotient 1 (dyn 0)))))
+(println (classify (lambda () (+ 1 (dyn "two")))))
+(println (classify (lambda () 'no-failure)))
+
+;; no clause matches: the exception goes on to an outer handler
+(println (with-handlers ([string? (lambda (s) (string-append "outer got " s))])
+           (with-handlers ([symbol? (lambda (s) 'inner)])
+             (raise "a string"))))
+
+;; a handler that raises goes to the next handler out, not itself
+(println (with-handlers ([fixnum? (lambda (n) (* n 100))])
+           (with-handlers ([fixnum? (lambda (n) (raise (+ n 1)))])
+             (raise 1))))
+
+;; unwinding through deep non-tail recursion
+(define (descend n) (if (eq? n 0) (raise 'bottom) (+ 1 (descend (- n 1)))))
+(println (with-handlers ([symbol? (lambda (s) s)]) (descend 5000)))
+
+;; a tail call inside the body keeps the handler
+(define (count-down n) (if (eq? n 0) (raise 'done) (count-down (- n 1))))
+(println (with-handlers ([symbol? (lambda (s) s)]) (count-down 100000)))
+
+;; many handlers entered and left in a loop
+(define (sum-safe i acc)
+  (if (eq? i 0)
+      acc
+      (sum-safe (- i 1)
+                (+ acc (with-handlers ([fixnum? (lambda (n) n)])
+                         (if (eq? 0 (remainder i 3)) (raise 1) 2))))))
+(println (sum-safe 3000 0))
+
+;; with-handlers is an expression: its value is the body's or the handler's
+(define results
+  (map (lambda (x) (with-handlers ([exn? (lambda (e) 'bad)]) (car (dyn x))))
+       (list (list 1 2) 5 (cons 'a 'b) "s")))
+(println results)
+
+;; predicates and handlers are evaluated once, before the body
+(define calls 0)
+(define (make-pred) (set! calls (+ calls 1)) exn?)
+(println (with-handlers ([(make-pred) (lambda (e) 'caught)]) (error 'x)))
+(println calls)
+
+;; an exception is a value: kept, shown, raised again
+(define saved (with-handlers ([exn? (lambda (e) e)]) (error "kept")))
+(println (exn? saved))
+(println saved)
+(println (with-handlers ([exn? exn-message]) (raise saved)))
+(println (list (exn? 'x) (exn? (dyn saved))))
+
+;; quoted with-handlers is data
+(println '(with-handlers ([p h]) body))
+(println `(with-handlers ,(with-handlers ([exn? exn-message]) (error "in a template"))))
+
+;; reading input still works under a handler
+(println (with-handlers ([exn? exn-message]) (+ (read) (read))))
+
+;; (an uncaught raise or error: src/errors-corpus/rt-raise-*.puf)

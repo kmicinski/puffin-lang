@@ -156,6 +156,7 @@ static pf pair_cdr(pf v) { return pf_heap_ptr(v)[2]; }
 static int is_pair(pf v) { return pf_is_kind(v, PF_KIND_PAIR); }
 
 __attribute__((noreturn)) static void fatal_fmt_flush(char *buf) {
+  if (pf_raise_hook) pf_fail(PF_EXN_FATAL, buf);
   fflush(stdout);
   fprintf(stderr, "puffin runtime error: %s\n", buf);
   exit(255);

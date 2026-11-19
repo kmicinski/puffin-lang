@@ -112,6 +112,7 @@
 ;; ---------------------------------------------------------------------
 
 (define (select-instructions-arm64 p)
+  (reject-native-handlers! p)
   (define-values (symbol-table string-table) (scan-literals-arm p))
   ;; separate compilation (docs/MODULES.md §3): symbol ids are interned
   ;; at module-init time (they must agree across .o's), so a symbol

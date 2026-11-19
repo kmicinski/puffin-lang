@@ -118,6 +118,23 @@ void pf_die_arith(void) __attribute__((noreturn));
 // offending value; a/b are the operands, the first non-fixnum is shown
 void pf_die_arith_typed(const char *op, pf a, pf b) __attribute__((noreturn));
 
+// Exceptions (lib/exn.c, docs/EXCEPTIONS.md). Every failure ends in
+// pf_raise_value. A runtime that can catch (the bytecode VM, while a
+// call-with-handler is active) sets pf_raise_hook, which never
+// returns; with no hook the exception is uncaught and the program
+// prints and exits exactly as it did before exceptions existed. An
+// exn's `style` records that ending:
+#define PF_EXN_FATAL 0   // stderr "puffin runtime error: MSG", exit 255
+#define PF_EXN_ERROR 1   // stdout "error: VALUE", exit 1  ((error v))
+#define PF_EXN_IO    2   // stderr "error: MSG", exit 1    (file I/O)
+typedef void (*pf_raise_fn)(pf v);
+extern pf_raise_fn pf_raise_hook;
+void pf_raise_value(pf v) __attribute__((noreturn));
+void pf_raise_error(pf v) __attribute__((noreturn));
+void pf_fail(int style, const char *msg) __attribute__((noreturn));
+pf pf_make_exn(pf kind, pf payload, int style);
+pf pf_to_string(pf v);
+
 // Type-check helper: die unless v is a heap object of `kind`.
 static inline void pf_expect_kind(pf v, int kind) {
   if (!pf_is_kind(v, kind)) pf_die_kind();

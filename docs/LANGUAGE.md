@@ -148,7 +148,18 @@ vector? string? hash? set?`.
 
 I/O: `(read)` reads an integer from stdin; `(read-all)` the rest of
 stdin as a string; `(println e)`, `(display e)`, `(newline)`,
-`(displayln e)`; `(error e)` prints `error: <e>` and halts.
+`(displayln e)`; `(error e)` prints `error: <e>` and halts — unless a
+handler catches it.
+
+Exceptions (docs/EXCEPTIONS.md): `(raise v)` raises any value;
+`(with-handlers ([pred handler] ...) body ...)` is Racket's, and catches
+what `raise`, `error` and every runtime error (bad index, wrong kind of
+value, failed cast, division by zero, ...) raise. `exn?`,
+`(exn-message e)` and `(exn-kind e)` (`'error` or `'runtime`) look
+inside the exceptions `error` and the runtime make. Uncaught, a failure
+prints and exits exactly as it always has. Catching needs the bytecode
+target (the REPL, the studio, `-t bytecode`); the native backends
+refuse `with-handlers` at compile time.
 
 For writing compilers (see docs/BOOTSTRAP.md): `value->string`,
 `(format "~a ~a" (list x y))`, `number->string`, `string->number`,
@@ -336,5 +347,7 @@ playground's "+ file" tab turns the editor into a module DAG.
 - A REPL define can't shadow a primitive name (files can).
 - `main` is reserved for the program entry point (defining it is a
   clear compile-time error).
+- `with-handlers` compiles only for the bytecode target (and the
+  interpreter); native builds refuse it (docs/EXCEPTIONS.md §5).
 - `apply` handles at most 5 arguments (the register-argument budget);
   `format` is fully variadic.

@@ -28,6 +28,8 @@
 // ---------------------------------------------------------------
 
 void pf_fatal(const char *msg) {
+  // a handler is installed: a catchable runtime exn (lib/exn.c)
+  if (pf_raise_hook) pf_fail(PF_EXN_FATAL, msg);
   fflush(stdout);
   fprintf(stderr, "puffin runtime error: %s\n", msg);
   exit(255);
@@ -364,6 +366,7 @@ pf pf_read_line(void) {
 // message goes to stdout so golden tests see identical output from
 // the native binary and the interpreters.
 pf pf_error(pf v) {
+  if (pf_raise_hook) pf_raise_error(v);
   printf("error: ");
   pf_display_value(v);
   printf("\n");

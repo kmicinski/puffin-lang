@@ -41,9 +41,8 @@
 (define ffi-lib-cache (make-hash))    ;; rpath -> lib
 
 (define (ffi-fatal msg)
-  (flush-output)
-  (fprintf (current-error-port) "puffin runtime error: ~a\n" msg)
-  (exit 255))
+  ;; catchable inside a handler (docs/EXCEPTIONS.md), else stderr + exit 255
+  (puffin-fatal msg))
 
 ;; the §5.2 blame grammar, shared by every failure below
 (define (ffi-blame-site name pos argk)

@@ -1,0 +1,3 @@
+(define (dyn x) x)
+(println (with-handlers ([exn? (lambda (e) (raise e))]) (vector-ref (vector) (dyn 3))))
+(println "never")

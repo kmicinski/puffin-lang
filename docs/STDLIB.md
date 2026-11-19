@@ -95,6 +95,11 @@ typecheckers; `—` means untyped (the checkers derive `(-> _ ... _)` from the a
 | `adt?` | 1 | `(-> a Bool)` | `pf_adt_huh` | Is this value of the old datatype heap kind? (#f for define-type instances, which are lists and symbols: docs/GRAMMARS.md) |
 | `foreign-ptr?` | 1 | `(-> a Bool)` | `pf_foreign_ptr_huh` | Is this value a foreign handle (an opaque pointer from a foreign library)? |
 | `read-line` | 0 | `(-> _)` | `pf_read_line` | The next line of standard input without its newline, or #f at end of input. |
+| `raise` | 1 | `(-> a _)` | `pf_raise` | Raise a value as an exception: the innermost handler gets it (an uncaught raise prints `uncaught exception: <value>` and halts). |
+| `call-with-handler` | 2 | `(-> (-> a) (-> _ a) a)` | `pf_call_with_handler` | Call the thunk; if it raises, call the handler on the raised value instead (`with-handlers` is the usual way to write this). |
+| `exn?` | 1 | `(-> a Bool)` | `pf_exn_huh` | Is this value an exception raised by `error` or by a runtime error? |
+| `exn-message` | 1 | `(-> _ Str)` | `pf_exn_message` | An exception's message: a runtime error's text, or the value given to `error` as a string. |
+| `exn-kind` | 1 | `(-> _ Sym)` | `pf_exn_kind` | An exception's kind: 'error (from `error`) or 'runtime (a runtime error). |
 
 ## Compiler-internal primitives
 

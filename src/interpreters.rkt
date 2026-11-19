@@ -41,11 +41,7 @@
 ;; so every route agrees byte-for-byte on arithmetic type errors.
 (define (die-arith op a b)
   (define bad (if (exact-integer? a) b a))
-  (flush-output)
-  (fprintf (current-error-port)
-           "puffin runtime error: ~a: expected Int, got ~a\n"
-           op (render-value bad))
-  (exit 255))
+  (puffin-fatal (format "~a: expected Int, got ~a" op (render-value bad))))
 (define (arith2 op a b f)
   (unless (and (exact-integer? a) (exact-integer? b)) (die-arith op a b))
   (f a b))
@@ -191,6 +187,9 @@
          ['read (next-input! inbox)]
          ['read-all (rest-of-input! inbox)]
          ['read-line (next-line! inbox)]
+         ['call-with-handler
+          (match-define (list thunk handler) (map (λ (e) (ev e env)) es))
+          (call-with-handler-impl apply-value thunk handler)]
          [_ (apply impl (map (λ (e) (ev e env)) es))])]
       [`(,e-f ,e-args ...)
        (define f (ev e-f env))
@@ -219,6 +218,13 @@
                            (foldl (λ (x v acc) (hash-set acc x (box v))) cenv xs args)
                            globals inbox)])]
       [_ (error 'interpret "application of a non-procedure: ~a" f)]))
+  ;; a procedure value applied from a prim (call-with-handler): a
+  ;; source-level closure, or (after closure conversion) a closure
+  ;; record whose slot 0 holds its function, called with itself first
+  (define (apply-value f args)
+    (if (closure-record? f)
+        (apply-closure (vector-ref (closure-record-vec f) 0) (cons f args))
+        (apply-closure f args)))
   (ev e env))
 
 ;; Accepts programs both before collect-globals ((program ,forms...))
@@ -307,10 +313,12 @@
       [`(fun-ref ,f) `(fun-ref ,f)]
       [`(global-ref ,i) (vector-ref globals i)]
       [`(unsafe-vector-ref ,a ,i) (vector-ref (unsafe-vec (atom-val a env)) i)]
-      [`(- ,a) (- (atom-val a env))]
-      [`(+ ,a0 ,a1) (+ (atom-val a0 env) (atom-val a1 env))]
-      [`(* ,a0 ,a1) (* (atom-val a0 env) (atom-val a1 env))]
-      [`(< ,a0 ,a1) (< (atom-val a0 env) (atom-val a1 env))]
+      ;; tag-checked like the compiled routes (die-arith above): the
+      ;; message is observable once a handler can catch it
+      [`(- ,a) (arith1 '- (atom-val a env) -)]
+      [`(+ ,a0 ,a1) (arith2 '+ (atom-val a0 env) (atom-val a1 env) +)]
+      [`(* ,a0 ,a1) (arith2 '* (atom-val a0 env) (atom-val a1 env) *)]
+      [`(< ,a0 ,a1) (arith2 '< (atom-val a0 env) (atom-val a1 env) <)]
       [`(eq? ,a0 ,a1) (eqv? (atom-val a0 env) (atom-val a1 env))]
       [`(,(? stdlib-prim? op) ,as ...)
        (define impl (stdlib-ref-impl op))
@@ -318,8 +326,24 @@
          ['read (next-input! inbox)]
          ['read-all (rest-of-input! inbox)]
          ['read-line (next-line! inbox)]
+         ['call-with-handler
+          (match-define (list thunk handler) (map (λ (a) (atom-val a env)) as))
+          (call-with-handler-impl call-value thunk handler)]
          [_ (apply impl (map (λ (a) (atom-val a env)) as))])]
       [a (atom-val a env)]))
+  ;; a closure record applied from a prim (call-with-handler): its
+  ;; function (slot 0) with the record first, run to completion here
+  (define (call-value f args)
+    (match-define `(fun-ref ,fptr) (vector-ref (unsafe-vec f) 0))
+    (define formals (hash-ref name->args fptr))
+    (define full (cons f args))
+    (define mi (index-of formals '#%rest))
+    (define env+
+      (if mi
+          (hash-set (foldl (λ (x v acc) (hash-set acc x v)) (hash) (take formals mi) (take full mi))
+                    (list-ref formals (add1 mi)) (drop full mi))
+          (foldl (λ (x v acc) (hash-set acc x v)) (hash) formals full)))
+    (go (hash-ref blocks fptr) env+ '(top-stack)))
   (define (go s env stack)
     (match s
       [`(return ,a)
@@ -395,10 +419,10 @@
        (define truth
          (match cmp
            ['eq? (eqv? v0 v1)]
-           ['<   (< v0 v1)]
-           ['<=  (<= v0 v1)]
-           ['>   (> v0 v1)]
-           ['>=  (>= v0 v1)]))
+           ['<   (arith2 '< v0 v1 <)]
+           ['<=  (arith2 '<= v0 v1 <=)]
+           ['>   (arith2 '> v0 v1 >)]
+           ['>=  (arith2 '>= v0 v1 >=)]))
        (go (hash-ref blocks (if truth l-t l-f)) env stack)]
       [`(goto ,l) (go (hash-ref blocks l) env stack)]))
   (display-return

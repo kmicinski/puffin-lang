@@ -1082,9 +1082,76 @@
 ;; the checker proper: everything below closes over adts/ctors/top
 ;; ---------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------
+;; with-handlers (docs/EXCEPTIONS.md): expanded before anything is
+;; checked, so every route -- the chain, both backends, the assists --
+;; sees only the call-with-handler prim:
+;;
+;;   (with-handlers ([P H] ...) BODY ...)
+;;   => (let ([#%wh-p0 P] [#%wh-h0 H] ...)
+;;        (call-with-handler (lambda () BODY ...)
+;;                           (lambda (#%wh-e)
+;;                             (cond [(#%wh-p0 #%wh-e) (#%wh-h0 #%wh-e)] ...
+;;                                   [else (raise #%wh-e)]))))
+;;
+;; A P or H that is a name or a lambda is used in place. Fixed binder
+;; names (no gensym), quote is data, quasiquote is data except under
+;; unquote / unquote-splicing. Mirrors src/types.rkt.
+;; ---------------------------------------------------------------------
+
+(define (wh-qq t)
+  (cond
+    [(and (pair? t)
+          (if (eq? (car t) 'unquote) #t (eq? (car t) 'unquote-splicing))
+          (pair? (cdr t))
+          (null? (cdr (cdr t))))
+     (list (car t) (expand-with-handlers (car (cdr t))))]
+    [(pair? t) (cons (wh-qq (car t)) (wh-qq (cdr t)))]
+    [else t]))
+
+(define (wh-clause? c) (and (list? c) (eq? (length c) 2)))
+
+;; a P or H in place, or bound: (list EXPR BINDINGS)
+(define (wh-place x tag)
+  (let ([x2 (expand-with-handlers x)])
+    (if (if (symbol? x2) #t (and (pair? x2) (eq? (car x2) 'lambda)))
+        (list x2 '())
+        (let ([name (string->symbol (string-append "#%wh-" tag))])
+          (list name (list (list name x2)))))))
+
+(define (wh-expand clauses body)
+  (let loop ([cs clauses] [i 0] [tests '()] [binds '()])
+    (if (null? cs)
+        (let ([call (list 'call-with-handler
+                          (cons 'lambda (cons '() (map expand-with-handlers body)))
+                          (list 'lambda (list '#%wh-e)
+                                (cons 'cond (append (reverse tests)
+                                                    (list (list 'else (list 'raise '#%wh-e)))))))])
+          (if (null? binds) call (list 'let binds call)))
+        (let* ([n (number->string i)]
+               [pp (wh-place (car (car cs)) (string-append "p" n))]
+               [hp (wh-place (car (cdr (car cs))) (string-append "h" n))])
+          (loop (cdr cs) (+ i 1)
+                (cons (list (list (car pp) '#%wh-e) (list (car hp) '#%wh-e)) tests)
+                (append binds (append (car (cdr pp)) (car (cdr hp)))))))))
+
+(define (expand-with-handlers e)
+  (cond
+    [(not (pair? e)) e]
+    [(eq? (car e) 'quote) e]
+    [(and (eq? (car e) 'quasiquote) (pair? (cdr e)) (null? (cdr (cdr e))))
+     (list 'quasiquote (wh-qq (car (cdr e))))]
+    [(and (eq? (car e) 'with-handlers) (list? e) (pair? (cdr e))
+          (list? (car (cdr e))) (andmap wh-clause? (car (cdr e)))
+          (pair? (cdr (cdr e))))
+     (wh-expand (car (cdr e)) (cdr (cdr e)))]
+    [(list? e) (map expand-with-handlers e)]
+    [else (cons (expand-with-handlers (car e)) (cdr e))]))
+
 (define (typecheck-program p0)
   (match p0
-    [`(program ,forms00 ...)
+    [`(program ,forms000 ...)
+     (define forms00 (map expand-with-handlers forms000))
      ;; type aliases are unfolded everywhere before any type is read
      (define aliases (collect-aliases forms00))
      (define forms0 (expand-type-aliases forms00 aliases))

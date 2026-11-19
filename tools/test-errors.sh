@@ -28,6 +28,11 @@
 #   NAME.flags            optional directives, one per line:
 #                           strict          pass --strict-types everywhere
 #                                           (warning-promotion cases)
+#                           vm-only         a runtime case that catches
+#                                           (with-handlers): the native
+#                                           backends refuse it at compile
+#                                           time (docs/EXCEPTIONS.md), so
+#                                           its native legs are skipped
 #                           interp-exit-ok  accept exit 0 from the
 #                                           reference interpreter (the
 #                                           (error ...) class: the interp
@@ -253,6 +258,8 @@ for c in $cases; do
   has_flag "$c" strict && STRICT="--strict-types"
   interp_ok0=no
   has_flag "$c" interp-exit-ok && interp_ok0=yes
+  vmonly=no
+  has_flag "$c" vm-only && vmonly=yes
 
   # classify: both compilers, bytecode target
   # shellcheck disable=SC2086
@@ -283,6 +290,9 @@ for c in $cases; do
     run_leg "$t/rkt-native" "$PUF" $STRICT -c -o "$t/rkt.exe" "$src"
     # shellcheck disable=SC2086
     run_leg "$t/pcc-native" "$CC" $STRICT "$src" -o "$t/pcc.exe"
+  elif [ "$vmonly" = yes ]; then
+    run_leg "$t/rkt-vm" "$VM" "$t/rkt.pbc"
+    run_leg "$t/pcc-vm" "$VM" "$t/pcc.pbc"
   else
     # shellcheck disable=SC2086
     run_leg "$t/rkt-cc" "$PUF" $STRICT -c -o "$t/rkt.exe" "$src"
@@ -324,9 +334,12 @@ for c in $cases; do
       gen_leg "$c" interp     "$t/interp"     interp
       gen_leg "$c" rkt-vm     "$t/rkt-vm"     rkt-vm
       gen_leg "$c" pcc-vm     "$t/pcc-vm"     pcc-vm
-      gen_leg "$c" rkt-native "$t/rkt-native" rkt-native
-      gen_leg "$c" pcc-native "$t/pcc-native" pcc-native
-      for l in rkt-vm pcc-vm rkt-native pcc-native; do
+      natives="rkt-native pcc-native"
+      if [ "$vmonly" = yes ]; then natives=""; else
+        gen_leg "$c" rkt-native "$t/rkt-native" rkt-native
+        gen_leg "$c" pcc-native "$t/pcc-native" pcc-native
+      fi
+      for l in rkt-vm pcc-vm $natives; do
         if [ "$(leg_ec "$t/$l")" -eq 0 ]; then
           echo "  REFUSED: leg $l exited 0 -- this case does not fail there"
           gen_refused=$((gen_refused + 1)); gen_set=""; break
@@ -379,8 +392,10 @@ for c in $cases; do
     check_leg "$c" interp     "$t/interp"     interp     yes "$interp_ok0"
     check_leg "$c" rkt-vm     "$t/rkt-vm"     rkt-vm     yes no
     check_leg "$c" pcc-vm     "$t/pcc-vm"     pcc-vm     yes no
-    check_leg "$c" rkt-native "$t/rkt-native" rkt-native yes no
-    check_leg "$c" pcc-native "$t/pcc-native" pcc-native yes no
+    if [ "$vmonly" != yes ]; then
+      check_leg "$c" rkt-native "$t/rkt-native" rkt-native yes no
+      check_leg "$c" pcc-native "$t/pcc-native" pcc-native yes no
+    fi
   fi
   if [ "$case_bad" -ne 0 ]; then
     cases_failed=$((cases_failed + 1))

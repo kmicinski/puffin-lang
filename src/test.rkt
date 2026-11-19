@@ -163,7 +163,22 @@
 ;; native modes
 ;; ---------------------------------------------------------------------
 
-(define (run-native-tests progs tgt)
+;; The native backends reject exceptions (docs/EXCEPTIONS.md): a program
+;; whose source catches -- with-handlers / call-with-handler -- runs on
+;; every other route and is skipped by the native ones.
+(define (native-capable? prog)
+  (define path (program-path prog))
+  (define sources
+    (if (equal? (path->string (file-name-from-path path)) "main.puf")
+        (for/list ([f (directory-list (path-only path) #:build? #t)]
+                   #:when (regexp-match? #rx"\\.(puf|scm)$" (path->string f)))
+          f)
+        (list path)))
+  (not (for/or ([f sources])
+         (regexp-match? #rx"with-handlers|call-with-handler" (file->string f)))))
+
+(define (run-native-tests progs0 tgt)
+  (define progs (filter native-capable? progs0))
   (define exe (build-path (find-system-path 'temp-dir) (format "puffin-test-~a-~a" tgt (current-milliseconds))))
   (for ([prog progs])
     (define compiled?
@@ -264,7 +279,8 @@
 ;; result to the same goldens
 ;; ---------------------------------------------------------------------
 
-(define (run-puffincc-tests progs tgt)
+(define (run-puffincc-tests progs0 tgt)
+  (define progs (filter native-capable? progs0))
   (define exe (build-path (find-system-path 'temp-dir) (format "puffincc-test-~a" (current-milliseconds))))
   (for ([prog progs])
     (define compiled?

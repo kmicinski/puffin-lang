@@ -975,9 +975,64 @@
   (current-form-origin-set! #f)
   out)
 
+;; ---------------------------------------------------------------------
+;; with-handlers (docs/EXCEPTIONS.md): expanded before anything is
+;; checked, so every route -- the interpreter, both backends, the
+;; assists -- sees only the call-with-handler prim:
+;;
+;;   (with-handlers ([P H] ...) BODY ...)
+;;   => (let ([#%wh-p0 P] [#%wh-h0 H] ...)        ; P/H evaluated first,
+;;        (call-with-handler                      ; as in Racket
+;;          (lambda () BODY ...)
+;;          (lambda (#%wh-e)
+;;            (cond [(#%wh-p0 #%wh-e) (#%wh-h0 #%wh-e)] ...
+;;                  [else (raise #%wh-e)]))))
+;;
+;; A P or H that is a name or a lambda is used in place (no binding:
+;; evaluating it has no effect). The binders are fixed names, not
+;; gensyms, so the two compilers' gensym counters are untouched; user
+;; code cannot spell them into BODY's scope (they bind only P/H values
+;; the handler lambda calls). quote is data; quasiquote is data except
+;; under unquote / unquote-splicing. Mirrored by puffincc-src/types.puf.
+;; ---------------------------------------------------------------------
+
+(define (expand-with-handlers e)
+  (define (qq t)
+    (cond
+      [(and (pair? t) (memq (car t) '(unquote unquote-splicing)) (pair? (cdr t)) (null? (cddr t)))
+       (list (car t) (expand-with-handlers (cadr t)))]
+      [(pair? t) (cons (qq (car t)) (qq (cdr t)))]
+      [else t]))
+  (match e
+    [(cons 'quote _) e]
+    [(list 'quasiquote t) (list 'quasiquote (qq t))]
+    [`(with-handlers ,clauses ,body ...)
+     #:when (and (list? clauses) (andmap (λ (c) (and (list? c) (= (length c) 2))) clauses)
+                 (pair? body))
+     (define (place x i)
+       (define x+ (expand-with-handlers x))
+       (if (or (symbol? x+) (and (pair? x+) (eq? (car x+) 'lambda)))
+           (values x+ '())
+           (let ([name (string->symbol (format "#%wh-~a" i))])
+             (values name (list (list name x+))))))
+     (define-values (tests binds)
+       (for/fold ([tests '()] [binds '()] #:result (values (reverse tests) binds))
+                 ([c clauses] [i (in-naturals)])
+         (define-values (p pb) (place (first c) (format "p~a" i)))
+         (define-values (h hb) (place (second c) (format "h~a" i)))
+         (values (cons `[(,p #%wh-e) (,h #%wh-e)] tests) (append binds pb hb))))
+     (define call
+       `(call-with-handler
+         (lambda () ,@(map expand-with-handlers body))
+         (lambda (#%wh-e) (cond ,@tests [else (raise #%wh-e)]))))
+     (if (null? binds) call `(let ,binds ,call))]
+    [(cons a d) (cons (expand-with-handlers a) (if (list? d) (map expand-with-handlers d) d))]
+    [_ e]))
+
 (define (typecheck-program p0)
   (match p0
-    [`(program ,forms00 ...)
+    [`(program ,forms000 ...)
+     (define forms00 (map expand-with-handlers forms000))
      ;; type aliases are unfolded everywhere before any type is read
      (define aliases (collect-aliases forms00))
      (define forms0 (expand-type-aliases forms00 aliases))

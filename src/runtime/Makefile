@@ -27,7 +27,7 @@ SYSTEM_LIBGC ?= $(firstword $(wildcard /usr/lib/*-linux-gnu/libgc.a /usr/lib64/l
 endif
 
 CORE_SRCS := core.c
-LIB_SRCS  := lib/pairs.c lib/vectors.c lib/strings.c lib/table.c lib/hashes.c lib/sets.c lib/hamt.c lib/adt.c lib/cast.c lib/arith.c lib/predicates.c lib/io.c lib/foreign.c lib/stdlib_init.c
+LIB_SRCS  := lib/pairs.c lib/vectors.c lib/strings.c lib/table.c lib/hashes.c lib/sets.c lib/hamt.c lib/adt.c lib/cast.c lib/arith.c lib/predicates.c lib/io.c lib/foreign.c lib/exn.c lib/stdlib_init.c
 SRCS      := $(CORE_SRCS) $(LIB_SRCS)
 
 BUILD := build

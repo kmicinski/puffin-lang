@@ -388,7 +388,23 @@
 ;; select-instructions
 ;; ---------------------------------------------------------------------
 
+;; The native backends cannot catch yet (docs/EXCEPTIONS.md): refuse a
+;; program that applies call-with-handler anywhere (a quoted symbol is
+;; (quote ...), never an application). Mirrors src/stdlib.rkt.
+(define (reject-native-handlers! p)
+  ;; a function's blocks are a hash (label -> tail) in this IR
+  (when (hash? p)
+    (map (lambda (k) (reject-native-handlers! (hash-ref p k))) (hash-keys p)))
+  (when (pair? p)
+    (begin
+      (when (and (eq? (car p) 'call-with-handler) (list? p) (eq? (length p) 3))
+        (error "with-handlers needs the bytecode target (-t bytecode): the native backends do not support exceptions yet (docs/EXCEPTIONS.md)"))
+      (unless (eq? (car p) 'quote)
+        (begin (reject-native-handlers! (car p))
+               (reject-native-handlers! (cdr p)))))))
+
 (define (select-instructions-x86 p)
+  (reject-native-handlers! p)
   (define tables (bk-scan-literals p))
   (define symbol-table (first tables))
   (define string-table (second tables))
@@ -1122,6 +1138,7 @@
 ;; ---------------------------------------------------------------------
 
 (define (select-instructions-arm64 p)
+  (reject-native-handlers! p)
   (define tables (bk-scan-literals p))
   (define symbol-table (first tables))
   (define string-table (second tables))

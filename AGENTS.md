@@ -44,7 +44,8 @@ for working on it:
   cross-checked when present — `racket tools/gen-prim-names.rkt`)
   rather than editing generated files.
 - Puffin dialect notes for `puffincc-src/` edits: `string-append` is
-  binary; no `with-handlers`; no `(or ...)` match patterns or `match*`;
+  binary; no `with-handlers` (the language has it now -- docs/EXCEPTIONS.md
+  -- but the committed seed cannot compile it until it is refreshed); no `(or ...)` match patterns or `match*`;
   `(unquote ,e)`-shaped quasiquote patterns are escapes; `#:kw`
   literals in quasiquote patterns break the hosted build; unary
   `(- a)` must be `(- 0 a)`.

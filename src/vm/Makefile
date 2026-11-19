@@ -97,17 +97,26 @@ RUNTIME_SRCS := \
 	../runtime/lib/table.c ../runtime/lib/hashes.c ../runtime/lib/sets.c \
 	../runtime/lib/hamt.c ../runtime/lib/adt.c ../runtime/lib/cast.c ../runtime/lib/arith.c \
 	../runtime/lib/predicates.c \
-	../runtime/lib/io.c ../runtime/lib/foreign.c ../runtime/lib/stdlib_init.c
+	../runtime/lib/io.c ../runtime/lib/foreign.c ../runtime/lib/exn.c ../runtime/lib/stdlib_init.c
 
 # The wasm build: VM + allocator + error boundary + the runtime.
 WASM_SRCS := puffin-vm.c wasm/wasm-gc.c wasm/wasm-host.c $(RUNTIME_SRCS)
+
+# Catching exceptions (docs/EXCEPTIONS.md §6): the VM longjmps from a
+# failing prim back into its dispatch loop. On wasm, LLVM lowers C
+# setjmp/longjmp onto the exception-handling feature -- the LEGACY
+# encoding (try/catch), shipped since 2022 in every engine the
+# playground targets (Chrome 95, Firefox 100, Safari 15.2, Node 17);
+# the newer exnref encoding is not required. libsetjmp is wasi-libc's
+# runtime half. docs/WASM-VM.md principle 4 records the exception.
+WASM_SJLJ := -DPUFFIN_WASM_SJLJ -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=true
 
 # -DPVM_WASM_GC: puffin-vm.c enables the §3.3 safepoint seam
 # (PVM_SAFEPOINT + pvm_gc_frame_roots) and skips Boehm-style whole-
 # chunk root registration; wasm-gc.c provides the collector behind it.
 WASM_CFLAGS := -Wall -Wextra -O2 \
 	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
-	-mexec-model=$(WASM_EXEC_MODEL) -DPVM_WASM_GC \
+	-mexec-model=$(WASM_EXEC_MODEL) -DPVM_WASM_GC $(WASM_SJLJ) \
 	-I wasm/include -I ../runtime
 
 # --wrap=exit routes the runtime's exit() to __wrap_exit -> host_abort
@@ -118,7 +127,8 @@ WASM_LDFLAGS := \
 	-Wl,--wrap=exit \
 	-Wl,--initial-memory=16777216 \
 	-Wl,--max-memory=1073741824 \
-	-Wl,--stack-first
+	-Wl,--stack-first \
+	-lsetjmp
 
 wasm: vm-prims.inc $(WASM_CC)-check
 	$(WASM_CC) $(WASM_CFLAGS) $(WASM_LDFLAGS) $(WASM_SRCS) -o $(WASM_BIN)
@@ -141,7 +151,7 @@ WASM_REPL_BIN := ../../bin/puffin-vm-repl.wasm
 
 WASM_REPL_CFLAGS := -Wall -Wextra -O2 \
 	--target=wasm32-wasi --sysroot=$(WASM_SYSROOT) \
-	-mexec-model=reactor -DPVM_REACTOR -DPVM_WASM_GC \
+	-mexec-model=reactor -DPVM_REACTOR -DPVM_WASM_GC $(WASM_SJLJ) \
 	-I wasm/include -I ../runtime
 
 wasm-repl: vm-prims.inc $(WASM_CC)-check

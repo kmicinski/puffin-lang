@@ -1,0 +1,1 @@
+(println (with-handlers ([symbol? (lambda (s) s)]) (error "not a symbol")))

@@ -151,6 +151,9 @@
       ;; foreign handles: #<Regex 0x104a3c200>, #<Regex closed> --
       ;; exactly like lib/foreign.c's display_handle
       [(foreign-handle? v) (foreign-handle-render v out)]
+      ;; exceptions: #<exn: boom> -- exactly like lib/exn.c's display_exn
+      [(puffin-exn? v)
+       (display "#<exn: " out) (render (puffin-exn-payload v)) (display ">" out)]
       ;; {k ↦ v, ...} sorted by the key's printed text; ∅ when empty --
       ;; exactly like lib/hashes.c's pf_hash_printer_finish
       [(hash? v)
@@ -228,9 +231,97 @@
 ;; native runtime's exit(1) does.
 (struct puffin-error-stop ())
 
+;; ---------------------------------------------------------------------
+;; Exceptions, reference-side (docs/EXCEPTIONS.md; lib/exn.c).
+;;
+;; An exn is (puffin-exn kind payload style): kind 'error or 'runtime,
+;; the payload the value given to `error` or a runtime error's message,
+;; and the style of its UNCAUGHT ending (lib/exn.c PF_EXN_*): 0 fatal
+;; (stderr "puffin runtime error: MSG", exit 255), 1 error (stdout
+;; "error: VALUE"), 2 io (stderr "error: MSG", exit 1). A raise travels
+;; as a Racket exception carrying the raised value (puffin-raise).
+;;
+;; handler-depth counts the active call-with-handlers. At depth 0
+;; every failure ends the program exactly as it did before exceptions
+;; (the interpreter's (error v) prints and stops with exit 0 -- the
+;; golden-parity design); inside one, failures raise.
+;; ---------------------------------------------------------------------
+
+(struct puffin-exn (kind payload style))
+(struct puffin-raise (v))
+(define handler-depth (box 0))
+
+(define (puffin-uncaught v)
+  (cond
+    [(puffin-exn? v)
+     (match (puffin-exn-style v)
+       [1 (display (format "error: ~a\n" (render-value (puffin-exn-payload v))))
+          (raise (puffin-error-stop))]
+       [2 (flush-output)
+          (fprintf (current-error-port) "error: ~a\n" (render-value (puffin-exn-payload v)))
+          (exit 1)]
+       [_ (flush-output)
+          (fprintf (current-error-port) "puffin runtime error: ~a\n" (render-value (puffin-exn-payload v)))
+          (exit 255)])]
+    [else
+     (display (format "uncaught exception: ~a\n" (render-value v)))
+     (raise (puffin-error-stop))]))
+
+(define (puffin-raise-impl v)
+  (if (positive? (unbox handler-depth))
+      (raise (puffin-raise v))
+      (puffin-uncaught v)))
+
 (define (puffin-error-impl v)
-  (display (format "error: ~a\n" (render-value v)))
-  (raise (puffin-error-stop)))
+  (puffin-raise-impl (puffin-exn 'error v 1)))
+
+;; a runtime error: catchable inside a handler, else stderr + exit 255
+(define (puffin-fatal msg)
+  (puffin-raise-impl (puffin-exn 'runtime msg 0)))
+
+;; (call-with-handler thunk handler): `call` applies an interpreter's
+;; procedure value to a list of arguments. A Racket-level failure of a
+;; ref-impl (car of a non-pair, ...) is caught as a runtime exn too;
+;; its message is Racket's (the interp route's documented variance:
+;; errors-corpus *.expect.interp).
+(define (call-with-handler-impl call thunk handler)
+  (define-values (ok? v)
+    (dynamic-wind
+     (λ () (set-box! handler-depth (add1 (unbox handler-depth))))
+     (λ ()
+       (with-handlers ([puffin-raise? (λ (r) (values #f (puffin-raise-v r)))]
+                       [exn:fail? (λ (e) (values #f (puffin-exn 'runtime (racket-failure-message e) 0)))])
+         (values #t (call thunk '()))))
+     (λ () (set-box! handler-depth (sub1 (unbox handler-depth))))))
+  (if ok? v (call handler (list v))))
+
+;; a Racket-level failure of a ref-impl, worded the way the C runtime
+;; words the same failure where the two line up (index and kind errors)
+(define (racket-failure-message e)
+  (define m (exn-message e))
+  (cond
+    [(regexp-match? #rx"index is out of range|index out of range" m) "index out of range"]
+    [(regexp-match? #rx"contract violation" m) "operation applied to a value of the wrong type"]
+    [else m]))
+
+;; The native backends cannot catch yet (docs/EXCEPTIONS.md): their
+;; select-instructions passes refuse a program that applies
+;; call-with-handler anywhere (a quoted symbol is (quote ...), never
+;; an application). Mirrored by puffincc-src/backends.puf.
+(define (reject-native-handlers! p)
+  (let walk ([t p])
+    ;; a function's blocks are a hash (label -> tail) in this IR
+    (when (hash? t) (for ([v (in-hash-values t)]) (walk v)))
+    (when (pair? t)
+      (when (and (eq? (car t) 'call-with-handler) (list? t) (= (length t) 3))
+        (error "with-handlers needs the bytecode target (-t bytecode): the native backends do not support exceptions yet (docs/EXCEPTIONS.md)"))
+      (unless (eq? (car t) 'quote)
+        (walk (car t))
+        (walk (cdr t))))))
+
+(define (puffin-exn-message v)
+  (define p (puffin-exn-payload v))
+  (if (string? p) p (render-value p)))
 
 ;; ---------------------------------------------------------------------
 ;; FFI reference implementations (docs/FFI.md §8.3): the manifest
@@ -629,11 +720,9 @@
                   [else
                    (define shown
                      (if (and (pair? desc) (memq (car desc) '(adt fptr))) (cadr desc) desc))
-                   (flush-output)
-                   (fprintf (current-error-port)
-                            "puffin runtime error: cast: expected ~a, got ~a (blame: ~a)\n"
-                            (render-value shown) (render-value v) (render-value blame))
-                   (exit 255)]))
+                   (puffin-fatal
+                    (format "cast: expected ~a, got ~a (blame: ~a)"
+                            (render-value shown) (render-value v) (render-value blame)))]))
               "INTERNAL: first-order transient cast: v unless its outermost shape violates desc; fatal cast error naming blame otherwise.")
 
    ;; ---- the FFI (lib/foreign.c; docs/FFI.md) ----------------------------
@@ -680,7 +769,29 @@
    ;; committed seed's bytecode must keep meaning what it meant
    (prim-spec 'read-line 0 'pf_read_line #t 'read-line
               "The next line of standard input without its newline, or #f at end of input."
-              #:type '(-> _))))
+              #:type '(-> _))
+
+   ;; ---- exceptions (lib/exn.c; docs/EXCEPTIONS.md) -----------------------
+   ;; appended too (prim ids). `with-handlers` expands to
+   ;; call-with-handler in both typecheckers; the bytecode VM implements
+   ;; it (puffin-vm.c), the native backends reject it at compile time.
+   (prim-spec 'raise 1 'pf_raise #t puffin-raise-impl
+              "Raise a value as an exception: the innermost handler gets it (an uncaught raise prints `uncaught exception: <value>` and halts)."
+              #:type '(-> a _))
+   (prim-spec 'call-with-handler 2 'pf_call_with_handler #t 'call-with-handler
+              "Call the thunk; if it raises, call the handler on the raised value instead (`with-handlers` is the usual way to write this)."
+              #:type '(-> (-> a) (-> _ a) a))
+   (prim-spec 'exn? 1 'pf_exn_huh #t puffin-exn?
+              "Is this value an exception raised by `error` or by a runtime error?"
+              #:type '(-> a Bool))
+   (prim-spec 'exn-message 1 'pf_exn_message #t
+              (λ (v) (if (puffin-exn? v) (puffin-exn-message v) (puffin-fatal "operation applied to a value of the wrong type")))
+              "An exception's message: a runtime error's text, or the value given to `error` as a string."
+              #:type '(-> _ Str))
+   (prim-spec 'exn-kind 1 'pf_exn_kind #t
+              (λ (v) (if (puffin-exn? v) (puffin-exn-kind v) (puffin-fatal "operation applied to a value of the wrong type")))
+              "An exception's kind: 'error (from `error`) or 'runtime (a runtime error)."
+              #:type '(-> _ Sym))))
 
 ;; manifest self-agreement: a typed prim's arrow arity must equal its
 ;; declared arity (the type field cannot drift from the manifest it
