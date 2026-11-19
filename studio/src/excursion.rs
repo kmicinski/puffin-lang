@@ -289,7 +289,12 @@ impl Studio {
         let _ = writeln!(user, "\nThe question now: {}", excursion.thread[at].question);
         let model = std::env::var("PUFFIN_EXPLAIN_MODEL").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| claude_api::EXPLAIN_MODEL.to_owned());
         let answer = match self.voice_api() {
-            Some(api) => api.structured(&model, "low", EXPLAINER, &user, schema(), 2500, Duration::from_secs(90)).await,
+            Some(api) => {
+                // the language itself, as the builder has it: a question is
+                // as often about Puffin (`ann`, `_`, define-grammar) as the program
+                let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{EXPLAINER}", crate::knowledge::reference(&self.root));
+                api.structured(&model, "low", &system, &user, schema(), 2500, Duration::from_secs(90)).await
+            }
             None => Err("no Claude API credentials".to_owned()),
         };
         self.voice_excursion(|slot| {
@@ -362,7 +367,9 @@ You are the guide on an excursion through a Puffin program (Puffin: a gradually 
 types, define-type data, match, typed holes `??` that are bodies not written yet). The author is building it \
 by voice and has stopped to understand part of it. You are shown the whole program with line numbers, the \
 fragments of code this excursion has brought into view, the questions and answers so far, and the question \
-now. Explain; never propose edits unless asked what to change.
+now. Explain; never propose edits unless asked what to change. When the question is about a form of the language \
+itself (`ann`, `_`, `define-grammar`, `match` patterns, quasiquote templates), say that it is built in and what \
+it does, from the reference above, then what it does in this code.
 
 answer: markdown, short -- a few sentences to two short paragraphs, or a few bullets -- read in a narrow \
 panel beside the code. Speak to this program: name its definitions and constructors in `code`, cite lines as \
