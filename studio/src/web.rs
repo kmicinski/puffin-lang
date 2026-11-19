@@ -285,6 +285,8 @@ enum Request {
     BoardSet { board: Value },
     /// The author's typed answer to the builder's question `id`.
     Answer { id: u64, text: String },
+    /// A signature typed on `file`'s card: a planned definition (board.rs).
+    BoardDefine { file: String, text: String },
 }
 
 /// Messages for one tab only; everything else is a broadcast `Event`.
@@ -681,6 +683,7 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
         }
         Request::BoardSet { board } => studio.set_board(board),
         Request::Answer { id, text } => studio.answer(id, text),
+        Request::BoardDefine { file, text } => notice(&direct, studio.board_define(&file, &text).map(|_| ())),
         Request::OpenProject { name } => {
             let web = web.clone();
             tokio::spawn(async move {

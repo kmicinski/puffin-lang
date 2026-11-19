@@ -907,3 +907,21 @@ async fn notes_on_the_design_reach_the_builder() {
     assert!(told.contains("- on alloc (store.puf): hand out the next unused integer"), "{told}");
     assert!(told.contains("- on the module machine.puf: follow the paper rule by rule"), "{told}");
 }
+
+#[tokio::test]
+async fn a_signature_typed_on_the_board_is_planned_in_the_module() {
+    let Some(studio) = studio("board-define", &[("store.puf", "(provide Addr)\n(define-type-alias Addr Int)\n")]) else { return };
+    studio.board_define("store.puf", "type Store = Hash Addr Int").unwrap();
+    assert_eq!(studio.board_define("store.puf", "val alloc : Store -> Addr").unwrap(), "alloc");
+    assert!(studio.board_define("store.puf", "alloc : Store -> Store").is_err(), "a name defined twice");
+    let text = studio.text_of("store.puf").unwrap();
+    assert!(text.starts_with("(provide Addr Store alloc)"), "{text}");
+    assert!(text.contains("(: alloc (-> Store Addr))\n(define (alloc store) ??)"), "{text}");
+    // the plan checks: only the hole is missing
+    let report = studio.toolchain.check(&studio.files(), "store.puf").await;
+    assert!(report.passes() && report.holed(), "{report:?}");
+    let outline = crate::board::outline(&studio.files());
+    let alloc = outline[0].items.iter().find(|i| i.name == "alloc").unwrap();
+    assert!(alloc.opaque);
+    assert_eq!(alloc.sig, "val alloc : Store -> Addr");
+}

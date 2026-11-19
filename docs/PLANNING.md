@@ -165,6 +165,24 @@ to the definitions it governs. Clicking one puts its slice in front of
 you again (an open question comes back with its answer box). It comes out
 by itself when the first decision or question arrives; ✕ puts it away.
 
+**Designing on the board.** Under each module's rows, "+ plan a
+definition" takes a signature in the board's own ML style and plans it
+in the module (`Studio::board_define`, `board::define_from_signature`),
+its body a typed hole, the provide list kept current:
+
+| typed | written |
+|---|---|
+| `val alloc : Store -> Addr` | `(: alloc (-> Store Addr))` `(define (alloc store) ??)` |
+| `step : State * Kont -> State` | parameters named after their types: `(step state kont)` |
+| `fresh : unit -> Addr` | `(define (fresh) ??)` |
+| `val limit : Int` | `(: limit Int)` `(define limit ??)` |
+| `type Kont = Done \| Arg of Expr * Env` | `(define-type Kont (Done) (Arg Expr Env))` |
+| `type Env = Hash Var Addr` | `(define-type-alias Env (Hash Var Addr))` |
+
+So a design can be sketched, annotated and decided entirely on the board
+— checked as it grows, since holes are checked past — before anyone (the
+builder, or the author) writes a body.
+
 ## 6. Reading the board
 
 - **The lens.** Hover a row (or move the keyboard's cursor to it): wires

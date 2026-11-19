@@ -70,6 +70,9 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   // the note being written: { file, name (null: the module), id (editing
   // one), kind, text }
   let writing = null;
+  // the card a signature is being typed on (designing on the board)
+  let adding = null;
+  let addText = "";
 
   function load(key) {
     try { return localStorage.getItem(key); } catch { return null; }
@@ -313,13 +316,14 @@ export function createBoard({ editor, files, send, stage, onShow }) {
   // out of a note being written
   function render() {
     const active = document.activeElement;
-    const typingNote = active?.classList?.contains("board-note-text-input") ? [active.selectionStart, active.selectionEnd] : null;
+    const kind = ["board-note-text-input", "board-add-input"].find((c) => active?.classList?.contains(c));
+    const at = kind ? [active.selectionStart, active.selectionEnd] : null;
     renderBoard();
-    if (typingNote) {
-      const box = canvas.querySelector(".board-note-text-input");
+    if (kind) {
+      const box = canvas.querySelector(`.${kind}`);
       if (box) {
         box.focus({ preventScroll: true });
-        box.setSelectionRange(...typingNote);
+        box.setSelectionRange(...at);
       }
     }
   }
@@ -497,6 +501,7 @@ export function createBoard({ editor, files, send, stage, onShow }) {
       list.append(renderItem(m, item, open.has(item.name), hidden.has(item.name), focused));
     }
     node.append(list);
+    if (m.path !== DECISIONS && m.path !== "properties.puf" && !focus) node.append(addRow(m));
     if (tucked) {
       const label = focus ? `${tucked} not in focus` : query ? `${tucked} not matching` : `${tucked} hidden`;
       const more = el("button", "board-more", label);
@@ -610,6 +615,54 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     if (writing && writing.file === m.path && writing.name === item.name && writing.id == null) row.append(noteEditor());
     if (isOpen) row.append(body(m, item));
     return row;
+  }
+
+  // ---- designing on the board: a signature becomes a planned definition --------------------
+
+  function addRow(m) {
+    if (adding !== m.path) {
+      const plus = el("button", "board-add", "+ plan a definition");
+      plus.title = "Type a signature -- val name : Type -> Type, or type T = A | B of Int -- and it is planned in this module, its body a hole";
+      plus.addEventListener("click", (event) => {
+        event.stopPropagation();
+        adding = m.path;
+        addText = "";
+        render();
+        setTimeout(() => canvas.querySelector(".board-add-input")?.focus(), 20);
+      });
+      return plus;
+    }
+    const box = el("div", "board-add-box");
+    const input = el("input", "board-add-input");
+    input.value = addText;
+    input.spellcheck = false;
+    input.placeholder = "val name : Type -> Type    ·    type T = A | B of Int";
+    input.addEventListener("input", () => { addText = input.value; });
+    input.addEventListener("pointerdown", (event) => event.stopPropagation());
+    input.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      if (event.key === "Enter" && input.value.trim()) {
+        send({ t: "board-define", file: m.path, text: input.value.trim() });
+        // ready for the next one
+        addText = "";
+        input.value = "";
+      } else if (event.key === "Escape") {
+        adding = null;
+        render();
+        root.focus({ preventScroll: true });
+      }
+    });
+    input.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (adding === m.path && !input.value.trim() && document.activeElement !== input) {
+          adding = null;
+          render();
+        }
+      }, 150);
+    });
+    box.append(el("span", "board-kind", "+"), input);
+    box.append(el("div", "board-add-hint", "↵ plans it (its body a hole) · Esc closes · A * B -> C takes two arguments"));
+    return box;
   }
 
   // ---- notes: the author's decisions and comments on the design --------------------------

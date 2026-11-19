@@ -407,6 +407,258 @@ fn grammar_sig(parts: &[T]) -> String {
     format!("grammar {head} = {}", prods.join(" | "))
 }
 
+// ---- Designing on the board: a signature becomes a planned definition ------------
+
+/// A definition from what the author typed on a card, in the board's own
+/// ML style, as Puffin text with its body a typed hole:
+///   `val alloc : Store -> Addr`      (: alloc (-> Store Addr))
+///                                    (define (alloc store) ??)
+///   `step : State * Kont -> State`   (parameters named after their types)
+///   `val limit : Int`                (: limit Int) (define limit ??)
+///   `type Kont = Done | Arg of Expr * Env`
+///                                    (define-type Kont (Done) (Arg Expr Env))
+///   `type Option a = None | Some of a`
+///   `type Env = Hash Var Addr`       (a type without constructors: an alias)
+/// Types: `A -> B` is a function, `A * B -> C` takes two arguments, `unit
+/// -> C` none; `List Int` is `(List Int)`; parentheses group.
+pub fn define_from_signature(text: &str) -> Result<String, String> {
+    let text = text.trim().trim_end_matches(';');
+    if let Some(rest) = text.strip_prefix("type ") {
+        let (head, body) = rest.split_once('=').ok_or("a type needs `= ...`: type T = A | B of Int")?;
+        let head_words: Vec<&str> = head.split_whitespace().collect();
+        let name = *head_words.first().ok_or("the type needs a name")?;
+        check_name(name)?;
+        let head = if head_words.len() == 1 { name.to_owned() } else { format!("({})", head_words.join(" ")) };
+        let alternatives: Vec<&str> = body.split('|').map(str::trim).filter(|a| !a.is_empty()).collect();
+        // a capitalized single word followed by type words is a constructor
+        // only when there are alternatives or `of`; `type Env = Hash Var Addr` is an alias
+        let constructors = alternatives.len() > 1 || body.contains(" of ");
+        if !constructors {
+            let ty = ml_type(body.trim())?;
+            return Ok(format!("(define-type-alias {head} {ty})"));
+        }
+        let mut ctors = Vec::new();
+        for alt in alternatives {
+            let (ctor, fields) = match alt.split_once(" of ") {
+                Some((c, f)) => (c.trim(), f.split('*').map(|t| ml_type(t.trim())).collect::<Result<Vec<_>, _>>()?),
+                None => (alt, Vec::new()),
+            };
+            check_name(ctor)?;
+            ctors.push(if fields.is_empty() { format!("({ctor})") } else { format!("({ctor} {})", fields.join(" ")) });
+        }
+        return Ok(format!("(define-type {head}\n  {})", ctors.join("\n  ")));
+    }
+    let text = text.strip_prefix("val ").unwrap_or(text);
+    let (name, ty) = text.split_once(':').ok_or("write it as `name : Type -> Type` (or `type T = ...`)")?;
+    let name = name.trim();
+    check_name(name)?;
+    let ty = ty.trim();
+    if ty.is_empty() {
+        return Err(format!("{name} needs a type after the colon"));
+    }
+    let parsed = MlType::parse(ty)?;
+    match &parsed {
+        MlType::Arrow(args, _) => {
+            let mut used: Vec<String> = Vec::new();
+            let params: Vec<String> = args
+                .iter()
+                .map(|a| {
+                    let base = a.param_name();
+                    let mut name = base.clone();
+                    let mut n = 2;
+                    while used.contains(&name) {
+                        name = format!("{base}{n}");
+                        n += 1;
+                    }
+                    used.push(name.clone());
+                    name
+                })
+                .collect();
+            let head = if params.is_empty() { format!("({name})") } else { format!("({name} {})", params.join(" ")) };
+            Ok(format!("(: {name} {})\n(define {head} ??)", parsed.puffin()))
+        }
+        _ => Ok(format!("(: {name} {})\n(define {name} ??)", parsed.puffin())),
+    }
+}
+
+fn check_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.chars().any(|c| c.is_whitespace() || "()[]{}\";'`,".contains(c)) || name.parse::<i64>().is_ok() {
+        return Err(format!("`{name}` is not a name"));
+    }
+    Ok(())
+}
+
+fn ml_type(text: &str) -> Result<String, String> {
+    Ok(MlType::parse(text)?.puffin())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum MlType {
+    Name(String),
+    App(Vec<MlType>),
+    Arrow(Vec<MlType>, Box<MlType>),
+}
+
+impl MlType {
+    fn parse(text: &str) -> Result<MlType, String> {
+        let tokens = ml_tokens(text);
+        let mut at = 0;
+        let ty = Self::arrow(&tokens, &mut at)?;
+        if at != tokens.len() {
+            return Err(format!("could not read the type `{text}` past `{}`", tokens[at..].join(" ")));
+        }
+        Ok(ty)
+    }
+
+    // arrow := product ('->' arrow)?   product := app ('*' app)*
+    fn arrow(t: &[String], at: &mut usize) -> Result<MlType, String> {
+        let mut args = vec![Self::app(t, at)?];
+        while t.get(*at).map(String::as_str) == Some("*") {
+            *at += 1;
+            args.push(Self::app(t, at)?);
+        }
+        if t.get(*at).map(String::as_str) == Some("->") {
+            *at += 1;
+            let result = Self::arrow(t, at)?;
+            if args.len() == 1 && args[0] == MlType::Name("unit".into()) {
+                args.clear();
+            }
+            return Ok(MlType::Arrow(args, Box::new(result)));
+        }
+        if args.len() > 1 {
+            // a bare product: a pair type, Puffin's Pairof for two
+            return Ok(MlType::App(std::iter::once(MlType::Name("Pairof".into())).chain(args).collect()));
+        }
+        Ok(args.pop().unwrap())
+    }
+
+    fn app(t: &[String], at: &mut usize) -> Result<MlType, String> {
+        let mut parts = Vec::new();
+        while let Some(tok) = t.get(*at) {
+            match tok.as_str() {
+                "(" => {
+                    *at += 1;
+                    let inner = Self::arrow(t, at)?;
+                    if t.get(*at).map(String::as_str) != Some(")") {
+                        return Err("a parenthesis is not closed".to_owned());
+                    }
+                    *at += 1;
+                    parts.push(inner);
+                }
+                ")" | "*" | "->" => break,
+                name => {
+                    parts.push(MlType::Name(name.to_owned()));
+                    *at += 1;
+                }
+            }
+        }
+        match parts.len() {
+            0 => Err("a type is missing".to_owned()),
+            1 => Ok(parts.pop().unwrap()),
+            _ => Ok(MlType::App(parts)),
+        }
+    }
+
+    fn puffin(&self) -> String {
+        match self {
+            MlType::Name(n) => n.clone(),
+            MlType::App(parts) => format!("({})", parts.iter().map(MlType::puffin).collect::<Vec<_>>().join(" ")),
+            MlType::Arrow(args, result) => {
+                let mut all: Vec<String> = args.iter().map(MlType::puffin).collect();
+                all.push(result.puffin());
+                format!("(-> {})", all.join(" "))
+            }
+        }
+    }
+
+    /// A parameter named after its type: Store -> store, (List Int) ->
+    /// list, a function -> f, `_` -> x.
+    fn param_name(&self) -> String {
+        match self {
+            MlType::Name(n) if n == "_" => "x".to_owned(),
+            MlType::Name(n) => {
+                let lower: String = n.chars().filter(|c| c.is_alphanumeric() || *c == '-').collect::<String>().to_lowercase();
+                if lower.is_empty() || lower.len() == 1 && !n.chars().next().is_some_and(char::is_uppercase) { "x".to_owned() } else { lower }
+            }
+            MlType::App(parts) => parts[0].param_name(),
+            MlType::Arrow(..) => "f".to_owned(),
+        }
+    }
+}
+
+fn ml_tokens(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let flush = |word: &mut String, out: &mut Vec<String>| {
+        if !word.is_empty() {
+            out.push(std::mem::take(word));
+        }
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '-' && chars.get(i + 1) == Some(&'>') {
+            flush(&mut word, &mut out);
+            out.push("->".to_owned());
+            i += 2;
+            continue;
+        }
+        if c.is_whitespace() {
+            flush(&mut word, &mut out);
+        } else if "()*".contains(c) {
+            flush(&mut word, &mut out);
+            out.push(c.to_string());
+        } else {
+            word.push(c);
+        }
+        i += 1;
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+impl Studio {
+    /// The author typed a signature on `file`'s card: append the planned
+    /// definition to the module (and its name to the provide list, if the
+    /// module has one). Answers the definition's name.
+    pub fn board_define(&self, file: &str, text: &str) -> Result<String, String> {
+        let current = self.text_of(file).ok_or_else(|| format!("there is no module {file}"))?;
+        let code = define_from_signature(text)?;
+        let defined = read_all(&code)
+            .iter()
+            .find_map(|t| match t {
+                T::List(items) if items.first().and_then(atom).is_some_and(|h| h.starts_with("define")) => match items.get(1) {
+                    Some(T::Atom(a)) => Some(a.clone()),
+                    Some(T::List(h)) => h.first().and_then(atom).map(str::to_owned),
+                    None => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_default();
+        let names: BTreeSet<String> = sexp::forms(&current).into_iter().filter(|f| f.head.as_deref().is_some_and(|h| h.starts_with("define"))).filter_map(|f| f.name).collect();
+        if names.contains(&defined) {
+            return Err(format!("{file} already defines {defined}"));
+        }
+        let mut next = current.trim_end().to_owned();
+        // a provide list names what the module offers: the new definition too
+        if let Some(form) = sexp::forms(&current).into_iter().find(|f| f.head.as_deref() == Some("provide")) {
+            let provide = &current[form.start..form.end];
+            if !provide.contains("#:") && !provide.split(|c: char| c.is_whitespace() || c == '(' || c == ')').any(|w| w == defined) {
+                let extended = format!("{} {defined})", provide.trim_end_matches(')'));
+                next = next.replacen(provide, &extended, 1);
+            }
+        }
+        if !next.is_empty() {
+            next.push_str("\n\n");
+        }
+        next.push_str(&code);
+        next.push('\n');
+        self.replace(file, next, "board", &format!("plan {defined}"));
+        Ok(defined)
+    }
+}
+
 // ---- Slicing: what a question about some definitions needs on screen ------------
 
 /// The definitions to show for a question about `about` (names): those
@@ -866,6 +1118,22 @@ mod tests {
         assert_eq!(sig("varargs").sig, "val varargs : a * more... -> _");
         assert_eq!(m.effects, 1);
         assert_eq!(render(&read_all("(-> (-> Int Int) (List Int) Bool)")[0]), "(Int -> Int) * (List Int) -> Bool");
+    }
+
+    #[test]
+    fn signatures_typed_on_the_board_become_planned_definitions() {
+        assert_eq!(define_from_signature("val alloc : Store -> Addr").unwrap(), "(: alloc (-> Store Addr))\n(define (alloc store) ??)");
+        assert_eq!(define_from_signature("step : State * Kont -> State").unwrap(), "(: step (-> State Kont State))\n(define (step state kont) ??)");
+        assert_eq!(define_from_signature("pair : Int * Int -> Int").unwrap(), "(: pair (-> Int Int Int))\n(define (pair int int2) ??)");
+        assert_eq!(define_from_signature("fresh : unit -> Addr").unwrap(), "(: fresh (-> Addr))\n(define (fresh) ??)");
+        assert_eq!(define_from_signature("map-k : (Int -> Int) * List Int -> List Int").unwrap(), "(: map-k (-> (-> Int Int) (List Int) (List Int)))\n(define (map-k f list) ??)");
+        assert_eq!(define_from_signature("val limit : Int").unwrap(), "(: limit Int)\n(define limit ??)");
+        assert_eq!(define_from_signature("type Kont = Done | Arg of Expr * Env").unwrap(), "(define-type Kont\n  (Done)\n  (Arg Expr Env))");
+        assert_eq!(define_from_signature("type Option a = None | Some of a").unwrap(), "(define-type (Option a)\n  (None)\n  (Some a))");
+        assert_eq!(define_from_signature("type Env = Hash Var Addr").unwrap(), "(define-type-alias Env (Hash Var Addr))");
+        assert!(define_from_signature("alloc Store").is_err());
+        assert!(define_from_signature("f : (Int -> Int").is_err());
+        assert!(define_from_signature("type = A").is_err());
     }
 
     #[test]
