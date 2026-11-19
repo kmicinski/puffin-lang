@@ -113,6 +113,63 @@ fn tokens(text: &str) -> Vec<(Token, usize, usize)> {
     out
 }
 
+/// The constructors a `define-type` form declares, each with the 1-based
+/// line it is written on: `VRec` of `(define-type Value ... (VRec Sym Sym
+/// Expr Env))`, and a bare `Nil` too. `form` is one of `forms(text)`.
+pub fn constructors_at(text: &str, form: &Form) -> Vec<(String, usize)> {
+    if form.head.as_deref() != Some("define-type") {
+        return Vec::new();
+    }
+    let line_of = |at: usize| text[..at].bytes().filter(|&b| b == b'\n').count() + 1;
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    // the form's children at depth 1: 0 the head, 1 the type's name
+    let mut child = 0usize;
+    let mut opened_at_child: Option<usize> = None;
+    let mut first_in_list = false;
+    for (kind, start, end) in tokens(&text[form.start..form.end]) {
+        let (start, end) = (form.start + start, form.start + end);
+        match kind {
+            Token::Open => {
+                depth += 1;
+                if depth == 2 {
+                    opened_at_child = Some(child);
+                    first_in_list = true;
+                }
+            }
+            Token::Close => {
+                if depth == 2 {
+                    child += 1;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Token::Atom => {
+                let atom = &text[start..end];
+                let upper = atom.chars().next().is_some_and(char::is_uppercase);
+                if depth == 1 {
+                    if child >= 2 && upper {
+                        out.push((atom.to_owned(), line_of(start)));
+                    }
+                    child += 1;
+                } else if depth == 2 && first_in_list {
+                    if opened_at_child.is_some_and(|c| c >= 2) && upper {
+                        out.push((atom.to_owned(), line_of(start)));
+                    }
+                    first_in_list = false;
+                }
+            }
+            Token::Str | Token::Prefix => {
+                if depth == 1 {
+                    child += 1;
+                }
+                first_in_list = false;
+            }
+            Token::Comment => {}
+        }
+    }
+    out
+}
+
 /// The top-level forms of `text`, in order. A stray closer at the top level
 /// is skipped.
 pub fn forms(text: &str) -> Vec<Form> {
@@ -531,6 +588,15 @@ mod tests {
 '(quoted list)
 42
 ";
+
+    #[test]
+    fn constructors_are_found_with_their_lines() {
+        let text = "(define-type Value\n  (VNum Int) ;; (Fake x)\n  (VRec Sym Sym\n        Expr Env)\n  Nil)\n(define-type (Option a) (None) (Some a))\n(define (f x) (Foo x))\n";
+        let all = forms(text);
+        let found: Vec<(String, usize)> = all.iter().flat_map(|f| constructors_at(text, f)).collect();
+        let want: Vec<(String, usize)> = [("VNum", 2), ("VRec", 3), ("Nil", 5), ("None", 6), ("Some", 6)].iter().map(|(n, l)| (n.to_string(), *l)).collect();
+        assert_eq!(found, want);
+    }
 
     #[test]
     fn forms_have_spans_heads_and_names() {

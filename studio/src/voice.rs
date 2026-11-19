@@ -263,6 +263,11 @@ impl Studio {
                     let mut state = studio.voice.state();
                     if inert(decision) {
                         state.fragments.push((Instant::now(), utterance.clone()));
+                        // chatter not meant for the studio is kept too: only
+                        // the last couple can be the start of a request
+                        while state.fragments.len() > 2 {
+                            state.fragments.remove(0);
+                        }
                     } else {
                         state.fragments.clear();
                     }
@@ -341,11 +346,15 @@ impl Studio {
         let api = self.voice.api.as_ref().ok_or("no Claude API credentials")?;
         let files = self.files();
         let mut user = String::new();
-        let _ = writeln!(user, "Files and their top-level definitions (name: line):");
+        let _ = writeln!(user, "Files and their top-level definitions (name:line; a type's constructors in brackets, each name:line):");
         for (path, text) in &files {
             let names: Vec<String> = sexp::forms(text)
                 .iter()
-                .filter_map(|form| form.name.as_ref().map(|name| format!("{name}:{}", form.line)))
+                .filter_map(|form| {
+                    let name = form.name.as_ref()?;
+                    let made: Vec<String> = sexp::constructors_at(text, form).iter().map(|(c, line)| format!("{c}:{line}")).collect();
+                    Some(if made.is_empty() { format!("{name}:{}", form.line) } else { format!("{name}:{} [{}]", form.line, made.join(", ")) })
+                })
                 .take(80)
                 .collect();
             let _ = writeln!(user, "- {path} ({} lines): {}", text.lines().count(), names.join(", "));
@@ -1255,9 +1264,19 @@ fn definitions(files: &Files, name: &str) -> Vec<Value> {
     if want.is_empty() {
         return Vec::new();
     }
+    // every top-level definition, and every constructor of a define-type
+    // (\"where is VRec defined\": on its line inside `Value`)
     let all: Vec<(String, String, usize)> = files
         .iter()
-        .flat_map(|(path, text)| sexp::forms(text).into_iter().filter_map(move |f| f.name.map(|n| (path.clone(), n, f.line))))
+        .flat_map(|(path, text)| {
+            sexp::forms(text).into_iter().flat_map(move |f| {
+                let made: Vec<(String, String, usize)> = sexp::constructors_at(text, &f).into_iter().map(|(c, line)| (path.clone(), c, line)).collect();
+                // a define-something names what it defines; a provide or a
+                // signature only mentions it
+                let defines = f.head.as_deref().is_some_and(|h| h.starts_with("define"));
+                f.name.clone().filter(|_| defines).map(|n| (path.clone(), n, f.line)).into_iter().chain(made)
+            })
+        })
         .collect();
     let pick = |test: &dyn Fn(&str) -> bool| -> Vec<Value> {
         all.iter()
@@ -1482,8 +1501,10 @@ mis-heard words, missing punctuation, homophones (\"line for tea\" = line 40, \"
 separate builder agent writes the code; you never write code.
 
 navigate -- move their view, instantly. kind:
-- definition: show where `name` is defined. Use the exact identifier from the file list when you can tell \
-which one they mean.
+- definition: show where `name` is defined -- a definition, or a type's constructor (listed in brackets \
+after its type). Use the exact identifier from the file list. Spoken names arrive mangled (\"v-rex\", \"v \
+wreck\" = VRec; \"eval expert\" = eval-expr; \"if you rack\" may be VRec too): pick the identifier in the \
+list that sounds closest, and never answer that it cannot be found while a name in the list sounds like it.
 - usages: show the definition of `name` and every place it is used (\"where is foo used\", \"who calls \
 this\").
 - line: `line` in `file` (empty file = the shown one). Also for a part INSIDE a definition -- a clause, a \
@@ -1656,6 +1677,17 @@ mod tests {
         for action in ["note", "decide", "slice", "only", "plan-mode", "build-mode"] {
             assert!(actions.contains(&action), "{action}");
         }
+    }
+
+    #[test]
+    fn constructors_are_definitions_too() {
+        let values = ";; values.puf -- run-time values and environments.\n(require \"syntax.puf\")\n(provide Value VNum VBool VClo VRec Env)\n\n;; What an expression evaluates to.\n(define-type Value\n  (VNum Int)                       ;; an integer\n  (VBool Bool)                     ;; a boolean\n  (VClo Sym Expr Env)              ;; closure: parameter, body, defining env\n  (VRec Sym Sym Expr Env))         ;; recursive closure: self name, parameter, body, env\n";
+        let files = files(&[("values.puf", values)]);
+        let found = definitions(&files, "VRec");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0]["line"], json!(10));
+        assert_eq!(definitions(&files, "v rec")[0]["line"], json!(10));
+        assert_eq!(definitions(&files, "Value")[0]["line"], json!(6));
     }
 
     #[test]
