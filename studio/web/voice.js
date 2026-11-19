@@ -99,12 +99,26 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   mic.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>';
   mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
   const caption = el("div", "voice-caption");
-  const typed = el("input", "voice-typed");
+  // a text area that grows with what is written (up to a few lines, then
+  // it scrolls), so nothing typed is ever cut off; Enter sends, Shift+Enter
+  // starts a new line
+  const typed = el("textarea", "voice-typed");
+  typed.rows = 1;
+  typed.spellcheck = true;
   typed.placeholder = "Describe what you want to build";
+  const fit = () => {
+    typed.style.height = "auto";
+    typed.style.height = `${Math.min(typed.scrollHeight, 200)}px`;
+  };
+  typed.addEventListener("input", fit);
   typed.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && typed.value.trim()) {
-      utter(typed.value.trim());
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      const text = typed.value.trim();
+      if (!text) return;
+      utter(text);
       typed.value = "";
+      fit();
     }
     if (event.key === "Escape") {
       typed.blur();
