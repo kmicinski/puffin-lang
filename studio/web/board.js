@@ -962,6 +962,11 @@ export function createBoard({ editor, files, send, stage, onShow }) {
     // a module brought out (a chip clicked while the board shows)
     bringOut: (path) => change((b) => { ensureCard(b, path); }),
     fit,
+    outline: () => outline,
+    editAt,
+    // focus on a definition and what touches it (the palette, f)
+    slice: (path, name) => { setView("board"); sliceAt(keyOf(path, name)); },
+    clearFocus: () => change((b) => { b.focus = null; }),
     focusFilter: () => { setView("board"); setTimeout(() => filter.focus(), 30); },
     state: () => board,
   };

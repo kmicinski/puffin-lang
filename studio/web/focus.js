@@ -76,7 +76,11 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   runButton.title = "Run the shown file (⇧⌘↵, or say “run it”)";
   runButton.addEventListener("click", () => { run(); });
   left.append(chips);
-  right.append(slot, modeButton, boardButton, runButton);
+  // the command palette (palette.js listens for ⌘K)
+  const paletteButton = el("button", "focus-palette", "⌘K");
+  paletteButton.title = "Every command, file and definition (⌘K / ctrl-K)";
+  paletteButton.addEventListener("click", () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true })));
+  right.append(slot, paletteButton, modeButton, boardButton, runButton);
   bar.append(left, right);
   stage.append(bar);
 
@@ -334,6 +338,11 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     // the author asked to build something new: off the canvas once it lands
     started() { fresh = false; },
     on: () => on,
+    // the palette's "New module…": the bar's name field
+    newModule() {
+      editing = { kind: "new" };
+      renderFiles();
+    },
   };
   return api;
 }

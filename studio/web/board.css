@@ -259,7 +259,7 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board-answer:focus { border-color: var(--violet); }
 
 /* the bar's controls for the board */
-.focus-board, .focus-mode {
+.focus-board, .focus-mode, .focus-palette {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -268,5 +268,6 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
   font: 12px var(--sans);
   cursor: pointer;
 }
+.focus-palette { color: var(--muted); font-size: 11px; }
 .focus-board.on, .focus-mode.on { border-color: var(--violet); color: var(--violet); }
 .focus-file[draggable="true"] { cursor: grab; }

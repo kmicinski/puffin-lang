@@ -71,6 +71,7 @@ function loadMonaco() {
 // Solarized light, as the playground (web/src/monaco-setup.js) has it.
 const SOL = {
   base3: "fdf6e3", base2: "eee8d5", base1: "93a1a1", base00: "657b83", base01: "586e75",
+  base03: "002b36", base02: "073642", base0: "839496", base1d: "586e75", base01d: "93a1a1",
   yellow: "b58900", orange: "cb4b16", red: "dc322f", magenta: "d33682",
   violet: "6c71c4", blue: "268bd2", cyan: "2aa198", green: "859900",
 };
@@ -118,11 +119,11 @@ function register(monaco) {
     wordPattern: /[^\s()[\];",'`]+/,
     autoClosingPairs: [],
   });
-  monaco.editor.defineTheme("puffin-solarized", {
-    base: "vs",
+  const theme = (dark) => ({
+    base: dark ? "vs-dark" : "vs",
     inherit: true,
     rules: [
-      { token: "comment", foreground: SOL.base1, fontStyle: "italic" },
+      { token: "comment", foreground: dark ? SOL.base1d : SOL.base1, fontStyle: "italic" },
       { token: "string", foreground: SOL.cyan },
       { token: "string.escape", foreground: SOL.orange },
       { token: "number", foreground: SOL.magenta },
@@ -132,18 +133,18 @@ function register(monaco) {
       { token: "keyword", foreground: SOL.green, fontStyle: "bold" },
       { token: "keyword.flag", foreground: SOL.orange },
       { token: "builtin", foreground: SOL.blue },
-      { token: "identifier", foreground: SOL.base00 },
+      { token: "identifier", foreground: dark ? SOL.base0 : SOL.base00 },
       { token: "operator.quote", foreground: SOL.orange },
     ],
     colors: {
-      "editor.background": `#${SOL.base3}`,
-      "editor.foreground": `#${SOL.base00}`,
-      "editor.lineHighlightBackground": "#eee8d580",
-      "editor.selectionBackground": `#${SOL.base2}`,
-      "editorCursor.foreground": `#${SOL.base01}`,
-      "editorLineNumber.foreground": `#${SOL.base1}`,
-      "editorLineNumber.activeForeground": `#${SOL.base01}`,
-      "editorBracketMatch.background": `#${SOL.base2}`,
+      "editor.background": `#${dark ? SOL.base03 : SOL.base3}`,
+      "editor.foreground": `#${dark ? SOL.base0 : SOL.base00}`,
+      "editor.lineHighlightBackground": dark ? "#07364280" : "#eee8d580",
+      "editor.selectionBackground": `#${dark ? SOL.base02 : SOL.base2}`,
+      "editorCursor.foreground": `#${dark ? SOL.base01d : SOL.base01}`,
+      "editorLineNumber.foreground": `#${dark ? SOL.base1d : SOL.base1}`,
+      "editorLineNumber.activeForeground": `#${dark ? SOL.base01d : SOL.base01}`,
+      "editorBracketMatch.background": `#${dark ? SOL.base02 : SOL.base2}`,
       "editorBracketMatch.border": `#${SOL.yellow}`,
       "editorBracketHighlight.foreground1": `#${SOL.blue}`,
       "editorBracketHighlight.foreground2": `#${SOL.magenta}`,
@@ -153,18 +154,40 @@ function register(monaco) {
       "editorInfo.foreground": `#${SOL.cyan}`,
       "editorHint.foreground": `#${SOL.magenta}`,
       // the rest of a match, shown before it is written (assists.js)
-      "editorGhostText.foreground": `#${SOL.base1}`,
+      "editorGhostText.foreground": `#${dark ? SOL.base1d : SOL.base1}`,
     },
   });
+  monaco.editor.defineTheme("puffin-solarized", theme(false));
+  monaco.editor.defineTheme("puffin-solarized-dark", theme(true));
+}
+
+// light or dark: the page's data-theme if it says, else the system's
+export function darkMode() {
+  const set = document.documentElement.dataset.theme;
+  if (set === "dark") return true;
+  if (set === "light") return false;
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+const currentTheme = () => (darkMode() ? "puffin-solarized-dark" : "puffin-solarized");
+
+// follow the system, and the palette's Theme command, as they change
+let followingTheme = false;
+function followTheme(monaco) {
+  if (followingTheme) return;
+  followingTheme = true;
+  const apply = () => monaco.editor.setTheme(currentTheme());
+  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", apply);
+  new MutationObserver(apply).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 }
 
 const SEVERITY = { warning: "Warning", info: "Info", hint: "Hint" };
 
 function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole, onTrace }) {
   register(monaco);
+  followTheme(monaco);
   const editor = monaco.editor.create(element, {
     language: "puffin",
-    theme: "puffin-solarized",
+    theme: currentTheme(),
     automaticLayout: true,
     minimap: { enabled: false },
     folding: false,

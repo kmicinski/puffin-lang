@@ -22,6 +22,7 @@ import { createRename } from "./rename.js";
 import { createVoice } from "./voice.js";
 import { createFocus } from "./focus.js";
 import { createBoard } from "./board.js";
+import { createPalette } from "./palette.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -140,6 +141,58 @@ focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: docum
 const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on) });
 focus.attachBoard(board);
 const voice = createVoice({ editor, files, send, note, button: $("voice-toggle"), stage: document.querySelector(".editor-pane"), layout: focus, board, run: () => load(null) });
+
+// ⌘K: every action, every file, every definition
+const KIND_ICON = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?" };
+const palette = createPalette({
+  commands() {
+    const list = [];
+    const add = (group, title, run, extra = {}) => list.push({ group, title, run, ...extra });
+    const onBoard = board.shown();
+    add("Board", onBoard ? "Show the editor" : "Show the module board", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
+    add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
+    if (onBoard) {
+      add("Board", "Fit the board to the window", () => board.fit(), { icon: "⤢", keys: "0" });
+      add("Board", "Filter the board", () => board.focusFilter(), { icon: "⌕", keys: "/" });
+      if (board.state().focus) add("Board", "Show everything (clear the focus)", () => board.clearFocus(), { icon: "◎", keys: "Esc" });
+    }
+    add("Run", "Run the shown file", () => load(null), { icon: "▸", keys: "⇧⌘↵", rank: 1 });
+    add("Run", "Run the properties", () => send({ t: "voice-control", command: "run-properties" }), { icon: "✓" });
+    add("Run", "Show the output and REPL", () => focus.showOutput(true), { icon: "›" });
+    add("Run", "Reset the session", () => $("reset").click(), { icon: "↺" });
+    add("Project", "Open another project…", () => $("project").click(), { icon: "⌂" });
+    const setTheme = (theme) => {
+      if (theme) document.documentElement.dataset.theme = theme;
+      else delete document.documentElement.dataset.theme;
+      try { theme ? localStorage.setItem("puffin-theme", theme) : localStorage.removeItem("puffin-theme"); } catch { /* private window */ }
+    };
+    const theme = document.documentElement.dataset.theme ?? "system";
+    add("Appearance", `Theme: dark${theme === "dark" ? " ✓" : ""}`, () => setTheme("dark"), { icon: "◐", keywords: "dark mode night solarized" });
+    add("Appearance", `Theme: light${theme === "light" ? " ✓" : ""}`, () => setTheme("light"), { icon: "○", keywords: "light mode day solarized" });
+    add("Appearance", `Theme: match the system${theme === "system" ? " ✓" : ""}`, () => setTheme(null), { icon: "◑", keywords: "auto theme" });
+    add("Project", "History of this project", () => history.toggle(), { icon: "◷" });
+    add("Project", "New module…", () => (focus.on() ? focus.newModule() : tree.newFile()), { icon: "+" });
+    add("Voice", voice.on() ? "Show all panes (leave the focused layout)" : "Focused layout with voice", () => voice.toggle(), { icon: "◉", keys: "⌘⇧V" });
+    add("Voice", "Undo the builder's last edit", () => send({ t: "voice-control", command: "undo" }), { icon: "↶" });
+    add("Voice", "Start a new conversation with the builder", () => send({ t: "voice-control", command: "new-conversation" }), { icon: "✦" });
+    for (const path of files.paths().filter((p) => p !== "prop.puf")) {
+      add("Files", path, () => { board.setView("editor"); files.open(path); }, { icon: "▤", detail: path === files.active() ? "shown" : "", rank: 3 });
+    }
+    for (const m of board.outline()) {
+      for (const item of m.items) {
+        add("Definitions", item.kind === "property" ? item.sig : item.name, () => board.editAt(m.path, item.line), {
+          icon: KIND_ICON[item.kind] ?? "·",
+          detail: item.kind === "property" ? m.path : `${item.sig.replace(/^(val|type|grammar) \S+\s*/, "")} — ${m.path.replace(/\.puf$/, "")}${item.opaque ? " ◌" : ""}`,
+          keywords: `${item.sig} ${item.doc ?? ""}`,
+          alt: () => board.slice(m.path, item.name),
+          hiddenUntilTyped: true,
+          rank: 4,
+        });
+      }
+    }
+    return list;
+  },
+});
 
 const repl = createRepl({
   transcript: $("transcript"),

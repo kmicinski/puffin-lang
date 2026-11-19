@@ -1,7 +1,7 @@
 /* Voice mode (voice.js): the editor alone, centered; everything else
    floats over the margins, and only while it matters. */
 
-#voice-toggle.on { background: var(--violet); color: #fdf6e3; border-color: var(--violet); }
+#voice-toggle.on { background: var(--violet); color: var(--on-accent); border-color: var(--violet); }
 
 /* ---- The layout: one editor, centered (focus.js) --------------------------- */
 
@@ -94,7 +94,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
   padding: 3px 10px;
   border-radius: 12px;
 }
-.focus-run:hover { background: #eef2d6; }
+.focus-run:hover { background: var(--green-tint); }
 
 /* beside a hovered form: evaluate it, or try it in the REPL */
 .focus-chip {
@@ -132,7 +132,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
   white-space: nowrap;
 }
 .voice-badge:hover { background: var(--base2); }
-.voice-badge.bad { color: #fdf6e3; background: var(--red); }
+.voice-badge.bad { color: var(--on-accent); background: var(--red); }
 
 /* ---- The pill at the foot --------------------------------------------------- */
 
@@ -170,7 +170,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 .voice-mic.live {
   background: var(--red);
   border-color: var(--red);
-  color: #fdf6e3;
+  color: var(--on-accent);
   box-shadow: 0 0 0 calc(2px + var(--level) * 10px) rgba(220, 50, 47, calc(0.15 + var(--level) * 0.35));
 }
 /* what was heard or said back: its own row above the text box, wrapped,
@@ -205,6 +205,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
   color: var(--text);
   resize: none;
   overflow-y: auto;
+  height: calc(1.4em + 6px);
   max-height: 200px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

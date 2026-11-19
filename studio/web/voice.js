@@ -106,7 +106,12 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   typed.rows = 1;
   typed.spellcheck = true;
   typed.placeholder = "Describe what you want to build";
+  // one line when empty (the placeholder too), growing with the text
   const fit = () => {
+    if (!typed.value) {
+      typed.style.height = "";
+      return;
+    }
     typed.style.height = "auto";
     typed.style.height = `${Math.min(typed.scrollHeight, 200)}px`;
   };
