@@ -628,3 +628,9 @@ body.focus-canvas .voice-progress-now { padding-top: 4px; white-space: normal; }
 body.focus-canvas .voice-progress-past { display: block; padding-top: 2px; }
 .voice-progress-said { display: none; }
 body.focus-canvas .voice-progress-said { display: block; padding: 3px 0 0 16px; color: var(--text); font-style: italic; }
+
+/* ---- keeping clear of the pill (voice.js keepClear) ----------------------- */
+/* a float in the pill's columns ends above the pill and its progress card */
+.timeline.clear-pill, .voice-rail.clear-pill { bottom: var(--pill-clear, 84px); }
+.voice-menu.clear-pill { bottom: var(--pill-clear, 68px); }
+body.voice-on.focus-output .right-pane.clear-pill { bottom: var(--pill-clear-fixed, 86px); }

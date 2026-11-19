@@ -102,6 +102,11 @@ classic layout (tree, tabs, REPL), remembered per browser.
   (file:lines, a click to show them, ▾ for the new code), check, run,
   property and lookup, with how it went; a live line at its foot. Older
   turns fold to a summary line. "show history" / "hide history", or ‹.
+  It never covers the pill or the progress card (it ends above them when
+  they share its columns), and when the margin is too narrow to hold it
+  beside the code it folds to its tab by itself; a click on the tab opens
+  it anyway. The rail, the ⋯ menu and the output keep clear of the pill
+  the same way (`voice.js` `keepClear`).
 - **Progress** (`studio/web/progress.js`), a card just above the pill,
   there only while something said is in flight: the phrase at once with
   "understanding…" and a running clock; then what the router made of it

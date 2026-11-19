@@ -365,6 +365,44 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     },
   });
 
+  // ---- Nothing floats over the pill ----------------------------------------------------
+  //
+  // The pill and the progress card above it are where the eye is while
+  // talking; the history, the rail, the menu and the output keep clear of
+  // them. Each float that shares columns with the pill (a narrow window, a
+  // tall caption, a big card) ends above it instead of under it; one that
+  // does not keeps its own place. Measured, since the pill grows and moves
+  // (the canvas centers it).
+  const CLEAR_GAP = 12;
+  const TIMELINE_MIN = 260; // voice.css .timeline
+  function keepClear() {
+    if (!on) return;
+    const zone = pill.getBoundingClientRect();
+    let top = zone.top;
+    const card = progress.node.getBoundingClientRect();
+    if (!progress.node.hidden && card.height) top = Math.min(top, card.top);
+    const host = layer.getBoundingClientRect();
+    document.body.style.setProperty("--pill-clear", `${Math.max(0, host.bottom - top + CLEAR_GAP)}px`);
+    document.body.style.setProperty("--pill-clear-fixed", `${Math.max(0, window.innerHeight - top + CLEAR_GAP)}px`);
+    // the history needs the left margin to itself (TIMELINE_MIN wide)
+    const column = document.querySelector(".editor-column")?.getBoundingClientRect();
+    if (column?.width) timeline.setRoom(column.left - host.left >= 16 + TIMELINE_MIN + CLEAR_GAP);
+    const floats = [...layer.querySelectorAll(".timeline, .voice-rail, .voice-menu"), document.querySelector(".right-pane")];
+    for (const node of floats) {
+      if (!node) continue;
+      const box = node.getBoundingClientRect();
+      // hidden, or not in the pill's columns: its own place
+      const shares = box.width > 0 && box.left < zone.right + CLEAR_GAP && box.right > zone.left - CLEAR_GAP;
+      node.classList.toggle("clear-pill", shares);
+    }
+  }
+  const watcher = new ResizeObserver(keepClear);
+  watcher.observe(pill);
+  watcher.observe(progress.node);
+  window.addEventListener("resize", keepClear);
+  // floats come and go by many paths: look again now and then (cheap)
+  setInterval(keepClear, 500);
+
   function speak(text) {
     if (!settings.speak || !window.speechSynthesis || !text) return;
     const words = new SpeechSynthesisUtterance(text);

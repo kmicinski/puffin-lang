@@ -222,5 +222,6 @@ export function createProgress({ host }) {
       render();
     },
     running: () => Boolean(turn),
+    node: card,
   };
 }

@@ -44,7 +44,10 @@ export function createTimeline({ host, go }) {
   box.append(head, list, live);
   const tab = el("button", "timeline-tab", "History ›");
   tab.title = "What happened (say “show history”)";
-  tab.addEventListener("click", () => setCollapsed(false));
+  tab.addEventListener("click", () => {
+    if (!room) forced = true;
+    setCollapsed(false);
+  });
   host.append(box, tab);
 
   let exchange = null; // the latest thing said: { node, meta }
@@ -53,11 +56,18 @@ export function createTimeline({ host, go }) {
   const lastEdit = new Map(); // turn -> the step row of its latest edit call
   let any = false;
 
+  // the margin is too narrow to hold it without covering the code: folded
+  // to its tab (the author's own choice, open or folded, is kept for when
+  // there is room); a click on the tab opens it anyway, until it fits again
+  let room = true;
+  let forced = false;
   function render() {
-    box.hidden = collapsed || !any;
-    tab.hidden = !collapsed || !any;
+    const open = !collapsed && (room || forced);
+    box.hidden = !open || !any;
+    tab.hidden = open || !any;
   }
   function setCollapsed(value) {
+    if (value) forced = false;
     collapsed = value;
     try { localStorage.setItem(STORE, value ? "collapsed" : "open"); } catch { /* fine */ }
     render();
@@ -254,9 +264,19 @@ export function createTimeline({ host, go }) {
       any = false;
       render();
     },
-    show() { setCollapsed(false); },
+    show() {
+      if (!room) forced = true;
+      setCollapsed(false);
+    },
     hide() { setCollapsed(true); },
     toggle() { setCollapsed(!collapsed); },
+    // whether the left margin holds it beside the code
+    setRoom(value) {
+      if (value === room) return;
+      room = value;
+      if (room) forced = false;
+      render();
+    },
     collapsed: () => collapsed,
   };
 }
