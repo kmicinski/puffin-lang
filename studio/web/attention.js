@@ -37,7 +37,7 @@ export const FEATURES = [
 
 export const DEFAULT_WEIGHTS = Object.freeze({
   focus: 10, // you are here
-  kept: 3, // the author brought it into view: it stays, at least as a line
+  kept: 5, // the author brought it into view: in full while fresh, at least a line always
   pinned: 3.5, // the author pinned it: with `kept`, enough for its code in full
   uses: 4.5, // what the focus calls: needed to read it
   usedBy: 3, // what calls the focus: what constrains it

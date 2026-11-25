@@ -643,7 +643,7 @@ export function createBoard({ files, send, stage, onShow }) {
     line.addEventListener("click", (event) => {
       cursor = key;
       clearTimeout(clicking);
-      if (event.detail === 1) clicking = setTimeout(() => view?.pull(m.path, item.name), 240);
+      if (event.detail <= 1) clicking = setTimeout(() => view?.pull(m.path, item.name), 240);
     });
     line.addEventListener("dblclick", () => {
       clearTimeout(clicking);
@@ -935,9 +935,11 @@ export function createBoard({ files, send, stage, onShow }) {
     const z = Math.max(READABLE, Math.min(1, (root.clientWidth - 48) / Math.max(1, top.w)));
     const v = { x: 24 - head.x * z, y: TOP() - head.y * z, z };
     if (box) {
-      // the least move that shows it, at that zoom
+      // the least move that shows it, at that zoom, clear of what floats
+      // over the foot of the screen (the voice pill)
       const bottom = (box.y + box.h) * z + v.y;
-      if (bottom > root.clientHeight - 24) v.y -= bottom - (root.clientHeight - 24);
+      const foot = root.clientHeight - 110;
+      if (bottom > foot) v.y -= bottom - foot;
       if (box.y * z + v.y < TOP()) v.y = TOP() - box.y * z;
     }
     camera.set(v, animate);

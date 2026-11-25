@@ -124,8 +124,11 @@ test("pins are shown whatever they score", () => {
 test("the set's members are always shown, their detail by their score", () => {
   const examples = "main.puf::examples";
   const fresh = byId(rank(at({ focus: STEP, set: [{ id: examples, at: now }] })));
-  // unrelated to step, but just brought in: its folded row
-  assert.equal(fresh.get(examples).detail, "folded");
+  // unrelated to step, but just brought in: its code
+  assert.equal(fresh.get(examples).detail, "full");
+  // untouched for a while, its folded row
+  const later = byId(rank(at({ focus: STEP, set: [{ id: examples, at: now - 15 * 60e3 }] })));
+  assert.equal(later.get(examples).detail, "folded");
   assert.ok(fresh.get(examples).kept);
   assert.equal(fresh.get(examples).reasons[0], "you brought it in");
   // an hour on, still there, as a line
