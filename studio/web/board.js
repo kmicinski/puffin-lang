@@ -165,9 +165,16 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
 
   // the board appearing (the canvas going, a resize) lets unplaced cards be placed
   let lastWidth = 0;
+  // and a window that changes size (a layout switched, a pane dragged) is
+  // looked at again: what was framed is framed for the new size
+  let reframe = 0;
   new ResizeObserver(() => {
     const width = root.offsetWidth;
     if (width && !lastWidth && shown()) render();
+    if (width && lastWidth && Math.abs(width - lastWidth) > 40) {
+      clearTimeout(reframe);
+      reframe = setTimeout(firstLook, 120);
+    }
     lastWidth = width;
   }).observe(root);
 
@@ -369,6 +376,8 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   // out of a note being written
   // (and code being typed keeps the keyboard: its card is rebuilt around it)
   let rendering = false;
+  // whether the camera has been put where a focus is laid out
+  let focusFramed = false;
   function render() {
     const active = document.activeElement;
     const kind = ["board-note-text-input", "board-add-input"].find((c) => active?.classList?.contains(c));
@@ -453,6 +462,9 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
         node.style.top = `${spot.y}px`;
       }
     } else if (focus) {
+      // the question and its slice are laid out for the window as it is
+      if (!focusFramed) camera.set({ x: 0, y: 0, z: 1 });
+      focusFramed = true;
       const focused = board.cards.filter((c) => (moduleOf(c.path)?.items ?? []).some((i) => focus.has(keyOf(c.path, i.name))));
       for (const card of board.cards) {
         const node = nodeOf(card.path);
@@ -469,6 +481,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
         node.style.top = `${spot.y}px`;
       }
     } else {
+      focusFramed = false;
       for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
       settle();
     }
@@ -1120,8 +1133,8 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(key)}"]`)?.classList.add("ref-target");
   }
 
-  // Coming back to the canvas: the code last pulled out, with what it was
-  // pulled from; else the whole program.
+  // Coming back to the canvas (or to a window of another size): the code
+  // last pulled out, with what it was pulled from; else the whole program.
   function firstLook() {
     const last = (board.pulled ?? []).at(-1);
     if (last && nodeOfView(`pull:${last.key}`)) frameViews([last.from, `pull:${last.key}`]);
