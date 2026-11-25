@@ -41,6 +41,8 @@ const COLLAPSED = 48;
 // a file this short is shown whole when nothing is focused yet
 const SHORT_FILE = 60;
 const NODES_MAX = 10;
+// the focus is never wider than this many columns
+const WIDEST = 100;
 const SVG = "http://www.w3.org/2000/svg";
 
 const el = (tag, className, text) => {
@@ -127,18 +129,24 @@ export function createWorkset({ editor, files, board, stage, layout }) {
   const setList = el("div", "ws-list");
   const shelfRow = el("div", "ws-shelf");
   setPane.append(setList, shelfRow);
+  // the neighbourhood sits under the focus: the two are read together
   const graph = el("div", "ws-graph");
-  side.append(setPane, graph);
+  column.append(graph);
+  side.append(setPane);
   stage.append(side);
+  const wrap = column.querySelector("#editor-wrap");
 
   // the column's room changed: fit the set again, redraw the wires, and
   // tell the board where the focus ends (it grows over the side)
-  new ResizeObserver(() => {
+  const observer = new ResizeObserver(() => {
     if (!on) return;
     fit();
+    sizeFocus();
     drawWires();
     stage.style.setProperty("--ws-left", `${column.getBoundingClientRect().right - stage.getBoundingClientRect().left + 8}px`);
-  }).observe(side);
+  });
+  observer.observe(side);
+  observer.observe(column);
 
   // ---- the focus ------------------------------------------------------------------------
 
@@ -170,13 +178,33 @@ export function createWorkset({ editor, files, board, stage, layout }) {
   }
 
   function narrowFocus() {
-    if (!focus || whole || files.active() !== focus.path) {
-      main.setHiddenAreas([]);
-      return;
-    }
-    const span = spanOf(main.getModel().getValue(), focus.name);
-    if (!span) return main.setHiddenAreas([]);
-    narrowView(main, spans, span);
+    const span = focus && !whole && files.active() === focus.path ? spanOf(main.getModel().getValue(), focus.name) : null;
+    if (span) narrowView(main, spans, span);
+    else main.setHiddenAreas([]);
+    widen(span);
+  }
+
+  // The focus is as tall as its definition, as far as the neighbourhood
+  // under it leaves room (the whole file: most of the column).
+  function sizeFocus() {
+    if (!on) return;
+    const room = column.clientHeight - head.offsetHeight - 46 - 84;
+    const neighbourhood = Math.min(graph.scrollHeight, room * (whole ? 0.3 : 0.5));
+    const content = whole ? Infinity : main.getContentHeight() + 12;
+    wrap.style.flex = `0 0 ${Math.max(60, Math.min(content, room - neighbourhood))}px`;
+  }
+  main.onDidContentSizeChange(() => requestAnimationFrame(sizeFocus));
+
+  // The focus takes the width its lines need (the rest goes to the set
+  // beside it): a two-line helper does not hold 100 columns of blank.
+  function widen(span) {
+    const model = main.getModel();
+    if (!model) return;
+    const lines = model.getLinesContent().slice(span ? span.start - 1 : 0, span ? span.end : undefined);
+    const longest = Math.max(60, ...lines.map((line) => line.length));
+    const char = main.getOption(monaco.editor.EditorOption.fontInfo).typicalHalfwidthCharacterWidth;
+    const width = Math.round(Math.min(longest + 6, WIDEST) * char + main.getLayoutInfo().contentLeft + 24);
+    document.body.style.setProperty("--ws-focus-width", `${width}px`);
   }
 
   // Focus `def`: the editor shows it (opening its file), the history
@@ -405,6 +433,8 @@ export function createWorkset({ editor, files, board, stage, layout }) {
 
   let refitting = 0;
   function size(fragment) {
+    // not laid out yet (no width: every character would wrap)
+    if (!fragment.body.clientWidth) return;
     const height = Math.min(BODY_MAX, fragment.view.getContentHeight());
     if (height === fragment.height) return;
     fragment.height = height;
@@ -426,18 +456,28 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     const room = setList.clientHeight;
     if (!room) return;
     const wanted = (f) => (f.pinned ? Infinity : f.touched + (related(f, focus) ? NEAR : 0));
-    let left = room;
-    const decided = new Map();
-    for (const fragment of [...set].sort((a, b) => wanted(b) - wanted(a))) {
-      const full = HEAD + fragment.height + 10;
-      if (full <= left) {
+    // one not measured yet counts by its lines
+    const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight) * 0.9;
+    for (const fragment of [...set, ...offered]) {
+      if (fragment.height) continue;
+      const span = fragment.collection.getRange(0);
+      fragment.height = Math.min(BODY_MAX, span ? (span.endLineNumber - span.startLineNumber + 1) * lineHeight + 8 : 60);
+    }
+    // every one gets its signature line, least wanted first to the shelf
+    // when even those do not fit; then the most wanted get their bodies
+    const order = [...set].sort((a, b) => wanted(b) - wanted(a));
+    const decided = new Map(order.map((f) => [f, "collapsed"]));
+    let left = room - order.length * (COLLAPSED + 10);
+    for (const fragment of [...order].reverse()) {
+      if (left >= 0 || fragment.pinned) break;
+      decided.set(fragment, "shelf");
+      left += COLLAPSED + 10;
+    }
+    for (const fragment of order) {
+      const more = fragment.height + HEAD - COLLAPSED;
+      if (decided.get(fragment) === "collapsed" && more <= left) {
         decided.set(fragment, "full");
-        left -= full;
-      } else if (COLLAPSED <= left || fragment.pinned) {
-        decided.set(fragment, "collapsed");
-        left -= COLLAPSED;
-      } else {
-        decided.set(fragment, "shelf");
+        left -= more;
       }
     }
     for (const [fragment, how] of decided) {
@@ -608,31 +648,35 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     top.append(grow);
     graph.append(top);
     const item = focus?.name && itemOf(focus);
+    const body = el("div", "ws-graph-body");
     const map = el("div", "ws-map");
-    graph.append(map);
+    const aside = el("div", "ws-aside");
+    body.append(map, aside);
+    graph.append(body);
     if (item) {
       const { uses, users } = neighbours(focus);
       const callers = users.filter((d) => d.item.kind !== "property");
       const properties = users.filter((d) => d.item.kind === "property");
-      map.append(el("div", "ws-row-label", callers.length ? "used by" : "used by nothing"));
-      map.append(nodes(callers, "caller"));
-      const middle = el("div", "ws-row focus");
+      const group = (role, list, label) => {
+        const part = el("div", `ws-part ${role}`);
+        part.append(el("div", "ws-row-label", label), nodes(list, role));
+        return part;
+      };
+      const middle = el("div", "ws-part focus");
       middle.append(node(focus, "focus"));
-      map.append(middle);
-      map.append(nodes(uses, "callee"));
-      map.append(el("div", "ws-row-label", uses.length ? "uses" : "uses nothing of the program's"));
+      map.append(group("caller", callers, callers.length ? "used by" : "used by nothing"), middle, group("callee", uses, uses.length ? "uses" : "uses nothing of the program's"));
       if (properties.length) {
-        graph.append(el("div", "ws-section", "properties"));
+        aside.append(el("div", "ws-section", "properties"));
         const list = el("div", "ws-props");
         for (const def of properties) list.append(node(def, "property"));
-        graph.append(list);
+        aside.append(list);
       }
       map.append(wires);
     }
     // the focus's module: its other definitions, a click away
     const m = focus && outline().find((mm) => mm.path === focus.path);
     if (m) {
-      graph.append(el("div", "ws-section", `${short(m.path)}${m.requires.length ? ` · requires ${m.requires.map(short).join(", ")}` : ""}`));
+      aside.append(el("div", "ws-section", `${short(m.path)}${m.requires.length ? ` · requires ${m.requires.map(short).join(", ")}` : ""}`));
       const card = el("div", "ws-card");
       for (const i of m.items) {
         const row = el("button", `ws-card-row${i.name === focus.name ? " current" : ""}${set.some((f) => same(f, { path: m.path, name: i.name })) ? " in-set" : ""}`);
@@ -643,30 +687,39 @@ export function createWorkset({ editor, files, board, stage, layout }) {
         row.addEventListener("dblclick", () => show(def));
         card.append(row);
       }
-      graph.append(card);
+      aside.append(card);
     }
-    requestAnimationFrame(drawWires);
+    requestAnimationFrame(() => {
+      sizeFocus();
+      drawWires();
+    });
   }
 
-  // curves from each caller down to the focus, and from it to each callee
+  // curves from each caller to the focus, and from it to each callee:
+  // left to right, or top to bottom when the map is stacked (narrow)
   function drawWires() {
     if (!wires.isConnected) return;
     const map = wires.parentNode;
     const box = map.getBoundingClientRect();
+    const across = getComputedStyle(map).flexDirection === "row";
     wires.setAttribute("width", box.width);
     wires.setAttribute("height", map.scrollHeight);
     wires.replaceChildren();
     const center = map.querySelector(".ws-node.focus")?.getBoundingClientRect();
     if (!center) return;
-    const point = (r, bottom) => [r.left + r.width / 2 - box.left, (bottom ? r.bottom : r.top) - box.top];
+    // the point a wire leaves (end) or enters a box
+    const point = (r, end) => (across
+      ? [(end ? r.right : r.left) - box.left, r.top + r.height / 2 - box.top]
+      : [r.left + r.width / 2 - box.left, (end ? r.bottom : r.top) - box.top]);
     for (const chip of map.querySelectorAll(".ws-node.caller, .ws-node.callee")) {
       const r = chip.getBoundingClientRect();
       const caller = chip.classList.contains("caller");
       const [x1, y1] = caller ? point(r, true) : point(center, true);
       const [x2, y2] = caller ? point(center, false) : point(r, false);
-      const mid = (y1 + y2) / 2;
       const path = document.createElementNS(SVG, "path");
-      path.setAttribute("d", `M${x1},${y1} C${x1},${mid} ${x2},${mid} ${x2},${y2}`);
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      path.setAttribute("d", across ? `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}` : `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
       path.setAttribute("class", `ws-wire ${caller ? "caller" : "callee"}`);
       wires.append(path);
     }
@@ -759,6 +812,10 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       render();
     },
     opened,
+    // the board came out beside the focus: fitted to the room it has there
+    boardShown(shown) {
+      if (on && shown) setTimeout(() => board.fit(), 360);
+    },
     // a row of the board (its ↗, the palette's definitions) asked for
     // `line` of `path`: focus the definition there, the board staying
     navigate(path, line, find) {

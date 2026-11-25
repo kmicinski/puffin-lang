@@ -142,7 +142,7 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on), navigate: (path, line, find) => workset?.navigate(path, line, find) });
+const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => { focus?.boardShown(on); workset?.boardShown(on); }, navigate: (path, line, find) => workset?.navigate(path, line, find) });
 focus.attachBoard(board);
 // the focused layout is focus and context: one definition, what it is read
 // with, and its neighbourhood of the board (workset.js)
