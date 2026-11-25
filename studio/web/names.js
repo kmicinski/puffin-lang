@@ -11,7 +11,9 @@
 // (null: not one of the program's, or the definition shown here itself);
 // `span()` the part of the file this view shows, where names are marked.
 
-const WORD = /[^\s()[\];",'`]+/g;
+// a word of code, as far as a name can run (view.js reads them too)
+export const WORD = /[^\s()[\];",'`]+/;
+const WORDS = new RegExp(WORD.source, "g");
 
 export function bindNames(monaco, view, { find, span, onPull, onFocus, onHover }) {
   const marks = view.createDecorationsCollection();
@@ -24,8 +26,8 @@ export function bindNames(monaco, view, { find, span, onPull, onFocus, onHover }
     if (!model || !shown) return marks.clear();
     const text = model.getValue();
     const list = [];
-    WORD.lastIndex = shown.from;
-    for (let m = WORD.exec(text); m && m.index < shown.to; m = WORD.exec(text)) {
+    WORDS.lastIndex = shown.from;
+    for (let m = WORDS.exec(text); m && m.index < shown.to; m = WORDS.exec(text)) {
       if (!find(m[0])) continue;
       const range = monaco.Range.fromPositions(model.getPositionAt(m.index), model.getPositionAt(m.index + m[0].length));
       list.push({ range, options: { inlineClassName: "code-ref" } });

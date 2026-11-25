@@ -33,7 +33,8 @@
 
 import { forms } from "./lexer.js";
 import { DEFINES, nameAt, narrow, lineOf, spanOf } from "./span.js";
-import { bindNames } from "./names.js";
+import { bindNames, WORD } from "./names.js";
+import { laneTree } from "./lane.js";
 import { createFragment } from "./fragment.js";
 import { overlay, wire } from "./wires.js";
 import { createNeighbourhood } from "./neighbourhood.js";
@@ -50,7 +51,7 @@ const SET_LIMIT = 8;
 const OFFER_LIMIT = 5;
 // a line of the lane, as the model's budget counts lines
 const LINE = 19;
-// a fragment needed by the one above it sits in this far
+// a fragment sits this far in for each step down the call tree (two at most)
 const INDENT = 28;
 // the lane reorders when the author has been still this long
 const IDLE_MS = 2500;
@@ -274,7 +275,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   function show(def, { push = true, select = null } = {}) {
     if (!def) return;
     const before = focus;
-    const leaving = before?.name && !same(before, def) && push && !whole ? before : null;
+    // (walking the history too: what was left was in the set, or is now)
+    const leaving = before?.name && !same(before, def) && !whole ? before : null;
     focus = { path: def.path, name: def.name };
     whole = false;
     if (push && !same(past[at], focus)) {
@@ -299,7 +301,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     }
     moving = false;
     main.focus();
-    render({ arrived: leaving && idFor(leaving) });
+    render({ arrived: leaving && idFor(leaving), settle: true });
   }
 
   function setWhole(value) {
@@ -606,18 +608,47 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     for (const d of ["full", "folded", "signature"]) f.node.classList.toggle(`is-${d}`, f.detail === d);
   }
 
-  // Lay the ranking out in the lane. Arrivals (and an idle author) let it
-  // reorder and change detail; otherwise what is there holds still, and
-  // only what is new comes in, at its place.
-  function layLane({ arrived = null } = {}) {
+  // What `def` uses, as ids, in the order its text uses them -- code
+  // before types (a type reads best after the code that uses it).
+  function usesIn(def, texts) {
+    const names = new Set(itemOf(def)?.uses ?? []);
+    const text = texts[def.path];
+    const span = names.size && text != null && spanOf(text, def.name);
+    if (!span) return [];
+    const found = new Map();
+    for (const [word] of text.slice(span.from, span.to).matchAll(new RegExp(WORD.source, "g"))) {
+      if (!names.has(word) || found.has(word)) continue;
+      const used = find(word, def.path);
+      if (used) found.set(word, used);
+    }
+    const code = (d) => (["fun", "val"].includes(itemOf(d)?.kind) ? 0 : 1);
+    return [...found.values()].sort((a, b) => code(a) - code(b)).map(idFor);
+  }
+
+  // Lay the ranking out in the lane, as a call tree (lane.js): the model
+  // says what is there and at what detail, the program where. A new
+  // focus (`settle`), or an idle author, lets every fragment take its
+  // place and detail again; an arrival goes in where the tree puts it,
+  // at its own detail, and the rest hold still -- as they do otherwise,
+  // with only what is new coming in.
+  let tree = new Map(); // id -> { parent, depth }
+  function layLane({ arrived = null, settle = false } = {}) {
     const shown = ranking();
     const focusId = focus?.name ? idFor(focus) : null;
     const set = shown.filter((s) => s.kept && s.id !== focusId);
     const offered = shown.filter((s) => !s.kept && !s.focus).slice(0, OFFER_LIMIT);
     const want = [...set, ...offered];
-    const calm = arrived || (Date.now() - lastInput > IDLE_MS && !inLane && !lane.querySelector(".frag.editing"));
-    const ids = want.map((s) => s.id);
-    if (calm) order = ids;
+    const texts = files.texts();
+    const uses = new Map();
+    const usesOf = (id) => {
+      if (!uses.has(id)) uses.set(id, usesIn(defOf(id), texts));
+      return uses.get(id);
+    };
+    const rows = laneTree(focusId, want.map((s) => s.id), usesOf);
+    tree = new Map(rows.map((r) => [r.id, r]));
+    const ids = rows.map((r) => r.id);
+    const calm = settle || (Date.now() - lastInput > IDLE_MS && !inLane && !lane.querySelector(".frag.editing"));
+    if (calm || arrived) order = ids;
     else {
       // what is there stays put; what is new goes in where it ranks
       order = order.filter((id) => ids.includes(id));
@@ -631,7 +662,6 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     }
     const byId = new Map(want.map((s) => [s.id, s]));
     const before = new Map([...frags].map(([id, f]) => [id, f.node.getBoundingClientRect().top]));
-    const depth = depths();
     order.forEach((id, i) => {
       const s = byId.get(id);
       let f = frags.get(id);
@@ -641,7 +671,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       // detail changes wait for calm too, unless it is new or just arrived
       if (calm || !f.detail || id === arrived) f.detail = s.detail;
       renderFrag(f);
-      f.node.style.marginLeft = `${(depth.get(id) ?? 0) * INDENT}px`;
+      f.node.style.marginLeft = `${Math.min(2, tree.get(id)?.depth ?? 0) * INDENT}px`;
       if (lane.children[i] !== f.node) lane.insertBefore(f.node, lane.children[i] ?? null);
     });
     lane.querySelector(".lane-hint")?.remove();
@@ -666,21 +696,6 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       flash(f.node);
       requestAnimationFrame(() => requestAnimationFrame(() => board.reveal(f.node)));
     }
-  }
-
-  // The lane reads as a tree of where each definition is needed: one the
-  // focus uses sits at the left edge; one only a fragment above it uses
-  // sits a step in from that one (two steps at most).
-  function depths() {
-    const depth = new Map();
-    const uses = (def, name) => itemOf(def)?.uses.includes(name);
-    order.forEach((id, i) => {
-      const { name } = defOf(id);
-      if (!focus?.name || uses(focus, name)) return depth.set(id, 0);
-      const parent = order.slice(0, i).find((other) => uses(defOf(other), name));
-      depth.set(id, parent ? Math.min(2, (depth.get(parent) ?? 0) + 1) : 0);
-    });
-    return depth;
   }
 
   // once the author is still, the lane takes the ranking's order
@@ -727,10 +742,10 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
 
   // ---- wires: from the line that uses a name to its fragment ------------------------------
 
-  // Each fragment of the set at its code or row is wired from the first
-  // line in the focus that uses it, else from the first fragment above it
-  // that does -- so the lane reads as the focus's reading list, each item
-  // tied to the place it is needed.
+  // Each fragment of the set at its code or row is wired from the line
+  // that needs it: in the focus, across into the board; in the fragment
+  // above it in the tree, round the lane's right side -- so the lane
+  // reads as the focus's reading list, each item tied to its place.
   function drawWires() {
     across.clear();
     if (board.out() || !focus?.name) return;
@@ -741,34 +756,36 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     const span = focused.span();
     const model = main.getModel();
     const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
-    const uses = (def, name) => itemOf(def)?.uses.includes(name);
-    order.forEach((id, i) => {
+    for (const id of order) {
       const f = frags.get(id);
-      if (!f || f.offered || f.detail === "signature") return;
+      if (!f || f.offered || f.detail === "signature") continue;
       const target = f.head.getBoundingClientRect();
-      if (target.bottom < pane.top || target.top > pane.bottom || target.left > pane.right) return;
+      // (a fragment off the board's sides, mid-glide, is not wired across the focus)
+      if (target.bottom < pane.top || target.top > pane.bottom || target.left < pane.left || target.left > pane.right) continue;
       const y = target.top + target.height / 2;
-      if (span && focused.name() && uses(focus, f.def.name)) {
+      const parent = tree.get(id)?.parent;
+      if (parent === idFor(focus)) {
+        if (!span || !focused.name()) continue;
         // from the line of the focus, across into the board
         const line = editorBox.top + main.getTopForLineNumber(lineOf(model, span, f.def.name)) - main.getScrollTop() + lineHeight / 2;
         if (line > editorBox.top && line < editorBox.bottom) wire(across.layer, across.point(editorBox.right - 6, line), across.point(target.left, y), "use");
-        return;
+        continue;
       }
-      // from the line of a fragment above it, round the lane's right side
-      const above = order.slice(0, i).map((other) => frags.get(other)).find((g) => g?.fragment && g.detail === "full" && uses(g.def, f.def.name));
-      if (!above) return;
+      // from the line of the fragment above it, round the lane's right side
+      const above = parent && frags.get(parent);
+      if (!above?.fragment || above.detail !== "full") continue;
       const box = above.fragment.node.getBoundingClientRect();
       const scale = box.height / Math.max(1, above.fragment.node.offsetHeight);
       wire(across.layer, across.point(box.right, box.top + above.fragment.yOf(f.def.name) * scale), across.point(target.right, y), "use", { out: 26 });
-    });
+    }
   }
 
   // ---- all of it -----------------------------------------------------------------------------
 
-  function render({ arrived = null } = {}) {
+  function render({ arrived = null, settle = false } = {}) {
     if (!restored) return;
     renderHead();
-    layLane({ arrived });
+    layLane({ arrived, settle });
     graph.render(focus?.name ? focus : null, focus?.path);
     requestAnimationFrame(sizeFocus);
     save();

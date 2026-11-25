@@ -51,10 +51,15 @@ it shows.
   filter, the lens — and, left of the cards, **the lane**: the working
   set, each definition as live code (a *fragment*: another view of its
   file's model, narrowed to it, growing as it is typed in).
-- **The lane reads as a tree** of where each definition is needed: one
-  the focus uses sits at its left edge, wired from the very line that
-  uses it; one that only a fragment above it uses sits a step in (two at
-  most), wired from that fragment's line round the lane's right side.
+- **The lane reads as a call tree** (`lane.js`): what the focus uses
+  comes first, in the order its text uses it (code before types), each
+  followed by what it alone brings in, a step in (two at most) — so the
+  lane reads like the code beside it and every wire runs down. One the
+  focus uses sits at the left edge, wired from the very line that uses
+  it; one that only a fragment uses hangs under the nearest such
+  fragment, wired from that fragment's line round the lane's right side.
+  What the focus does not reach (a caller pulled in, a type offered)
+  roots a little tree of its own below, a caller before what it calls.
 - **Wires** say "this uses that" in one visual language: from the line
   in the focus that uses a name to its fragment (crossing from the focus
   into the board), from a line in one fragment to a fragment below it
@@ -98,7 +103,7 @@ one zoom away, where each piece lives.
 | ⊙ / ✕ on a fragment | pin it / put it away (on an offered one: "show this less") |
 
 Focusing never loses where you were: the definition you leave goes into
-the set. Anything that moves the cursor outside the focused definition
+the set — walking the history with ‹ › too. Anything that moves the cursor outside the focused definition
 — the palette, F8 to a hole, voice navigation, a click in the dimmed
 lines — moves the focus there, so every older way of navigating drives
 the view unchanged. Hovering a name, a node or a row lights everything
@@ -106,8 +111,9 @@ showing that definition: its row, its fragment, its node.
 
 ## 3. What is shown when: the defaults
 
-**One call decides.** What the lane holds, in what order and at what
-detail, is one `rank` of the attention model (docs/ATTENTION.md) with
+**One call decides.** What the lane holds, and at what detail, is one
+`rank` of the attention model; where each piece sits is the call tree
+(§1) (docs/ATTENTION.md) with
 the focus and the working set in its state:
 
 - the **set** — what the author brought in — is scored like everything
@@ -123,12 +129,14 @@ the focus and the working set in its state:
   one line. Using one (typing in it, pinning it, double-clicking its
   head, pulling its name) takes it into the set.
 
-**Stability.** The lane reorders, and changes a fragment's detail, only
-when something *arrives* (a pull, an offer taken, the voice pulling
-something in) or when the author has been still for 2.5 s with the
-pointer off the lane and no fragment being typed in. Otherwise what is
-there holds still and only what is new comes in, where it ranks — the
-lane never moves under the author's eyes. What does move glides.
+**Stability.** Because the order is the program's, an arrival (a pull,
+an offer taken, the voice pulling something in) goes in where the tree
+puts it and nothing else moves — only it takes its new detail. A new
+focus lays the whole lane out again; otherwise fragments change detail
+(and the tree is redrawn after edits) only once the author has been
+still for 2.5 s with the pointer off the lane and no fragment being
+typed in. The lane never moves under the author's eyes; what does move
+glides.
 
 **Room.** The set holds eight; an arrival beyond that sends the
 lowest-scored unpinned member (never the one arriving, never the one
@@ -205,7 +213,8 @@ not replay the last one. The builder has the same verbs in its
 
 | piece | file | what it is |
 |---|---|---|
-| the view | `view.js` | the focus (narrowing, the lines around it, history, whole file), the set and the ranking, the lane's fragments and its tree, the wires across the panes, the learning signals |
+| the view | `view.js` | the focus (narrowing, the lines around it, history, whole file), the set and the ranking, the lane's fragments, the wires across the panes, the learning signals |
+| the lane's order | `lane.js` | the call tree: what the lane holds, ordered and indented by where it is needed |
 | the neighbourhood | `neighbourhood.js` | callers, callees, properties and the module's rows under the focus, wired; its keys |
 | the board | `board.js` | cards, rows (`renderItem`), notes, decisions, questions and slices, plan mode, the HUD, filter, keys, the lens; the lane's place, its wires to rows, the row marks; `home` / `overview` |
 | the camera | `camera.js` | one transform, glides, wheel/pinch/drag; `onFrame` on every frame of a glide (for the wires across the panes) |
@@ -223,8 +232,6 @@ part of its state.
 
 ## 8. Not done
 
-- The lane's order is the model's, not the call graph's: a fragment is
-  indented under what needs it, but not moved next to it.
 - Fragments cannot be dragged, and the lane cannot be moved on the
   board; the cards still can.
 - Dwell is hover or typing time, not visible-and-read time.
