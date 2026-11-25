@@ -352,10 +352,27 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     render();
   }
 
-  // the text changed: the focus stays on its definition, the lane's code on theirs
-  main.onDidChangeModelContent(() => requestAnimationFrame(() => {
-    if (focus?.name && !whole && files.active() === focus.path) narrowFocus();
-  }));
+  // the text changed: the focus stays on its definition; what the author
+  // typed here is told to the model
+  const editedHere = new Set();
+  main.onDidFocusEditorText(() => editedHere.clear());
+  main.onDidChangeModelContent((event) => {
+    if (main.hasTextFocus()) for (const c of event.changes) noteEdit(files.active(), c.range.startLineNumber, c.range.startLineNumber + c.text.split("\n").length - 1, editedHere);
+    requestAnimationFrame(() => {
+      if (focus?.name && !whole && files.active() === focus.path) narrowFocus();
+    });
+  });
+
+  // The author typed lines from..to of `path` (in the focus or a
+  // fragment): the tracker hears the lines, and each definition they fall
+  // in is one edit to the model per visit (`seen`: those told this visit).
+  function noteEdit(path, from, to, seen) {
+    for (const id of tracker.edit(path, from, to)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      attention.observe({ type: "edit", id });
+    }
+  }
 
   // ---- the header ---------------------------------------------------------------------------
 
@@ -528,14 +545,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       },
       onEscape: () => main.focus(),
       onEvalForm: (pos) => onEvalAt?.(path, { pos }),
-      onEdit(from, to) {
-        // each definition typed in is one edit to the model, per visit
-        for (const each of tracker.edit(path, from, to)) {
-          if (edited.has(each)) continue;
-          edited.add(each);
-          attention.observe({ type: "edit", id: each });
-        }
-      },
+      onEdit: (from, to) => noteEdit(path, from, to, edited),
       onResize: () => { board.laneChanged(); drawWires(); },
     });
     f.body.append(f.fragment.node);
