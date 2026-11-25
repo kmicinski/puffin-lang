@@ -192,13 +192,13 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // of the file around it as the room it is given leaves (dimmed: there,
   // not the focus); the whole file when widened.
   // the lines the focus pane shows, the dimmed ones around the definition included
-  let shown = { from: 0, to: 0 };
+  let shown = { from: 0, to: 0, id: null };
   function narrowFocus() {
     const narrowed = focus?.name && !whole && files.active() === focus.path;
     let span = focused.to(narrowed ? focus.name : null);
     if (narrowed && !span) span = focused.to(null);
     context.clear();
-    if (!narrowed) shown = { from: 0, to: 0 };
+    if (!narrowed) shown = { from: 0, to: 0, id: null };
     else if (span && focused.name()) around(span);
     mainNames.refresh();
     widen(narrowed ? span : null);
@@ -240,8 +240,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     if (below) dim.push(new monaco.Range(span.end + 1, 1, span.end + below, 1));
     context.set(dim.map((range) => ({ range, options: { isWholeLine: true, className: "focus-context", inlineClassName: "focus-context-text" } })));
     // a new place: shown from its top, not where Monaco last scrolled
-    if (start !== shown.from) requestAnimationFrame(() => main.setScrollTop(0));
-    shown = { from: start, to: end };
+    if (idFor(focus) !== shown.id) requestAnimationFrame(() => main.setScrollTop(0));
+    shown = { from: start, to: end, id: idFor(focus) };
   }
 
   // The room in the column: the focus gets what its definition needs, at
