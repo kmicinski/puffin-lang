@@ -4,7 +4,8 @@
 
 /* ---- the layout: the focus and its neighbourhood | the board ---- */
 
-body.view .editor-pane { justify-content: flex-start; }
+/* (the board never spills over the output beside it) */
+body.view .editor-pane { justify-content: flex-start; overflow: hidden; }
 body.view .editor-column {
   flex: 0 1 var(--view-focus-width, 860px);
   /* the board keeps at least two fifths of the room */
@@ -16,7 +17,7 @@ body.voice-on.view .editor-pane { padding-left: 18px; }
 body.voice-on.view .editor-column { padding: 46px 0 12px; }
 body.view #editor-wrap { transition: flex-basis 0.25s ease; }
 body.voice-on.view .focus-bar { width: calc(100% - 36px); left: 18px; transform: none; }
-.board-pane { position: relative; flex: 1 1 auto; min-width: 300px; overflow: hidden; border-left: 1px solid var(--border); margin-left: 14px; }
+.board-pane { position: relative; flex: 1 1 auto; min-width: 260px; overflow: hidden; border-left: 1px solid var(--border); margin-left: 14px; }
 body.voice-on .board-hud { top: 46px; }
 .board-hud { top: 10px; }
 body.focus-canvas .board-pane, body.focus-canvas .view-head, body.focus-canvas .view-graph { visibility: hidden; }
