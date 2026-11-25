@@ -520,6 +520,13 @@ records in the history (`rename`, `delete`), and a file that goes from
 disk outside the studio goes from the project too, with a notice.
 Every tab's tree follows the studio.
 
+One file under `.puffin/` is deliberately *not* history:
+`attention-log.jsonl`, what the page showed the author and what they did
+with it, kept so the attention model can learn what this author wants
+on screen (docs/ATTENTION.md). It is behavior, not the program, so it
+stays on the machine: the studio lists it in the repository's own
+`.git/info/exclude`, and its commits leave it out.
+
 Why: transparency. The intent is that a course can ask a student
 about their own history -- how a program came to be, what they tried,
 what they asked -- with the record already there and in order, and
