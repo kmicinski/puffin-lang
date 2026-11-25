@@ -816,6 +816,21 @@ async fn a_property_that_crashes_or_waits_on_a_hole_stops_only_itself() {
 const PLAN_STORE: &str = "(provide alloc store-ref)\n(define (alloc s) (fresh s))\n(define (fresh s) (+ 1 (biggest s)))\n(define (biggest s) ??)\n(define (store-ref s a) ??)\n(define (unused-a x) x)\n(define (unused-b x) x)\n";
 const PLAN_MACHINE: &str = "(require \"store.puf\")\n(define (step s) (alloc s))\n(define (inject e) ??)\n";
 
+fn set_of(board: &Value) -> Vec<String> {
+    board["set"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_owned()).collect()
+}
+
+/// Every arrangement the voice router may pick is one the studio does.
+#[tokio::test]
+async fn every_arrangement_the_router_may_pick_is_known() {
+    let Some(studio) = studio("board-verbs", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
+    let schema = crate::voice::router_schema();
+    for action in schema["properties"]["arrange"]["properties"]["action"]["enum"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|a| *a != "none") {
+        let answer = studio.arrange(&json!({ "action": action, "names": ["alloc"], "modules": ["store"], "near": "step", "side": "right", "text": "a note" }));
+        assert!(!answer.as_ref().err().is_some_and(|e| e.starts_with("unknown")), "{action}: {answer:?}");
+    }
+}
+
 fn names_in(board: &Value, path: &str, list: &str) -> Vec<String> {
     let card = board["cards"].as_array().unwrap().iter().find(|c| c["path"] == json!(path)).expect("the card");
     card[list].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_owned()).collect()
@@ -826,10 +841,10 @@ async fn the_board_arranges_by_name() {
     let Some(studio) = studio("board-arrange", &[("store.puf", PLAN_STORE), ("machine.puf", PLAN_MACHINE)]) else { return };
     studio.arrange(&json!({ "action": "hide", "names": ["unused-a", "unused-b"] })).unwrap();
     assert_eq!(names_in(&studio.board(), "store.puf", "hidden"), vec!["unused-a", "unused-b"]);
-    assert_eq!(studio.board()["view"], "board");
-    studio.arrange(&json!({ "action": "open", "names": ["alloc"] })).unwrap();
-    assert_eq!(names_in(&studio.board(), "store.puf", "open"), vec!["alloc"]);
-    assert_eq!(names_in(&studio.board(), "store.puf", "pinned"), vec!["alloc"]);
+    // the page's camera is asked out to the board, to see it done
+    assert_eq!(studio.board()["look"], json!({ "to": "board", "n": 1 }));
+    studio.arrange(&json!({ "action": "unhide", "names": ["unused-b"] })).unwrap();
+    assert_eq!(names_in(&studio.board(), "store.puf", "pinned"), vec!["unused-b"]);
     // a slice: alloc, what it uses, what uses it
     studio.arrange(&json!({ "action": "slice", "names": ["alloc"] })).unwrap();
     let items: Vec<String> = studio.board()["focus"]["items"].as_array().unwrap().iter().map(|p| p[1].as_str().unwrap().to_owned()).collect();
@@ -837,6 +852,22 @@ async fn the_board_arranges_by_name() {
     studio.arrange(&json!({ "action": "clear" })).unwrap();
     assert!(studio.board()["focus"].is_null());
     assert!(studio.arrange(&json!({ "action": "only", "names": ["no-such"] })).is_err());
+    // what the author is reading: the working set, and the camera back to the code
+    studio.arrange(&json!({ "action": "pull", "names": ["alloc"] })).unwrap();
+    assert_eq!(set_of(&studio.board()), vec!["store.puf::alloc"]);
+    assert_eq!(studio.board()["look"]["to"], "code");
+    // "show me inject next to step": the one it is next to, then it
+    studio.arrange(&json!({ "action": "beside", "names": ["inject"], "near": "step" })).unwrap();
+    assert_eq!(set_of(&studio.board()), vec!["store.puf::alloc", "machine.puf::step", "machine.puf::inject"]);
+    studio.arrange(&json!({ "action": "close", "names": ["alloc"] })).unwrap();
+    assert_eq!(set_of(&studio.board()), vec!["machine.puf::step", "machine.puf::inject"]);
+    // "bring out" a definition pulls it; a module, its card
+    studio.arrange(&json!({ "action": "bring", "names": ["fresh"], "modules": [] })).unwrap();
+    assert!(set_of(&studio.board()).contains(&"store.puf::fresh".to_owned()));
+    assert!(studio.arrange(&json!({ "action": "pull", "names": ["no-such"] })).is_err());
+    let n = studio.board()["look"]["n"].as_u64().unwrap();
+    studio.arrange(&json!({ "action": "show-board" })).unwrap();
+    assert_eq!(studio.board()["look"], json!({ "to": "board", "n": n + 1 }));
     // the board is kept with the project
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(studio.directory.join(crate::board::BOARD_FILE)).unwrap()).unwrap();
     assert_eq!(saved, studio.board());
@@ -853,8 +884,6 @@ async fn after_a_turn_the_board_hides_what_it_did_not_touch() {
     // alloc and what it uses directly (fresh) stay, the provided store-ref
     // stays, the author's pin stays; biggest is two steps away and folds
     assert_eq!(hidden, vec!["biggest", "unused-a"], "{hidden:?}");
-    // plan mode: no body opened
-    assert!(names_in(&studio.board(), "store.puf", "open").is_empty());
 }
 
 #[tokio::test]
@@ -868,7 +897,7 @@ async fn a_question_shows_its_slice() {
     assert_eq!(board["questions"][0]["answered"], false);
     let items: Vec<String> = board["focus"]["items"].as_array().unwrap().iter().map(|p| p[1].as_str().unwrap().to_owned()).collect();
     assert_eq!(items, vec!["alloc", "fresh", "step"]);
-    assert_eq!(board["view"], "board");
+    assert_eq!(board["look"]["to"], "board");
 }
 
 #[tokio::test]

@@ -161,12 +161,14 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // Narrow the focus pane to the focused definition, with as many lines
   // around it as the room it is given leaves (dimmed); the whole file
   // when widened.
+  let shownFrom = 0;
   function narrowFocus() {
     const model = main.getModel();
     const narrowed = focus?.name && !whole && files.active() === focus.path;
     let span = focused.to(narrowed ? focus.name : null);
     if (narrowed && !span) span = focused.to(null);
     context.clear();
+    if (!narrowed) shownFrom = 0;
     if (narrowed && span && focused.name()) {
       const lines = model.getLineCount();
       const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
@@ -179,6 +181,9 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       if (start > 1) hidden.push(new monaco.Range(1, 1, start - 1, 1));
       if (end < lines) hidden.push(new monaco.Range(end + 1, 1, lines, 1));
       main.setHiddenAreas(hidden);
+      // a new place: shown from its top (not where Monaco last scrolled)
+      if (start !== shownFrom) main.setScrollTop(0);
+      shownFrom = start;
       const dim = [];
       if (above) dim.push(new monaco.Range(start, 1, span.start - 1, 1));
       if (below) dim.push(new monaco.Range(span.end + 1, 1, end, 1));

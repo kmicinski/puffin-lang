@@ -10,12 +10,15 @@
 //!   just `??` is *opaque*: planned, not written), the comment above it,
 //!   and the other top-level names it uses -- the dependency graph the
 //!   slicer walks (`slice`);
-//! - the **board**, the view: which module cards are out, where, which
-//!   definitions are open (body shown) or hidden, whether the studio is
-//!   in plan mode, the questions asked and the focus a question set.
-//!   It is JSON the page mostly owns, kept in `.puffin/board.json` (so it
-//!   is committed with the project's history) and broadcast as
-//!   `Event::Board` with the outline whenever either changes.
+//! - the **board**, the view (docs/VIEW.md): which module cards are out,
+//!   where, which definitions are hidden, the working set (`set`: the
+//!   definitions the author reads beside the focus, as live code), whether
+//!   the studio is in plan mode, the questions asked and the focus a
+//!   question set, and the last place the voice asked the camera to go
+//!   (`look`). It is JSON the page mostly owns, kept in
+//!   `.puffin/board.json` (so it is committed with the project's history)
+//!   and broadcast as `Event::Board` with the outline whenever either
+//!   changes.
 
 use crate::sexp;
 use crate::studio::{Event, Studio};
@@ -724,7 +727,7 @@ fn property_lines(text: &str) -> Vec<(usize, String)> {
 // ---- The board's state, and the studio's side of it ------------------------------
 
 pub fn empty() -> Value {
-    json!({ "view": "editor", "mode": "build", "cards": [], "focus": null, "questions": [], "notes": [] })
+    json!({ "mode": "build", "cards": [], "set": [], "focus": null, "questions": [], "notes": [] })
 }
 
 impl Studio {
@@ -814,10 +817,17 @@ impl Studio {
 // ---- Arranging: what the voice router and the builder ask of the board ----------
 
 impl Studio {
-    /// Do one arrangement (voice.rs routes "hide the store", "just show
+    /// Do one arrangement (voice.rs routes "show the board", "pull in
+    /// alloc", "show me step next to inject", "hide the store", "just show
     /// step", "what does step need", "put machine next to store", ...).
     /// `a` is { action, names: [definition], modules: [path], near, side }.
     /// Answers a few words for the caption, or why it could not.
+    ///
+    /// The page has no board mode: "the board" and "the code" are where its
+    /// camera is (docs/VIEW.md). An arrangement that changes the cards asks
+    /// it to glide out to the board, one that brings code into the working
+    /// set to come back in to the code -- `look` -- so the author sees what
+    /// was done.
     pub fn arrange(&self, a: &Value) -> Result<String, String> {
         let action = a["action"].as_str().unwrap_or("none");
         let strings = |key: &str| -> Vec<String> { a[key].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(|s| s.trim().to_owned())).filter(|s| !s.is_empty()).collect() };
@@ -833,11 +843,36 @@ impl Studio {
         let mut board = self.board();
         let said = match action {
             "show-board" => {
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 "The board.".to_owned()
             }
             "show-editor" => {
-                board["view"] = json!("editor");
+                look(&mut board, "code");
+                String::new()
+            }
+            // into the working set, beside the focus ("open step" is said too)
+            "pull" | "open" | "bring" if !found.is_empty() => {
+                pull_in(&mut board, &found);
+                look(&mut board, "code");
+                String::new()
+            }
+            // "show me step next to inject": both in the working set, the
+            // one it is to be next to first
+            "beside" => {
+                need("those definitions", found.is_empty())?;
+                let near: Vec<(String, String)> = a["near"].as_str().map(|n| locate(&outline, &[n.trim().to_owned()])).unwrap_or_default();
+                pull_in(&mut board, &near);
+                pull_in(&mut board, &found);
+                look(&mut board, "code");
+                String::new()
+            }
+            "pull" | "open" => return Err(format!("I couldn't find those definitions to {action}.")),
+            "close" => {
+                need("those definitions", found.is_empty())?;
+                let ids: Vec<String> = found.iter().map(|(f, n)| format!("{f}::{n}")).collect();
+                if let Some(set) = board["set"].as_array_mut() {
+                    set.retain(|s| !s["id"].as_str().is_some_and(|id| ids.iter().any(|i| i == id)));
+                }
                 String::new()
             }
             "plan-mode" => {
@@ -848,27 +883,15 @@ impl Studio {
                 board["mode"] = json!("build");
                 "Build mode.".to_owned()
             }
-            "open" | "close" | "hide" | "unhide" => {
+            "hide" | "unhide" => {
                 need("those definitions", found.is_empty())?;
                 for (file, name) in &found {
                     let card = card_mut(&mut board, file);
-                    let (list, add) = match action {
-                        "open" => ("open", true),
-                        "close" => ("open", false),
-                        "hide" => ("hidden", true),
-                        _ => ("hidden", false),
-                    };
-                    set_member(card, list, name, add);
-                    match action {
-                        "open" | "unhide" => set_member(card, "pinned", name, true),
-                        "hide" => {
-                            set_member(card, "open", name, false);
-                            set_member(card, "pinned", name, false);
-                        }
-                        _ => {}
-                    }
+                    set_member(card, "hidden", name, action == "hide");
+                    // what the author unhides, the automatic hiding leaves alone
+                    set_member(card, "pinned", name, action == "unhide");
                 }
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 String::new()
             }
             "only" | "slice" => {
@@ -884,7 +907,7 @@ impl Studio {
                 }
                 let label = if action == "only" { format!("just {}", names.join(", ")) } else { format!("{} and what touches it", names.join(", ")) };
                 board["focus"] = json!({ "items": items, "label": label, "question": null });
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 String::new()
             }
             // the author's notes on the design (docs/PLANNING.md §5): a
@@ -909,7 +932,7 @@ impl Studio {
                         note["by"] = json!(by);
                     }
                 }
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 if action == "decide" { "Decided.".to_owned() } else { "Noted.".to_owned() }
             }
             "clear" => {
@@ -924,7 +947,7 @@ impl Studio {
                 for m in &modules {
                     card_mut(&mut board, m);
                 }
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 String::new()
             }
             "put-away" => {
@@ -952,7 +975,7 @@ impl Studio {
                     card["x"] = json!(x);
                     card["y"] = json!(y);
                 }
-                board["view"] = json!("board");
+                look(&mut board, "board");
                 String::new()
             }
             other => return Err(format!("unknown arrangement {other}")),
@@ -970,8 +993,8 @@ impl Studio {
     /// interface (its provides) stays, and the rest of its internals --
     /// helpers the turn neither touched nor needs -- fold into "N hidden".
     /// What the author pinned (opened or unhid themselves) is never
-    /// hidden. In build mode the bodies just written open (the last few);
-    /// in plan mode bodies stay folded: the signatures are the design.
+    /// hidden. (What it just wrote is not opened here: the attention model
+    /// offers the builder's unseen changes beside the focus, docs/VIEW.md.)
     pub fn auto_arrange(&self, touched: &[(String, usize, usize)]) {
         if touched.is_empty() {
             return;
@@ -995,7 +1018,6 @@ impl Studio {
                 }
             }
         }
-        let plan = self.board()["mode"] == json!("plan");
         let files: BTreeSet<&String> = touched.iter().map(|(f, _, _)| f).collect();
         self.update_board(|board| {
             for m in outline.iter().filter(|m| files.contains(&m.path) && m.path != crate::props::HARNESS) {
@@ -1013,16 +1035,6 @@ impl Studio {
                         .collect()
                 };
                 card["hidden"] = json!(hidden);
-                let mut open: Vec<String> = pinned.iter().filter(|n| card["open"].as_array().is_some_and(|o| o.contains(&json!(n)))).cloned().collect();
-                if !plan {
-                    let fresh: Vec<String> = changed.iter().filter(|(f, n)| f == &m.path && m.items.iter().any(|i| &i.name == n && i.kind == "fun")).map(|(_, n)| n.clone()).collect();
-                    for name in fresh.iter().rev().take(3) {
-                        if !open.contains(name) {
-                            open.push(name.clone());
-                        }
-                    }
-                }
-                card["open"] = json!(open);
             }
         });
     }
@@ -1068,6 +1080,30 @@ pub fn describe_notes(board: &Value) -> String {
     out
 }
 
+/// Ask the page's camera to go to `to`: "board" (the whole program) or
+/// "code" (the working set beside the focus). The page moves once per
+/// request: `n` counts them.
+pub(crate) fn look(board: &mut Value, to: &str) {
+    let n = board["look"]["n"].as_u64().unwrap_or(0) + 1;
+    board["look"] = json!({ "to": to, "n": n });
+}
+
+/// Pull definitions into the working set (each `path::name`, when it was
+/// brought), after what is there; the page lays the set out in the lane.
+fn pull_in(board: &mut Value, found: &[(String, String)]) {
+    if !board["set"].is_array() {
+        board["set"] = json!([]);
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let set = board["set"].as_array_mut().unwrap();
+    for (file, name) in found {
+        let id = format!("{file}::{name}");
+        if !set.iter().any(|s| s["id"] == json!(id)) {
+            set.push(json!({ "id": id, "at": at }));
+        }
+    }
+}
+
 /// The card of `path` on `board`, made (unplaced) if it is not out.
 pub(crate) fn card_mut<'a>(board: &'a mut Value, path: &str) -> &'a mut Value {
     if !board["cards"].is_array() {
@@ -1077,7 +1113,7 @@ pub(crate) fn card_mut<'a>(board: &'a mut Value, path: &str) -> &'a mut Value {
     let index = match cards.iter().position(|c| c["path"] == json!(path)) {
         Some(index) => index,
         None => {
-            cards.push(json!({ "path": path, "x": null, "y": null, "open": [], "hidden": [], "pinned": [] }));
+            cards.push(json!({ "path": path, "x": null, "y": null, "hidden": [], "pinned": [] }));
             cards.len() - 1
         }
     };

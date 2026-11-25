@@ -412,12 +412,13 @@ impl Studio {
             )
         };
         let board = self.board();
+        let set: Vec<&str> = board["set"].as_array().into_iter().flatten().filter_map(|s| s["id"].as_str()).map(|id| id.rsplit("::").next().unwrap_or(id)).collect();
         let _ = writeln!(
             user,
-            "\nThe view: {} (mode: {}){}",
-            board["view"].as_str().unwrap_or("editor"),
+            "\nThe view (mode: {}): beside the focus, the working set: {}{}",
             board["mode"].as_str().unwrap_or("build"),
-            board["focus"]["label"].as_str().map(|l| format!("; focused on: {l}")).unwrap_or_default()
+            if set.is_empty() { "nothing".to_owned() } else { set.join(", ") },
+            board["focus"]["label"].as_str().map(|l| format!("; the board focused on: {l}")).unwrap_or_default()
         );
         let open_questions: Vec<String> = board["questions"]
             .as_array()
@@ -559,7 +560,7 @@ fn inert(decision: &Value) -> bool {
         && none(&decision["explain"]["action"])
 }
 
-fn router_schema() -> Value {
+pub(crate) fn router_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -592,7 +593,7 @@ fn router_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["action", "names", "modules", "near", "side", "text"],
                 "properties": {
-                    "action": { "type": "string", "enum": ["none", "show-board", "show-editor", "plan-mode", "build-mode", "open", "close", "hide", "unhide", "only", "slice", "clear", "bring", "put-away", "place", "note", "decide"] },
+                    "action": { "type": "string", "enum": ["none", "show-board", "show-editor", "pull", "beside", "close", "plan-mode", "build-mode", "hide", "unhide", "only", "slice", "clear", "bring", "put-away", "place", "note", "decide"] },
                     "text": { "type": "string" },
                     "names": { "type": "array", "items": { "type": "string" } },
                     "modules": { "type": "array", "items": { "type": "string" } },
@@ -671,11 +672,14 @@ new-conversation (forget the builder's context), mute/unmute (the studio's voice
 listening), follow/unfollow (whether the view follows the builder's edits), run (run the program), \
 show-output / hide-output (the program's output and REPL), or none.
 
-arrange -- the module board (the program as cards of ML-style signatures, bodies hidden until opened), \
-instantly, no builder. action: show-board / show-editor (\"show me the board\", \"back to the code\"); \
-plan-mode / build-mode (plan mode: the builder writes signatures and leaves bodies as holes); open / close \
-(a definition's body: \"open step\", \"fold alloc\"); hide / unhide (rows: \"hide the store helpers\" -- \
-name each definition); only (\"just show step and inject\"); slice (\"show me what step depends on\", \
+arrange -- what is on the screen, instantly, no builder. The author reads one definition (the focus) with a \
+working set of others beside it as live code, on one zoomable surface with the module board (the program \
+as cards of ML-style signatures). action: show-board / show-editor (\"show me the board\", \"zoom out\", \
+\"back to the code\": the camera glides out to the whole program, or back in to the working set); pull \
+(\"pull in alloc\", \"bring out step\", \"open eval-expr\": `names` into the working set) / close (\"put \
+alloc away\", \"fold step\": out of it); beside (\"show me step next to inject\": `names` beside `near`, \
+both in the working set); plan-mode / build-mode (plan mode: the builder writes signatures and leaves \
+bodies as holes); hide / unhide (rows: \"hide the store helpers\" -- name each definition); only (\"just show step and inject\"); slice (\"show me what step depends on\", \
 \"what touches alloc\"); clear (\"show everything\"); bring / put-away (whole modules' cards); place \
 (module cards `modules` next to `near`, on `side`); note / decide (the author's comment, or binding \
 decision, on definitions `names` or whole `modules`, worded in `text` as they said it but self-contained: \

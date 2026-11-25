@@ -546,6 +546,7 @@ export function createBoard({ files, send, stage, onShow }) {
     if (m.effects) node.append(el("div", "board-effects", `+ ${m.effects} top-level expression${m.effects === 1 ? "" : "s"}`));
   }
 
+  let clicking = 0;
   function renderItem(m, item, isHidden, focused) {
     const key = keyOf(m.path, item.name);
     const classes = [
@@ -637,12 +638,17 @@ export function createBoard({ files, send, stage, onShow }) {
     actions.append(edit, hide);
     line.append(actions);
     line.title = [item.doc, `${m.path}:${item.line}`, item.uses.length ? `uses ${item.uses.join(", ")}` : ""].filter(Boolean).join("\n");
-    // a click: its code into the lane; a double-click: the focus
+    // a click: its code into the lane; a double-click: the focus (the
+    // click waits a moment to see which it is)
     line.addEventListener("click", (event) => {
       cursor = key;
-      if (event.detail === 1) view?.pull(m.path, item.name);
+      clearTimeout(clicking);
+      if (event.detail === 1) clicking = setTimeout(() => view?.pull(m.path, item.name), 240);
     });
-    line.addEventListener("dblclick", () => view?.focus(m.path, item.line));
+    line.addEventListener("dblclick", () => {
+      clearTimeout(clicking);
+      view?.focus(m.path, item.line);
+    });
     line.addEventListener("pointerenter", () => { setLens(key); view?.hover(key); });
     line.addEventListener("pointerleave", () => { setLens(null); view?.hover(null); });
     row.append(line);

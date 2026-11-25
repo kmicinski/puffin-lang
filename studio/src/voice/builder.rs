@@ -309,7 +309,7 @@ impl Studio {
                 crate::board::card_mut(board, file);
             }
             board["focus"] = json!({ "items": items, "question": id, "label": format!("question #{id}") });
-            board["view"] = json!("board");
+            crate::board::look(board, "board");
         });
         id
     }
@@ -581,8 +581,8 @@ pub fn tools() -> Value {
         ),
         tool(
             "arrange",
-            "Arrange the module board the author sees (they may also say it). action: open/close (show or fold definitions' bodies), hide/unhide (rows on their cards), only (just these definitions), slice (these and what touches them), clear, bring/put-away (modules' cards), show-board/show-editor, note (leave a comment, in `text`, on `names` or `modules` -- e.g. a design trade-off you noticed). Use it to put what you are talking about in front of them.",
-            json!({ "action": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}, "modules": {"type": "array", "items": {"type": "string"}}, "text": {"type": "string"} }),
+            "Arrange what the author sees (they may also say it). Beside the definition they are in, the studio shows a working set of other definitions as live code, on the same zoomable surface as the module board. action: pull (`names` into the working set, beside their focus) / close (out of it); beside (`names` next to the definition `near`, both in the working set); show-board / show-editor (glide out to the whole program, or back in to the code); hide/unhide (rows on their cards), only (just these definitions), slice (these and what touches them), clear, bring/put-away (modules' cards), note (leave a comment, in `text`, on `names` or `modules` -- e.g. a design trade-off you noticed). Use it to put what you are talking about in front of them: pull the definitions you are explaining.",
+            json!({ "action": {"type": "string"}, "names": {"type": "array", "items": {"type": "string"}}, "modules": {"type": "array", "items": {"type": "string"}}, "near": {"type": "string"}, "text": {"type": "string"} }),
             &["action"],
         ),
         tool(
@@ -727,9 +727,11 @@ and the definitions it is about. The author sees exactly those on the board and 
 answer comes back as an instruction, and you write it down: as a property when it says what must hold, \
 in the types and signatures when it says how things are built. Answers are how the spec grows.
 
-The board. The author may be looking at the module board instead of the editor: module cards of \
-signatures, bodies folded. Write a one-line comment above each definition saying what it is for -- the \
-board shows it under the signature. Use `arrange` to put what you are talking about in front of them.
+The view. The author reads one definition at a time (the focus), with a working set of others beside it \
+as live code, and the module board -- cards of signatures, one row per definition -- on the same surface, \
+a zoom away. Write a one-line comment above each definition saying what it is for -- the board shows it \
+under the signature. Use `arrange` to put what you are talking about in front of them (pull it into the \
+working set; show-board for the whole design).
 
 Sources. When the author points at a paper, a spec or a page (\"the CESK* machine from Van Horn and \
 Might\"), use `research` once to get its exact content -- the grammar, the states, the transition rules \
