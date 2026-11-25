@@ -419,20 +419,6 @@ mod tests {
 
     #[test]
     fn the_explainer_schema_is_strict() {
-        fn walk(v: &Value) {
-            if v["type"] == "object" {
-                assert_eq!(v["additionalProperties"], json!(false));
-                let props: Vec<&String> = v["properties"].as_object().unwrap().keys().collect();
-                let required: Vec<&str> = v["required"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
-                for p in &props {
-                    assert!(required.contains(&p.as_str()), "{p} not required");
-                    walk(&v["properties"][p.as_str()]);
-                }
-            }
-            if v["type"] == "array" {
-                walk(&v["items"]);
-            }
-        }
-        walk(&schema());
+        claude_api::assert_strict(&schema(), "explainer");
     }
 }

@@ -192,3 +192,29 @@ fn clip(text: &str, max: usize) -> String {
     }
     format!("{}…", &text[..end])
 }
+
+/// Structured output wants every object closed and every property
+/// required: a schema the API refuses would fail every request made with
+/// it. Panics, naming the place, where `schema` is not so.
+#[cfg(test)]
+pub fn assert_strict(schema: &Value, path: &str) {
+    match schema["type"].as_str() {
+        Some("object") => {
+            assert_eq!(schema["additionalProperties"], json!(false), "{path}: additionalProperties");
+            let properties = schema["properties"].as_object().unwrap_or_else(|| panic!("{path}: properties"));
+            let mut required: Vec<&str> = schema["required"].as_array().unwrap_or_else(|| panic!("{path}: required")).iter().map(|r| r.as_str().unwrap()).collect();
+            required.sort_unstable();
+            assert_eq!(properties.keys().map(String::as_str).collect::<Vec<_>>(), required, "{path}: every property required");
+            for (key, property) in properties {
+                assert_strict(property, &format!("{path}.{key}"));
+            }
+        }
+        Some("array") => assert_strict(&schema["items"], &format!("{path}[]")),
+        Some("string" | "integer" | "boolean" | "number") => {
+            if let Some(choices) = schema["enum"].as_array() {
+                assert!(!choices.is_empty() && choices.iter().all(Value::is_string), "{path}: enum");
+            }
+        }
+        other => panic!("{path}: type {other:?}"),
+    }
+}

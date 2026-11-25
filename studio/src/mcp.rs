@@ -91,9 +91,25 @@ fn selection_end(arguments: &Value, text: &str, at: usize) -> Option<usize> {
     arguments["end"].as_u64().map(|end| (end as usize).min(text.len())).filter(|end| *end > at)
 }
 
+/// String argument `key`, which the tool requires.
+pub fn string_argument(arguments: &Value, key: &str) -> Result<String, String> {
+    arguments[key].as_str().map(str::to_owned).ok_or_else(|| format!("missing string argument `{key}`"))
+}
+
+/// The strings of array argument `key`; none when it is missing.
+pub fn strings_argument(arguments: &Value, key: &str) -> Vec<String> {
+    arguments[key].as_array().into_iter().flatten().filter_map(|value| value.as_str().map(str::to_owned)).collect()
+}
+
+/// A tool as `tools/list` describes it: its input is an object of
+/// `properties`, the `required` ones required.
+pub fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+    json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": required } })
+}
+
 pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, arguments: &Value) -> Result<Value, String> {
     let thread = thread.ok_or("this MCP session names no thread; the studio's assistant runs set one")?;
-    let text = |key: &str| arguments[key].as_str().map(str::to_owned).ok_or_else(|| format!("missing string argument `{key}`"));
+    let text = |key: &str| string_argument(arguments, key);
     let note = arguments["note"].as_str().unwrap_or("").to_owned();
     let fork = || studio.fork_of(thread);
     // what runs runs past the typed holes (plan mode leaves bodies as `??`):
@@ -219,7 +235,7 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
         "evaluate" => studio.try_expression(&text("expr")?).await,
         "trace" => {
             let names: Vec<String> = match &arguments["names"] {
-                Value::Array(names) => names.iter().filter_map(|name| name.as_str().map(str::to_owned)).collect(),
+                Value::Array(_) => strings_argument(arguments, "names"),
                 Value::String(name) => name.split_whitespace().map(str::to_owned).collect(),
                 _ => return Err("missing `names`: the functions to trace, e.g. [\"eval-expr\"]".to_owned()),
             };
@@ -244,7 +260,6 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
 }
 
 pub fn tools() -> Value {
-    let object = |properties: Value, required: &[&str]| json!({ "type": "object", "properties": properties, "required": required });
     let note = json!({ "type": "string", "description": "One sentence for the author: what this changes and why. Shown over the change." });
     let file = json!({ "type": "string", "description": "A project file, as list_files names it (e.g. `main.puf`)." });
     let at = json!({
@@ -259,98 +274,98 @@ pub fn tools() -> Value {
     with_id["id"] = json!({ "type": "string", "description": "The assist's id, as assists_at lists it (fill-match, add-missing-cases, case-split, template, stub, fill-hole, extract, ...)." });
     with_id["title"] = json!({ "type": "string", "description": "The assist's exact title, when several share its id (each fill-hole candidate is one)." });
     with_id["note"] = note.clone();
-    json!([
-        {
-            "name": "list_files",
-            "description": "The program's files, with their sizes, and its entries (the modules nothing requires).",
-            "inputSchema": object(json!({}), &[]),
-        },
-        {
-            "name": "get_file",
-            "description": "A file's text as your pending proposals leave it, with its top-level forms (key, line, byte start and end).",
-            "inputSchema": object(json!({ "file": file }), &["file"]),
-        },
-        {
-            "name": "check",
-            "description": "Check the whole program as your proposals leave it (reader, resolver, types): ok, or the located errors and warnings.",
-            "inputSchema": object(json!({}), &[]),
-        },
-        {
-            "name": "assists_at",
-            "description": "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function, annotate a function from observed types, fill a typed hole ?? (fill-hole: the locals of the goal type, the recursive call, constructors with new holes), and with `end` extract the selection into a function -- each with its title, source and edits. source says where the knowledge came from: type (the checker; certain), observed (values the author's session passed; seen so far, not proof), patterns (other matches and templates in the file), call-site, syntax. Prefer these to writing such code yourself; apply_assist proposes one.",
-            "inputSchema": object(selected, &["file"]),
-        },
-        {
-            "name": "apply_assist",
-            "description": "Propose the edit of assist `id` at a point (see assists_at), as a proposal like propose_edit's: checked, scoped, and waiting for the author.",
-            "inputSchema": object(with_id, &["file", "id"]),
-        },
-        {
-            "name": "holes",
-            "description": "Every typed hole (??) in the program as your proposals leave it: file, line, byte pos, and its goal type (the type the expression there must have). The check checks the whole program around its holes (each is an expression of any type that raises if reached); a run reaching one raises '??'.",
-            "inputSchema": object(json!({}), &[]),
-        },
-        {
-            "name": "lint",
-            "description": "The observation lint: each match with no catch-all whose parameter the author's live session saw take a shape no clause handles (file, line, byte pos of the match, message). Evidence from real runs, not proof. The add-missing-cases assist with source observed at the match adds the cases.",
-            "inputSchema": object(json!({}), &[]),
-        },
-        {
-            "name": "type_at",
-            "description": "The type the checker gives the expression at a point, or null.",
-            "inputSchema": object(at.clone(), &["file"]),
-        },
-        {
-            "name": "facts_at",
-            "description": "Everything known at a point, each part labelled with its layer: form (syntax: its key and lines), type and diagnostics (the checker), session (whether the author's live session has this form current, stale, or not loaded; an expression's last result), and observed/function (what the session's runs actually passed: per parameter, the call count and the shapes seen, with match patterns made from them).",
-            "inputSchema": object(at, &["file"]),
-        },
-        {
-            "name": "propose_edit",
-            "description": "Propose replacing an exact piece of a file's text. `old` must occur exactly once in the file as get_file shows it; include whole forms or enough context. An empty `old` appends `new` to the file (making the file if it does not exist), when the question's scope allows. The program as it would leave it must pass the check, and the change must stay inside the question's scope, or it is refused with why. Editing text your pending proposal wrote corrects that proposal. Nothing changes until the author accepts.",
-            "inputSchema": object(json!({
+    Value::Array(vec![
+        tool(
+            "list_files",
+            "The program's files, with their sizes, and its entries (the modules nothing requires).",
+            json!({}), &[],
+        ),
+        tool(
+            "get_file",
+            "A file's text as your pending proposals leave it, with its top-level forms (key, line, byte start and end).",
+            json!({ "file": file }), &["file"],
+        ),
+        tool(
+            "check",
+            "Check the whole program as your proposals leave it (reader, resolver, types): ok, or the located errors and warnings.",
+            json!({}), &[],
+        ),
+        tool(
+            "assists_at",
+            "The compiler's deterministic edits that apply at a point -- fill a match from its scrutinee's type, add missing cases, case-split a binder, a structural-recursion template, stub an unbound function, annotate a function from observed types, fill a typed hole ?? (fill-hole: the locals of the goal type, the recursive call, constructors with new holes), and with `end` extract the selection into a function -- each with its title, source and edits. source says where the knowledge came from: type (the checker; certain), observed (values the author's session passed; seen so far, not proof), patterns (other matches and templates in the file), call-site, syntax. Prefer these to writing such code yourself; apply_assist proposes one.",
+            selected, &["file"],
+        ),
+        tool(
+            "apply_assist",
+            "Propose the edit of assist `id` at a point (see assists_at), as a proposal like propose_edit's: checked, scoped, and waiting for the author.",
+            with_id, &["file", "id"],
+        ),
+        tool(
+            "holes",
+            "Every typed hole (??) in the program as your proposals leave it: file, line, byte pos, and its goal type (the type the expression there must have). The check checks the whole program around its holes (each is an expression of any type that raises if reached); a run reaching one raises '??'.",
+            json!({}), &[],
+        ),
+        tool(
+            "lint",
+            "The observation lint: each match with no catch-all whose parameter the author's live session saw take a shape no clause handles (file, line, byte pos of the match, message). Evidence from real runs, not proof. The add-missing-cases assist with source observed at the match adds the cases.",
+            json!({}), &[],
+        ),
+        tool(
+            "type_at",
+            "The type the checker gives the expression at a point, or null.",
+            at.clone(), &["file"],
+        ),
+        tool(
+            "facts_at",
+            "Everything known at a point, each part labelled with its layer: form (syntax: its key and lines), type and diagnostics (the checker), session (whether the author's live session has this form current, stale, or not loaded; an expression's last result), and observed/function (what the session's runs actually passed: per parameter, the call count and the shapes seen, with match patterns made from them).",
+            at, &["file"],
+        ),
+        tool(
+            "propose_edit",
+            "Propose replacing an exact piece of a file's text. `old` must occur exactly once in the file as get_file shows it; include whole forms or enough context. An empty `old` appends `new` to the file (making the file if it does not exist), when the question's scope allows. The program as it would leave it must pass the check, and the change must stay inside the question's scope, or it is refused with why. Editing text your pending proposal wrote corrects that proposal. Nothing changes until the author accepts.",
+            json!({
                 "file": file,
                 "old": { "type": "string", "description": "Exact text to replace, occurring once; empty to append." },
                 "new": { "type": "string", "description": "Its replacement (may be empty to delete)." },
                 "note": note,
-            }), &["file", "old", "new", "note"]),
-        },
-        {
-            "name": "get_proposals",
-            "description": "Your proposals in this thread: status, whether each still applies (stale), and conflicts with other threads.",
-            "inputSchema": object(json!({}), &[]),
-        },
-        {
-            "name": "evaluate",
-            "description": "Evaluate Puffin forms against the author's live REPL session (what they evaluated is defined there) and keep nothing. Returns printed output and results, or the error. Effects outside the session (system, write-file, reading stdin, foreign) are refused.",
-            "inputSchema": object(json!({ "expr": { "type": "string", "description": "One or more forms, e.g. `(eval-expr (Add (Num 1) (Num 2)))`." } }), &["expr"]),
-        },
-        {
-            "name": "trace",
-            "description": "See what a function actually does: run `expr` against the author's live session with each function of `names` traced, as Racket's trace does -- `> (f args)` on each call, `< value` on its return, one `| ` per level of depth -- and keep nothing (try). Each named define is taken from the files as your proposals leave them (or, for a function the author defined only at the prompt, the session's own text), with the definitions it and `expr` need that the session lacks, so a proposed fix can be traced before the author accepts it. Returns the first 200 lines of the trace, the counts of lines and calls, and the results; a failing or runaway run still returns the trace up to where it stopped. Effects outside the session are refused, as in evaluate. Typed holes (`??`) raise \"??\" when reached.",
-            "inputSchema": object(json!({
+            }), &["file", "old", "new", "note"],
+        ),
+        tool(
+            "get_proposals",
+            "Your proposals in this thread: status, whether each still applies (stale), and conflicts with other threads.",
+            json!({}), &[],
+        ),
+        tool(
+            "evaluate",
+            "Evaluate Puffin forms against the author's live REPL session (what they evaluated is defined there) and keep nothing. Returns printed output and results, or the error. Effects outside the session (system, write-file, reading stdin, foreign) are refused.",
+            json!({ "expr": { "type": "string", "description": "One or more forms, e.g. `(eval-expr (Add (Num 1) (Num 2)))`." } }), &["expr"],
+        ),
+        tool(
+            "trace",
+            "See what a function actually does: run `expr` against the author's live session with each function of `names` traced, as Racket's trace does -- `> (f args)` on each call, `< value` on its return, one `| ` per level of depth -- and keep nothing (try). Each named define is taken from the files as your proposals leave them (or, for a function the author defined only at the prompt, the session's own text), with the definitions it and `expr` need that the session lacks, so a proposed fix can be traced before the author accepts it. Returns the first 200 lines of the trace, the counts of lines and calls, and the results; a failing or runaway run still returns the trace up to where it stopped. Effects outside the session are refused, as in evaluate. Typed holes (`??`) raise \"??\" when reached.",
+            json!({
                 "names": { "type": "array", "items": { "type": "string" }, "description": "Functions to trace, each defined at the top level of a file: (define (f a ...) ...)." },
                 "expr": { "type": "string", "description": "What to run, e.g. `(interp '(app (lam x x) 1) '())`." },
-            }), &["names", "expr"]),
-        },
-        {
-            "name": "evaluate_program",
-            "description": "Compile one file of the program, as your proposals leave it, as a whole program, and run it on a throwaway VM (10 s limit): its output and exit status, or the compile errors. Typed holes (`??`) run: reaching one raises \"??\", so the parts that are written can be tried in plan mode.",
-            "inputSchema": object(json!({ "file": { "type": "string", "description": "The file to run (default: the first entry)." } }), &[]),
-        },
-        {
-            "name": "search_docs",
-            "description": "Search Puffin's docs (docs/*.md: LANGUAGE, STDLIB, TYPES, MODULES, ...) and examples for words; returns the best paragraphs with file and line.",
-            "inputSchema": object(json!({ "query": { "type": "string", "description": "Words or a phrase." } }), &["query"]),
-        },
-        {
-            "name": "read_doc",
-            "description": "Read lines of a doc or example search_docs named (e.g. `docs/STDLIB.md`).",
-            "inputSchema": object(json!({
+            }), &["names", "expr"],
+        ),
+        tool(
+            "evaluate_program",
+            "Compile one file of the program, as your proposals leave it, as a whole program, and run it on a throwaway VM (10 s limit): its output and exit status, or the compile errors. Typed holes (`??`) run: reaching one raises \"??\", so the parts that are written can be tried in plan mode.",
+            json!({ "file": { "type": "string", "description": "The file to run (default: the first entry)." } }), &[],
+        ),
+        tool(
+            "search_docs",
+            "Search Puffin's docs (docs/*.md: LANGUAGE, STDLIB, TYPES, MODULES, ...) and examples for words; returns the best paragraphs with file and line.",
+            json!({ "query": { "type": "string", "description": "Words or a phrase." } }), &["query"],
+        ),
+        tool(
+            "read_doc",
+            "Read lines of a doc or example search_docs named (e.g. `docs/STDLIB.md`).",
+            json!({
                 "path": { "type": "string", "description": "Repository-relative path." },
                 "start": { "type": "integer", "description": "First line, 1-based (default 1)." },
                 "lines": { "type": "integer", "description": "How many (default 200, at most 400)." },
-            }), &["path"]),
-        },
+            }), &["path"],
+        ),
     ])
 }

@@ -12,6 +12,7 @@
 use super::Context;
 use super::places::target;
 use crate::claude_cli::{McpConfig, Run, result_text, tool_name};
+use crate::mcp::{string_argument, strings_argument, tool};
 use crate::props::{self, Results};
 use crate::review::{Change, apply};
 use crate::sexp;
@@ -426,7 +427,7 @@ impl Studio {
     // ---- The builder's tools (mcp.rs routes voice calls here) ----------------
 
     pub async fn voice_call(self: &Arc<Self>, name: &str, arguments: &Value) -> Result<Value, String> {
-        let text = |key: &str| arguments[key].as_str().map(str::to_owned).ok_or_else(|| format!("missing string argument `{key}`"));
+        let text = |key: &str| string_argument(arguments, key);
         let note = arguments["note"].as_str().unwrap_or("").to_owned();
         match name {
             "edit" => {
@@ -451,7 +452,7 @@ impl Studio {
                 let property = text("name")?;
                 let statement = text("statement")?;
                 let code = text("code")?;
-                let requires: Vec<String> = arguments["requires"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+                let requires = strings_argument(arguments, "requires");
                 let mut current = self.text_of(props::PROPERTIES).unwrap_or_else(|| props::new_file(&requires));
                 for module in &requires {
                     let line = format!("(require \"{module}\")");
@@ -482,7 +483,7 @@ impl Studio {
             }
             "ask" => {
                 let question = text("question")?;
-                let about: Vec<String> = arguments["about"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+                let about = strings_argument(arguments, "about");
                 let why = arguments["why"].as_str().unwrap_or("").to_owned();
                 let id = self.ask_author(&question, &about, &why);
                 self.voice_event("reply", json!({ "text": question, "speak": true, "from": "builder" }));
@@ -571,9 +572,6 @@ pub fn tools() -> Value {
         "list_files", "get_file", "check", "assists_at", "holes", "lint", "type_at", "facts_at", "evaluate", "trace", "evaluate_program", "search_docs", "read_doc",
     ];
     let mut out: Vec<Value> = crate::mcp::tools().as_array().cloned().unwrap_or_default().into_iter().filter(|tool| READS.contains(&tool["name"].as_str().unwrap_or(""))).collect();
-    let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
-        json!({ "name": name, "description": description, "inputSchema": { "type": "object", "properties": properties, "required": required } })
-    };
     out.extend([
         tool(
             "edit",

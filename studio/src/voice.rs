@@ -681,32 +681,11 @@ half-sentence), do nothing: all none, reply empty.";
 mod tests {
     use super::*;
 
-    /// Structured output wants every object closed and every property
-    /// required; a schema the API refuses would fail every utterance.
+    /// A schema the API refuses would fail every utterance.
     #[test]
     fn the_router_schema_is_strict_all_the_way_down() {
-        fn walk(v: &Value, path: &str) {
-            match v["type"].as_str() {
-                Some("object") => {
-                    assert_eq!(v["additionalProperties"], json!(false), "{path}: additionalProperties");
-                    let props: std::collections::BTreeSet<String> = v["properties"].as_object().unwrap_or_else(|| panic!("{path}: properties")).keys().cloned().collect();
-                    let required: std::collections::BTreeSet<String> = v["required"].as_array().unwrap_or_else(|| panic!("{path}: required")).iter().map(|r| r.as_str().unwrap().to_owned()).collect();
-                    assert_eq!(props, required, "{path}: every property required");
-                    for (k, sub) in v["properties"].as_object().unwrap() {
-                        walk(sub, &format!("{path}.{k}"));
-                    }
-                }
-                Some("array") => walk(&v["items"], &format!("{path}[]")),
-                Some("string" | "integer" | "boolean" | "number") => {
-                    if let Some(e) = v["enum"].as_array() {
-                        assert!(!e.is_empty() && e.iter().all(Value::is_string), "{path}: enum");
-                    }
-                }
-                other => panic!("{path}: type {other:?}"),
-            }
-        }
         let schema = router_schema();
-        walk(&schema, "router");
+        claude_api::assert_strict(&schema, "router");
         // the actions the executor knows are the ones the router may pick
         let actions: Vec<&str> = schema["properties"]["arrange"]["properties"]["action"]["enum"].as_array().unwrap().iter().map(|a| a.as_str().unwrap()).collect();
         for action in ["note", "decide", "slice", "only", "plan-mode", "build-mode"] {
