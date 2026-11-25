@@ -58,7 +58,7 @@ impl Studio {
         };
         if targets.is_empty() {
             let text = format!("I couldn't find {label}.");
-            self.voice_event("reply", json!({ "text": text, "speak": true }));
+            self.say(text);
             return;
         }
         let mut targets = targets;

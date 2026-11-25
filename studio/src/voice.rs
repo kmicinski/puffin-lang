@@ -206,6 +206,12 @@ impl Studio {
         self.publish(Event::Voice(VoiceEvent { kind: kind.to_owned(), data: entry }));
     }
 
+    /// The studio says `text` back to the author (aloud, when they have
+    /// asked for that).
+    pub(crate) fn say(&self, text: impl Into<String>) {
+        self.voice_event("reply", json!({ "text": text.into(), "speak": true }));
+    }
+
     fn converse(&self, line: String) {
         let mut state = self.voice.state();
         state.conversation.push_back(line);
@@ -292,20 +298,20 @@ impl Studio {
                     state.stopped = true;
                     state.child.as_mut().is_some_and(|child| child.start_kill().is_ok())
                 };
-                self.voice_event("reply", json!({ "text": if killed { "Stopped." } else { "Nothing is running." }, "speak": true }));
+                self.say(if killed { "Stopped." } else { "Nothing is running." });
             }
             "undo" => {
                 let last = self.voice.state().undo.pop();
                 match last {
                     Some((file, Some(before))) => {
                         self.replace(&file, before, "voice", "undo");
-                        self.voice_event("reply", json!({ "text": format!("Undid the builder's last edit to {file}."), "speak": true }));
+                        self.say(format!("Undid the builder's last edit to {file}."));
                     }
                     Some((file, None)) => {
                         let _ = self.delete_file(&file);
-                        self.voice_event("reply", json!({ "text": format!("Removed {file}, which the builder made."), "speak": true }));
+                        self.say(format!("Removed {file}, which the builder made."));
                     }
-                    None => self.voice_event("reply", json!({ "text": "The builder has made no edits to undo.", "speak": true })),
+                    None => self.say("The builder has made no edits to undo."),
                 }
             }
             "run-properties" => {
@@ -318,7 +324,7 @@ impl Studio {
                 state.conversation.clear();
                 state.fragments.clear();
                 drop(state);
-                self.voice_event("reply", json!({ "text": "Starting a fresh conversation with the builder.", "speak": true }));
+                self.say("Starting a fresh conversation with the builder.");
             }
             other => self.voice_event("error", json!({ "message": format!("unknown voice control {other}") })),
         }
@@ -485,7 +491,7 @@ impl Studio {
         }
         self.voice_event("routed", json!({ "text": utterance, "did": did, "ms": ms, "decision": decision }));
         if !reply.is_empty() {
-            self.voice_event("reply", json!({ "text": reply, "speak": true }));
+            self.say(reply.as_str());
             self.converse(format!("studio: {reply}"));
         }
         if nav_kind != "none" {
@@ -493,9 +499,9 @@ impl Studio {
         }
         if arrange_kind != "none" {
             match self.arrange(arrange) {
-                Ok(said) if !said.is_empty() && reply.is_empty() => self.voice_event("reply", json!({ "text": said, "speak": true })),
+                Ok(said) if !said.is_empty() && reply.is_empty() => self.say(said),
                 Ok(_) => {}
-                Err(why) => self.voice_event("reply", json!({ "text": why, "speak": true })),
+                Err(why) => self.say(why),
             }
         }
         if answer_to != 0 && !answer_text.is_empty() {
