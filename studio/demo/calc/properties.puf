@@ -6,7 +6,7 @@
 
 ;; @property compile-agrees: the compiled code computes what the interpreter does
 (check-example 'compile-agrees
-  (= (run (Let 'x (Num 6) (Mul (Var 'x) (Num 7))))
+  (eq? (run (Let 'x (Num 6) (Mul (Var 'x) (Num 7))))
      (execute (compile-expr (Let 'x (Num 6) (Mul (Var 'x) (Num 7)))))))
 
 ;; @property size-positive: every expression has at least one node
