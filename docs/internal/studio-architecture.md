@@ -77,7 +77,7 @@ units**. Conversion happens at the edge -- web.rs (`point`,
 | `review.rs` | Proposals: threads, changesets, ops, scopes, forks; applying a change. |
 | `ask.rs` | The assistant's side in the studio: asking, a question's scope and preamble, the proposal and accept gates. |
 | `agent.rs` | The assistant's runs: what they are told, and their stream as a thread's transcript. |
-| `claude_cli.rs` | Running `claude -p`: the MCP config file, the flags, streaming its events, stopping it. |
+| `claude_cli.rs` | Running `claude -p`: the MCP config file, the flags, its stream-json taken apart into `Part`s, stopping it. |
 | `claude_api.rs` | Direct Messages API calls: credentials, structured output, server-side web research. |
 | `mcp.rs` | `POST /mcp`: JSON-RPC, the assistant's tools and their dispatch; the plumbing the builder's tools share. |
 | `knowledge.rs` | What agents know of Puffin: the reference in their system prompt, `search_docs`, `read_doc`. |
