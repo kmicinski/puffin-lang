@@ -1,0 +1,14 @@
+== rename @ 173 (exit 0)
+== stdout
+{"edits":[{"start":156,"end":162,"text":"step"},{"start":173,"end":179,"text":"step"},{"start":212,"end":218,"text":"step"}]}
+== stderr
+== apply 1: rename
+;; assist: rename @ "(define (helper" +9 new=step
+;; a private helper: its (private ...) declaration names it too, so a
+;; rename carries it along
+(private step)
+(define (step x) (* x 2))
+(define (double x) (step x))
+(double 4)
+== check (exit 0)
+{"ok":true}
