@@ -37,7 +37,7 @@
 // tree once its evaluation ends (trace.js).
 
 import { balanced, forms } from "./lexer.js";
-import { highlight } from "./markdown.js";
+import { escape, highlight } from "./markdown.js";
 import { bindTextarea } from "./paredit.js";
 import { bindTexField } from "./tex.js";
 import { renderOutput } from "./trace.js";
@@ -239,7 +239,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
       if (entry.command) where.title = "The command this gesture is: typed at the prompt, it does the same";
     }
     const code = head.appendChild(el("span", "code"));
-    code.innerHTML = entry.kind === "eval" && !entry.line.startsWith(",") ? highlight(entry.line) : escapeText(entry.line);
+    code.innerHTML = entry.kind === "eval" && !entry.line.startsWith(",") ? highlight(entry.line) : escape(entry.line);
     if (entry.kind === "eval") {
       code.title = "Click to put it in the prompt";
       code.addEventListener("click", () => insert(entry.line));
@@ -389,8 +389,4 @@ export function createRepl({ transcript, prompt, send, commands }) {
       "entry-done": done,
     },
   };
-}
-
-function escapeText(text) {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]);
 }

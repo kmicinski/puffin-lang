@@ -8,10 +8,8 @@
 // It is opened and grown by voice ("explain the fix clause", "and what does
 // apply-fn do?"); ✕ or "close the excursion" ends it.
 
-import { markdown } from "./markdown.js";
+import { escape, markdown } from "./markdown.js";
 import { el } from "./dom.js";
-
-const escape = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 export function createExcursion({ host, view, monaco, files, go, close }) {
   const card = el("div", "voice-excursion voice-float");
