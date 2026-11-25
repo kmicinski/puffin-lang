@@ -147,20 +147,13 @@ impl Studio {
             if !open.docs.contains_key(path) {
                 return Err(format!("there is no file {path}"));
             }
-            let target = self.directory.join(path);
-            if target.exists() {
-                std::fs::remove_file(&target).map_err(|error| format!("cannot delete {path}: {error}"))?;
-            }
-            let _ = std::fs::remove_file(target.with_extension("puffin-studio-tmp"));
+            self.remove_on_disk(path)?;
             open.docs.remove(path);
             open.files_event()
         };
         self.forget(path);
         self.publish(event);
         self.record("delete", json!({ "file": path }));
-        if self.tracked {
-            self.journal_due.notify_one();
-        }
         Ok(())
     }
 
@@ -177,11 +170,7 @@ impl Studio {
             let inside = |dir: &str| dir.starts_with(&format!("{path}/"));
             removed = open.docs.keys().filter(|file| inside(file)).cloned().collect();
             for file in &removed {
-                let target = self.directory.join(file);
-                if target.exists() {
-                    std::fs::remove_file(&target).map_err(|error| format!("cannot delete {file}: {error}"))?;
-                }
-                let _ = std::fs::remove_file(target.with_extension("puffin-studio-tmp"));
+                self.remove_on_disk(file)?;
                 open.docs.remove(file);
             }
             let dirs: Vec<String> = open.folders.iter().filter(|dir| *dir == &path || inside(dir)).cloned().collect();
@@ -201,12 +190,19 @@ impl Studio {
         }
         self.publish(event);
         self.record("delete", json!({ "file": path, "folder": true, "files": removed.len() }));
-        if self.tracked {
-            self.journal_due.notify_one();
-        }
         if kept {
             return Err(format!("{path} holds files the studio does not manage, so the folder stays; its Puffin files are gone"));
         }
+        Ok(())
+    }
+
+    /// Remove `file` from disk, with any save of it left half-done.
+    fn remove_on_disk(&self, file: &str) -> Result<(), String> {
+        let target = self.directory.join(file);
+        if target.exists() {
+            std::fs::remove_file(&target).map_err(|error| format!("cannot delete {file}: {error}"))?;
+        }
+        let _ = std::fs::remove_file(target.with_extension("puffin-studio-tmp"));
         Ok(())
     }
 
