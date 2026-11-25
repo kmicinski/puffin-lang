@@ -46,7 +46,7 @@ export const DEFAULT_WEIGHTS = Object.freeze({
   propertyOpen: 0.5, // a property waits on it (it reaches a hole)
   sameModule: 0.8, // beside the focus
   interface: 0.6, // provided by its module: public, so more often wanted
-  dismissed: -6, // the author said "show this less"
+  dismissed: -4, // the author said "show this less"
 });
 
 // Half-lives, in milliseconds, of the features that fade.
@@ -55,7 +55,7 @@ export const HALF_LIFE = Object.freeze({
   authorEdit: 15 * 60e3,
   voice: 3 * 60e3,
   looked: 30 * 60e3,
-  dismissed: 30 * 60e3,
+  dismissed: 20 * 60e3,
 });
 
 // A definition dismissed less than this long ago is not shown at all
@@ -461,7 +461,8 @@ export function createAttention({ write = () => {}, now = Date.now, weights = DE
     const scored = scoreAll(full, w);
     const { shown, rest } = allocate(scored, { ...DEFAULT_BUDGET, ...budget });
     const signature = shown.map((s) => `${s.id}:${s.detail}`).join("|");
-    if (signature !== last?.signature) {
+    // an empty screen teaches nothing, so it is not logged
+    if (signature !== last?.signature && shown.length) {
       const imp = `${tag}:${++impressions}`;
       const byId = new Map(scored.map((s) => [s.id, s]));
       write([{
@@ -471,7 +472,7 @@ export function createAttention({ write = () => {}, now = Date.now, weights = DE
       }]);
       last = { imp, signature };
     }
-    last.state = full;
+    last = { ...last, state: full };
     return shown;
   }
 
@@ -578,7 +579,7 @@ export const parseLog = (text) => text.split("\n").filter((l) => l.trim()).flatM
 
 export const LEARNED = FEATURES.filter((k) => k !== "focus");
 
-export const LEARNING = Object.freeze({ rate: 0.05, epochs: 30, prior: 0.02, band: 3, minPairs: 20, holdout: 0.2 });
+export const LEARNING = Object.freeze({ rate: 0.1, epochs: 50, prior: 0.002, band: 3, minPairs: 20, holdout: 0.2, margin: 0.02 });
 
 export function preferences(log) {
   const impressions = new Map();
@@ -670,7 +671,7 @@ export function learn(log, options = {}) {
   const trial = train(pairs.slice(0, cut), prior, o);
   const held = pairs.slice(cut);
   const score = { prior: round(agreement(held, prior)), learned: round(agreement(held, trial)) };
-  if (score.learned < score.prior) return keep("the tuned weights did worse on recent behavior", { agreement: score });
+  if (score.learned < score.prior + o.margin) return keep("the tuned weights did no better on recent behavior", { agreement: score });
   const weights = train(pairs, prior, o);
   for (const k of LEARNED) weights[k] = round(weights[k]);
   return { weights, used: true, pairs: pairs.length, agreement: score, why: `tuned on ${pairs.length} preferences` };

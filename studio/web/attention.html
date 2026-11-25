@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention</title>
+<style>
+  /* the attention model's demo page (docs/ATTENTION.md §6): the project's
+     definitions on the left, what the model would show in the middle,
+     its weights on the right */
+  :root {
+    --page: #fdf6e3; --chrome: #eee8d5; --border: #d9d2c2; --text: #657b83; --muted: #93a1a1; --strong: #586e75;
+    --blue: #268bd2; --green: #859900; --orange: #cb4b16; --code: #f5efdc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --page: #002b36; --chrome: #073642; --border: #0d4553; --text: #839496; --muted: #586e75; --strong: #93a1a1; --code: #03323e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: var(--chrome); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 14px; margin: 0; color: var(--strong); }
+  header label { display: flex; gap: 6px; align-items: center; }
+  header .status { margin-left: auto; color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(220px, 280px) 1fr minmax(200px, 260px); min-height: calc(100vh - 44px); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { padding: 12px 16px; border-right: 1px solid var(--border); overflow: auto; min-width: 0; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 4px 0 8px; }
+  .module { margin-bottom: 10px; }
+  .module > div:first-child { color: var(--strong); font-weight: 600; }
+  .def { display: flex; gap: 4px; align-items: baseline; padding: 1px 4px; border-radius: 3px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .def:hover { background: var(--code); }
+  .def.focus { background: var(--blue); color: var(--page); }
+  .def .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .def button { visibility: hidden; }
+  .def:hover button { visibility: visible; }
+  button { font: inherit; font-size: 11px; color: var(--text); background: none; border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; cursor: pointer; }
+  button:hover { color: var(--strong); border-color: var(--muted); }
+  .shown { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; }
+  .shown .head { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; flex-wrap: wrap; }
+  .shown .sig { flex: 1; min-width: 12em; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--strong); }
+  .shown .score { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .detail { font-size: 10px; text-transform: uppercase; padding: 0 4px; border-radius: 2px; color: var(--page); }
+  .detail.full { background: var(--green); } .detail.folded { background: var(--blue); } .detail.signature { background: var(--muted); }
+  .shown .doc { padding: 0 8px 4px; color: var(--muted); font-style: italic; }
+  .shown pre { margin: 0; padding: 6px 8px; background: var(--code); font-size: 12px; overflow-x: auto; border-top: 1px solid var(--border); }
+  .reasons { padding: 0 8px 6px; color: var(--muted); font-size: 12px; }
+  .why { padding: 6px 8px; border-top: 1px dashed var(--border); font-size: 12px; }
+  .why td { padding: 0 8px 0 0; }
+  .weights td { padding: 1px 8px 1px 0; font-variant-numeric: tabular-nums; }
+  .weights .up { color: var(--green); } .weights .down { color: var(--orange); }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Attention</h1>
+  <label>budget <input id="lines" type="range" min="10" max="120" value="50"> <span id="lines-out">50</span> lines</label>
+  <label><input id="overview" type="checkbox"> no focus (overview)</label>
+  <span class="status" id="status">connecting…</span>
+</header>
+<main>
+  <section>
+    <h2>The program</h2>
+    <div class="note">Click a definition to make it the focus. On hover: <b>b</b> the builder edits it, <b>a</b> you edit it, <b>?</b> ask about it, <b>✗</b> a property fails.</div>
+    <div id="program"></div>
+  </section>
+  <section>
+    <h2>What the model shows</h2>
+    <div id="ranked"></div>
+  </section>
+  <section>
+    <h2>Weights</h2>
+    <div class="note">The defaults, until this project's log teaches better ones. <button id="learn">learn from the log</button></div>
+    <div id="report" class="note"></div>
+    <table class="weights" id="weights"></table>
+  </section>
+</main>
+<script type="module">
+import { DEFAULT_WEIGHTS, LEARNED, createAttention, httpLog, idOf } from "/static/attention.js";
+import { createTracker } from "/static/attention-studio.js";
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+};
+
+const log = httpLog();
+const attention = createAttention({ write: log.write });
+const tracker = createTracker();
+const texts = new Map();
+let focus = null;
+const questions = []; // asked on this page: { text, about }
+const failing = new Set(); // properties marked failing on this page
+let opened = null; // the id whose "why" is open
+let since = 0; // when the focus last changed, for its dwell
+
+const budget = () => ({ lines: Number($("lines").value) });
+
+function state() {
+  const s = tracker.state({ focus: $("overview").checked ? null : focus });
+  return {
+    ...s,
+    questions: [...s.questions, ...questions],
+    properties: [...s.properties.filter((p) => !failing.has(p.name)), ...[...failing].map((name) => ({ name, status: "fail" }))],
+  };
+}
+
+function source(id) {
+  const item = tracker.graph().nodes.get(id);
+  const lines = (texts.get(item.path) ?? "").split("\n");
+  return lines.slice(item.line - 1, item.endLine).join("\n");
+}
+
+function renderProgram() {
+  const box = $("program");
+  box.replaceChildren();
+  for (const m of tracker.graph().modules.values()) {
+    const card = el("div", "module");
+    card.append(el("div", "", m.path));
+    for (const item of m.items) {
+      const id = idOf(m.path, item.name);
+      const row = el("div", `def${id === focus ? " focus" : ""}`);
+      row.append(el("span", "name", item.name));
+      const act = (label, title, f) => {
+        const b = el("button", "", label);
+        b.title = title;
+        b.onclick = (e) => { e.stopPropagation(); f(); render(); };
+        row.append(b);
+      };
+      act("b", "the builder edits it", () => tracker.edit(m.path, item.line, item.line, "builder"));
+      act("a", "you edit it", () => { tracker.edit(m.path, item.line, item.line, "author"); attention.observe({ type: "edit", id }); });
+      if (item.kind === "property") act("✗", "mark it failing", () => (failing.has(item.name) ? failing.delete(item.name) : failing.add(item.name)));
+      else act("?", "ask a question about it", () => questions.push({ text: `What should ${item.name} do?`, about: [id] }));
+      row.onclick = () => {
+        if (focus) attention.observe({ type: "dwell", id: focus, ms: Date.now() - since });
+        focus = id === focus ? null : id;
+        since = Date.now();
+        if (focus) attention.observe({ type: "focus", id: focus });
+        render();
+      };
+      card.append(row);
+    }
+    box.append(card);
+  }
+}
+
+function renderRanked() {
+  const shown = attention.rank(state(), budget());
+  const box = $("ranked");
+  box.replaceChildren();
+  if (!shown.length) box.append(el("div", "note", "Nothing needs your attention: pick a focus, or make something happen."));
+  for (const s of shown) {
+    const item = tracker.graph().nodes.get(s.id);
+    const card = el("div", "shown");
+    const head = el("div", "head");
+    head.append(el("span", `detail ${s.detail}`, s.detail), el("span", "sig", item.sig || s.name), el("span", "score", `${s.score} · ${s.cost} lines`));
+    const button = (label, title, f) => {
+      const b = el("button", "", label);
+      b.title = title;
+      b.onclick = () => { f(); render(); };
+      head.append(b);
+    };
+    if (!s.focus) {
+      if (s.detail !== "full") button("more", "show more of it (logged: opened)", () => attention.observe({ type: "open", id: s.id, detail: s.detail }));
+      button("less", "show this less", () => attention.showLess(s.id));
+      button(s.pinned ? "unpin" : "pin", "keep it on screen", () => (s.pinned ? attention.unpin(s.id) : attention.pin(s.id)));
+    }
+    button("why", "every feature's part in its score", () => { opened = opened === s.id ? null : s.id; });
+    card.append(head);
+    if (s.detail !== "signature" && item.doc) card.append(el("div", "doc", item.doc));
+    if (s.detail === "full") card.append(el("pre", "", source(s.id)));
+    card.append(el("div", "reasons", s.reasons.join(" · ")));
+    if (opened === s.id) card.append(whyOf(s.id));
+    box.append(card);
+  }
+}
+
+function whyOf(id) {
+  const why = attention.why(id, budget());
+  const w = attention.weights();
+  const box = el("div", "why");
+  box.append(el("div", "", `${why.verdict}; score ${why.score}`));
+  const table = el("table");
+  for (const [k, x] of Object.entries(why.features)) {
+    if (!x) continue;
+    const tr = el("tr");
+    tr.append(el("td", "", k), el("td", "", String(x)), el("td", "", `× ${w[k]} = ${Math.round(x * w[k] * 100) / 100}`));
+    table.append(tr);
+  }
+  box.append(table);
+  return box;
+}
+
+function renderWeights() {
+  const w = attention.weights();
+  const table = $("weights");
+  table.replaceChildren();
+  for (const k of ["focus", ...LEARNED]) {
+    const d = DEFAULT_WEIGHTS[k];
+    const tr = el("tr");
+    tr.append(el("td", "", k), el("td", w[k] > d ? "up" : w[k] < d ? "down" : "", String(w[k])), el("td", "", w[k] !== d ? `(${d})` : ""));
+    table.append(tr);
+  }
+}
+
+function render() {
+  renderProgram();
+  renderRanked();
+  renderWeights();
+}
+
+$("lines").oninput = () => { $("lines-out").textContent = $("lines").value; renderRanked(); };
+$("overview").onchange = render;
+$("learn").onclick = async () => {
+  log.flush();
+  await new Promise((r) => setTimeout(r, 300));
+  const result = attention.learnFrom(await log.read());
+  $("report").textContent = `${result.why}${result.agreement ? ` (recent preferences ordered right: defaults ${result.agreement.prior}, tuned ${result.agreement.learned})` : ""}.`;
+  render();
+};
+
+// the studio's own messages keep the model's view of the program current
+const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  if (message.t === "init") {
+    for (const f of message.files ?? []) texts.set(f.path, f.text);
+    $("status").textContent = message.project;
+  }
+  if (message.t === "text") texts.set(message.file, message.text);
+  tracker.receive(message);
+  if (["init", "board", "text", "voice", "diagnostics"].includes(message.t)) render();
+};
+socket.onclose = () => { $("status").textContent = "disconnected"; };
+// what this project has taught before
+log.read().then((records) => { if (records.length) { attention.learnFrom(records); renderWeights(); } }).catch(() => {});
+setInterval(renderRanked, 30e3); // things fade
+</script>
+</body>
+</html>
