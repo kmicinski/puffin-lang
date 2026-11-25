@@ -520,8 +520,10 @@ function connect() {
   socket.addEventListener("open", () => renderConnection(true));
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    handlers[message.t]?.(message);
+    // the attention model's tracker sees each message before anything
+    // that ranks with it (view.js)
     view?.receive(message);
+    handlers[message.t]?.(message);
   });
   socket.addEventListener("close", () => {
     renderConnection(false);

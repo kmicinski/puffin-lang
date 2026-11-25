@@ -7,7 +7,8 @@
 body.view .editor-pane { justify-content: flex-start; }
 body.view .editor-column {
   flex: 0 1 var(--view-focus-width, 860px);
-  max-width: var(--view-focus-width, 860px);
+  /* the board keeps at least two fifths of the room */
+  max-width: min(var(--view-focus-width, 860px), 60%);
   min-width: 420px;
   transition: flex-basis 0.3s ease, max-width 0.3s ease;
 }

@@ -320,6 +320,10 @@ function monacoEditor(monaco, element, { onChange, onOtherChange, onSave, onEval
         glyphMargin: false,
         padding: { top: 4, bottom: 4 },
         renderLineHighlight: "none",
+        stickyScroll: { enabled: false },
+        // wider than the board can show at reading distance, lines wrap
+        wordWrap: "on",
+        wrappingIndent: "deepIndent",
         matchBrackets: "always",
         bracketPairColorization: { enabled: true },
         overviewRulerLanes: 0,

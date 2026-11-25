@@ -129,10 +129,18 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // the wires from a line of code to the fragment it uses, across the panes
   const across = overlay(stage, "view-wires");
   document.body.classList.add("view");
-  // a definition is read whole: its long lines wrap in the focus
-  main.updateOptions({ wordWrap: "on", wrappingIndent: "deepIndent" });
+  // a definition is read whole: its long lines wrap in the focus, and no
+  // sticky scroll pins the lines above it (they are context, or hidden)
+  main.updateOptions({ wordWrap: "on", wrappingIndent: "deepIndent", stickyScroll: { enabled: false } });
 
   new ResizeObserver(() => { sizeFocus(); drawGraphWires(); drawWires(); }).observe(column);
+  // the board's room changed: the lane's code fits it again
+  let boardWidth = 0;
+  new ResizeObserver(() => {
+    if (Math.abs(board.root.clientWidth - boardWidth) < 8) return;
+    boardWidth = board.root.clientWidth;
+    for (const f of frags.values()) f.fragment?.refresh();
+  }).observe(board.root);
   board.onMove(() => drawWires());
   main.onDidScrollChange(() => drawWires());
 
@@ -159,39 +167,54 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   });
 
   // Narrow the focus pane to the focused definition, with as many lines
-  // around it as the room it is given leaves (dimmed); the whole file
-  // when widened.
+  // of the file around it as the room it is given leaves (dimmed: there,
+  // not the focus); the whole file when widened.
   let shownFrom = 0;
   function narrowFocus() {
-    const model = main.getModel();
     const narrowed = focus?.name && !whole && files.active() === focus.path;
     let span = focused.to(narrowed ? focus.name : null);
     if (narrowed && !span) span = focused.to(null);
     context.clear();
     if (!narrowed) shownFrom = 0;
-    if (narrowed && span && focused.name()) {
-      const lines = model.getLineCount();
-      const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
-      const spare = Math.max(0, Math.floor((room().focusMin - (span.end - span.start + 1) * lineHeight - 16) / lineHeight));
-      const above = Math.min(span.start - 1, Math.floor(spare / 3));
-      const below = Math.min(lines - span.end, spare - above);
+    else if (span && focused.name()) around(span);
+    mainNames.refresh();
+    widen(narrowed ? span : null);
+    sizeFocus();
+  }
+
+  // The lines around `span`: a third of the spare room above, the rest
+  // below, given back a line at a time while the text (wrapped lines
+  // count) is taller than the room.
+  function around(span) {
+    const model = main.getModel();
+    const lines = model.getLineCount();
+    const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
+    const target = room().focusMin;
+    const spare = Math.max(0, Math.floor((target - (span.end - span.start + 1) * lineHeight - 16) / lineHeight));
+    let above = Math.min(span.start - 1, Math.floor(spare / 3));
+    let below = Math.min(lines - span.end, spare - above);
+    const show = () => {
       const start = span.start - above;
       const end = span.end + below;
       const hidden = [];
       if (start > 1) hidden.push(new monaco.Range(1, 1, start - 1, 1));
       if (end < lines) hidden.push(new monaco.Range(end + 1, 1, lines, 1));
       main.setHiddenAreas(hidden);
-      // a new place: shown from its top (not where Monaco last scrolled)
-      if (start !== shownFrom) main.setScrollTop(0);
-      shownFrom = start;
-      const dim = [];
-      if (above) dim.push(new monaco.Range(start, 1, span.start - 1, 1));
-      if (below) dim.push(new monaco.Range(span.end + 1, 1, end, 1));
-      context.set(dim.map((range) => ({ range, options: { isWholeLine: true, className: "focus-context", inlineClassName: "focus-context-text" } })));
+      return start;
+    };
+    let start = show();
+    while ((above || below) && main.getContentHeight() > target) {
+      if (below) below--;
+      else above--;
+      start = show();
     }
-    mainNames.refresh();
-    widen(narrowed ? span : null);
-    sizeFocus();
+    const dim = [];
+    if (above) dim.push(new monaco.Range(start, 1, span.start - 1, 1));
+    if (below) dim.push(new monaco.Range(span.end + 1, 1, span.end + below, 1));
+    context.set(dim.map((range) => ({ range, options: { isWholeLine: true, className: "focus-context", inlineClassName: "focus-context-text" } })));
+    // a new place: shown from its top, not where Monaco last scrolled
+    if (start !== shownFrom) requestAnimationFrame(() => main.setScrollTop(0));
+    shownFrom = start;
   }
 
   // The room in the column: the focus gets what its definition needs, at
@@ -247,7 +270,6 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     if (span && focused.name()) {
       if (select) main.setSelection(select);
       else main.setPosition({ lineNumber: Math.min(span.start + (span.end > span.start ? 1 : 0), span.end), column: 1 });
-      main.revealLineNearTop(span.start);
     }
     moving = false;
     main.focus();
@@ -470,6 +492,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       model: editor.model(path, files.texts()[path] ?? ""),
       path,
       name,
+      maxWidth: board.laneMax,
       find: (word) => find(word, path),
       onPull: (def) => pull(def),
       onFocusDef: (def) => show(def),
@@ -659,6 +682,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     if (board.zoom() < NEAR || !focus?.name) return;
     const pane = board.root.getBoundingClientRect();
     const editorBox = main.getDomNode()?.getBoundingClientRect();
+    // only when the board is beside the focus (on a phone it is below it)
+    if (!editorBox || pane.left < editorBox.right - 4) return;
     const span = focused.span();
     const model = main.getModel();
     const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);

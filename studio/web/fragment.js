@@ -5,10 +5,11 @@
 // view of the file follows as it is typed, and the studio hears it
 // through files.js as from the main editor.
 //
-// It is as tall as the definition and as wide as its longest line (the
-// widest Monaco has drawn, else an estimate), within limits; it never
-// scrolls -- the board's camera is what moves. `onResize` says when its
-// size changed, so what sits around it can move.
+// It is as wide as its longest line (the widest Monaco has drawn, else
+// an estimate), within limits -- `maxWidth()`, the room the board can
+// show at reading distance; past that its lines wrap -- and as tall as
+// what it shows; it never scrolls, the board's camera is what moves.
+// `onResize` says when its size changed, so what sits around it can move.
 
 import { narrow, lineOf } from "./span.js";
 import { bindNames } from "./names.js";
@@ -16,7 +17,7 @@ import { bindNames } from "./names.js";
 const MIN_WIDTH = 360;
 export const MAX_WIDTH = 820;
 
-export function createFragment({ editor, model, path, name, find, onPull, onFocusDef, onHover, onFocus, onBlur, onEscape, onEvalForm, onEdit, onResize }) {
+export function createFragment({ editor, model, path, name, maxWidth, find, onPull, onFocusDef, onHover, onFocus, onBlur, onEscape, onEvalForm, onEdit, onResize }) {
   const monaco = editor.raw.monaco;
   const node = document.createElement("div");
   node.className = "frag-code";
@@ -45,12 +46,14 @@ export function createFragment({ editor, model, path, name, find, onPull, onFocu
   function resize() {
     const shown = span.span();
     if (!shown) return;
-    const lineHeight = view.getOption(monaco.editor.EditorOption.lineHeight);
-    const h = (shown.end - shown.start + 1) * lineHeight + 8;
     const longest = Math.max(20, ...Array.from({ length: shown.end - shown.start + 1 }, (_, i) => model.getLineLength(Math.min(shown.start + i, model.getLineCount()))));
     const char = view.getOption(monaco.editor.EditorOption.fontInfo).typicalHalfwidthCharacterWidth || 7.8;
     const gutter = view.getLayoutInfo().contentLeft;
-    const w = Math.ceil(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, gutter + Math.max(drawn, (longest + 2) * char) + 16)));
+    const room = Math.min(MAX_WIDTH, maxWidth?.() ?? MAX_WIDTH);
+    const w = Math.ceil(Math.min(room, Math.max(MIN_WIDTH, gutter + Math.max(drawn, (longest + 2) * char) + 16)));
+    // laid out at its width first: how tall it is depends on what wraps
+    if (w !== size.w) view.layout({ width: w, height: Math.max(size.h, 20) });
+    const h = view.getContentHeight();
     if (w === size.w && h === size.h) return;
     size = { w, h };
     node.style.width = `${w}px`;

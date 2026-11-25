@@ -411,7 +411,7 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
   padding-bottom: 40px;
 }
 .frag {
-  max-width: 840px;
+  max-width: var(--lane-max, 840px);
   min-width: 360px;
   background: var(--surface);
   border: 1px solid var(--border-strong);

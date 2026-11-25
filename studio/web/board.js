@@ -47,7 +47,7 @@ const FRESH_MS = 2600;
 export const NEAR = 0.62;
 const FAR = 0.38;
 // the lane is framed no further out than this: its code is read there
-const READABLE = 0.72;
+const READABLE = 0.75;
 // the room between the lane and the cards
 const LANE_GAP = 96;
 // narrower than this, the board stacks its cards under the lane (a phone)
@@ -860,6 +860,7 @@ export function createBoard({ files, send, stage, onShow }) {
   function placeLane() {
     const compact = root.classList.contains("compact");
     lane.classList.toggle("compact", compact);
+    lane.style.setProperty("--lane-max", `${laneMax()}px`);
     if (compact) {
       lane.style.left = `${GRID.x}px`;
       lane.style.top = `${GRID.y}px`;
@@ -869,15 +870,23 @@ export function createBoard({ files, send, stage, onShow }) {
     }
   }
 
-  // the fragments' sizes changed (one arrived, one grew as it was typed in)
+  // the widest a fragment in the lane can be and still be read whole
+  const laneMax = () => Math.max(360, (root.clientWidth - 48) / READABLE);
+
+  // The fragments' sizes changed (one arrived, one grew as it was typed
+  // in): the lane is placed again, and, if the camera is still where it
+  // was put to read the lane, it frames the lane as it is now.
   let laneFrame = 0;
   function laneChanged() {
     cancelAnimationFrame(laneFrame);
     laneFrame = requestAnimationFrame(() => {
       placeLane();
-      if (root.classList.contains("compact")) return render();
-      renderLaneWires();
-      for (const f of moved) f();
+      if (root.classList.contains("compact")) render();
+      else {
+        renderLaneWires();
+        for (const f of moved) f();
+      }
+      if (atHome) home();
     });
   }
 
@@ -914,8 +923,13 @@ export function createBoard({ files, send, stage, onShow }) {
   }
 
   // where the camera reads code: the lane, framed near, its top under the
-  // HUD (and, given `box`, that fragment brought into view too)
+  // HUD (and, given `box`, that fragment brought into view too). It stays
+  // "at home" until the author moves it themselves.
+  let atHome = false;
+  root.addEventListener("wheel", () => { atHome = false; }, { capture: true });
+  root.addEventListener("pointerdown", (event) => { if (event.target === root || event.target.classList.contains("canvas-pan")) atHome = false; }, { capture: true });
   function home(animate = true, box = null) {
+    atHome = !box;
     const top = canvasBox(lane);
     const head = { ...top, h: Math.min(top.h, root.clientHeight * 0.8) };
     const z = Math.max(READABLE, Math.min(1, (root.clientWidth - 48) / Math.max(1, top.w)));
@@ -931,6 +945,7 @@ export function createBoard({ files, send, stage, onShow }) {
 
   // where the camera shows the program: everything, fitted
   function overview(animate = true) {
+    atHome = false;
     const boxes = [...canvas.querySelectorAll(".board-card:not([hidden]):not(.unplaced)")].map(canvasBox);
     if (lane.offsetHeight) boxes.push(canvasBox(lane));
     if (!boxes.length) return camera.set({ x: 0, y: 0, z: 1 }, animate);
@@ -1465,6 +1480,7 @@ export function createBoard({ files, send, stage, onShow }) {
       if (key) canvas.querySelector(`.board-item[data-key="${CSS.escape(key)}"]`)?.classList.add("ref-target");
     },
     zoom: () => camera.zoom(),
+    laneMax,
     // a fragment in the lane into view, the camera at reading distance
     reveal: (node) => home(true, canvasBox(node)),
     // `f` is told whenever the board moves under the screen
