@@ -11,7 +11,7 @@
 
 use super::Context;
 use super::places::target;
-use crate::claude_cli::{McpConfig, Run, result_text, tool_name};
+use crate::claude_cli::{McpConfig, Part, Run, parts};
 use crate::mcp::{string_argument, strings_argument, tool};
 use crate::props::{self, Results};
 use crate::review::{Change, apply};
@@ -188,97 +188,72 @@ impl Studio {
 
     /// Show one stream-json event of the builder; whether it was the result.
     fn builder_event(&self, event: &Value) -> bool {
-        if !event["parent_tool_use_id"].is_null() {
-            return false;
-        }
-        match event["type"].as_str() {
-            Some("system") if event["subtype"] == "init" => {
-                if let Some(session) = event["session_id"].as_str() {
-                    self.voice.state().session = Some(session.to_owned());
-                }
-            }
-            Some("stream_event") => {
-                let inner = &event["event"];
-                if inner["type"] == "content_block_start" {
-                    match inner["content_block"]["type"].as_str() {
-                        Some("thinking" | "redacted_thinking") => self.set_activity(json!({ "state": "thinking" })),
-                        Some("text") => self.set_activity(json!({ "state": "talking" })),
-                        _ => {}
-                    }
-                }
-            }
-            Some("assistant") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    match block["type"].as_str() {
-                        Some("text") => {
-                            let text = block["text"].as_str().unwrap_or("").trim();
-                            if !text.is_empty() {
-                                let turn = self.voice.state().turn;
-                                self.voice_event("builder", json!({ "text": text, "turn": turn }));
-                                self.converse(format!("builder: {}", toolchain::clip(text, 400)));
-                            }
+        let mut ended = false;
+        for part in parts(event) {
+            match part {
+                Part::Session(session) => self.voice.state().session = Some(session.to_owned()),
+                Part::Init { .. } => {}
+                Part::Partial(inner) => {
+                    if inner["type"] == "content_block_start" {
+                        match inner["content_block"]["type"].as_str() {
+                            Some("thinking" | "redacted_thinking") => self.set_activity(json!({ "state": "thinking" })),
+                            Some("text") => self.set_activity(json!({ "state": "talking" })),
+                            _ => {}
                         }
-                        Some("tool_use") => {
-                            let name = tool_name(block).to_owned();
-                            let input = &block["input"];
-                            let what = input["file"].as_str().or(input["name"].as_str()).or(input["query"].as_str()).unwrap_or("");
-                            let text = describe_tool(&name, what);
-                            let id = block["id"].as_str().unwrap_or("").to_owned();
-                            let turn = {
-                                let mut state = self.voice.state();
-                                state.calls.insert(id.clone(), name.clone());
-                                state.turn
-                            };
-                            // `say` and `show` speak for themselves in the trace
-                            if !matches!(name.as_str(), "say" | "show" | "arrange") {
-                                let mut step = json!({ "turn": turn, "id": id, "tool": name, "text": text });
-                                if let Some(file) = input["file"].as_str() {
-                                    step["file"] = json!(file);
-                                }
-                                if let Some(detail) = step_input(&name, input) {
-                                    step["input"] = json!(detail);
-                                }
-                                self.voice_event("step", step);
-                            }
-                            self.set_activity(json!({ "state": "working", "tool": name, "text": text }));
-                        }
-                        _ => {}
                     }
                 }
-            }
-            Some("user") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    if block["type"] != "tool_result" {
-                        continue;
-                    }
-                    let id = block["tool_use_id"].as_str().unwrap_or("").to_owned();
+                Part::Text(text) => {
+                    let turn = self.voice.state().turn;
+                    self.voice_event("builder", json!({ "text": text, "turn": turn }));
+                    self.converse(format!("builder: {}", toolchain::clip(text, 400)));
+                }
+                Part::ToolUse { id, name, input } => self.builder_step(id, name, input),
+                Part::ToolResult { id, text, error } => {
                     let (turn, name) = {
                         let state = self.voice.state();
-                        (state.turn, state.calls.get(&id).cloned().unwrap_or_default())
+                        (state.turn, state.calls.get(id).cloned().unwrap_or_default())
                     };
-                    if matches!(name.as_str(), "say" | "show") {
-                        continue;
+                    // `say` and `show` speak for themselves in the trace
+                    if !matches!(name.as_str(), "say" | "show") {
+                        let (ok, summary) = step_outcome(&name, &text, error);
+                        self.voice_event("step-done", json!({ "turn": turn, "id": id, "ok": ok, "summary": summary }));
                     }
-                    let text = result_text(block);
-                    let error = block["is_error"].as_bool().unwrap_or(false);
-                    let (ok, summary) = step_outcome(&name, &text, error);
-                    self.voice_event("step-done", json!({ "turn": turn, "id": id, "ok": ok, "summary": summary }));
+                }
+                Part::Result(event) => {
+                    if event["is_error"].as_bool().unwrap_or(false) {
+                        let text = event["result"].as_str().unwrap_or("").trim();
+                        let message = if text.is_empty() { event["subtype"].as_str().unwrap_or("error").to_owned() } else { text.to_owned() };
+                        self.voice_event("error", json!({ "message": format!("builder: {message}") }));
+                    }
+                    ended = true;
                 }
             }
-            Some("result") => {
-                if let Some(session) = event["session_id"].as_str() {
-                    self.voice.state().session = Some(session.to_owned());
-                }
-                if event["is_error"].as_bool().unwrap_or(false) {
-                    let text = event["result"].as_str().unwrap_or("").trim();
-                    let message = if text.is_empty() { event["subtype"].as_str().unwrap_or("error").to_owned() } else { text.to_owned() };
-                    self.voice_event("error", json!({ "message": format!("builder: {message}") }));
-                }
-                return true;
-            }
-            _ => {}
         }
-        false
+        ended
+    }
+
+    /// A tool call of the builder: a step in the trace (but for the tools
+    /// that show themselves), and what it is doing now.
+    fn builder_step(&self, id: &str, name: &str, input: &Value) {
+        let what = input["file"].as_str().or(input["name"].as_str()).or(input["query"].as_str()).unwrap_or("");
+        let text = describe_tool(name, what);
+        let turn = {
+            let mut state = self.voice.state();
+            state.calls.insert(id.to_owned(), name.to_owned());
+            state.turn
+        };
+        // `say` and `show` speak for themselves in the trace
+        if !matches!(name, "say" | "show" | "arrange") {
+            let mut step = json!({ "turn": turn, "id": id, "tool": name, "text": text });
+            if let Some(file) = input["file"].as_str() {
+                step["file"] = json!(file);
+            }
+            if let Some(detail) = step_input(name, input) {
+                step["input"] = json!(detail);
+            }
+            self.voice_event("step", step);
+        }
+        self.set_activity(json!({ "state": "working", "tool": name, "text": text }));
     }
 
     /// What every builder run starts with: the files, the diagnostics, the

@@ -5,8 +5,9 @@
 //! A run is told where the tools are by an MCP config file (mode 0600: it
 //! holds the bearer token), gets no built-in tools at all, and streams its
 //! progress as stream-json, one event a line, which the caller reads as it
-//! comes. Its process is handed to the caller while it runs, so that it can
-//! be stopped. The quick, one-request calls go to the Messages API instead
+//! comes, each event taken apart into the `Part`s a reader acts on. Its
+//! process is handed to the caller while it runs, so that it can be
+//! stopped. The quick, one-request calls go to the Messages API instead
 //! (claude_api.rs).
 
 use serde_json::{Value, json};
@@ -165,6 +166,64 @@ impl Ended {
     }
 }
 
+/// What one stream-json event of a run says, in the parts a reader acts
+/// on. Events of a subagent (inside a parent's tool use) are not the run's
+/// own and say nothing here.
+pub enum Part<'a> {
+    /// The claude session the run is (to be resumed by the next).
+    Session(&'a str),
+    /// The run began, on `model`.
+    Init { model: &'a str },
+    /// A partial event of the reply as it streams (`content_block_start`,
+    /// `_delta`, `_stop`).
+    Partial(&'a Value),
+    /// A finished text block of the reply, trimmed; never empty.
+    Text(&'a str),
+    /// A tool call, its name without the server's prefix.
+    ToolUse { id: &'a str, name: &'a str, input: &'a Value },
+    /// A tool's answer.
+    ToolResult { id: &'a str, text: String, error: bool },
+    /// The run's last event: its outcome, cost and usage.
+    Result(&'a Value),
+}
+
+/// The parts of stream-json event `event`, in order.
+pub fn parts(event: &Value) -> Vec<Part<'_>> {
+    let mut out = Vec::new();
+    if !event["parent_tool_use_id"].is_null() {
+        return out;
+    }
+    let blocks = || event["message"]["content"].as_array().into_iter().flatten();
+    match event["type"].as_str() {
+        Some("system") if event["subtype"] == "init" => {
+            out.extend(event["session_id"].as_str().map(Part::Session));
+            out.push(Part::Init { model: event["model"].as_str().unwrap_or("") });
+        }
+        Some("stream_event") => out.push(Part::Partial(&event["event"])),
+        Some("assistant") => {
+            for block in blocks() {
+                match block["type"].as_str() {
+                    Some("text") => out.extend(block["text"].as_str().map(str::trim).filter(|text| !text.is_empty()).map(Part::Text)),
+                    Some("tool_use") => out.push(Part::ToolUse { id: block["id"].as_str().unwrap_or(""), name: tool_name(block), input: &block["input"] }),
+                    _ => {}
+                }
+            }
+        }
+        Some("user") => {
+            for block in blocks().filter(|block| block["type"] == "tool_result") {
+                let error = block["is_error"].as_bool().unwrap_or(false);
+                out.push(Part::ToolResult { id: block["tool_use_id"].as_str().unwrap_or(""), text: result_text(block), error });
+            }
+        }
+        Some("result") => {
+            out.extend(event["session_id"].as_str().map(Part::Session));
+            out.push(Part::Result(event));
+        }
+        _ => {}
+    }
+    out
+}
+
 /// A tool's name without its MCP server's prefix.
 pub fn tool_name(block: &Value) -> &str {
     let name = block["name"].as_str().unwrap_or("tool");
@@ -172,7 +231,7 @@ pub fn tool_name(block: &Value) -> &str {
 }
 
 /// A `tool_result` block's text.
-pub fn result_text(block: &Value) -> String {
+fn result_text(block: &Value) -> String {
     match &block["content"] {
         Value::String(text) => text.clone(),
         Value::Array(parts) => parts.iter().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n"),
@@ -208,6 +267,26 @@ mod tests {
         assert_eq!(after("--model"), "opus");
         assert_eq!(after("--output-format"), "stream-json");
         assert_eq!(after("--max-turns"), "24");
+    }
+
+    #[test]
+    fn a_stream_reads_as_its_parts() {
+        let init = json!({ "type": "system", "subtype": "init", "session_id": "s1", "model": "opus" });
+        assert!(matches!(parts(&init)[..], [Part::Session("s1"), Part::Init { model: "opus" }]));
+        let said = json!({ "type": "assistant", "message": { "content": [
+            { "type": "text", "text": "  On it.\n" },
+            { "type": "text", "text": " " },
+            { "type": "tool_use", "id": "t1", "name": "mcp__puffin__get_file", "input": { "file": "a.puf" } },
+        ]}});
+        assert!(matches!(parts(&said)[..], [Part::Text("On it."), Part::ToolUse { id: "t1", name: "get_file", .. }]));
+        let answered = json!({ "type": "user", "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "t1", "content": [{ "type": "text", "text": "a" }, { "type": "text", "text": "b" }], "is_error": true },
+        ]}});
+        assert!(matches!(&parts(&answered)[..], [Part::ToolResult { id: "t1", text, error: true }] if text == "a\nb"));
+        let inner = json!({ "type": "assistant", "parent_tool_use_id": "t0", "message": { "content": [{ "type": "text", "text": "x" }] } });
+        assert!(parts(&inner).is_empty());
+        let done = json!({ "type": "result", "session_id": "s1", "is_error": false });
+        assert!(matches!(parts(&done)[..], [Part::Session("s1"), Part::Result(_)]));
     }
 
     #[test]

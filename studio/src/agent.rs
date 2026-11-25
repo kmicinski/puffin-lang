@@ -11,7 +11,7 @@
 //! run is started and read is claude_cli.rs; this is what the assistant's
 //! runs are told, and how their stream becomes a transcript.
 
-use crate::claude_cli::{McpConfig, Run, result_text, tool_name};
+use crate::claude_cli::{McpConfig, Part, Run, parts, tool_name};
 use crate::knowledge;
 use crate::review::Message;
 use crate::studio::Studio;
@@ -335,41 +335,19 @@ struct Stream {
 
 impl Stream {
     fn read(&mut self, event: &Value, out: &Transcript) {
-        if !event["parent_tool_use_id"].is_null() {
-            return;
-        }
-        match event["type"].as_str() {
-            Some("system") if event["subtype"] == "init" => {
-                if let Some(session) = event["session_id"].as_str() {
-                    out.set_session(Some(session.to_owned()));
+        for part in parts(event) {
+            match part {
+                Part::Session(session) => out.set_session(Some(session.to_owned())),
+                Part::Init { model } => self.model = model.to_owned(),
+                Part::Partial(event) => self.partial(event, out),
+                Part::Text(text) => {
+                    self.last_text = text.to_owned();
+                    out.push("assistant", text, Value::Null);
                 }
-                self.model = event["model"].as_str().unwrap_or("").to_owned();
+                Part::ToolUse { id, name, input } => self.call(id, name, input, out),
+                Part::ToolResult { id, text, error } => self.answer(id, &text, error, out),
+                Part::Result(event) => self.result(event, out),
             }
-            Some("stream_event") => self.partial(&event["event"], out),
-            Some("assistant") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    match block["type"].as_str() {
-                        Some("text") => {
-                            let text = block["text"].as_str().unwrap_or("").trim();
-                            if !text.is_empty() {
-                                self.last_text = text.to_owned();
-                                out.push("assistant", text, Value::Null);
-                            }
-                        }
-                        Some("tool_use") => self.call(block, out),
-                        _ => {}
-                    }
-                }
-            }
-            Some("user") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    if block["type"] == "tool_result" {
-                        self.answer(block, out);
-                    }
-                }
-            }
-            Some("result") => self.result(event, out),
-            _ => {}
         }
     }
 
@@ -415,25 +393,21 @@ impl Stream {
         }
     }
 
-    fn call(&mut self, block: &Value, out: &Transcript) {
-        let name = tool_name(block);
+    fn call(&mut self, id: &str, name: &str, input: &Value, out: &Transcript) {
         if HIDDEN_TOOLS.contains(&name) {
             return;
         }
-        let id = block["id"].as_str().unwrap_or("").to_owned();
-        let data = json!({ "id": id, "name": name, "input": clip(&block["input"]), "status": "running" });
+        let data = json!({ "id": id, "name": name, "input": clip(input), "status": "running" });
         let index = out.push("tool", "", data);
-        self.calls.insert(id, index);
+        self.calls.insert(id.to_owned(), index);
     }
 
-    fn answer(&mut self, block: &Value, out: &Transcript) {
-        let text = result_text(block);
-        let error = block["is_error"].as_bool().unwrap_or(false);
-        if let Some(index) = block["tool_use_id"].as_str().and_then(|id| self.calls.get(id)) {
+    fn answer(&mut self, id: &str, text: &str, error: bool, out: &Transcript) {
+        if let Some(index) = self.calls.get(id) {
             out.update(*index, |entry| {
                 entry.data["status"] = json!(if error { "error" } else { "ok" });
                 // a proposal's id, for its chip
-                let value = serde_json::from_str::<Value>(&text).ok();
+                let value = serde_json::from_str::<Value>(text).ok();
                 if let Some(op) = value.as_ref().and_then(|value| value["proposed"].as_u64()) {
                     entry.data["op"] = json!(op);
                 }
@@ -443,16 +417,13 @@ impl Stream {
                 {
                     entry.data["trace"] = json!(crate::toolchain::clip(trace, TRACE_KEPT));
                 }
-                entry.data["result"] = json!(clip_text(&text));
+                entry.data["result"] = json!(clip_text(text));
             });
         }
     }
 
     fn result(&mut self, event: &Value, out: &Transcript) {
         self.got_result = true;
-        if let Some(session) = event["session_id"].as_str() {
-            out.set_session(Some(session.to_owned()));
-        }
         let text = event["result"].as_str().unwrap_or("").trim();
         if event["is_error"].as_bool().unwrap_or(false) {
             let message = match (text, event["subtype"].as_str()) {
