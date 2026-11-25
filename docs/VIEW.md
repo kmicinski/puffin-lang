@@ -30,7 +30,10 @@ it shows.
   shorter than its room, the lines of the file around it fill the room,
   dimmed: there, a click away from being the focus. Its header says what
   it is (`ƒ step · machine : State -> State`), with ‹ › for the focus
-  history. **≡ whole file** (⌥O) widens the focus to the whole file;
+  history. A new line typed after the definition, or a click on a blank
+  line among the dimmed ones, keeps the focus; a click on another
+  definition's lines moves it there. **≡ whole file** (⌥O) widens the
+  focus to the whole file;
   the focus then follows the cursor, and ◎ (⌥O) narrows to wherever it
   is. There is no other editor: a file chip, the tree, ⌘K's files open
   the file whole in the focus.
@@ -160,8 +163,8 @@ logged (`.puffin/attention-log.jsonl`, never committed):
 | ✕ on an offered fragment, or hides a row | `showLess` |
 | ⊙ | `pin` / `unpin` |
 
-On open the page relearns this project's weights from the whole log
-(`learnFrom`): pairwise preferences, kept within a band of the defaults,
+On open, and every ten minutes after, the page relearns this project's
+weights from the whole log (`learnFrom`): pairwise preferences, kept within a band of the defaults,
 and only if they predict the most recent behavior better
 (docs/ATTENTION.md §4). The set and pins are the author's own choices,
 so they teach nothing: `kept` and `pinned` are never learned, and the

@@ -86,7 +86,10 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   const tracker = createTracker();
   const log = httpLog();
   const attention = createAttention({ write: log.write });
-  log.read().then((records) => attention.learnFrom(records)).catch(() => {});
+  // learnt from the whole log on open, and again now and then as it grows
+  const relearn = () => log.read().then((records) => attention.learnFrom(records)).catch(() => {});
+  relearn();
+  setInterval(() => { if (!document.hidden) relearn(); }, 10 * 60e3);
 
   let focus = null; // { path, name } (name null: a file with no definition at the cursor)
   let whole = false; // the focus pane shows the whole file
