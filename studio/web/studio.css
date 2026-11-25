@@ -1,19 +1,23 @@
 /* Puffin Studio: the playground's chrome (web/src/styles.css, Solarized
-   light), with one accent per meaning: green runs, red stops and errors,
+   light and dark), with one accent per meaning: green runs, red stops and errors,
    blue is a value, violet marks the assistant, cyan what runs have shown. */
 :root {
-  --base3: #fdf6e3;
-  --base2: #eee8d5;
-  --base1: #93a1a1;
-  --base0: #839496;
-  --base00: #657b83;
-  --base01: #586e75;
-  --base02: #073642;
+  /* Solarized, each tone as light-dark(light, dark): in the dark the base
+     tones swap and the accents stay. Which one shows is the color scheme:
+     the system's, unless the palette's Theme command set data-theme. */
+  color-scheme: light dark;
+  --base3: light-dark(#fdf6e3, #002b36);
+  --base2: light-dark(#eee8d5, #073642);
+  --base1: light-dark(#93a1a1, #586e75);
+  --base0: light-dark(#839496, #657b83);
+  --base00: light-dark(#657b83, #839496);
+  --base01: light-dark(#586e75, #93a1a1);
+  --base02: light-dark(#073642, #eee8d5);
   --page: var(--base3);
   --surface: var(--base3);
   --chrome: var(--base2);
-  --border: #d9d2c2;
-  --border-strong: #cfc4a5;
+  --border: light-dark(#d9d2c2, #0f3d49);
+  --border-strong: light-dark(#cfc4a5, #1d5260);
   --text: var(--base00);
   --muted: var(--base1);
   --strong: var(--base01);
@@ -21,27 +25,31 @@
   --yellow: #b58900;
   --orange: #cb4b16;
   --green: #859900;
-  --green-dark: #6c7c00;
+  --green-dark: light-dark(#6c7c00, #a5b520);
   --red: #dc322f;
-  --red-tint: #fdeceb;
-  --orange-tint: #fdf1e8;
+  --red-tint: light-dark(#fdeceb, #3a1e22);
+  --orange-tint: light-dark(#fdf1e8, #36261a);
   --magenta: #d33682;
-  --magenta-tint: #fbeaf2;
+  --magenta-tint: light-dark(#fbeaf2, #37192d);
   --violet: #6c71c4;
-  --violet-tint: #f1f0fa;
-  --blue-tint: #e6f1fa;
-  --green-tint: #eff3d6;
-  --hover: #f7f0dd;
-  --green-hover: #97ad00;
-  --red-hover: #c42a27;
-  --diff-add: #4c5a00;
-  --diff-del: #a82422;
+  --violet-tint: light-dark(#f1f0fa, #1d2747);
+  --blue-tint: light-dark(#e6f1fa, #0a3550);
+  --green-tint: light-dark(#eff3d6, #1f3510);
+  --hover: light-dark(#f7f0dd, #0a3a46);
+  --green-hover: light-dark(#97ad00, #6e7f00);
+  --red-hover: light-dark(#c42a27, #b82825);
+  --diff-add: light-dark(#4c5a00, #b3c43a);
+  --diff-del: light-dark(#a82422, #f06b67);
   --on-accent: #fdf6e3;
   --cyan: #2aa198;
+  /* the module board's grid (board.css): the border's tone in the light */
+  --board-dot: light-dark(#d9d2c2, #0b3a45);
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: "SF Mono", Menlo, Monaco, "Cascadia Code", monospace;
   --radius: 5px;
 }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -699,36 +707,4 @@ button.trace-more { margin: 1px 0 1px 18px; padding: 0 7px; font: 11px var(--san
   background: var(--chrome);
   font-size: 11px;
   color: var(--muted);
-}
-
-/* ---- Solarized dark: the base tones swap, the accents stay ----
-   Follows the system unless the page says otherwise (data-theme, set
-   from the palette's Theme command). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --base3: #002b36; --base2: #073642; --base1: #586e75; --base0: #657b83;
-    --base00: #839496; --base01: #93a1a1; --base02: #eee8d5;
-    --border: #0f3d49; --border-strong: #1d5260;
-    --green-dark: #a5b520;
-    --red-tint: #3a1e22; --orange-tint: #36261a; --magenta-tint: #37192d;
-    --violet-tint: #1d2747; --blue-tint: #0a3550; --green-tint: #1f3510;
-    --hover: #0a3a46; --green-hover: #6e7f00; --red-hover: #b82825;
-    --diff-add: #b3c43a; --diff-del: #f06b67;
-    --on-accent: #fdf6e3;
-    --board-dot: #0b3a45;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --base3: #002b36; --base2: #073642; --base1: #586e75; --base0: #657b83;
-  --base00: #839496; --base01: #93a1a1; --base02: #eee8d5;
-  --border: #0f3d49; --border-strong: #1d5260;
-  --green-dark: #a5b520;
-  --red-tint: #3a1e22; --orange-tint: #36261a; --magenta-tint: #37192d;
-  --violet-tint: #1d2747; --blue-tint: #0a3550; --green-tint: #1f3510;
-  --hover: #0a3a46; --green-hover: #6e7f00; --red-hover: #b82825;
-  --diff-add: #b3c43a; --diff-del: #f06b67;
-  --on-accent: #fdf6e3;
-  --board-dot: #0b3a45;
-  color-scheme: dark;
 }
