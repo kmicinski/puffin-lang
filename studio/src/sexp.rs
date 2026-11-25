@@ -342,7 +342,7 @@ pub fn mentions(text: &str) -> std::collections::BTreeSet<String> {
 }
 
 /// Every atom of `text` (outside comments and strings), as byte ranges:
-/// where a name is written, for voice mode's "usages of foo" (voice.rs).
+/// where a name is written, for voice mode's "usages of foo" (voice/places.rs).
 pub fn atoms(text: &str) -> Vec<(usize, usize)> {
     tokens(text).into_iter().filter(|(kind, ..)| matches!(kind, Token::Atom)).map(|(_, start, end)| (start, end)).collect()
 }

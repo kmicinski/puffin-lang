@@ -202,3 +202,18 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
     }
     Results { properties: declared, error: None, ms: ms() }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn properties_are_declared_with_their_english() {
+        let text = "(require \"prop.puf\")\n;; @property rev: reversing twice is identity\n(check-property 'rev (for-all (list (gen-list gen-int)) (lambda (xs) #t)))\n(check-example 'one (equal? 1 1))\n";
+        let declared = declared(text);
+        assert_eq!(declared.len(), 2);
+        assert_eq!(declared[0].name, "rev");
+        assert_eq!(declared[0].statement, "reversing twice is identity");
+        assert_eq!(declared[1].name, "one");
+    }
+}

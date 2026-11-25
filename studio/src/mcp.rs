@@ -21,7 +21,7 @@ pub async fn handle(studio: &Arc<Studio>, headers: HeaderMap, body: String) -> R
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let thread = headers.get(THREAD_HEADER).and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u32>().ok());
-    let voice = headers.contains_key(crate::voice::VOICE_HEADER);
+    let voice = headers.contains_key(crate::voice::builder::VOICE_HEADER);
     let request: Value = match serde_json::from_str(&body) {
         Ok(request) => request,
         Err(error) => return rpc_error(Value::Null, -32700, &format!("parse error: {error}")),
@@ -37,8 +37,8 @@ pub async fn handle(studio: &Arc<Studio>, headers: HeaderMap, body: String) -> R
             "serverInfo": { "name": "puffin-studio", "version": env!("CARGO_PKG_VERSION") },
         }),
         "ping" => json!({}),
-        // a voice builder's calls (voice.rs): its own writes, applied at once
-        "tools/list" if voice => json!({ "tools": crate::voice::tools() }),
+        // a voice builder's calls (voice/builder.rs): its own writes, applied at once
+        "tools/list" if voice => json!({ "tools": crate::voice::builder::tools() }),
         "tools/list" => json!({ "tools": tools() }),
         "tools/call" => {
             let name = request["params"]["name"].as_str().unwrap_or("");

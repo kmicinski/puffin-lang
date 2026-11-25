@@ -3,8 +3,8 @@
 Status, 2026-11-19: built on the `exceptions` branch (it needs
 docs/EXCEPTIONS.md: holes must check and run past). Server
 `studio/src/board.rs`, page `studio/web/board.js` + `board.css`; the
-voice side is in `voice.rs` (router `arrange` / `answer`, builder tools
-`ask` / `arrange`, plan-mode prompt).
+voice side is the router's `arrange` / `answer` (`voice.rs`) and the
+builder's tools `ask` / `arrange` and plan-mode prompt (`voice/builder.rs`).
 
 The idea: when a program is being designed, by talking, the screen should
 hold as much of the *design* as it can — and the code only where it is
