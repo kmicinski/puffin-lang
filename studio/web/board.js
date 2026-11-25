@@ -57,7 +57,7 @@ const FAR = 0.38;
 // a file this short opens whole on a fresh canvas
 const SHORT_FILE = 40;
 // the room the bar and the HUD take over the top of the canvas
-const TOP = 64;
+const TOP = 72;
 // narrower than this, the board stacks its cards (a phone)
 const COMPACT = 700;
 const SVG = "http://www.w3.org/2000/svg";
@@ -469,10 +469,9 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     }
     renderPulled();
     placePulled();
-    // with code pulled out, the cards it was not pulled from recede
-    const pulled = board.pulled ?? [];
-    const involved = new Set(pulled.flatMap((p) => [p.key.split("\u001f")[0], nodeOfView(p.from)?.closest(".board-card")?.dataset.path]));
-    for (const node of canvas.querySelectorAll(".board-card")) node.classList.toggle("receded", pulled.length > 0 && !involved.has(node.dataset.path));
+    // with code pulled out, the cards showing no code recede
+    const pulled = (board.pulled ?? []).length > 0;
+    for (const node of canvas.querySelectorAll(".board-card")) node.classList.toggle("receded", pulled && !node.querySelector(".span-editor"));
     let maxX = 0;
     let maxY = 0;
     for (const node of canvas.querySelectorAll(".board-card:not([hidden]), .canvas-frag")) {
@@ -1042,8 +1041,11 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     }
   }
 
-  // fold a pulled definition back into its row (and what was pulled from it)
+  // fold a pulled definition back into its row (and what was pulled from
+  // it); the camera goes back to the code it was pulled for
   function fold(key) {
+    const from = (board.pulled ?? []).find((p) => p.key === key)?.from;
+    if (from) requestAnimationFrame(() => frameViews([from]));
     change((b) => {
       const gone = new Set([`pull:${key}`]);
       let more = true;
@@ -1158,30 +1160,34 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   }
 
   // Each pulled definition sits right of what it was pulled from, its top
-  // level with the line that uses it; one that would overlap another is
-  // moved down below it.
+  // level with the line that uses it. It does not cover other pulled code
+  // or a card showing code: where it would, it moves down below that or
+  // right past it, whichever is the shorter way.
   function placePulled() {
-    const placed = [];
-    for (const p of board.pulled ?? []) {
+    const obstacles = [...canvas.querySelectorAll(".board-card:not([hidden])")].filter((n) => n.querySelector(".span-editor")).map(canvasBox);
+    // in the order of their uses down the code, so that wires do not cross
+    // (a pulled one's source is placed before it: it was pulled first)
+    const order = (board.pulled ?? []).map((p, i) => ({ p, i, y: useAnchor(p)?.y ?? 0 }));
+    order.sort((a, b) => (a.p.from === b.p.from ? a.y - b.y : a.i - b.i));
+    for (const { p } of order) {
       const node = canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(p.key)}"]`);
       if (!node) continue;
       const source = useAnchor(p);
-      let x = source ? source.right + 64 : GRID.x;
-      let y = source ? source.y - 18 : GRID.y;
+      const start = { x: source ? source.right + 64 : GRID.x, y: source ? source.y - 18 : GRID.y };
+      let { x, y } = start;
       const w = node.offsetWidth;
       const h = node.offsetHeight;
-      for (let moved = true; moved;) {
-        moved = false;
-        for (const q of placed) {
-          if (x < q.x + q.w + 12 && q.x < x + w + 12 && y < q.y + q.h + 14 && q.y < y + h + 14) {
-            y = q.y + q.h + 16;
-            moved = true;
-          }
-        }
+      for (let tries = 0; tries < 24; tries++) {
+        const hit = obstacles.find((q) => x < q.x + q.w + 16 && q.x < x + w + 16 && y < q.y + q.h + 16 && q.y < y + h + 16);
+        if (!hit) break;
+        const down = { x, y: hit.y + hit.h + 18 };
+        const right = { x: hit.x + hit.w + 24, y };
+        const far = (spot) => Math.hypot(spot.x - start.x, spot.y - start.y);
+        ({ x, y } = far(down) <= far(right) ? down : right);
       }
       node.style.left = `${x}px`;
       node.style.top = `${y}px`;
-      placed.push({ x, y, w, h });
+      obstacles.push({ x, y, w, h });
     }
   }
 
@@ -1578,30 +1584,29 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     change((b) => { b.focus = { items, label: `${found.item.name} and what touches it`, question: null }; });
   }
 
-  // ] and [ on a row: walk the call graph from the keyboard. Each press
-  // pulls the next of what it uses (or of what uses it) that is not out
-  // yet, beside its code, and moves the cursor there.
+  // ] and [ on a row: the call graph from the keyboard. Each press pulls
+  // the next of what it uses (or of what uses it) that is not out yet --
+  // functions before types -- beside its code. The cursor stays, so ]]]
+  // brings out what a definition calls, one after another; Tab goes into
+  // them.
   function pullAlong(found, direction) {
     const view = viewOf(cursor) ?? (toggleOpen(found.m.path, found.item.name, false), `row:${cursor}`);
     const { uses, users } = neighbours(found.item.name);
-    const next = [...(direction === "uses" ? uses : users)].find((k) => !viewOf(k) && !k.startsWith(DECISIONS));
+    const rank = (k) => (["fun", "val"].includes(itemOf(k)?.item?.kind) ? 0 : 1);
+    const next = [...(direction === "uses" ? uses : users)].filter((k) => !viewOf(k) && !k.startsWith(DECISIONS)).sort((a, b) => rank(a) - rank(b))[0];
     if (!next) return;
-    const [path, name] = next.split("\u001f");
     requestAnimationFrame(() => {
-      if (direction === "uses") pull(name, view, found.m.path);
-      else {
-        // a caller comes out beside the code it calls, the wire from that
-        // code's own name
-        change((b) => {
-          b.pulled = (b.pulled ?? []).filter((p) => p.key !== next);
-          b.pulled.push({ key: next, from: view, use: found.item.name, caller: true });
-          ensureCard(b, path);
-          evict(b, `pull:${next}`);
-        });
-        requestAnimationFrame(() => frameViews([view, `pull:${next}`]));
-      }
-      cursor = keyOf(path, name);
-      afterCursor();
+      const [path, name] = next.split("\u001f");
+      if (direction === "uses") return pull(name, view, found.m.path);
+      // a caller comes out beside the code it calls, the wire from that
+      // code's own name
+      change((b) => {
+        b.pulled = (b.pulled ?? []).filter((p) => p.key !== next);
+        b.pulled.push({ key: next, from: view, use: found.item.name });
+        ensureCard(b, path);
+        evict(b, `pull:${next}`);
+      });
+      requestAnimationFrame(() => frameViews([view, `pull:${next}`]));
     });
   }
 
