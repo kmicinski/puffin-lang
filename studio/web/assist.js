@@ -21,6 +21,7 @@ import { balanced } from "./lexer.js";
 import { renderOutput } from "./trace.js";
 import { el } from "./dom.js";
 import { plural } from "./words.js";
+import { recall, remember } from "./stored.js";
 
 // The question, when `text` asks for ask mode: `??` and what follows.
 export function asking(text) {
@@ -202,9 +203,9 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
   }, { capture: true });
 
   // the scope: remembered, and a selection preferred when there is one
-  try { scopeSelect.value = localStorage.getItem("puffin-studio.scope") || "form"; } catch { /* private mode */ }
+  scopeSelect.value = recall("puffin-studio.scope") || "form";
   scopeSelect.addEventListener("change", () => {
-    try { localStorage.setItem("puffin-studio.scope", scopeSelect.value); } catch { /* private mode */ }
+    remember("puffin-studio.scope", scopeSelect.value);
     prompt.focus();
   });
 

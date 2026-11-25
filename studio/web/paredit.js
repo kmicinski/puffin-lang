@@ -10,6 +10,7 @@
 //   BINDINGS                     [operation, chords, what it does], for help
 
 import { paredit } from "./sexp.js";
+import { recall, remember } from "./stored.js";
 
 export const BINDINGS = [
   ["slurpForward", ["Ctrl-Shift-0", "Ctrl-Right"], "slurp: take the next expression into this list"],
@@ -51,11 +52,11 @@ const TYPING = {
 
 const STORED = "puffin-studio.structured";
 export const structured = {
-  on: (() => { try { return localStorage.getItem(STORED) !== "off"; } catch { return true; } })(),
+  on: recall(STORED) !== "off",
   listeners: new Set(),
   set(on) {
     this.on = on;
-    try { localStorage.setItem(STORED, on ? "on" : "off"); } catch { /* private mode */ }
+    remember(STORED, on ? "on" : "off");
     for (const listener of this.listeners) listener(on);
   },
 };

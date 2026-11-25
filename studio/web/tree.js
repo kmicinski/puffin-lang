@@ -19,6 +19,7 @@
 import { basename, dirname, sorted } from "./files.js";
 import { el } from "./dom.js";
 import { plural } from "./words.js";
+import { recall, remember } from "./stored.js";
 
 // a project this big, or any folder, shows the tree unasked
 const MANY = 4;
@@ -41,13 +42,14 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     return files.paths().length > MANY || files.folders().length > 0;
   }
 
-  function show(on, remember = false) {
+  // `byHand`: the person chose it, so it is remembered for the project
+  function show(on, byHand = false) {
     shown = on;
     panel.hidden = !on;
     toggle.classList.toggle("on", on);
-    if (remember) {
+    if (byHand) {
       chosen = on;
-      try { localStorage.setItem(key(), on ? "show" : "hide"); } catch { /* private window */ }
+      remember(key(), on ? "show" : "hide");
     }
     render();
   }
@@ -506,7 +508,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     receive: {
       init(snapshot) {
         project = snapshot.project ?? "";
-        try { chosen = { show: true, hide: false }[localStorage.getItem(key())] ?? null; } catch { chosen = null; }
+        chosen = { show: true, hide: false }[recall(key())] ?? null;
         collapsed.clear();
         show(wanted());
       },

@@ -24,6 +24,7 @@ import { createTimeline } from "./timeline.js";
 import { createProgress } from "./progress.js";
 import { createExcursion } from "./excursion.js";
 import { el } from "./dom.js";
+import { recallJSON, remember } from "./stored.js";
 
 const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
@@ -36,12 +37,8 @@ const REPLY_MS = 15000;
 // how long a list of places stays without being used
 const LENS_IDLE_MS = 45000;
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { return {}; }
-}
-function store(value) {
-  try { localStorage.setItem(STORE, JSON.stringify(value)); } catch { /* private window */ }
-}
+const load = () => recallJSON(STORE, {});
+const store = (value) => remember(STORE, value, { json: true });
 
 // A word of Puffin at `column` of `line`: an atom's characters.
 function wordAt(line, column) {

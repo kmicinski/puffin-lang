@@ -42,6 +42,7 @@ import { bindTextarea } from "./paredit.js";
 import { bindTexField } from "./tex.js";
 import { renderOutput } from "./trace.js";
 import { el } from "./dom.js";
+import { recallJSON, remember } from "./stored.js";
 
 const HELP = `,load FILE           evaluate a whole module in the session (⌘⇧↵ in the editor)
 ,eval FILE:LINE      evaluate the form on LINE, loading first the definitions it needs (⌘↵)
@@ -84,14 +85,14 @@ export function createRepl({ transcript, prompt, send, commands }) {
     lines: [],
     index: 0,
     load() {
-      try { this.lines = JSON.parse(localStorage.getItem(this.key)) ?? []; } catch { this.lines = []; }
+      this.lines = recallJSON(this.key, []);
       this.index = this.lines.length;
     },
     push(line) {
       if (this.lines.at(-1) !== line) this.lines.push(line);
       this.lines = this.lines.slice(-500);
       this.index = this.lines.length;
-      try { localStorage.setItem(this.key, JSON.stringify(this.lines)); } catch { /* private mode */ }
+      remember(this.key, this.lines, { json: true });
     },
   };
   history.load();

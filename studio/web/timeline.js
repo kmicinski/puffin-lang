@@ -11,6 +11,7 @@
 import { markdown } from "./markdown.js";
 import { el } from "./dom.js";
 import { outcomeWord, plural, turnLabel } from "./words.js";
+import { recall, remember } from "./stored.js";
 
 const ICON = {
   edit: "✎", write_file: "✎", delete_file: "✕", add_property: "≡", run_properties: "≡",
@@ -23,8 +24,7 @@ const STORE = "puffin-timeline";
 const seconds = (ms) => (ms < 1000 ? `${ms} ms` : ms < 60000 ? `${Math.round(ms / 100) / 10}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
 
 export function createTimeline({ host, go }) {
-  let collapsed = false;
-  try { collapsed = localStorage.getItem(STORE) === "collapsed"; } catch { /* default */ }
+  let collapsed = recall(STORE) === "collapsed";
 
   const box = el("div", "timeline voice-float");
   const head = el("div", "timeline-head");
@@ -64,7 +64,7 @@ export function createTimeline({ host, go }) {
   function setCollapsed(value) {
     if (value) forced = false;
     collapsed = value;
-    try { localStorage.setItem(STORE, value ? "collapsed" : "open"); } catch { /* fine */ }
+    remember(STORE, value ? "collapsed" : "open");
     render();
     if (!value) scroll(true);
   }
