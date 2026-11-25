@@ -62,7 +62,7 @@ body.ws-on .board { border-left: 1px solid var(--border); box-shadow: -8px 0 24p
 
 /* ---- the working set ---- */
 
-.ws-list { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; }
+.ws-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; display: flex; flex-direction: column; gap: 10px; }
 .ws-hint { font: 12.5px/1.5 var(--sans); color: var(--muted); padding: 10px 4px; border: 1px dashed var(--border); border-radius: 8px; text-align: center; }
 .ws-frag {
   flex: none;
@@ -193,3 +193,6 @@ body.focus-canvas .ws-side, body.focus-canvas .ws-head { display: none !importan
 .ws-frag.offered:hover, .ws-frag.offered.lit { opacity: 1; }
 .ws-list { position: relative; }
 .ws-frag.unfit { position: absolute; left: 0; right: 0; top: 0; visibility: hidden; pointer-events: none; }
+/* a phone scrolls the page: the pill stays on the screen */
+@media (max-width: 700px) { body.ws-on .voice-layer { position: fixed; } }
+.ws-node.lit { border-color: var(--violet); box-shadow: 0 0 0 3px var(--violet-tint); }

@@ -190,7 +190,10 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     const host = stage.getBoundingClientRect();
     if (top < 0 || top > box.height - 20) return (chip.hidden = true);
     chip.style.top = `${box.top - host.top + top}px`;
-    chip.style.left = `${box.right - host.left + 8}px`;
+    // beside the editor; inside its right edge when the working set is
+    // beside it (workset.js)
+    const inside = document.body.classList.contains("ws-on");
+    chip.style.left = `${inside ? box.right - host.left - chip.offsetWidth - 24 : box.right - host.left + 8}px`;
     chip.hidden = false;
   }
 

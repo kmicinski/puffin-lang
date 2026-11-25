@@ -41,6 +41,8 @@ const COLLAPSED = 48;
 // a file this short is shown whole when nothing is focused yet
 const SHORT_FILE = 60;
 const NODES_MAX = 10;
+// a phone: one column that scrolls, so nothing is short of room
+const PHONE = window.matchMedia("(max-width: 700px)");
 // the focus is never wider than this many columns
 const WIDEST = 100;
 const SVG = "http://www.w3.org/2000/svg";
@@ -188,7 +190,8 @@ export function createWorkset({ editor, files, board, stage, layout }) {
   // under it leaves room (the whole file: most of the column).
   function sizeFocus() {
     if (!on) return;
-    const room = column.clientHeight - head.offsetHeight - 46 - 84;
+    // (on a phone the page scrolls: the focus has most of a screen)
+    const room = PHONE.matches ? window.innerHeight * 0.9 : column.clientHeight - head.offsetHeight - 46 - 84;
     const neighbourhood = Math.min(graph.scrollHeight, room * (whole ? 0.3 : 0.5));
     const content = whole ? Infinity : main.getContentHeight() + 12;
     wrap.style.flex = `0 0 ${Math.max(60, Math.min(content, room - neighbourhood))}px`;
@@ -389,6 +392,7 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       fragment = make(def, { from, cameFrom });
       if (!fragment) return;
       set.unshift(fragment);
+      crowding = true;
     }
     if (!quiet) render();
   }
@@ -418,6 +422,10 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       }
     });
     bindNames(view, fragment);
+    // the lens: its node in the neighbourhood lights while the mouse is on it
+    const lit = (value) => graph.querySelector(`.ws-node[data-key="${CSS.escape(key(fragment))}"]`)?.classList.toggle("lit", value);
+    node.addEventListener("mouseenter", () => lit(true));
+    node.addEventListener("mouseleave", () => lit(false));
     refit(fragment);
     requestAnimationFrame(() => requestAnimationFrame(() => node.classList.remove("arriving")));
     return fragment;
@@ -450,10 +458,15 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     if (!quiet) render();
   }
 
-  // Fit the set to its column: the most wanted get their bodies, the next
-  // their signature line, the rest the shelf.
+  // Fit the set to its column: the most wanted get their bodies, the rest
+  // their signature line. Only a fragment arriving pushes others to the
+  // shelf: a window resized, or the page loading, never sets anything
+  // aside (the column scrolls instead).
+  let crowding = false;
   function fit() {
-    const room = setList.clientHeight;
+    const evict = crowding;
+    crowding = false;
+    const room = PHONE.matches ? Infinity : setList.clientHeight;
     if (!room) return;
     const wanted = (f) => (f.pinned ? Infinity : f.touched + (related(f, focus) ? NEAR : 0));
     // one not measured yet counts by its lines
@@ -469,7 +482,7 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     const decided = new Map(order.map((f) => [f, "collapsed"]));
     let left = room - order.length * (COLLAPSED + 10);
     for (const fragment of [...order].reverse()) {
-      if (left >= 0 || fragment.pinned) break;
+      if (left >= 0 || fragment.pinned || !evict) break;
       decided.set(fragment, "shelf");
       left += COLLAPSED + 10;
     }
@@ -798,6 +811,8 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     setOn(value) {
       on = value;
       document.body.classList.toggle("ws-on", on);
+      // a definition is read whole: its long lines wrap in the narrowed column
+      main.updateOptions({ wordWrap: on ? "on" : "off", wrappingIndent: "deepIndent" });
       if (!on) {
         main.setHiddenAreas([]);
         return;
