@@ -184,11 +184,6 @@ impl Session {
     pub fn prompt_definition(&self, name: &str) -> Option<String> {
         self.prompt.get(name).cloned()
     }
-
-    /// What one function's observations are, if any.
-    pub fn observed_of(&self, function: &str) -> Option<&Observed> {
-        self.observed.iter().find(|observed| observed.function == function)
-    }
 }
 
 /// The definitions `target` needs from its module `text`, in source order:

@@ -234,10 +234,7 @@ impl Review {
     /// The program as `thread` sees it: `files` with the thread's own
     /// pending ops applied in order, skipping any that no longer apply.
     pub fn fork(&self, files: &Files, thread: u32) -> Files {
-        self.ops
-            .iter()
-            .filter(|op| op.thread == thread && op.status == Status::Pending)
-            .fold(files.clone(), |files, op| apply(&files, &op.change).unwrap_or(files))
+        self.pending_of_thread(thread).fold(files.clone(), |files, op| apply(&files, &op.change).unwrap_or(files))
     }
 
     /// Queue a change from `thread`, checked against that thread's fork so
@@ -343,12 +340,7 @@ impl Review {
     /// before it, in order.
     pub fn chain(&self, id: u32) -> Option<(Change, Vec<(u32, Change)>)> {
         let op = self.ops.iter().find(|op| op.id == id && op.status == Status::Pending)?;
-        let before = self
-            .ops
-            .iter()
-            .filter(|other| other.thread == op.thread && other.status == Status::Pending && other.id < id)
-            .map(|other| (other.id, other.change.clone()))
-            .collect();
+        let before = self.pending_of_thread(op.thread).filter(|other| other.id < id).map(|other| (other.id, other.change.clone())).collect();
         Some((op.change.clone(), before))
     }
 
@@ -358,15 +350,12 @@ impl Review {
     }
 
     /// The pending ops of `thread`, in order.
-    pub fn pending_of_thread(&self, thread: u32) -> Vec<&Op> {
-        self.ops.iter().filter(|op| op.thread == thread && op.status == Status::Pending).collect()
+    pub fn pending_of_thread(&self, thread: u32) -> impl Iterator<Item = &Op> {
+        self.ops.iter().filter(move |op| op.thread == thread && op.status == Status::Pending)
     }
 
     fn fork_before(&self, files: &Files, op: &Op) -> Files {
-        self.ops
-            .iter()
-            .filter(|other| other.thread == op.thread && other.status == Status::Pending && other.id < op.id)
-            .fold(files.clone(), |files, other| apply(&files, &other.change).unwrap_or(files))
+        self.pending_of_thread(op.thread).filter(|other| other.id < op.id).fold(files.clone(), |files, other| apply(&files, &other.change).unwrap_or(files))
     }
 }
 
