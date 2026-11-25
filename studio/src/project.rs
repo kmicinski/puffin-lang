@@ -308,7 +308,7 @@ pub fn files_at(directory: &Path, hash: &str) -> Result<std::collections::BTreeM
     let listed = git(directory, &["ls-tree", "-r", "--name-only", "-z", hash])?;
     let mut files = std::collections::BTreeMap::new();
     for path in listed.split('\0').filter(|path| !path.is_empty()) {
-        let puffin = path.rsplit_once('.').is_some_and(|(_, extension)| crate::studio::EXTENSIONS.contains(&extension));
+        let puffin = path.rsplit_once('.').is_some_and(|(_, extension)| crate::studio::files::EXTENSIONS.contains(&extension));
         if !puffin || path.starts_with(".puffin/") {
             continue;
         }

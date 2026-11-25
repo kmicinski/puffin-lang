@@ -215,7 +215,7 @@ impl Studio {
     /// program as it leaves it passes the check; else refuse it with why.
     pub(crate) async fn propose(&self, thread: u32, change: Change, note: String) -> Result<Value, String> {
         if !change.old.is_empty() || !self.files().contains_key(&change.file) {
-            crate::studio::valid_path(&change.file).map_err(|why| format!("Refused: {why}"))?;
+            crate::studio::files::valid_path(&change.file).map_err(|why| format!("Refused: {why}"))?;
         }
         let files = self.files();
         let (fork, scope) = {

@@ -435,7 +435,7 @@ impl Studio {
                 self.apply_voice(change, &note).await
             }
             "write_file" => {
-                let file = crate::studio::valid_path(&text("file")?)?;
+                let file = crate::studio::files::valid_path(&text("file")?)?;
                 let body = text("text")?;
                 let mut files = self.files();
                 files.insert(file.clone(), body);
@@ -520,7 +520,7 @@ impl Studio {
 
     async fn apply_voice(self: &Arc<Self>, change: Change, note: &str) -> Result<Value, String> {
         if !change.old.is_empty() || !self.files().contains_key(&change.file) {
-            crate::studio::valid_path(&change.file)?;
+            crate::studio::files::valid_path(&change.file)?;
         }
         let after = apply(&self.files(), &change)?;
         self.land(&change.file, after, note).await
