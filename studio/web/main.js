@@ -144,7 +144,7 @@ const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
 // the board and the working set are one surface beside the focus (docs/VIEW.md)
-const board = createBoard({ files, send, stage: document.querySelector(".board-pane"), onShow: (on) => focus?.boardShown(on) });
+const board = createBoard({ send, stage: document.querySelector(".board-pane"), onShow: (on) => focus?.boardShown(on) });
 focus.attachBoard(board);
 view = createView({ editor, files, board, stage: document.querySelector(".editor-pane"), onEvalAt: evalAt });
 // the welcome's other path: design on the board, plan mode, the first
@@ -162,8 +162,7 @@ const palette = createPalette({
   commands() {
     const list = [];
     const add = (group, title, run, extra = {}) => list.push({ group, title, run, ...extra });
-    const out = board.zoom() < 0.62;
-    add("Board", out ? "Back to the code: the working set beside the focus" : "Show the board: glide out to the whole program", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
+    add("Board", board.out() ? "Back to the code: the working set beside the focus" : "Show the board: glide out to the whole program", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
     add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
     const planned = board.outline().flatMap((m) => m.items.filter((i) => i.opaque)).length;
     if (planned) add("Board", `Build the plan: write the ${planned} planned bod${planned === 1 ? "y" : "ies"}`, () => board.buildPlan(), { icon: "▸", keywords: "implement fill holes dive in", rank: 1 });

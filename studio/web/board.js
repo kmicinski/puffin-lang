@@ -44,7 +44,7 @@ const PROP_MARK = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run"
 const GRID = { x: 28, y: 92, w: 380, gap: 24 };
 const FRESH_MS = 2600;
 // the zoom below which code gives way to signatures, and signatures to names
-export const NEAR = 0.62;
+const NEAR = 0.62;
 const FAR = 0.38;
 // the lane is framed no further out than this: its code is read there
 const READABLE = 0.75;
@@ -61,11 +61,26 @@ const el = (tag, className, text) => {
 };
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+
+// A click that may be the first of a double-click: `once` waits a moment
+// to see (a row's click brings its code in, its double-click focuses it;
+// so do the neighbourhood's nodes, view.js).
+export function clicks(node, once, twice) {
+  let waiting = 0;
+  node.addEventListener("click", (event) => {
+    clearTimeout(waiting);
+    if (event.detail <= 1) waiting = setTimeout(() => once(event), 240);
+  });
+  node.addEventListener("dblclick", (event) => {
+    clearTimeout(waiting);
+    twice(event);
+  });
+}
 const short = (path) => path.replace(/\.puf$/, "");
 const keyOf = (path, name) => `${path}\u001f${name}`;
 const typing = (target) => target?.closest?.("input, textarea, [contenteditable], .monaco-editor");
 
-export function createBoard({ files, send, stage, onShow }) {
+export function createBoard({ send, stage, onShow }) {
   // what the working set (view.js) does with a row: { pull(path, name),
   // focus(path, line, find), along(path, name, "uses" | "users"),
   // hover(key) }; bound once it exists
@@ -546,7 +561,6 @@ export function createBoard({ files, send, stage, onShow }) {
     if (m.effects) node.append(el("div", "board-effects", `+ ${m.effects} top-level expression${m.effects === 1 ? "" : "s"}`));
   }
 
-  let clicking = 0;
   function renderItem(m, item, isHidden, focused) {
     const key = keyOf(m.path, item.name);
     const classes = [
@@ -638,17 +652,9 @@ export function createBoard({ files, send, stage, onShow }) {
     actions.append(edit, hide);
     line.append(actions);
     line.title = [item.doc, `${m.path}:${item.line}`, item.uses.length ? `uses ${item.uses.join(", ")}` : ""].filter(Boolean).join("\n");
-    // a click: its code into the lane; a double-click: the focus (the
-    // click waits a moment to see which it is)
-    line.addEventListener("click", (event) => {
-      cursor = key;
-      clearTimeout(clicking);
-      if (event.detail <= 1) clicking = setTimeout(() => view?.pull(m.path, item.name), 240);
-    });
-    line.addEventListener("dblclick", () => {
-      clearTimeout(clicking);
-      view?.focus(m.path, item.line);
-    });
+    // a click: its code into the lane; a double-click: the focus
+    line.addEventListener("click", () => { cursor = key; });
+    clicks(line, () => view?.pull(m.path, item.name), () => view?.focus(m.path, item.line));
     line.addEventListener("pointerenter", () => { setLens(key); view?.hover(key); });
     line.addEventListener("pointerleave", () => { setLens(null); view?.hover(null); });
     row.append(line);
@@ -1482,6 +1488,8 @@ export function createBoard({ files, send, stage, onShow }) {
       if (key) canvas.querySelector(`.board-item[data-key="${CSS.escape(key)}"]`)?.classList.add("ref-target");
     },
     zoom: () => camera.zoom(),
+    // whether the camera is out at the program (else in at the code)
+    out: () => camera.zoom() < NEAR,
     laneMax,
     // a fragment in the lane into view, the camera at reading distance
     reveal: (node) => home(true, canvasBox(node)),

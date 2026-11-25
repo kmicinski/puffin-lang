@@ -72,10 +72,14 @@ export function narrow(monaco, view, name) {
     refresh,
     span: () => span,
     name: () => name,
-    // narrow to another definition (the focus moving), or none (the whole file)
+    // narrow to another definition (the focus moving), or none (the whole
+    // file); the same one again is just a refresh (the range it tracks
+    // is what carries it while the text is unbalanced)
     to(next) {
-      name = next;
-      tracked.clear();
+      if (next !== name) {
+        name = next;
+        tracked.clear();
+      }
       return refresh();
     },
     dispose: () => tracked.clear(),

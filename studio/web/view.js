@@ -38,7 +38,7 @@ import { createFragment } from "./fragment.js";
 import { overlay, wire, svg, curve } from "./wires.js";
 import { createAttention, httpLog, idOf } from "./attention.js";
 import { createTracker } from "./attention-studio.js";
-import { NEAR } from "./board.js";
+import { clicks } from "./board.js";
 
 const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?" };
 // the set holds at most this many; an arrival beyond sends the least
@@ -382,13 +382,13 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     grow.title = whole ? "Narrow to the definition at the cursor (⌥O)" : "Widen the focus to the whole file (⌥O)";
     grow.disabled = whole && !item;
     grow.addEventListener("click", () => setWhole(!whole));
-    const out = el("button", "view-toggle", board.zoom() >= NEAR ? "▦ the board" : "◧ the code");
+    const out = el("button", "view-toggle", board.out() ? "◧ the code" : "▦ the board");
     out.title = "Glide out to the whole program, or back in to the code (⌘⇧B, or say “show the board”)";
     out.addEventListener("click", () => board.toggle());
     head.append(grow, out);
   }
   board.onMove(() => {
-    const label = board.zoom() >= NEAR ? "▦ the board" : "◧ the code";
+    const label = board.out() ? "◧ the code" : "▦ the board";
     const button = head.querySelector(".view-toggle:last-child");
     if (button && button.textContent !== label) button.textContent = label;
   });
@@ -450,7 +450,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // ]]] brings out what a definition calls, one after another
   function along(def, direction) {
     const { uses, users } = neighbours(def);
-    const out = (d) => same(d, focus) || frags.has(idFor(d));
+    const out = (d) => same(d, focus) || setOf().some((s) => s.id === idFor(d));
     const rank = (d) => (["fun", "val"].includes(itemOf(d)?.kind) ? 0 : 1);
     const next = (direction === "uses" ? uses : users).filter((d) => !out(d)).sort((a, b) => rank(a) - rank(b))[0];
     if (next) pull(next);
@@ -694,7 +694,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // tied to the place it is needed.
   function drawWires() {
     across.clear();
-    if (board.zoom() < NEAR || !focus?.name) return;
+    if (board.out() || !focus?.name) return;
     const pane = board.root.getBoundingClientRect();
     const editorBox = main.getDomNode()?.getBoundingClientRect();
     // only when the board is beside the focus (on a phone it is below it)
@@ -702,32 +702,26 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     const span = focused.span();
     const model = main.getModel();
     const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
-    for (const id of order) {
+    const uses = (def, name) => itemOf(def)?.uses.includes(name);
+    order.forEach((id, i) => {
       const f = frags.get(id);
-      if (!f || f.offered || f.detail === "signature") continue;
+      if (!f || f.offered || f.detail === "signature") return;
       const target = f.head.getBoundingClientRect();
-      if (target.bottom < pane.top || target.top > pane.bottom || target.left > pane.right) continue;
-      const to = across.point(target.left, target.top + target.height / 2);
-      let from = null;
-      if (span && focused.name() && itemOf(focus)?.uses.includes(f.def.name)) {
-        const line = lineOf(model, span, f.def.name);
-        const y = editorBox.top + main.getTopForLineNumber(line) - main.getScrollTop() + lineHeight / 2;
-        if (y > editorBox.top && y < editorBox.bottom) from = across.point(editorBox.right - 6, y);
-      } else {
-        // a fragment above it that uses it
-        for (const other of order.slice(0, order.indexOf(id))) {
-          const g = frags.get(other);
-          if (!g?.fragment || g.detail !== "full" || !itemOf(g.def)?.uses.includes(f.def.name)) continue;
-          const box = g.fragment.node.getBoundingClientRect();
-          const scale = box.height / Math.max(1, g.fragment.node.offsetHeight);
-          from = across.point(box.right, box.top + g.fragment.yOf(f.def.name) * scale);
-          wire(across.layer, from, across.point(target.right, target.top + target.height / 2), "use", { out: 26 });
-          from = null;
-          break;
-        }
+      if (target.bottom < pane.top || target.top > pane.bottom || target.left > pane.right) return;
+      const y = target.top + target.height / 2;
+      if (span && focused.name() && uses(focus, f.def.name)) {
+        // from the line of the focus, across into the board
+        const line = editorBox.top + main.getTopForLineNumber(lineOf(model, span, f.def.name)) - main.getScrollTop() + lineHeight / 2;
+        if (line > editorBox.top && line < editorBox.bottom) wire(across.layer, across.point(editorBox.right - 6, line), across.point(target.left, y), "use");
+        return;
       }
-      if (from) wire(across.layer, from, to, "use");
-    }
+      // from the line of a fragment above it, round the lane's right side
+      const above = order.slice(0, i).map((other) => frags.get(other)).find((g) => g?.fragment && g.detail === "full" && uses(g.def, f.def.name));
+      if (!above) return;
+      const box = above.fragment.node.getBoundingClientRect();
+      const scale = box.height / Math.max(1, above.fragment.node.offsetHeight);
+      wire(across.layer, across.point(box.right, box.top + above.fragment.yOf(f.def.name) * scale), across.point(target.right, y), "use", { out: 26 });
+    });
   }
 
   // ---- the neighbourhood ---------------------------------------------------------------------
@@ -744,10 +738,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     if (frags.has(idFor(def)) && !frags.get(idFor(def)).offered) chip.classList.add("in-set");
     if (item?.opaque) chip.classList.add("planned");
     chip.title = `${item?.sig ?? def.name}${item?.doc ? `\n${item.doc}` : ""}\nclick or ↵: into the lane · double-click or ⇧↵: focus on it`;
-    if (role !== "focus") {
-      chip.addEventListener("click", (event) => (event.metaKey || event.ctrlKey || event.shiftKey ? show(def) : pull(def)));
-      chip.addEventListener("dblclick", () => show(def));
-    }
+    if (role !== "focus") clicks(chip, (event) => (event.metaKey || event.ctrlKey || event.shiftKey ? show(def) : pull(def)), () => show(def));
     chip.addEventListener("pointerenter", () => lit(def, true));
     chip.addEventListener("pointerleave", () => lit(def, false));
     chip.addEventListener("focus", () => lit(def, true));
