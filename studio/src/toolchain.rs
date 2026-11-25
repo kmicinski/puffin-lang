@@ -332,10 +332,10 @@ impl Toolchain {
         std::fs::metadata(path).and_then(|meta| meta.modified()).ok()
     }
 
-    /// What `probe` found for the compiler as it is now, probing it again
-    /// with `run` when the binary changed.
-    async fn probed<F: std::future::Future<Output = bool>>(&self, probe: &Mutex<Probe>, run: impl FnOnce() -> F) -> bool {
-        let stamp = Self::stamp(&self.puffincc);
+    /// What `probe` found for `binary` as it is now, probing it again with
+    /// `run` when the binary changed.
+    async fn probed<F: std::future::Future<Output = bool>>(&self, binary: &Path, probe: &Mutex<Probe>, run: impl FnOnce() -> F) -> bool {
+        let stamp = Self::stamp(binary);
         {
             let known = probe.lock().expect("probe lock");
             if known.stamp.is_some() && known.stamp == stamp {
@@ -347,136 +347,97 @@ impl Toolchain {
         works
     }
 
+    /// Run puffincc with `args` over a fresh workspace of `files`: whether
+    /// `works` says its output (and the workspace, for what it wrote) shows
+    /// the feature. A run that cannot start shows nothing.
+    async fn try_puffincc(&self, files: &[(&str, &str)], args: &[&str], works: impl FnOnce(&Output, &Workspace) -> bool) -> bool {
+        let files: Files = files.iter().map(|(path, text)| ((*path).to_owned(), (*text).to_owned())).collect();
+        let Ok(workspace) = self.workspace(&files) else { return false };
+        let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+        self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| works(&output, &workspace))
+    }
+
+    /// A probe of the compiler, for the binary as it is now.
+    async fn probe_puffincc(&self, probe: &Mutex<Probe>, files: &[(&str, &str)], args: &[&str], works: impl FnOnce(&Output, &Workspace) -> bool) -> bool {
+        self.probed(&self.puffincc, probe, || self.try_puffincc(files, args, works)).await
+    }
+
     /// Whether `puffincc --assist` answers, for the binary as it is now.
     pub async fn assist_available(&self) -> bool {
-        self.probed(&self.assist, || self.probe_assist()).await
+        self.probe_puffincc(&self.assist, &[("probe.puf", "(define probe 1)\n")], &["--assist", "check", "probe.puf"], |output, _| {
+            output.success && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value["ok"] == Value::Bool(true))
+        })
+        .await
     }
 
     /// Whether `puffincc --repl --observe` compiles a unit.
     pub async fn observe_available(&self) -> bool {
-        self.probed(&self.observe, || async {
-            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define (probe x) x)\n".to_owned())])) else {
-                return false;
-            };
-            let out = workspace.path("probe.pbc");
-            let args = ["--repl", "--observe", "probe.puf", "-o"].map(String::from).into_iter().chain([out.to_string_lossy().into_owned()]).collect::<Vec<_>>();
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success) && out.is_file()
+        self.probe_puffincc(&self.observe, &[("probe.puf", "(define (probe x) x)\n")], &["--repl", "--observe", "probe.puf", "-o", "probe.pbc"], |output, workspace| {
+            output.success && workspace.path("probe.pbc").is_file()
         })
         .await
     }
 
     /// Whether `puffincc --repl --trace NAME` compiles a unit (§3.2).
     pub async fn trace_available(&self) -> bool {
-        self.probed(&self.trace, || async {
-            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define (probe x) x)\n".to_owned())])) else {
-                return false;
-            };
-            let out = workspace.path("probe.pbc");
-            let args = ["--repl", "--trace", "probe", "probe.puf", "-o"].map(String::from).into_iter().chain([out.to_string_lossy().into_owned()]).collect::<Vec<_>>();
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success) && out.is_file()
+        self.probe_puffincc(&self.trace, &[("probe.puf", "(define (probe x) x)\n")], &["--repl", "--trace", "probe", "probe.puf", "-o", "probe.pbc"], |output, workspace| {
+            output.success && workspace.path("probe.pbc").is_file()
         })
         .await
     }
 
     /// Whether `puffincc --assist facts` answers.
     pub async fn facts_available(&self) -> bool {
-        if !self.assist_available().await {
-            return false;
-        }
-        self.probed(&self.facts, || async {
-            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n".to_owned())])) else {
-                return false;
-            };
-            let args = ["--assist", "facts", "probe.puf", "8"].map(String::from);
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| {
-                output.success && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.get("type").is_some())
-            })
-        })
-        .await
+        self.assist_available().await
+            && self
+                .probe_puffincc(&self.facts, &[("probe.puf", "(define probe 1)\n")], &["--assist", "facts", "probe.puf", "8"], |output, _| {
+                    output.success && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.get("type").is_some())
+                })
+                .await
     }
 
     /// Whether `puffincc --assist assists` takes `--observed FILE`.
     pub async fn observed_flag_available(&self) -> bool {
-        if !self.assist_available().await {
-            return false;
-        }
-        self.probed(&self.observed_flag, || async {
-            let Ok(workspace) = self.workspace(&Files::from([
-                ("probe.puf".to_owned(), "(define probe 1)\n".to_owned()),
-                ("observed.sexp".to_owned(), "()\n".to_owned()),
-            ])) else {
-                return false;
-            };
-            let args = ["--assist", "assists", "probe.puf", "8", "--observed", "observed.sexp"].map(String::from);
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success && assist_lines(&output.stdout).1)
-        })
-        .await
+        self.assist_available().await
+            && self
+                .probe_puffincc(
+                    &self.observed_flag,
+                    &[("probe.puf", "(define probe 1)\n"), ("observed.sexp", "()\n")],
+                    &["--assist", "assists", "probe.puf", "8", "--observed", "observed.sexp"],
+                    |output, _| output.success && assist_lines(&output.stdout).1,
+                )
+                .await
     }
 
     /// Whether `puffincc --assist lint FILE --observed OBS` answers.
     pub async fn lint_available(&self) -> bool {
-        if !self.assist_available().await {
-            return false;
-        }
-        self.probed(&self.lint, || async {
-            let Ok(workspace) = self.workspace(&Files::from([
-                ("probe.puf".to_owned(), "(define probe 1)\n".to_owned()),
-                ("observed.sexp".to_owned(), "()\n".to_owned()),
-            ])) else {
-                return false;
-            };
-            let args = ["--assist", "lint", "probe.puf", "--observed", "observed.sexp"].map(String::from);
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| output.success && json_lines(&output.stdout, "message").1)
-        })
-        .await
+        self.assist_available().await
+            && self
+                .probe_puffincc(
+                    &self.lint,
+                    &[("probe.puf", "(define probe 1)\n"), ("observed.sexp", "()\n")],
+                    &["--assist", "lint", "probe.puf", "--observed", "observed.sexp"],
+                    |output, _| output.success && json_lines(&output.stdout, "message").1,
+                )
+                .await
     }
 
     /// Whether `puffincc --assist rename FILE POS NEW` is an operation this
     /// puffincc knows.
     pub async fn rename_available(&self) -> bool {
-        if !self.assist_available().await {
-            return false;
-        }
-        self.probed(&self.rename, || async {
-            let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n(+ probe 1)\n".to_owned())])) else {
-                return false;
-            };
-            let args = ["--assist", "rename", "probe.puf", "8", "renamed"].map(String::from);
-            self.puffincc(&args, &workspace.dir).await.is_ok_and(|output| {
-                !format!("{}{}", output.stdout, output.stderr).contains("unknown --assist operation")
-                    && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.is_object())
-            })
-        })
-        .await
-    }
-
-    async fn probe_assist(&self) -> bool {
-        let Ok(workspace) = self.workspace(&Files::from([("probe.puf".to_owned(), "(define probe 1)\n".to_owned())])) else {
-            return false;
-        };
-        let args = ["--assist", "check", "probe.puf"].map(String::from);
-        match self.puffincc(&args, &workspace.dir).await {
-            Ok(output) => {
-                output.success
-                    && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value["ok"] == Value::Bool(true))
-            }
-            Err(_) => false,
-        }
+        self.assist_available().await
+            && self
+                .probe_puffincc(&self.rename, &[("probe.puf", "(define probe 1)\n(+ probe 1)\n")], &["--assist", "rename", "probe.puf", "8", "renamed"], |output, _| {
+                    !format!("{}{}", output.stdout, output.stderr).contains("unknown --assist operation")
+                        && serde_json::from_str::<Value>(output.stdout.trim()).is_ok_and(|value| value.is_object())
+                })
+                .await
     }
 
     /// Whether `puffin-vm --serve` runs, for the binary as it is now: it
     /// must take `quit` and exit cleanly.
     pub async fn serve_available(&self) -> bool {
-        let stamp = Self::stamp(&self.vm);
-        {
-            let probe = self.serve.lock().expect("probe lock");
-            if probe.stamp.is_some() && probe.stamp == stamp {
-                return probe.works;
-            }
-        }
-        let works = self.probe_serve().await;
-        *self.serve.lock().expect("probe lock") = Probe { stamp, works };
-        works
+        self.probed(&self.vm, &self.serve, || self.probe_serve()).await
     }
 
     async fn probe_serve(&self) -> bool {
