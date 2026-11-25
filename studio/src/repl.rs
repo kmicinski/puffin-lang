@@ -170,17 +170,9 @@ impl Studio {
                     let head = prefix(&types, &names);
                     let own = declared.iter().map(|(_, form)| format!("{form}\n")).collect::<String>();
                     defines.extend(declared);
-                    let head = format!("{head}{own}");
-                    let dir = self.toolchain.fresh("unit");
-                    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-                    std::fs::write(dir.join("unit.puf"), format!("{head}{text}\n")).map_err(|error| error.to_string())?;
-                    return Ok(Unit { dir, path: "unit.puf".into(), prefix_lines: head.matches('\n').count(), inserted_after: 0, defines, _workspace: None });
+                    return self.write_unit(&format!("{head}{own}"), text, defines);
                 }
-                let head = prefix(&types, &names);
-                let dir = self.toolchain.fresh("unit");
-                std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-                std::fs::write(dir.join("unit.puf"), format!("{head}{text}\n")).map_err(|error| error.to_string())?;
-                Ok(Unit { dir, path: "unit.puf".into(), prefix_lines: head.matches('\n').count(), inserted_after: 0, defines, _workspace: None })
+                self.write_unit(&prefix(&types, &names), text, defines)
             }
             Source::File { file } => {
                 let files = self.files();
@@ -208,6 +200,50 @@ impl Studio {
                 })
             }
         }
+    }
+
+    /// A unit of `head` (the types it needs) then `text`, in a fresh
+    /// directory.
+    fn write_unit(&self, head: &str, text: &str, defines: Vec<(String, String)>) -> Result<Unit, String> {
+        let dir = self.toolchain.fresh("unit");
+        std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        std::fs::write(dir.join("unit.puf"), format!("{head}{text}\n")).map_err(|error| error.to_string())?;
+        Ok(Unit { dir, path: "unit.puf".into(), prefix_lines: head.matches('\n').count(), inserted_after: 0, defines, _workspace: None })
+    }
+
+    /// The studio's own one-line unit `source` (for the observer: read or
+    /// merge its record) compiled plainly in a fresh `what` directory: the
+    /// directory, removed when dropped, and the .pbc.
+    async fn compile_own(&self, what: &str, source: &str) -> Option<(toolchain::Workspace, std::path::PathBuf)> {
+        let dir = self.toolchain.fresh(what);
+        let workspace = toolchain::Workspace { dir: dir.clone() };
+        std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join("unit.puf"), source)).ok()?;
+        let pbc = dir.join("unit.pbc");
+        let compiled = self.toolchain.compile_unit(&dir, "unit.puf", &pbc, false).await;
+        compiled.is_ok_and(|output| output.success).then_some((workspace, pbc))
+    }
+
+    /// Wait for the evaluation queue as the assistant's tools do: a while,
+    /// not as long as the author's evaluation takes.
+    pub(crate) async fn wait_for_session(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        tokio::time::timeout(Duration::from_secs(30), self.eval_queue.lock())
+            .await
+            .map_err(|_| "the session is busy with the author's evaluation; try again shortly".to_owned())
+    }
+
+    /// Run `pbc` against the live session with `try`, for at most `limit`
+    /// (interrupted past it), and keep nothing: the observer's spill is of
+    /// the discarded state, so a later failure must not merge it.
+    pub(crate) async fn try_run(&self, pbc: &std::path::Path, limit: Duration, sink: crate::lane::Sink<'_>) -> Status {
+        let status = match tokio::time::timeout(limit, self.lane.run(pbc, false, sink)).await {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = self.lane.interrupt();
+                Status::Interrupted
+            }
+        };
+        let _ = std::fs::remove_file(self.lane.spill_path());
+        status
     }
 
     /// Compile `unit` for the live session: observing when it observes, and
@@ -432,18 +468,7 @@ impl Studio {
         if record.is_empty() || record == "()" {
             return;
         }
-        let dir = self.toolchain.fresh("merge");
-        let workspace = toolchain::Workspace { dir: dir.clone() };
-        if std::fs::create_dir_all(&dir)
-            .and_then(|()| std::fs::write(dir.join("unit.puf"), format!("(#%observe-merge! (quote {record}))\n")))
-            .is_err()
-        {
-            return;
-        }
-        let pbc = dir.join("unit.pbc");
-        if !self.toolchain.compile_unit(&dir, "unit.puf", &pbc, false).await.is_ok_and(|output| output.success) {
-            return;
-        }
+        let Some((workspace, pbc)) = self.compile_own("merge", &format!("(#%observe-merge! (quote {record}))\n")).await else { return };
         let merged = self.lane.run(&pbc, true, &mut |_| {}).await == Status::Ok;
         drop(workspace);
         if merged {
@@ -462,16 +487,7 @@ impl Studio {
         }
         let _queue = self.eval_queue.lock().await;
         let generation = self.lane.generation();
-        let dir = self.toolchain.fresh("observations");
-        let workspace = toolchain::Workspace { dir: dir.clone() };
-        if std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(dir.join("unit.puf"), "(#%observations)\n")).is_err() {
-            return;
-        }
-        let pbc = dir.join("unit.pbc");
-        let compiled = self.toolchain.compile_unit(&dir, "unit.puf", &pbc, false).await;
-        if !compiled.is_ok_and(|output| output.success) {
-            return;
-        }
+        let Some((workspace, pbc)) = self.compile_own("observations", "(#%observations)\n").await else { return };
         let mut results = Vec::new();
         let mut sink = |output: Output| {
             if let Output::Result(text) = output {
@@ -510,9 +526,7 @@ impl Studio {
         if let Some(word) = effectful(text) {
             return Err(format!("`{word}` reaches outside the session; evaluate refuses it. Suggest it to the author in a ```repl block instead."));
         }
-        let Ok(_queue) = tokio::time::timeout(Duration::from_secs(30), self.eval_queue.lock()).await else {
-            return Err("the session is busy with the author's evaluation; try again shortly".to_owned());
-        };
+        let _queue = self.wait_for_session().await?;
         let source = Source::Prompt;
         let unit = self.unit(text, &source)?;
         let pbc = match self.compile(&unit, &source).await {
@@ -529,16 +543,7 @@ impl Studio {
             }
             Output::Result(text) => results.push(text),
         };
-        let status = tokio::time::timeout(Duration::from_secs(20), self.lane.run(&pbc, false, &mut sink)).await;
-        let status = match status {
-            Ok(status) => status,
-            Err(_) => {
-                let _ = self.lane.interrupt();
-                Status::Interrupted
-            }
-        };
-        // the observer's spill is of the discarded state: a later failure must not merge it
-        let _ = std::fs::remove_file(self.lane.spill_path());
+        let status = self.try_run(&pbc, Duration::from_secs(20), &mut sink).await;
         let (ok, status) = match &status {
             Status::Ok => (true, "ok".to_owned()),
             Status::Err(code) => (false, format!("error (status {code})")),

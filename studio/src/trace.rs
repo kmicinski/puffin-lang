@@ -317,9 +317,7 @@ impl Studio {
         if let Some(word) = effectful(&body) {
             return Err(format!("`{word}` reaches outside the session; trace refuses it, as evaluate does. Suggest it to the author in a ```repl block instead."));
         }
-        let Ok(_queue) = tokio::time::timeout(Duration::from_secs(30), self.eval_queue.lock()).await else {
-            return Err("the session is busy with the author's evaluation; try again shortly".to_owned());
-        };
+        let _queue = self.wait_for_session().await?;
         self.lane.ensure().await.map_err(|error| format!("the session did not start: {error}"))?;
         if !self.can_trace().await {
             return Err("the author's session cannot trace (no --repl --trace, or its runtime did not load); use evaluate".to_owned());
@@ -342,16 +340,8 @@ impl Studio {
             }
             Output::Result(text) => results.push(text),
         };
-        let status = match tokio::time::timeout(TRACE_LIMIT, self.lane.run(&pbc, false, &mut sink)).await {
-            Ok(status) => status,
-            Err(_) => {
-                let _ = self.lane.interrupt();
-                Status::Interrupted
-            }
-        };
+        let status = self.try_run(&pbc, TRACE_LIMIT, &mut sink).await;
         kept.finish();
-        // the observer's spill is of the discarded state
-        let _ = std::fs::remove_file(self.lane.spill_path());
         let (ok, status) = match &status {
             Status::Ok => (true, "ok".to_owned()),
             Status::Err(code) => (false, format!("error (status {code}): the trace shows the calls up to the failure")),
