@@ -884,6 +884,10 @@ async fn after_a_turn_the_board_hides_what_it_did_not_touch() {
     // alloc and what it uses directly (fresh) stay, the provided store-ref
     // stays, the author's pin stays; biggest is two steps away and folds
     assert_eq!(hidden, vec!["biggest", "unused-a"], "{hidden:?}");
+    // what the author is reading in the working set stays in sight too
+    studio.arrange(&json!({ "action": "pull", "names": ["unused-a"] })).unwrap();
+    studio.auto_arrange(&[("store.puf".to_owned(), 2, 2)]);
+    assert_eq!(names_in(&studio.board(), "store.puf", "hidden"), vec!["biggest"]);
 }
 
 #[tokio::test]

@@ -1060,8 +1060,8 @@ impl Studio {
     /// interface (what it provides) stays, and the rest of its internals --
     /// private definitions among them --
     /// helpers the turn neither touched nor needs -- fold into "N hidden".
-    /// What the author pinned (opened or unhid themselves) is never
-    /// hidden. (What it just wrote is not opened here: the attention model
+    /// What the author pinned (unhid themselves) or is reading in the
+    /// working set is never hidden. (What it just wrote is not opened here: the attention model
     /// offers the builder's unseen changes beside the focus, docs/VIEW.md.)
     pub fn auto_arrange(&self, touched: &[(String, usize, usize)]) {
         if touched.is_empty() {
@@ -1089,8 +1089,10 @@ impl Studio {
         let files: BTreeSet<&String> = touched.iter().map(|(f, _, _)| f).collect();
         self.update_board(|board| {
             for m in outline.iter().filter(|m| files.contains(&m.path) && m.path != crate::props::HARNESS) {
+                // what the author is reading beside the focus stays in sight on its card too
+                let reading: Vec<String> = board["set"].as_array().into_iter().flatten().filter_map(|s| s["id"].as_str()?.strip_prefix(&format!("{}::", m.path)).map(str::to_owned)).collect();
                 let card = card_mut(board, &m.path);
-                let pinned: BTreeSet<String> = card["pinned"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+                let pinned: BTreeSet<String> = card["pinned"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).chain(reading).collect();
                 // few definitions: nothing worth folding away
                 let hidden: Vec<String> = if m.items.len() <= 5 {
                     Vec::new()

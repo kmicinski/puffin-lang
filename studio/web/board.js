@@ -864,7 +864,6 @@ export function createBoard({ send, stage, onChange }) {
   // and each fragment is wired to its row.
   function placeLane() {
     const compact = root.classList.contains("compact");
-    lane.classList.toggle("compact", compact);
     lane.style.setProperty("--lane-max", `${laneMax()}px`);
     if (compact) {
       lane.style.left = `${GRID.x}px`;
@@ -904,8 +903,9 @@ export function createBoard({ send, stage, onChange }) {
       const to = anchor(frag.dataset.key);
       if (!to) continue;
       const box = canvasBox(frag.querySelector(".frag-head") ?? frag);
-      const from = compact ? { x: box.x + box.w, y: box.y + box.h / 2 } : { x: box.x + box.w, y: box.y + box.h / 2 };
+      const from = { x: box.x + box.w, y: box.y + box.h / 2 };
       const cls = frag.classList.contains("offered") ? "offered" : "kept";
+      // (stacked, the row is below the lane: the wire goes round its side)
       laneLayer.append(svg("path", { d: curve(from, { x: to.left, y: to.y }, compact ? { out: 40 } : {}), class: `wire lane-wire ${cls}` }));
       laneLayer.append(svg("circle", { cx: to.left, cy: to.y, r: 2.5, class: `wire-dot lane-wire ${cls}` }));
     }
@@ -935,13 +935,12 @@ export function createBoard({ send, stage, onChange }) {
   root.addEventListener("pointerdown", (event) => { if (event.target === root || event.target.classList.contains("canvas-pan")) atHome = false; }, { capture: true });
   function home(animate = true, box = null) {
     atHome = !box;
-    const top = canvasBox(lane);
-    const head = { ...top, h: Math.min(top.h, root.clientHeight * 0.8) };
+    const at = canvasBox(lane);
     // as close as lets the code be read whole (a long signature line may
     // run off the side)
-    const code = Math.max(0, ...[...lane.querySelectorAll(".frag.is-full")].map((f) => f.offsetWidth)) || top.w;
+    const code = Math.max(0, ...[...lane.querySelectorAll(".frag.is-full")].map((f) => f.offsetWidth)) || at.w;
     const z = Math.max(READABLE, Math.min(1, (root.clientWidth - 48) / Math.max(1, code)));
-    const v = { x: 24 - head.x * z, y: TOP() - head.y * z, z };
+    const v = { x: 24 - at.x * z, y: TOP() - at.y * z, z };
     if (box) {
       // the least move that shows it, at that zoom, clear of what floats
       // over the foot of the screen (the voice pill)
