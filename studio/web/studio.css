@@ -78,14 +78,6 @@ body { display: flex; flex-direction: column; }
 .brand { display: flex; align-items: baseline; gap: 8px; margin-right: 8px; }
 .brand .logo { font-size: 20px; }
 .brand .name { font-size: 18px; font-weight: 700; color: var(--base01); letter-spacing: 0.5px; }
-.brand .target-note {
-  font: 12px var(--mono);
-  color: var(--base1);
-  border: 1px solid var(--base1);
-  border-radius: 10px;
-  padding: 1px 8px;
-}
-.brand .target-note:empty { display: none; }
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 
 .running-indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--base00); }
@@ -466,15 +458,15 @@ button.project-name:empty { display: none; }
 
 /* ---- History (the History button, ,history) ------------------------------------- */
 
-#history-panel {
-  width: 520px;
+/* the panels at the editor's right: this one and the versions */
+#history-panel, #versions {
   flex-shrink: 0;
   overflow: auto;
   border-left: 1px solid var(--border);
   background: var(--base3);
-  padding: 6px 10px;
   font-size: 12px;
 }
+#history-panel { width: 520px; padding: 6px 10px; }
 .history-head { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--strong); padding: 2px 0 6px; position: sticky; top: -6px; background: var(--base3); z-index: 1; }
 .history-head > span:first-child { margin-right: 4px; }
 .history-filters { display: flex; gap: 4px; flex: 1; flex-wrap: wrap; }
@@ -548,15 +540,7 @@ button.project-name:empty { display: none; }
 
 /* ---- Versions (,versions) -------------------------------------------------------- */
 
-#versions {
-  width: 360px;
-  flex-shrink: 0;
-  overflow: auto;
-  border-left: 1px solid var(--border);
-  background: var(--base3);
-  padding: 6px 8px;
-  font-size: 12px;
-}
+#versions { width: 360px; padding: 6px 8px; }
 .versions-head { display: flex; align-items: center; justify-content: space-between; font-weight: 600; color: var(--strong); padding: 2px 0 6px; }
 .version-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-bottom: 1px solid var(--border); }
 .version-id { font: 11px var(--mono); color: var(--muted); width: 32px; }

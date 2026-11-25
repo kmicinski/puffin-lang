@@ -212,15 +212,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 }
 .voice-typed::placeholder { color: var(--base1); }
 .voice-caption:not(:empty) + .voice-typed:not(:focus)::placeholder { color: transparent; }
-.voice-activity {
-  font-size: 12px;
-  color: var(--violet);
-  max-width: 40%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  animation: voice-busy 1.6s ease-in-out infinite;
-}
+/* something in progress: it breathes */
 @keyframes voice-busy { 50% { opacity: 0.55; } }
 .voice-stop, .voice-more {
   border: none;
@@ -279,7 +271,7 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 .voice-x:hover { color: var(--strong); }
 .voice-card-hint { padding: 4px 12px 8px; font-size: 11px; color: var(--base1); flex: none; }
 
-.voice-lens-list, .voice-talk-list { overflow: auto; padding: 0 6px 6px; min-height: 0; }
+.voice-lens-list { overflow: auto; padding: 0 6px 6px; min-height: 0; }
 .voice-lens-file { font: 600 11px var(--mono); color: var(--blue); padding: 6px 6px 2px; }
 .voice-lens-row {
   display: flex;
@@ -321,18 +313,6 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 .voice-prop.open .voice-prop-mark { color: var(--violet); }
 .voice-prop-detail { padding-left: 17px; font: 11px var(--mono); color: var(--red); white-space: pre-wrap; word-break: break-word; }
 .voice-prop-error { color: var(--red); font: 11px var(--mono); white-space: pre-wrap; padding: 2px 12px 6px; }
-
-.voice-talk { flex: 1; }
-.voice-line { padding: 3px 6px; line-height: 1.45; }
-.voice-who { display: inline-block; min-width: 50px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--base1); }
-.voice-line.author .voice-text, .voice-line.local .voice-text { color: var(--strong); font-weight: 600; }
-.voice-line.studio .voice-who { color: var(--cyan); }
-.voice-line.builder .voice-who { color: var(--violet); }
-.voice-line.builder .voice-text p { margin: 0 0 4px; }
-.voice-line.builder .voice-text ul, .voice-line.builder .voice-text ol { margin: 2px 0 4px; padding-left: 18px; }
-.voice-line.builder .voice-text code { font: 11.5px var(--mono); background: var(--base2); padding: 0 3px; border-radius: 3px; }
-.voice-line.error { color: var(--red); }
-.voice-extra { display: block; margin-left: 54px; font-size: 10.5px; color: var(--base1); }
 
 /* narrow windows: the rail floats over the editor's right edge */
 @media (max-width: 1500px) {

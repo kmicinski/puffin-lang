@@ -41,20 +41,18 @@
 /* ---- Answers in the transcript --------------------------------------------- */
 
 #transcript .entry { position: relative; }
-.entry.assist .line { color: var(--violet); }
+.entry.assist .line { color: var(--violet); font-weight: 600; }
 .entry.assist .line::before { content: "✦ "; color: var(--violet); }
 .entry.assist.follow .line::before { content: "↳ "; }
 .assist-body { font: 13px/1.5 var(--sans); color: var(--text); padding: 2px 0 0 14px; max-width: 80ch; }
 .assist-body .error { margin-top: 4px; }
 .assist-activity { color: var(--muted); padding-left: 14px; font: italic 12px var(--sans); }
 .assist-foot { display: flex; gap: 12px; padding: 2px 0 0 14px; color: var(--muted); font: 11px var(--sans); }
-.assist-foot a, .assist-actions a, a.assist-why { color: var(--muted); cursor: pointer; }
-.assist-foot a:hover, .assist-actions a:hover, a.assist-why:hover { color: var(--violet); text-decoration: underline; }
+.assist-foot a, a.assist-why { color: var(--muted); cursor: pointer; }
+.assist-foot a:hover, a.assist-why:hover { color: var(--violet); text-decoration: underline; }
 
-/* A suggested command, or a plan's steps. */
-.assist-chips, .assist-plan { margin: 4px 0 8px; }
-.assist-plan-head { display: flex; gap: 12px; color: var(--muted); font: 11px var(--sans); margin-bottom: 2px; }
-.assist-plan-head a { color: var(--violet); cursor: pointer; }
+/* A suggested command. */
+.assist-chips { margin: 4px 0 8px; }
 .assist-step {
   display: flex;
   flex-wrap: wrap;
@@ -76,27 +74,10 @@
 }
 .assist-step button.small { height: 20px; padding: 0 7px; font-size: 11px; }
 .assist-step .note { flex-basis: 100%; padding-left: 22px; color: var(--muted); font: 12px var(--sans); }
-.assist-step .mark { width: 14px; color: var(--green); text-align: center; }
-.assist-chips .mark { display: none; }
-.assist-plan .assist-step .mark::before { content: "○"; color: var(--muted); }
-.assist-plan .assist-step.done .mark::before { content: "✓"; color: var(--green); }
 
-/* "explain" and "next?" on any entry, while the pointer is over it. */
-.assist-actions {
-  position: absolute;
-  top: 0;
-  right: 0;
-  display: none;
-  gap: 10px;
-  padding: 0 4px;
-  background: var(--surface);
-  font: 11px var(--sans);
-}
-.entry:hover > .assist-actions { display: flex; }
 a.assist-why { float: right; margin-left: 12px; font: 11px var(--sans); }
 
 .assist-step.done code { border-color: var(--green); }
-.entry.assist .line { color: var(--violet); font-weight: 600; }
 .assist-body .note { padding-left: 0; }
 
 /* The steps an answer took: one quiet line, open for each call. */

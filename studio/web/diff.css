@@ -36,11 +36,12 @@
   white-space: nowrap;
   overflow: hidden;
 }
-.ip-who { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; color: var(--strong); font-weight: 600; }
+.ip-who { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; color: var(--violet); font-weight: 600; }
 .ip-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ip-flag { color: var(--orange); font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ip-head .ip-flag { flex: 0 1 auto; max-width: 35%; }
 .ip-checks { flex: none; color: var(--green); font-size: 11px; }
+.ip-checking { flex: none; color: var(--muted); font-size: 11px; font-style: italic; }
 .ip-head .ip-accept:disabled { opacity: 0.45; cursor: not-allowed; }
 .ip-head button { height: 18px; padding: 0 8px; font-size: 11px; border-radius: 4px; }
 .ip-head .ip-accept { margin-left: auto; background: var(--green); border-color: var(--green); color: white; }
@@ -54,8 +55,8 @@
   align-items: center;
   gap: 8px;
   padding: 3px 10px 3px 14px;
-  background: rgba(38, 139, 210, 0.07);
-  border-bottom: 1px solid rgba(38, 139, 210, 0.3);
+  background: var(--violet-tint);
+  border-bottom: 1px solid rgba(108, 113, 196, 0.35);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -67,32 +68,7 @@
 .ip-index { font: 11px var(--mono); color: var(--muted); min-width: 28px; text-align: center; }
 .proposal-bar button.on { background: var(--strong); border-color: var(--strong); color: var(--page); }
 
-/* ---- The Review tab and the Ask thread's chip --------------------------- */
-
-.review-set { margin-bottom: 12px; }
-.review-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
-.review-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--strong); }
-.review-decided { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.review-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: auto;
-  min-height: 26px;
-  margin-bottom: 3px;
-  padding: 3px 8px;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--tone);
-  border-radius: 4px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 12px;
-  text-align: left;
-}
-.review-row.gone { --tone: var(--muted); color: var(--muted); }
-.review-ids { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
-.review-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ---- The Ask thread's chip ---------------------------------------------- */
 
 .proposal-chip {
   display: flex;
@@ -107,15 +83,10 @@
   background: var(--surface);
   color: var(--strong);
   font-size: 12px;
+  margin-top: 6px;
+  max-width: 70ch;
 }
 .proposal-chip .chip-view { margin-left: auto; color: var(--blue); }
-.proposal-chip.done { color: var(--muted); }
-.ip-thread { height: 22px; padding: 0 8px; font-size: 11.5px; border-left: 3px solid var(--tone); }
-.ip-thread.on { background: var(--strong); color: var(--page); }
-
-.ip-who { color: var(--violet); }
-.ip-checking { flex: none; color: var(--muted); font-size: 11px; font-style: italic; }
-.proposal-bar { background: var(--violet-tint); border-bottom-color: rgba(108, 113, 196, 0.35); }
-.proposal-chip { margin-top: 6px; max-width: 70ch; }
-.proposal-chip .chip-files { color: var(--muted); font: 11px var(--mono); }
 .proposal-chip .chip-view + .chip-view { margin-left: 10px; }
+.proposal-chip .chip-files { color: var(--muted); font: 11px var(--mono); }
+.proposal-chip.done { color: var(--muted); }
