@@ -58,6 +58,9 @@ const COMPACT = 700;
 
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
+// JSON with each object's keys in order: the studio sends the board back
+// with its keys sorted, and it is the same board
+const canonical = (value) => JSON.stringify(value, (_, v) => (v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v));
 
 // A click that may be the first of a double-click: `once` waits a moment
 // to see (a row's click brings its code in, its double-click focuses it;
@@ -1417,6 +1420,11 @@ export function createBoard({ send, stage, onChange }) {
   let looked = null;
   return {
     receive({ board: next, outline: modules }) {
+      // The studio sends every change to every tab, this one too: its own
+      // change coming back, with the outline as it was, is nothing new
+      // (and redrawing every card for it is what made a pull slow).
+      const unchanged = (!next || canonical(next) === canonical(board)) && (!modules || JSON.stringify(modules) === JSON.stringify(outline));
+      if (unchanged && outline.length) return;
       const before = board.questions?.length ?? 0;
       const decidedBefore = (board.notes ?? []).filter((n) => n.kind === "decision").length;
       if (next) board = next;
@@ -1479,7 +1487,11 @@ export function createBoard({ send, stage, onChange }) {
     laneChanged,
     // the working set's membership, kept with the board
     set: () => board.set ?? [],
-    setSet: (set) => change((b) => { b.set = set; }),
+    // (the view lays the lane out itself: nothing on the cards changes)
+    setSet(set) {
+      board = { ...board, set };
+      save();
+    },
     // view.js's marks on the rows: key -> "set" | "offered" | "focus"
     mark(next) {
       marks = next;

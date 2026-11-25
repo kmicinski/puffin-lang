@@ -570,6 +570,9 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     f.offered = false;
     attention.observe({ type: "open", id: idFor(f.def), detail: f.detail });
     editSet((set) => [...set, { id: idFor(f.def), at: Date.now() }], idFor(f.def));
+    // (it is being typed in: the lane holds still, only its marks change)
+    layLane();
+    drawWires();
   }
 
   function renderFrag(f) {
