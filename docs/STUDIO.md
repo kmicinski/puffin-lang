@@ -13,7 +13,8 @@ corpus; `puffin-vm --serve`; the Emacs commands `puffin-assist`
 checks, the assist menu, the live REPL lane, ask mode with checked
 proposals, and per-file versions. Voice mode, an experiment in
 building a program by talking, is docs/VOICE.md. §9 lists where the studio differs
-from this design.
+from this design. The server's code is mapped in
+docs/internal/studio-architecture.md.
 
 Puffin Studio replaces the console REPL (`src/repl.rkt`, the Racket
 interpreter loop) with a local web workbench: an editor over the
