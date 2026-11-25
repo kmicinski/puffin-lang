@@ -23,7 +23,8 @@ const byId = (list) => new Map(list.map((x) => [x.id, x]));
 
 test("uses resolve across modules, and callers are the reverse", () => {
   const g = graph(outline);
-  assert.deepEqual(g.nodes.get(STEP).uses.sort(), ["machine.puf::apply-kont", "machine.puf::step-eval"]);
+  // its body's names, and the types of its `(: step (-> State State))`
+  assert.deepEqual(g.nodes.get(STEP).uses.sort(), ["machine.puf::State", "machine.puf::apply-kont", "machine.puf::step-eval"]);
   assert.ok(g.nodes.get("store.puf::alloc").usedBy.includes("machine.puf::bind-and-eval"));
   // a property is a node whose uses are what it mentions
   assert.deepEqual(g.nodes.get("properties.puf::closed-terminates").uses.sort(), ["lang.puf::expr-size", "machine.puf::run"]);
@@ -271,4 +272,12 @@ test("the tracker folds the studio's messages into a state", () => {
   assert.equal(tracker.at("machine.puf", 43), STEP);
   assert.deepEqual(tracker.edit("store.puf", 26, 31), ["store.puf::alloc", "store.puf::env-ref"]);
   assert.equal(idOf("a.puf", "f"), "a.puf::f");
+});
+
+test("a type in focus brings the types its constructors carry", () => {
+  const state = at({ focus: "machine.puf::Kont" });
+  assert.equal(features(state, "store.puf::Env").sigType, 1);
+  assert.equal(features(state, "lang.puf::Expr").sigType, 1);
+  // and what mentions it, through the graph
+  assert.equal(features(state, "machine.puf::apply-kont").usedBy, 1);
 });

@@ -114,8 +114,11 @@ export function graph(outline) {
     const required = new Set((modules.get(path)?.requires ?? []).map((r) => joinPath(path, r)));
     return ids.find((id) => nodes.get(id).path === path) ?? ids.find((id) => required.has(nodes.get(id).path)) ?? ids[0];
   };
+  // what a definition uses: the names in its body, and the types in its
+  // signature (a `(: f τ)` declaration's types are not among its uses)
   for (const node of nodes.values()) {
-    for (const name of node.names) {
+    const signature = node.kind === "property" ? [] : typeNames(node.sig); // a property's "signature" is English
+    for (const name of [...node.names, ...signature]) {
       const used = resolve(name, node.path);
       if (used && used !== node.id && !node.uses.includes(used)) node.uses.push(used);
     }
@@ -140,8 +143,10 @@ function joinPath(from, relative) {
   return parts.join("/");
 }
 
-// The capitalized names in a signature: the types it mentions.
-const typeNames = (sig) => (sig.split(":").slice(1).join(":").match(/[A-Z][\w?!*<>=/-]*/g) ?? []);
+// The capitalized names in a signature -- after `val f :`, or after
+// `type T =` -- the types it mentions (and a type's constructors, which
+// resolve to the type itself).
+const typeNames = (sig) => (sig.replace(/^[^:=]*[:=]/, "").match(/[A-Z][\w?!*<>/-]*/g) ?? []);
 
 // Breadth-first from `start` along `edge`: id -> { d, via }, where `via` is
 // the id one step nearer the start (null for its direct neighbors).
@@ -229,7 +234,7 @@ function prepare(state) {
     g, now: state.now, focus,
     down: focus ? reach(g, focus, "uses", CALLEE_DEPTH) : new Map(),
     up: focus ? reach(g, focus, "usedBy", CALLER_DEPTH) : new Map(),
-    sigTypes: new Set(focus ? typeNames(g.nodes.get(focus).sig).map((n) => g.resolve(n, g.nodes.get(focus).path)).filter(Boolean) : []),
+    sigTypes: new Set(focus && g.nodes.get(focus).kind !== "property" ? typeNames(g.nodes.get(focus).sig).map((n) => g.resolve(n, g.nodes.get(focus).path)).filter(Boolean) : []),
     context: contextIds, near, contextLabel: state.context?.label ?? "in context",
     builderEdits: latest(state.edits, "builder"), authorEdits: latest(state.edits, "author"),
     voice: latest(state.voice), looked, lastLook, failing, open,
