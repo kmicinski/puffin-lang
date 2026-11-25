@@ -30,7 +30,7 @@ use crate::claude_api::{self, Api};
 use crate::props::Results;
 use crate::sexp;
 use crate::studio::{Event, Studio};
-use crate::toolchain;
+use crate::toolchain::{self, Files};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -333,23 +333,33 @@ impl Studio {
         state.fragments.iter().map(|(_, text)| text.clone()).collect()
     }
 
+    /// What the router is told, and its decision: the program's index,
+    /// the author's view, the studio's state, then the words.
     async fn route(&self, utterance: &str, before: &[String], context: &Context) -> Result<Value, String> {
         let api = self.voice.api.as_ref().ok_or("no Claude API credentials")?;
         let files = self.files();
         let mut user = String::new();
-        let _ = writeln!(user, "Files and their top-level definitions (name:line; a type's constructors in brackets, each name:line):");
-        for (path, text) in &files {
-            let names: Vec<String> = sexp::forms(text)
-                .iter()
-                .filter_map(|form| {
-                    let name = form.name.as_ref()?;
-                    let made: Vec<String> = sexp::constructors_at(text, form).iter().map(|(c, line)| format!("{c}:{line}")).collect();
-                    Some(if made.is_empty() { format!("{name}:{}", form.line) } else { format!("{name}:{} [{}]", form.line, made.join(", ")) })
-                })
-                .take(80)
-                .collect();
-            let _ = writeln!(user, "- {path} ({} lines): {}", text.lines().count(), names.join(", "));
+        user.push_str(&program_index(&files));
+        user.push_str(&self.author_view(&files, context));
+        user.push_str(&self.studio_state());
+        if !before.is_empty() {
+            let quoted: Vec<String> = before.iter().map(|text| format!("\"{text}\"")).collect();
+            let _ = writeln!(
+                user,
+                "\nJust before, the author said {} -- you did nothing with it then, as not yet a whole request. \
+                 It is likely the start of what they say now (the speech recognizer ends a phrase at every pause): \
+                 read it and the new words as ONE utterance, and keep everything it asked for in any instruction.",
+                quoted.join(", then ")
+            );
         }
+        let _ = writeln!(user, "\nThe author just said: \"{utterance}\"");
+        api.structured(claude_api::FAST_MODEL, "low", ROUTER, &user, router_schema(), 1200, Duration::from_secs(20)).await
+    }
+
+    /// Where the author is looking: the browser's context, the line under
+    /// the mouse, the form at the cursor, and the shown file, numbered.
+    fn author_view(&self, files: &Files, context: &Context) -> String {
+        let mut user = String::new();
         let _ = writeln!(user, "\nThe author's view: {}", serde_json::to_string(context).unwrap_or_default());
         if let Some(hover) = &context.hover
             && let Some(text) = files.get(&hover.file)
@@ -376,6 +386,14 @@ impl Studio {
                 let _ = writeln!(user, "\nThe shown file, {file}, numbered:\n{shown}");
             }
         }
+        user
+    }
+
+    /// What the studio is doing, for the router: the view, the builder's
+    /// open questions and its state, the excursion, the properties, and the
+    /// conversation so far.
+    fn studio_state(&self) -> String {
+        let mut user = String::new();
         let (activity, running, queued, conversation, properties, excursion) = {
             let state = self.voice.state();
             (
@@ -427,18 +445,7 @@ impl Studio {
         if !conversation.is_empty() {
             let _ = writeln!(user, "\nThe conversation so far, oldest first:\n{}", conversation.join("\n"));
         }
-        if !before.is_empty() {
-            let quoted: Vec<String> = before.iter().map(|text| format!("\"{text}\"")).collect();
-            let _ = writeln!(
-                user,
-                "\nJust before, the author said {} -- you did nothing with it then, as not yet a whole request. \
-                 It is likely the start of what they say now (the speech recognizer ends a phrase at every pause): \
-                 read it and the new words as ONE utterance, and keep everything it asked for in any instruction.",
-                quoted.join(", then ")
-            );
-        }
-        let _ = writeln!(user, "\nThe author just said: \"{utterance}\"");
-        api.structured(claude_api::FAST_MODEL, "low", ROUTER, &user, router_schema(), 1200, Duration::from_secs(20)).await
+        user
     }
 
     async fn act(self: &Arc<Self>, utterance: &str, decision: Value, context: &Context, ms: u64) {
@@ -511,6 +518,26 @@ impl Studio {
         }
     }
 
+}
+
+/// The program's files and their top-level definitions, each with its
+/// line (a type's constructors too): what the router resolves names in.
+fn program_index(files: &Files) -> String {
+    let mut user = String::new();
+    let _ = writeln!(user, "Files and their top-level definitions (name:line; a type's constructors in brackets, each name:line):");
+    for (path, text) in files {
+        let names: Vec<String> = sexp::forms(text)
+            .iter()
+            .filter_map(|form| {
+                let name = form.name.as_ref()?;
+                let made: Vec<String> = sexp::constructors_at(text, form).iter().map(|(c, line)| format!("{c}:{line}")).collect();
+                Some(if made.is_empty() { format!("{name}:{}", form.line) } else { format!("{name}:{} [{}]", form.line, made.join(", ")) })
+            })
+            .take(80)
+            .collect();
+        let _ = writeln!(user, "- {path} ({} lines): {}", text.lines().count(), names.join(", "));
+    }
+    user
 }
 
 /// A routing that does nothing at all: no navigation, build, control,
