@@ -1,12 +1,14 @@
-/* The module board (board.js): module cards of ML-style signatures,
-   dense on purpose -- the design, not the code, fills the screen. */
+/* The canvas (board.js, docs/VIEW-CANVAS.md): module cards of ML-style
+   signatures, dense on purpose, with live code opened in them and pulled
+   out beside them; one surface, moved by the camera (camera.js). */
 
 .board {
   position: absolute;
   inset: 0;
   z-index: 25;
-  overflow: auto;
+  overflow: hidden;
   outline: none;
+  touch-action: none;
   background:
     radial-gradient(circle, var(--board-dot, var(--border)) 1px, transparent 1px) 0 0 / 22px 22px,
     var(--page);
@@ -17,8 +19,10 @@
 body.board-on .focus-chip { display: none; }
 /* the canvas (a new visit, or a project with no code) comes first */
 body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board-question { display: none; }
-.board-sizer { position: relative; min-width: 100%; min-height: 100%; }
-.board-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.board-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+/* a glide: the camera moving to frame what was just asked for */
+.board-canvas.gliding { transition: transform 0.42s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.board.panning { cursor: grabbing; }
 .board-wires, .board-lens { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
 .board-lens { z-index: 4; }
 .board-wire { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: 0.7; transition: opacity 0.2s; }
@@ -407,3 +411,64 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board-build { color: var(--green) !important; }
 .board-item.building > .board-item-line { background: linear-gradient(90deg, var(--green-tint), transparent 70%); background-size: 200% 100%; animation: board-building 1.4s ease-in-out infinite; }
 @keyframes board-building { 0% { background-position: 100% 0; } 50% { background-position: 0 0; } 100% { background-position: 100% 0; } }
+
+/* ---- code on the canvas (span-editor.js) ---- */
+
+.span-editor {
+  margin: 3px 6px 8px 22px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--page);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  animation: board-open 0.18s ease-out;
+}
+.span-editor.editing { border-color: var(--blue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent); }
+.board-card.is-file .span-editor { margin: 6px 8px 8px; }
+/* a card holding code is as wide as its code; its signatures stay as wide as before */
+.board-card:has(.span-editor) { max-width: none; }
+.board-card:has(.span-editor) .board-item-line { max-width: 560px; }
+/* names that are definitions: ⌘-click pulls them out */
+.canvas-ref { text-decoration: underline dotted color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
+.span-editor.ref-hover .canvas-ref:hover, .ref-hover .canvas-ref { cursor: pointer; }
+.board-item.ref-target > .board-item-line, .canvas-frag.ref-target .canvas-frag-head { background: var(--blue-tint, var(--violet-tint)); box-shadow: inset 2px 0 0 var(--blue); }
+
+/* a definition pulled out beside a use */
+.canvas-frag {
+  position: absolute;
+  z-index: 3;
+  background: var(--surface);
+  border: 1px solid var(--blue);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(7, 54, 66, 0.16);
+  font: 12px/1.5 var(--mono);
+  color: var(--text);
+  transition: left 0.38s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.38s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s, transform 0.25s;
+}
+.canvas-frag.arriving { opacity: 0; transform: translateX(-14px) scale(0.98); }
+.canvas-frag-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px 3px 10px; white-space: nowrap; border-radius: 8px 8px 0 0; }
+.canvas-frag-head .board-sig { flex: 1; }
+.canvas-frag-module { font: 11px var(--sans); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; cursor: pointer; }
+.canvas-frag-module:hover { color: var(--violet); border-color: var(--violet); }
+.canvas-frag .span-editor { margin: 2px 8px 8px; }
+.canvas-frag .board-doc { padding-left: 28px; }
+.board-pulls { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
+.board-pull-wire { fill: none; stroke: var(--blue); stroke-width: 1.6; opacity: 0.75; }
+.board-pull-dot { fill: var(--blue); }
+.flash { animation: canvas-flash 0.9s ease-out; }
+@keyframes canvas-flash { 0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+
+/* with code pulled out, the rest recedes (still there, still clickable) */
+.board-card.receded { opacity: 0.45; filter: saturate(0.4); }
+.board-card.receded:hover { opacity: 0.9; filter: none; }
+.board-whole.on { color: var(--blue); }
+
+/* semantic zoom: closer is more detail. Middle distance: signatures, code
+   shown but not to be read; far: the cards' names and their shape. */
+.board.z-mid .board-doc, .board.z-far .board-doc, .board.z-far .board-requires { display: none; }
+.board.z-mid .span-editor { pointer-events: none; }
+.board.z-far .board-item-line .board-sig-rest, .board.z-far .board-sig-kw { display: none; }
+.board.z-far .span-editor .monaco-editor { visibility: hidden; }
+.board.z-far .span-editor { background: repeating-linear-gradient(var(--page) 0 9px, var(--border) 9px 11px); }
+.board.z-far .board-card-title { font-size: 22px; }
+.board.z-far .board-card-meta, .board.z-far .board-tools, .board.z-far .board-add { display: none; }

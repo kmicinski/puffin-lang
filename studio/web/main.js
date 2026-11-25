@@ -84,6 +84,7 @@ const files = createFiles({
     focus?.changed();
   },
   onTexts: () => {
+    board?.texts();
     proposals?.refresh();
     session?.changed();
     focus?.changed();
@@ -138,7 +139,7 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on) });
+const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on), onEvalAt: evalAt, onSave: save });
 focus.attachBoard(board);
 // the welcome's other path: design on the board, plan mode, the first
 // module's "+ plan a definition" open
@@ -157,7 +158,8 @@ const palette = createPalette({
     const list = [];
     const add = (group, title, run, extra = {}) => list.push({ group, title, run, ...extra });
     const onBoard = board.shown();
-    add("Board", onBoard ? "Show the editor" : "Show the module board", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
+    add("Canvas", "The whole program: fit the canvas to the window", () => board.fit(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
+    if (files.active()) add("Canvas", `The whole of ${files.active()}, to edit as a file`, () => board.openFile(files.active()), { icon: "≡", rank: 1 });
     add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
     const planned = board.outline().flatMap((m) => m.items.filter((i) => i.opaque)).length;
     if (planned) add("Board", `Build the plan: write the ${planned} planned bod${planned === 1 ? "y" : "ies"}`, () => board.buildPlan(), { icon: "▸", keywords: "implement fill holes dive in", rank: 1 });
@@ -187,7 +189,7 @@ const palette = createPalette({
     add("Voice", "Undo the builder's last edit", () => send({ t: "voice-control", command: "undo" }), { icon: "↶" });
     add("Voice", "Start a new conversation with the builder", () => send({ t: "voice-control", command: "new-conversation" }), { icon: "✦" });
     for (const path of files.paths().filter((p) => p !== "prop.puf")) {
-      add("Files", path, () => { board.setView("editor"); files.open(path); }, { icon: "▤", detail: path === files.active() ? "shown" : "", rank: 3 });
+      add("Files", path, () => board.openFile(path), { icon: "▤", detail: path === files.active() ? "shown" : "", rank: 3 });
     }
     for (const m of board.outline()) {
       for (const item of m.items) {

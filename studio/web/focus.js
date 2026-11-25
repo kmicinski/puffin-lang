@@ -64,12 +64,8 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   const chips = el("div", "focus-files");
   const right = el("div", "focus-right");
   const slot = el("span", "focus-slot"); // voice mode's badge
-  // the module board (board.js) and plan mode
+  // the canvas (board.js) and plan mode
   let board = null;
-  const boardButton = el("button", "focus-board");
-  boardButton.append(el("span", "focus-icon", "▦"), el("span", "focus-label", " Board"));
-  boardButton.title = "The module board: signatures, bodies opaque (⌘⇧B, or say “show the board”)";
-  boardButton.addEventListener("click", () => board?.toggle());
   const modeButton = el("button", "focus-mode", "Plan");
   modeButton.title = "Plan mode: the builder writes signatures and leaves bodies as holes (say “plan mode” / “build mode”)";
   modeButton.addEventListener("click", () => board?.setMode(board.mode() === "plan" ? "build" : "plan"));
@@ -81,7 +77,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   const paletteButton = el("button", "focus-palette", "⌘K");
   paletteButton.title = "Every command, file and definition (⌘K / ctrl-K)";
   paletteButton.addEventListener("click", () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, ctrlKey: true })));
-  right.append(slot, paletteButton, modeButton, boardButton, runButton);
+  right.append(slot, paletteButton, modeButton, runButton);
   bar.append(left, right);
   stage.append(bar);
 
@@ -97,12 +93,9 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
         continue;
       }
       const chip = el("button", `focus-file${path === active ? " current" : ""}`, path);
-      chip.title = path === active ? "Double-click to rename · drag onto the board" : `Open ${path} · drag onto the board`;
-      // on the board a click brings the module out; else it opens it
-      chip.addEventListener("click", () => {
-        if (board?.shown()) board.bringOut(path);
-        else if (path !== active) files.open(path);
-      });
+      chip.title = path === active ? "The whole file on the canvas · double-click to rename" : `${path}, whole, on the canvas · drag onto the canvas`;
+      // the file's card comes out whole, and the camera goes to it
+      chip.addEventListener("click", () => (board ? board.openFile(path) : files.open(path)));
       chip.draggable = true;
       chip.addEventListener("dragstart", (event) => {
         event.dataTransfer.setData("text/x-puffin-module", path);
@@ -385,7 +378,6 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     attachBoard(b) { board = b; },
     // the board showed or went: the bar's buttons say so
     boardShown(shown) {
-      boardButton.classList.toggle("on", shown);
       modeButton.classList.toggle("on", board?.mode() === "plan");
       modeButton.textContent = board?.mode() === "plan" ? "Plan ✓" : "Plan";
     },

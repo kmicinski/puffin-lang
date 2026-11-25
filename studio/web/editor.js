@@ -27,6 +27,8 @@
 //   setRenameAvailable(on)   whether F2 renames
 //   caretBox()               the cursor's box on screen, for menus, or null
 //   focus()
+//   model(key, text)         document `key`'s Monaco model (made if need be),
+//                            for other views of the same file
 //   raw                      { monaco, editor } for Monaco, else null
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
 // Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
@@ -252,10 +254,22 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
   const range = (start, end) => monaco.Range.fromPositions(current().getPositionAt(start), current().getPositionAt(end));
   return {
     raw: { monaco, editor },
+    // The model of document `key`, made if need be: the canvas's span
+    // editors (span-editor.js) share it with this editor, so all of them
+    // are views of one text. Given `text`, a document not shown here takes
+    // it (the studio changed that file); the shown one is kept by show/set.
+    model(key, text) {
+      if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text ?? "", "puffin", uriOf(key)), view: null, glyphs: [], spans: new Map() });
+      const { model } = documents.get(key);
+      if (text !== undefined && key !== shown && model.getValue() !== text) {
+        model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+      }
+      return model;
+    },
     show(key, text) {
       if (key !== shown) {
         if (documents.has(shown)) documents.get(shown).view = editor.saveViewState();
-        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null, glyphs: [], spans: new Map() });
+        if (!documents.has(key)) this.model(key, text);
         const { model, view } = documents.get(key);
         quiet = true;
         editor.setModel(model);
@@ -422,6 +436,7 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
       if (area.value !== text) area.value = text;
     },
     forget(key) { texts.delete(key); if (shown === key) shown = null; },
+    model: () => null,
     get: () => area.value,
     set(text) {
       if (area.value === text) return;
