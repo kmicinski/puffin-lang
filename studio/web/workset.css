@@ -90,14 +90,14 @@ body.ws-on .board { border-left: 1px solid var(--border); box-shadow: -8px 0 24p
   font: 11.5px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden;
   user-select: none;
 }
-.ws-frag.collapsed .ws-frag-head { height: 38px; border-bottom: none; flex-wrap: wrap; }
+.ws-frag.collapsed .ws-frag-head { border-bottom: none; }
 .ws-frag-head .ws-kind { font: 12px var(--mono); color: var(--blue); }
 .ws-frag-name { border: none; background: transparent; padding: 0; font: 600 12.5px var(--mono); color: var(--strong); }
 .ws-frag-name:hover { color: var(--violet); text-decoration: underline; }
 .ws-frag-head .ws-sig { font: 11.5px var(--mono); overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .ws-rel { font: 10.5px var(--sans); padding: 0 6px; border-radius: 8px; }
-.ws-rel.callee { color: var(--blue); background: var(--blue-tint); }
-.ws-rel.caller { color: var(--violet); background: var(--violet-tint); }
+.ws-rel { color: var(--blue); background: var(--blue-tint); overflow: hidden; text-overflow: ellipsis; max-width: 55%; cursor: help; }
+.ws-rel.offered { color: var(--violet); background: var(--violet-tint); }
 .ws-tools { margin-left: auto; display: inline-flex; opacity: 0.45; transition: opacity 0.2s; flex: none; }
 .ws-frag:hover .ws-tools, .ws-frag.pinned .ws-tools { opacity: 1; }
 .ws-frag-body { transition: height 0.25s ease; }

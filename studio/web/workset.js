@@ -7,37 +7,50 @@
 //   and `(: name τ)` above it included) and the rest of its file hidden,
 //   so editing it is editing the file. "≡ whole file" (⌥O) shows the
 //   rest; the focus then follows the cursor, and ⌥O narrows again.
-// - The working set: definitions pulled in beside the focus, from any
-//   file, each a small live editor on the same text (an edit in one is an
-//   edit to its file, seen everywhere at once). ⌘-click a name in any of
-//   the code pulls its definition in; ⌘⇧-click focuses it. When the
-//   column is full the least wanted first shrink to their signature, then
-//   go to the shelf below it, a click from coming back: wanted is pinned
-//   (always kept), then fresh (touched lately), and a neighbour of the
-//   focus counts as two minutes fresher. Fragments with no edge to the
-//   focus fade.
-// - The neighbourhood: the board around the focus -- what uses it above,
-//   what it uses below, its module's other definitions and the
-//   properties that mention it. Click a node: pulled in; ⌘-click or
+// - The working set: definitions beside the focus, from any file, each a
+//   small live editor on the same text (an edit in one is an edit to its
+//   file, seen everywhere at once). ⌘-click a name in any of the code, or
+//   ⌥. at it, pulls its definition in (⌥. again, or ⌘⇧-click, focuses
+//   it); a node of the neighbourhood likewise. Under what the author
+//   pulled in, the attention model (attention.js, docs/ATTENTION.md)
+//   offers what it ranks next -- dashed, in full or as a signature line,
+//   each saying why -- in the room left; using one takes it, ✕ on one is
+//   "show this less". Short of room, the set's fragments shrink to their
+//   signature line by the model's score (plus a little for what was
+//   touched lately), and only a fragment arriving sends the least wanted
+//   to the shelf below, a click from coming back. Pinned ones stay. A
+//   fragment the model would no longer show fades.
+// - The neighbourhood, under the focus: the board around it -- what uses
+//   it on the left, what it uses on the right, wired; its module's other
+//   definitions and the properties that mention it. Click a node: pulled in; ⌘-click or
 //   double-click: focused. "▦ board" (⌘⇧B) grows it into the whole board
 //   beside the focus; a row's ↗ there focuses that row.
-// - Focusing keeps a history (‹ ›, ⌥← ⌥→), and the definition left
+// - Focusing keeps a history (‹ ›, ⌥← ⌥→ or ⌥,), and the definition left
 //   behind goes to the top of the working set: a jump never loses where
-//   it came from.
+//   it came from. F6 walks the focus and the fragments.
+// - What the author does -- pulls (the model's misses), opens, edits,
+//   focuses, dwells, dismissals, pins -- is logged for the model to learn
+//   this author's weights from (attention.js `learnFrom`).
 //
 // What is out, focused and pinned is this browser's, per project.
 
 import { forms, balanced } from "./lexer.js";
+import { createAttention, httpLog, idOf } from "./attention.js";
+import { createTracker } from "./attention-studio.js";
 
 const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?" };
 // the forms that define a name the outline knows
 const DEFINES = new Set(["define", "define-type", "define-type-alias", "define-grammar", "define-foreign-type", "check-property", "check-example"]);
-// a neighbour of the focus counts as this much fresher when space is short
-const NEAR = 120000;
+// a fragment just touched counts this much more than its score, fading by
+// half every five minutes: what the author is working with stays out
+const FRESH = 3;
+const FRESH_HALF_LIFE = 5 * 60e3;
+// a fragment's line, as the attention model's budget counts lines
+const LINE = 17;
 // a fragment's body is at most this tall before it scrolls
 const BODY_MAX = 300;
 const HEAD = 30;
-const COLLAPSED = 48;
+const COLLAPSED = 34;
 // a file this short is shown whole when nothing is focused yet
 const SHORT_FILE = 60;
 const NODES_MAX = 10;
@@ -80,7 +93,17 @@ function nameAt(text, line) {
 export function createWorkset({ editor, files, board, stage, layout }) {
   const monaco = editor.raw?.monaco;
   const main = editor.raw?.editor;
-  if (!monaco || !main) return { changed() {}, navigate: () => false, setOn() {} };
+  if (!monaco || !main) return { changed() {}, navigate: () => false, setOn() {}, opened() {}, boardShown() {}, receive() {} };
+
+  // What deserves the room (docs/ATTENTION.md): the model ranks, offers
+  // and explains; what the author does with what it offered teaches it.
+  const tracker = createTracker();
+  const log = httpLog();
+  const attention = createAttention({ write: log.write });
+  log.read().then((records) => attention.learnFrom(records)).catch(() => {});
+  const idFor = (def) => idOf(def.path, def.name);
+  // the model's word on one definition: { score, detail, reasons: [{ text }] }
+  const verdict = (def) => attention.why(idFor(def)) ?? null;
 
   let on = false;
   let focus = null; // { path, name }
@@ -113,12 +136,6 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     const users = [];
     for (const m of outline()) for (const i of m.items) if (i.uses.includes(def.name) && !(m.path === def.path && i.name === def.name)) users.push({ path: m.path, name: i.name, item: i, module: m });
     return { uses, users };
-  }
-  function related(a, b) {
-    if (!a || !b) return false;
-    const ia = itemOf(a);
-    const ib = itemOf(b);
-    return Boolean(ia?.uses.includes(b.name) || ib?.uses.includes(a.name));
   }
 
   // ---- the page -----------------------------------------------------------------------
@@ -230,7 +247,7 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     moving = true;
     if (files.active() !== def.path) files.open(def.path);
     narrowFocus();
-    offer();
+    attention.observe({ type: "focus", id: idFor(def) });
     const span = spanOf(main.getModel().getValue(), def.name);
     if (span) {
       main.setScrollTop(0);
@@ -347,16 +364,27 @@ export function createWorkset({ editor, files, board, stage, layout }) {
 
   // ---- the working set -------------------------------------------------------------------
 
+  // The model's ranking for this moment: what it shows beyond the focus
+  // and the set is offered, in its order, at its detail, in the room the
+  // set leaves (the set's own lines come off the budget).
   function offer() {
-    for (const fragment of offered) dispose(fragment);
-    offered = [];
-    if (!focus?.name || whole) return;
-    const { uses, users } = neighbours(focus);
-    const code = (d) => ["fun", "val"].includes(d.item?.kind) && !set.some((f) => same(f, d));
-    for (const def of [...uses.filter(code), ...users.filter(code)].slice(0, 6)) {
-      const fragment = make(def, { offered: true });
-      if (fragment) offered.push(fragment);
+    let ranked = [];
+    if (focus?.name && !whole) {
+      const room = PHONE.matches ? 80 : Math.floor(setList.clientHeight / LINE);
+      const taken = set.reduce((sum, f) => sum + (f.collapsed ? 3 : Math.ceil((f.height + HEAD) / LINE)), 0);
+      const members = new Set(set.map(idFor));
+      ranked = attention.rank(tracker.state({ focus: idFor(focus), pins: set.filter((f) => f.pinned).map(idFor) }), { lines: Math.max(room - taken, 6), items: 12, full: 4 })
+        .filter((s) => !s.focus && !members.has(s.id));
     }
+    const kept = [];
+    for (const s of ranked) {
+      const fragment = offered.find((f) => idFor(f) === s.id) ?? make({ path: s.path, name: s.name }, { offered: true });
+      if (!fragment) continue;
+      Object.assign(fragment, { detail: s.detail, reasons: s.reasons });
+      kept.push(fragment);
+    }
+    for (const fragment of offered) if (!kept.includes(fragment)) dispose(fragment);
+    offered = kept;
   }
 
   // an offered fragment the author used: one of the set now
@@ -364,6 +392,7 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     if (!fragment.offered) return;
     fragment.offered = false;
     offered = offered.filter((f) => f !== fragment);
+    attention.observe({ type: "open", id: idFor(fragment), detail: fragment.detail });
     // last of the set: just where it is on the screen
     set.push(fragment);
     render();
@@ -393,6 +422,8 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       if (!fragment) return;
       set.unshift(fragment);
       crowding = true;
+      // the model did not offer it: its miss, and the lesson that teaches most
+      if (!cameFrom) attention.observe({ type: "pull", id: idFor(def) });
     }
     if (!quiet) render();
   }
@@ -422,6 +453,14 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       }
     });
     bindNames(view, fragment);
+    noteEdits(view, fragment);
+    // the time it held the author, past a couple of seconds
+    let since = 0;
+    node.addEventListener("mouseenter", () => { since = Date.now(); });
+    node.addEventListener("mouseleave", () => {
+      const ms = Date.now() - since;
+      if (since && ms > 2000) attention.observe({ type: "dwell", id: idFor(fragment), ms });
+    });
     // the lens: its node in the neighbourhood lights while the mouse is on it
     const lit = (value) => graph.querySelector(`.ws-node[data-key="${CSS.escape(key(fragment))}"]`)?.classList.toggle("lit", value);
     node.addEventListener("mouseenter", () => lit(true));
@@ -468,7 +507,8 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     crowding = false;
     const room = PHONE.matches ? Infinity : setList.clientHeight;
     if (!room) return;
-    const wanted = (f) => (f.pinned ? Infinity : f.touched + (related(f, focus) ? NEAR : 0));
+    // the model's score, and a little more for what was touched lately
+    const wanted = (f) => (f.pinned ? Infinity : (verdict(f)?.score ?? 0) + FRESH * 0.5 ** ((Date.now() - f.touched) / FRESH_HALF_LIFE));
     // one not measured yet counts by its lines
     const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight) * 0.9;
     for (const fragment of [...set, ...offered]) {
@@ -503,11 +543,15 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       fragment.node.classList.toggle("collapsed", fragment.collapsed);
       fragment.body.style.height = fragment.collapsed ? "0px" : `${fragment.height}px`;
     }
-    // what is offered fills what room is left, in order, whole or not at all
+    // what is offered fills what room is left, in the model's order: in
+    // full if it said full and that fits, else its signature line
     for (const fragment of offered) {
-      const full = HEAD + fragment.height + 10;
-      const fits = full <= left;
-      if (fits) left -= full;
+      const full = fragment.detail === "full" && HEAD + fragment.height + 10 <= left;
+      const fits = full || COLLAPSED + 10 <= left;
+      if (fits) left -= full ? HEAD + fragment.height + 10 : COLLAPSED + 10;
+      fragment.collapsed = !full;
+      fragment.node.classList.toggle("collapsed", !full);
+      fragment.body.style.height = full ? `${fragment.height}px` : "0px";
       // kept laid out at the column's width, out of sight: it measures
       fragment.node.classList.toggle("unfit", !fits);
     }
@@ -519,10 +563,17 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     side.classList.toggle("empty", !set.length && !shelf.length);
     const all = [...set, ...offered];
     for (const fragment of all) renderFragment(fragment);
-    // in order, top first, moving only what moved
+    // in order, top first, moving only what moved -- and gliding there
+    // from where it was (the arriving one slides in at the top)
+    const before = new Map(all.filter((f) => f.node.isConnected).map((f) => [f, f.node.getBoundingClientRect().top]));
     all.forEach((fragment, i) => {
       if (setList.children[i] !== fragment.node) setList.insertBefore(fragment.node, setList.children[i] ?? null);
     });
+    for (const [fragment, top] of before) {
+      const moved = top - fragment.node.getBoundingClientRect().top;
+      if (!moved) continue;
+      fragment.node.animate([{ transform: `translateY(${moved}px)` }, { transform: "none" }], { duration: 280, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
+    }
     if (!all.length) {
       setList.replaceChildren(el("div", "ws-hint", "⌘-click a name in the code, or click a node in the neighbourhood, to read its definition here beside the focus."));
     } else {
@@ -541,15 +592,21 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     name.title = "Focus on it (⌘-click a name does the same)";
     name.addEventListener("click", () => show(fragment));
     top.append(kind, name, el("span", "ws-module", short(fragment.path)));
-    // how it stands to the focus
-    const relation = relationTo(fragment);
-    if (relation) top.append(el("span", `ws-rel ${relation.kind}`, fragment.offered ? `${relation.text} · offered` : relation.text));
-    top.append(el("span", "ws-sig", fragment.collapsed || !relation ? (item?.sig.replace(/^(val|type|grammar) \S+\s*/, "") ?? "") : ""));
+    // why it is here, in the model's words (all of them on hover)
+    const why = verdict(fragment);
+    const reasons = (fragment.offered ? fragment.reasons : why?.reasons?.map((r) => r.text)) ?? [];
+    if (reasons.length) {
+      const badge = el("span", `ws-rel${fragment.offered ? " offered" : ""}`, reasons[0].replace(/;.*$/, ""));
+      badge.title = `${fragment.offered ? "offered" : "kept"} because: ${reasons.join("; ")}${why ? `\nscore ${why.score.toFixed(2)}` : ""}`;
+      top.append(badge);
+    }
+    top.append(el("span", "ws-sig", fragment.collapsed || !reasons.length ? (item?.sig.replace(/^(val|type|grammar) \S+\s*/, "") ?? "") : ""));
     const tools = el("span", "ws-tools");
     const pin = el("button", `ws-icon${fragment.pinned ? " on" : ""}`, "⊙");
     pin.title = fragment.pinned ? "Unpin" : "Pin: kept, whatever else needs the room";
     pin.addEventListener("click", () => {
       fragment.pinned = !fragment.pinned;
+      (fragment.pinned ? attention.pin : attention.unpin)(idFor(fragment));
       if (fragment.offered) take(fragment);
       else render();
     });
@@ -557,23 +614,18 @@ export function createWorkset({ editor, files, board, stage, layout }) {
     up.title = "Focus on it";
     up.addEventListener("click", () => show(fragment));
     const close = el("button", "ws-icon", "✕");
-    close.title = "Put it away";
-    close.addEventListener("click", () => drop(fragment));
+    close.title = fragment.offered ? "Show this less (it was offered: the model learns from this)" : "Put it away";
+    close.addEventListener("click", () => {
+      if (fragment.offered) attention.showLess(idFor(fragment));
+      drop(fragment);
+    });
     tools.append(pin, up, close);
     top.append(tools);
     top.ondblclick = (event) => { if (!event.target.closest("button")) { fragment.collapsed = !fragment.collapsed; fragment.touched = Date.now(); render(); } };
-    fragment.node.classList.toggle("distant", !fragment.pinned && Boolean(focus?.name) && !related(fragment, focus));
+    // stale: the model would not show it now (it scores under a signature's worth)
+    fragment.node.classList.toggle("distant", !fragment.pinned && !fragment.offered && Boolean(focus?.name) && !whole && (why?.score ?? 0) < 1.5);
     fragment.node.classList.toggle("pinned", fragment.pinned);
     fragment.node.classList.toggle("offered", fragment.offered);
-  }
-
-  function relationTo(def) {
-    if (!focus?.name) return null;
-    const mine = itemOf(def);
-    const theirs = itemOf(focus);
-    if (theirs?.uses.includes(def.name)) return { kind: "callee", text: `${focus.name} uses it` };
-    if (mine?.uses.includes(focus.name)) return { kind: "caller", text: `uses ${focus.name}` };
-    return null;
   }
 
   function renderShelf() {
@@ -588,6 +640,24 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       shelfRow.append(chip);
     }
   }
+
+  // The author typing in a view (the focus or a fragment): the lines go to
+  // the tracker, and the definition is an edit, told once in a while
+  const told = new Map(); // id -> when
+  function noteEdits(view, def) {
+    view.onDidChangeModelContent((event) => {
+      if (!on || !view.hasTextFocus()) return;
+      const path = def === null ? files.active() : def.path;
+      for (const change of event.changes) tracker.edit(path, change.range.startLineNumber, change.range.endLineNumber + change.text.split("\n").length - 1);
+      const target = def ?? focus;
+      if (!target?.name) return;
+      const id = idFor({ path, name: target.name });
+      if (Date.now() - (told.get(id) ?? 0) < 10000) return;
+      told.set(id, Date.now());
+      attention.observe({ type: "edit", id });
+    });
+  }
+  noteEdits(main, null);
 
   // ---- names in the code: ⌘-click pulls in, ⌘⇧-click focuses --------------------------------
 
@@ -742,11 +812,16 @@ export function createWorkset({ editor, files, board, stage, layout }) {
 
   function render() {
     if (!on) return;
+    offer();
     renderHead();
     renderSet();
     renderGraph();
     save();
   }
+
+  // things fade (an edit's news, a dismissal): rank again now and then
+  let reranking = 0;
+  setInterval(() => { if (on && !document.hidden) render(); }, 30000);
 
   // ---- kept per project, in this browser -------------------------------------------------
 
@@ -792,11 +867,26 @@ export function createWorkset({ editor, files, board, stage, layout }) {
 
   // ---- keys ------------------------------------------------------------------------------
 
+  // ⌥. (Emacs's M-.) on a name: its definition beside the focus, and
+  // pressed again, focused; ⌥, (M-,) back
+  function nameAtCursor() {
+    const view = [main, ...set.map((f) => f.view)].find((v) => v.hasTextFocus());
+    const word = view?.getModel()?.getWordAtPosition(view.getPosition());
+    return word ? find(word.word) : null;
+  }
+
   window.addEventListener("keydown", (event) => {
     if (!on || event.metaKey || event.ctrlKey) return;
-    if (event.altKey && event.key === "ArrowLeft") { event.preventDefault(); back(-1); }
-    else if (event.altKey && event.key === "ArrowRight") { event.preventDefault(); back(1); }
-    else if (event.altKey && event.code === "KeyO") { event.preventDefault(); setWhole(!whole); }
+    const take = () => { event.preventDefault(); event.stopPropagation(); };
+    if (event.altKey && event.key === "ArrowLeft") { take(); back(-1); }
+    else if (event.altKey && event.key === "ArrowRight") { take(); back(1); }
+    else if (event.altKey && event.code === "Comma" && !event.shiftKey) { take(); back(-1); }
+    else if (event.altKey && event.code === "Period" && !event.shiftKey) {
+      take();
+      const def = nameAtCursor();
+      if (def) (set.some((f) => same(f, def)) ? show(def) : pull(def));
+    }
+    else if (event.altKey && event.code === "KeyO") { take(); setWhole(!whole); }
     else if (event.key === "F6") {
       // the focus, then each fragment in turn
       event.preventDefault();
@@ -827,6 +917,16 @@ export function createWorkset({ editor, files, board, stage, layout }) {
       render();
     },
     opened,
+    // every socket message: the model's view of the studio (edits by the
+    // builder, failing properties, errors, voice) -- and a moment later,
+    // the ranking again
+    receive(message) {
+      tracker.receive(message);
+      if (on && ["voice", "diagnostics", "text"].includes(message.t)) {
+        clearTimeout(reranking);
+        reranking = setTimeout(render, 400);
+      }
+    },
     // the board came out beside the focus: fitted to the room it has there
     boardShown(shown) {
       if (on && shown) setTimeout(() => board.fit(), 360);

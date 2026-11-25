@@ -530,6 +530,7 @@ function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     handlers[message.t]?.(message);
+    workset?.receive(message);
   });
   socket.addEventListener("close", () => {
     renderConnection(false);
