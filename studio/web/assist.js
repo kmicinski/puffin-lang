@@ -257,7 +257,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     const last = block.turn === turns.length - 1;
     const running = Boolean(thread?.running) && last;
     const done = !running;
-    const was = nearBottom();
+    const was = repl.atBottom();
     const texts = messages.filter((m) => m.role === "assistant").map((m) => m.text);
     const draft = running ? state.drafts.get(block.thread) ?? "" : "";
     // markdown() escapes all of the model's text
@@ -297,13 +297,8 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       const follow = block.foot.appendChild(el("a", "", "Follow up"));
       follow.addEventListener("click", () => ask({ thread: block.thread }));
     }
-    if (was) repl.scroll?.();
+    if (was) repl.scroll();
   }
-
-  const nearBottom = () => {
-    const t = document.getElementById("transcript");
-    return t.scrollHeight - t.scrollTop - t.clientHeight < 60;
-  };
 
   // An answer's ```repl blocks as chips.
   function chips(block) {
@@ -366,7 +361,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       agent({ thread, kind, text = "", index, entry }) {
         const known = state.threads.get(thread);
         if (kind === "delta") state.drafts.set(thread, (state.drafts.get(thread) ?? "") + text);
-        else if (kind === "phase") state.phases.set(thread, PHASES[text] ?? (text.startsWith("tool ") ? "Working…" : "Working…"));
+        else if (kind === "phase") state.phases.set(thread, PHASES[text] ?? "Working…");
         else if (kind === "entry" && known && entry) {
           known.messages[index] = entry;
           if (entry.role === "assistant") state.drafts.set(thread, "");
@@ -382,7 +377,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       },
       asked({ thread, error }) {
         if (error) {
-          repl.local?.("?? …", error, true);
+          repl.local("?? …", error, true);
           return;
         }
         if (state.mode === "ask") state.thread = thread;

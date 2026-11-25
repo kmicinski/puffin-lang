@@ -374,6 +374,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
     local,
     scroll: () => scroll(true),
     entries: () => [...entries.values()],
+    atBottom,
     nodeOf: (id) => nodes.get(id)?.node,
     receive: {
       init({ transcript: list }) {
