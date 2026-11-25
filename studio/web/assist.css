@@ -18,7 +18,7 @@
   padding: 0 10px;
   border: none;
   border-radius: 999px 0 0 999px;
-  background: white;
+  background: var(--surface);
   color: var(--violet);
   font: 11.5px var(--sans);
   min-width: 0;
@@ -30,12 +30,12 @@
   cursor: default;
 }
 .assist-tag:not(.follow) { border-radius: 999px; }
-.assist-tag:hover:not(:disabled) { background: white; color: var(--violet); }
+.assist-tag:hover:not(:disabled) { background: var(--surface); color: var(--violet); }
 .assist-tag-clear {
   height: 22px; padding: 0 8px; margin-left: -8px; border: none; border-radius: 0 999px 999px 0;
-  background: white; color: var(--muted); font: 13px var(--sans); line-height: 22px;
+  background: var(--surface); color: var(--muted); font: 13px var(--sans); line-height: 22px;
 }
-.assist-tag-clear:hover:not(:disabled) { color: var(--red); background: white; }
+.assist-tag-clear:hover:not(:disabled) { color: var(--red); background: var(--surface); }
 .assist-tag-clear[hidden] { display: none; }
 
 /* ---- Answers in the transcript --------------------------------------------- */
@@ -67,7 +67,7 @@
   padding: 1px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: white;
+  background: var(--surface);
   color: var(--strong);
   white-space: pre-wrap;
   cursor: text;

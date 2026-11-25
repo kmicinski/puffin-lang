@@ -36,6 +36,8 @@
 
 import { createCamera } from "./camera.js";
 import { svg, curve } from "./wires.js";
+import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 // the mark of each kind of definition, wherever one is named (view.js too)
 export const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?", decision: "◇" };
@@ -54,12 +56,6 @@ const LANE_GAP = 96;
 // narrower than this, the board stacks its cards under the lane (a phone)
 const COMPACT = 700;
 
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -501,7 +497,7 @@ export function createBoard({ send, stage, onChange }) {
       if (m.items.some((i) => i.internal)) {
         const exported = m.items.filter((i) => !i.internal).length;
         meta.textContent = `${exported} of ${m.items.length} provided`;
-      } else meta.textContent = `${m.items.length} definition${m.items.length === 1 ? "" : "s"}`;
+      } else meta.textContent = plural(m.items.length, "definition");
       if (planned) meta.append(el("span", "board-holes", ` · ◌ ${planned} planned`));
     }
     const close = el("button", "board-x", "✕");
@@ -557,7 +553,7 @@ export function createBoard({ send, stage, onChange }) {
       less.addEventListener("click", () => { revealed.delete(m.path); render(); });
       node.append(less);
     }
-    if (m.effects) node.append(el("div", "board-effects", `+ ${m.effects} top-level expression${m.effects === 1 ? "" : "s"}`));
+    if (m.effects) node.append(el("div", "board-effects", `+ ${plural(m.effects, "top-level expression")}`));
   }
 
   function renderItem(m, item, isHidden, focused) {
@@ -623,13 +619,13 @@ export function createBoard({ send, stage, onChange }) {
       line.append(hole);
     } else if (item.holes) {
       const hole = el("span", "board-opaque", `◌${item.holes}`);
-      hole.title = `${item.holes} hole${item.holes === 1 ? "" : "s"} left in the body`;
+      hole.title = `${plural(item.holes, "hole")} left in the body`;
       line.append(hole);
     }
     const notes = notesOn(m.path, item.name);
     if (notes.length) {
       const badge = el("span", `board-note-count${notes.some((n) => n.kind === "decision") ? " decided" : ""}`, `✎${notes.length}`);
-      badge.title = `${notes.length} note${notes.length === 1 ? "" : "s"}`;
+      badge.title = plural(notes.length, "note");
       line.append(badge);
     }
     const actions = el("span", "board-tools");

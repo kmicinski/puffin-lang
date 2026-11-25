@@ -153,6 +153,20 @@ function table([head, rule, ...rows]) {
 
 const PUFFIN = new Set(["puffin", "scheme", "racket", "lisp", "repl", "puf"]);
 
+// Every code block's Copy button, wherever the HTML lands (it is a string
+// here, so the listener is the page's, once): its code to the clipboard.
+if (typeof document !== "undefined") {
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.(".code-block > .copy");
+    if (!button) return;
+    const text = button.parentElement.querySelector("pre code")?.textContent ?? "";
+    navigator.clipboard?.writeText(text).then(() => {
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = "Copy"; }, 1200);
+    }).catch(() => {});
+  });
+}
+
 function code(text, lang) {
   const body = PUFFIN.has(lang) ? highlight(text) : escape(text);
   const label = lang ? `<span class="code-lang">${escape(lang)}</span>` : "";

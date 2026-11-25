@@ -22,6 +22,8 @@ export const dirname = (path) => (path.includes("/") ? path.slice(0, path.lastIn
 // whenever a file's text as this tab has it may have changed, and
 // `onFiles()` when the set of files or folders, the open tabs, or what the
 // tabs show of them changed (the tree redraws).
+import { recallJSON, remember } from "./stored.js";
+
 export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }) {
   const state = {
     // path -> { text, version, local, saved }: `text` is the studio's at
@@ -169,18 +171,14 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
   // The tabs this browser last had open on the project, those still here.
   const tabsKey = () => `puffin-studio.tabs.${state.project}`;
   function remembered() {
-    try {
-      const kept = JSON.parse(localStorage.getItem(tabsKey()) ?? "null");
-      if (!Array.isArray(kept?.opened)) return null;
-      const opened = kept.opened.filter((path) => state.files.has(path));
-      if (kept.active && state.files.has(kept.active)) state.active = kept.active;
-      return opened.length ? opened : null;
-    } catch {
-      return null;
-    }
+    const kept = recallJSON(tabsKey(), null);
+    if (!Array.isArray(kept?.opened)) return null;
+    const opened = kept.opened.filter((path) => state.files.has(path));
+    if (kept.active && state.files.has(kept.active)) state.active = kept.active;
+    return opened.length ? opened : null;
   }
-  function remember() {
-    try { localStorage.setItem(tabsKey(), JSON.stringify({ opened: state.opened, active: state.active })); } catch { /* private window */ }
+  function rememberTabs() {
+    remember(tabsKey(), { opened: state.opened, active: state.active }, { json: true });
   }
 
   const unsaved = (path, file) =>
@@ -188,7 +186,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
 
   function render() {
     renderTabs();
-    remember();
+    rememberTabs();
     onFiles?.();
   }
 

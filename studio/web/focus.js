@@ -21,17 +21,12 @@
 
 import { forms } from "./lexer.js";
 import { sorted } from "./files.js";
+import { el } from "./dom.js";
 
 const COLUMNS = 105;
 // files the studio keeps for itself, not shown as modules
 const HIDDEN = new Set(["prop.puf"]);
 
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 // A tab that has been here before (this session): it reloads into its work.
 const SEEN = "puffin-tab";

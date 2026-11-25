@@ -26,6 +26,8 @@ import { createPalette } from "./palette.js";
 import { createView } from "./view.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
+import { requests } from "./requests.js";
+import { remember } from "./stored.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -105,16 +107,8 @@ const tree = createTree({ panel: $("files"), toggle: $("files-toggle"), add: $("
 // The studio's facts at UTF-16 offset `pos` of `file` (studio/src/facts.rs):
 // the type there (a hole's goal) and what runs passed a parameter. The
 // hover shows them (assists.js).
-const factsWaiting = new Map(); // seq -> resolve
-let factsSeq = 0;
-function askFacts(file, pos, full = false) {
-  files.flush();
-  const id = ++factsSeq;
-  return new Promise((resolve) => {
-    factsWaiting.set(id, resolve);
-    send({ t: "facts", seq: id, file, pos, full });
-  });
-}
+const facts = requests(files);
+const askFacts = (file, pos, full = false) => facts.ask({ t: "facts", file, pos, full });
 
 const proposals = createProposals({ editor, files, send, bar: $("proposals") });
 const versions = createVersions({ panel: $("versions"), files, send });
@@ -177,7 +171,7 @@ const palette = createPalette({
     const setTheme = (theme) => {
       if (theme) document.documentElement.dataset.theme = theme;
       else delete document.documentElement.dataset.theme;
-      try { theme ? localStorage.setItem("puffin-theme", theme) : localStorage.removeItem("puffin-theme"); } catch { /* private window */ }
+      remember("puffin-theme", theme ?? null);
     };
     const theme = document.documentElement.dataset.theme ?? "system";
     add("Appearance", `Theme: dark${theme === "dark" ? " ✓" : ""}`, () => setTheme("dark"), { icon: "◐", keywords: "dark mode night solarized" });
@@ -463,10 +457,7 @@ const handlers = {
     showDiagnostics();
   },
   session: session.receive.session,
-  facts(reply) {
-    factsWaiting.get(reply.seq)?.(reply);
-    factsWaiting.delete(reply.seq);
-  },
+  facts: facts.answer,
   holes: holes.receive.holes,
   lint: lint.receive.lint,
   renamed: rename.receive.renamed,

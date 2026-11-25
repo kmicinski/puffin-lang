@@ -37,6 +37,8 @@ import { bindNames } from "./names.js";
 import { createFragment } from "./fragment.js";
 import { overlay, wire } from "./wires.js";
 import { createNeighbourhood } from "./neighbourhood.js";
+import { el } from "./dom.js";
+import { recallJSON, remember } from "./stored.js";
 import { createAttention, httpLog, idOf } from "./attention.js";
 import { createTracker } from "./attention-studio.js";
 import { KIND } from "./board.js";
@@ -58,12 +60,6 @@ const SHORT_FILE = 60;
 const WIDEST = 100;
 const PHONE = window.matchMedia("(max-width: 700px)");
 
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 const short = (path) => path.replace(/\.puf$/, "");
 const same = (a, b) => Boolean(a && b) && a.path === b.path && a.name === b.name;
 const keyOf = (path, name) => `${path}\u001f${name}`;
@@ -787,9 +783,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   const storeKey = () => `puffin-view.${document.getElementById("project")?.textContent.trim() ?? ""}`;
   function save() {
     if (!restored) return;
-    try {
-      localStorage.setItem(storeKey(), JSON.stringify({ focus, whole, past: past.slice(-30), at: Math.min(at, 29), shelf }));
-    } catch { /* private window */ }
+    remember(storeKey(), { focus, whole, past: past.slice(-30), at: Math.min(at, 29), shelf }, { json: true });
   }
 
   // Once the outline is in: what this browser had in focus, else the
@@ -798,8 +792,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // camera starts on the code, unless a question's slice is out.
   function restore() {
     restored = true;
-    let kept = null;
-    try { kept = JSON.parse(localStorage.getItem(storeKey()) ?? "null"); } catch { /* none */ }
+    const kept = recallJSON(storeKey(), null);
     const known = (d) => d?.name && itemOf(d);
     shelf = (kept?.shelf ?? []).filter((id) => itemOf(defOf(id)));
     past = (kept?.past ?? []).filter(known);
