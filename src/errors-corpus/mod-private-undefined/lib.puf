@@ -1,0 +1,4 @@
+;; a private declaration must name something the module defines
+(private helpr)
+(define (helper x) (* x 2))
+(define (double x) (helper x))

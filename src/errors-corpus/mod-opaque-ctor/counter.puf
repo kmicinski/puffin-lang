@@ -1,0 +1,3 @@
+(opaque Counter)
+(define-type Counter (C Int))
+(define (make) (C 0))

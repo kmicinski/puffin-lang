@@ -1,0 +1,2 @@
+(opaque Stack)
+(define-type Stak (Empty) (Push Int Stak))

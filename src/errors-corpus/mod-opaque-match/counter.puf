@@ -1,0 +1,5 @@
+;; Counter is opaque: other modules may hold one, never open it
+(opaque Counter)
+(define-type Counter (C Int))
+(define (make) (C 0))
+(define (tick [c : Counter]) : Counter (match c [(C n) (C (+ n 1))]))

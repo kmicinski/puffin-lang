@@ -1,0 +1,29 @@
+;; A functional queue (two lists, Okasaki's banker's style) that keeps
+;; its representation to itself. No provide form: everything is
+;; exported except what is declared private -- the helper that
+;; rebalances, and the representation of Queue itself (opaque: the
+;; type's name goes out, its constructor stays home).
+(opaque Queue)
+(define-type Queue (Q (List Int) (List Int)))
+
+(: empty Queue)
+(define empty (Q '() '()))
+
+(private balance)
+(define (balance [front : (List Int)] [back : (List Int)]) : Queue
+  (if (null? front) (Q (reverse back) '()) (Q front back)))
+
+(define (enqueue [q : Queue] [x : Int]) : Queue
+  (match q [(Q f b) (balance f (cons x b))]))
+
+;; the owner may take its own type apart, structurally too
+(define (peek [q : Queue]) : Int
+  (match q
+    [`(Q (,x . ,_) ,_) x]
+    [_ -1]))
+
+(define (dequeue [q : Queue]) : Queue
+  (match q [(Q f b) (if (null? f) q (balance (cdr f) b))]))
+
+(define (size [q : Queue]) : Int
+  (match q [(Q f b) (+ (length f) (length b))]))

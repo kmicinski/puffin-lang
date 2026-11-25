@@ -1,0 +1,6 @@
+(require "counter.puf")
+;; a template spells a C value -- but outside counter.puf a Counter
+;; is not something a template can be
+(: forged Counter)
+(define forged '(C 41))
+(println (count forged))

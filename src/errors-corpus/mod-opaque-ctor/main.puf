@@ -1,0 +1,2 @@
+(require "counter.puf")
+(println (C 41))

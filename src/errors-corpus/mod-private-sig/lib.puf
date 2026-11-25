@@ -1,0 +1,5 @@
+;; a signature cannot ask for what the module keeps private
+(provide #:sig "ring.pufs")
+(private add)
+(define zero 0)
+(define (add a b) (+ a b))

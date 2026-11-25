@@ -26,10 +26,15 @@
 (: provide-form? (-> _ Bool))
 (define (provide-form? f)
   (match f [`(provide . ,_) #t] [_ #f]))
+;; privacy declarations (docs/MODULES.md "Private definitions"):
+;; (private name ...) and (opaque Type ...), module forms like provide
+(: privacy-form? (-> _ Bool))
+(define (privacy-form? f)
+  (match f [`(private . ,_) #t] [`(opaque . ,_) #t] [_ #f]))
 
 (: module-forms? (-> (List _) Bool))
 (define (module-forms? forms)
-  (ormap (lambda (f) (or (require-form? f) (provide-form? f))) forms))
+  (ormap (lambda (f) (or (require-form? f) (provide-form? f) (privacy-form? f))) forms))
 
 (: module-error (-> Str _))
 (define (module-error msg)
@@ -300,7 +305,7 @@
   (read-forms-from-string (read-source path)))
 
 ;; signature ascription: returns the narrowed export set
-(define (check-signature [sig-path : Str] body top-names [mod-path : Str])
+(define (check-signature [sig-path : Str] body top-names privates [mod-path : Str])
   (define sig-forms (read-module-file sig-path mod-path #f))
   (define entries
     (match sig-forms
@@ -430,6 +435,11 @@
     (- (length t) 2))
   (foldl
    (lambda (entry provides)
+     ;; a signature is an interface: it cannot name what the module
+     ;; keeps private
+     (when (and (pair? entry) (pair? (cdr entry)) (set-member? privates (car (cdr entry))))
+       (module-error (str-cat mod-path ": signature names " (symbol->string (car (cdr entry)))
+                              ", which the module declares private")))
      (match entry
        [`(val ,n)
         (begin
@@ -469,7 +479,54 @@
    (set)
    entries))
 
-(define (parse-provides forms body top-names [path : Str] lines)
+;; privacy declarations -> the module's private names: every name a
+;; (private n ...) lists (a private define-type takes its constructors
+;; with it) and the constructors of every (opaque T ...): an opaque
+;; type's name is public, its representation stays home
+(define (parse-privates forms body top-names [path : Str] lines)
+  (define ls
+    (if (and lines (eq? (length lines) (length forms)))
+        lines
+        (map (lambda (f) #f) forms)))
+  ;; each define-type head -> its constructor names
+  (define type-ctors
+    (foldl (lambda (f acc)
+             (match f
+               [`(define-type ,head ,cs ...)
+                (hash-set acc (match head [`(,n ,_ ...) n] [n n])
+                          (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) cs))]
+               [_ acc]))
+           (hash) body))
+  (define (at pl)
+    (if pl (str-cat " [" (path-basename path) ":" (number->string pl) "]") ""))
+  (define (declared! kind n pl)
+    (begin
+      (unless (symbol? n)
+        (module-error (str-cat "malformed " kind " in " path)))
+      (unless (set-member? top-names n)
+        (module-error (str-cat path " declares " (symbol->string n) " " kind
+                               ", which it does not define" (at pl))))))
+  (foldl2 (lambda (f pl privates)
+            (match f
+              [`(private . ,ns)
+               (foldl (lambda (n acc)
+                        (begin
+                          (declared! "private" n pl)
+                          (set-union (set-add acc n) (list->set (hash-ref/default type-ctors n '())))))
+                      privates ns)]
+              [`(opaque . ,ns)
+               (foldl (lambda (n acc)
+                        (begin
+                          (declared! "opaque" n pl)
+                          (unless (hash-has-key? type-ctors n)
+                            (module-error (str-cat path " declares " (symbol->string n)
+                                                   " opaque, but only a define-type can be opaque" (at pl))))
+                          (set-union acc (list->set (hash-ref type-ctors n)))))
+                      privates ns)]
+              [_ privates]))
+          (set) forms ls))
+
+(define (parse-provides forms body top-names privates [path : Str] lines)
   (define ls
     (if (and lines (eq? (length lines) (length forms)))
         lines
@@ -493,9 +550,10 @@
        (match (first sig-forms)
          [`(provide ,_ ,sp)
           (if (string? sp)
-              (check-signature (path-join (path-dirname path) sp) body top-names path)
+              (check-signature (path-join (path-dirname path) sp) body top-names privates path)
               (module-error (str-cat "malformed provide in " path)))]))]
-    [(null? provide-forms) top-names]
+    ;; no provide form: everything not declared private
+    [(null? provide-forms) (set-subtract top-names privates)]
     [else
      (foldl2 (lambda (pf pl provides)
               (match pf
@@ -511,6 +569,13 @@
                                                                (str-cat " [" (path-basename path) ":"
                                                                         (number->string pl) "]")
                                                                ""))))
+                            (when (set-member? privates n)
+                              (module-error (str-cat path " provides " (symbol->string n)
+                                                     ", which it declares private"
+                                                     (if pl
+                                                         (str-cat " [" (path-basename path) ":"
+                                                                  (number->string pl) "]")
+                                                         ""))))
                             (set-add acc n)))
                         provides ns)]))
             (set)
@@ -578,7 +643,7 @@
                                          (hash-ref r 'line) st))
                                 state reqs)]
                  [body-pairs (foldr2 (lambda (f l acc)
-                                       (if (or (require-form? f) (provide-form? f))
+                                       (if (or (require-form? f) (provide-form? f) (privacy-form? f))
                                            acc
                                            (cons (cons f l) acc)))
                                      '() forms lines)]
@@ -591,14 +656,15 @@
                                      (foldl (lambda (n a) (set-add a n))
                                             acc (module-defn-names f)))
                                    (set) body)]
-                 [provides (parse-provides forms body top-names path lines)])
+                 [privates (parse-privates forms body top-names path lines)]
+                 [provides (parse-provides forms body top-names privates path lines)])
             (match state2
               [`(,loaded2 ,postorder2 ,ids2)
                (let* ([id (if (string=? path entry-path)
                               #f
                               (module-id path entry-dir ids2))]
                       [m (hash 'path path 'id id 'body body
-                               'top-names top-names 'provides provides 'reqs reqs
+                               'top-names top-names 'provides provides 'privates privates 'reqs reqs
                                'lines body-lines)])
                  (list (hash-set loaded2 (path-key path) m)
                        (cons m postorder2)
@@ -747,6 +813,10 @@
 
 ;; ---- resolve-modules --------------------------------------------------------
 
+;; why dep does not export n, for the importer's error message
+(define (unexported dep n)
+  (if (set-member? (hash-ref dep 'privates) n) " is private to " " is not provided by "))
+
 (define (resolve-modules [entry-path : Str])
   (match (load-modules entry-path)
     [`(,loaded ,mods)
@@ -775,6 +845,39 @@
                                  [_ acc]))
                              acc (hash-ref m 'body)))
                     (hash) mods)])
+       ;; abstract types for the checker (system.puf): a non-entry module's
+       ;; define-type none of whose constructors it exports -- and the
+       ;; module every flattened form came from
+       (module-abstract-reset!)
+       (for-each
+        (lambda (m)
+          (when (hash-ref m 'id)
+            (for-each
+             (lambda (f)
+               (match f
+                 [`(define-type ,head ,cs ...)
+                  (let ([cns (filter-map (lambda (c) (match c [`(,cn ,_ ...) cn] [_ #f])) cs)])
+                    (when (and (pair? cns)
+                               (not (ormap (lambda (c) (set-member? (hash-ref m 'provides) c)) cns)))
+                      (module-abstract-register! (module-mangled m (match head [`(,n ,_ ...) n] [n n]))
+                                                 (hash-ref m 'id)
+                                                 (path-basename (hash-ref m 'path)))))]
+                 [_ (void)]))
+             (hash-ref m 'body)))
+          ;; a dep's private names, for the unbound-name message
+          (for-each
+           (lambda (r)
+             (unless (hash-ref r 'alias)
+               (let ([dep (hash-ref loaded (path-key (hash-ref r 'target)))])
+                 (for-each (lambda (p)
+                             (unless (set-member? (hash-ref m 'top-names) p)
+                               (module-private-hint-register! p (hash-ref m 'id)
+                                                              (path-basename (hash-ref dep 'path)))))
+                           (set->list (hash-ref dep 'privates))))))
+           (hash-ref m 'reqs)))
+        mods)
+       (set! resolved-form-modules
+             (append-map (lambda (m) (map (lambda (f) (hash-ref m 'id)) (hash-ref m 'body))) mods))
        ;; the renamer is 1:1 per form, so each module's body lines map
        ;; straight onto its renamed forms; stash the flattened
        ;; (basename . line) origins for the driver
@@ -813,7 +916,8 @@
                     (begin
                       (when (hash-ref r 'sig)
                         (check-signature (hash-ref r 'sig) (hash-ref dep 'body)
-                                         (hash-ref dep 'top-names) (hash-ref dep 'path)))
+                                         (hash-ref dep 'top-names) (hash-ref dep 'privates)
+                                         (hash-ref dep 'path)))
                       (if (hash-ref r 'alias)
                           (list ren (hash-set aliases (hash-ref r 'alias) dep))
                           (let* ([dep-provides (hash-ref dep 'provides)]
@@ -825,7 +929,7 @@
                                                     (module-error
                                                      (str-cat m-path ": #:only name "
                                                                     (symbol->string n)
-                                                                    " is not provided by "
+                                                                    (unexported dep n)
                                                                     (hash-ref dep 'path)))))
                                                 (hash-ref r 'only))
                                            (hash-ref r 'only))]
@@ -881,7 +985,7 @@
                         (begin
                           (unless (set-member? (hash-ref dep 'provides) nm)
                             (module-error (str-cat m-path ": " (symbol->string nm)
-                                                         " is not provided by " (hash-ref dep 'path)
+                                                         (unexported dep nm) (hash-ref dep 'path)
                                                          " (via " str ")")))
                           (module-mangled dep nm)))
                       #f))

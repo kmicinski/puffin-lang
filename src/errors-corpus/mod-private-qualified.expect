@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-private-qualified/main.puf: helper is private to src/errors-corpus/mod-private-qualified/lib.puf (via L.helper)

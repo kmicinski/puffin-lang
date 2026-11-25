@@ -351,10 +351,23 @@
 (define (unstar e) (if (star? e) (car (cdr e)) e))
 
 ;; the grammar a type names, or #f
+;; An abstract type (docs/MODULES.md "Opaque types") is no grammar to
+;; the form being checked: its productions -- its constructors -- are
+;; private to the module that owns it, so to everyone else it is a
+;; bare name. The main check loop sets abstract-here per form.
+(define abstract-here '())
+;; the module whose form is being checked (#f: the entry), for the
+;; unbound-name message
+(define current-module #f)
 (define (gram-name t)
-  (cond [(and (symbol? t) (hash-has-key? grammar-table t)) t]
-        [(and (pair? t) (symbol? (car t)) (hash-has-key? grammar-table (car t))) (car t)]
-        [else #f]))
+  (let ([n (cond [(symbol? t) t]
+                 [(and (pair? t) (symbol? (car t))) (car t)]
+                 [else #f])])
+    (if (and n (hash-has-key? grammar-table n) (not (member n abstract-here))) n #f)))
+;; the abstract type t names here, or #f
+(define (abstract-name t)
+  (let ([n (if (pair? t) (car t) t)])
+    (if (member n abstract-here) n #f)))
 (define (sexpy? t) (or (sexp-type? t) (if (gram-name t) #t #f)))
 
 ;; substitution into a shape: literals are data, never parameters
@@ -1149,6 +1162,9 @@
     [else (cons (expand-with-handlers (car e)) (cdr e))]))
 
 (define (typecheck-program p0)
+  ;; a previous program's check may have stopped at an error mid-form
+  (set! abstract-here '())
+  (set! current-module #f)
   (match p0
     [`(program ,forms000 ...)
      (define forms00 (map expand-with-handlers forms000))
@@ -1237,7 +1253,13 @@
                              pt
                              (if repl-mode
                                  '_
-                                 (type-error (format "unbound variable ~a" (nm x))))))))))))
+                                 ;; ... and when a required module
+                                 ;; keeps the name private, the
+                                 ;; message says so
+                                 (let ([dep (module-private-hint current-module x)])
+                                   (if dep
+                                       (type-error (format "~a is private to ~a" (nm x) dep))
+                                       (type-error (format "unbound variable ~a" (nm x))))))))))))))
 
      ;; collect the binders a quasiquote pattern introduces (all typed
      ;; _; the point is that they ENTER the env so a later reference
@@ -1272,6 +1294,12 @@
 
      ;; pattern: returns bindings ((x . t) ...) and checks ctor shapes
      (define (pattern-bindings pat scrut-t)
+       ;; only binders, _ and type tests may meet an abstract type:
+       ;; every other pattern looks at the representation
+       (let ([a (abstract-name scrut-t)])
+         (when (and a (pair? pat) (not (eq? (car pat) '?)))
+           (type-error (format "~a is abstract outside ~a: a pattern cannot take it apart"
+                               (ty scrut-t) (module-abstract-owner a)))))
        (match pat
          [(? symbol? s)
           (if (eq? s '_)
@@ -1931,8 +1959,13 @@
 
      ;; --- check every top-level form under `top` ---
 
+     ;; each form sees through the abstract types of its own module only
+     (define form-mids (form-module-ids forms))
      (for-each-form
       (lambda (f)
+        (set! current-module (car form-mids))
+        (set! abstract-here (abstract-types-in (car form-mids)))
+        (set! form-mids (cdr form-mids))
         ;; FFI forms were validated above
         (if (and (pair? f) (member (car f) '(foreign define-foreign-type #%extern-foreign-type)))
             (void)
@@ -1991,6 +2024,8 @@
              (when (eq? dt '_) (hash-set! top x (if (set-member? assigned x) (loosen et) et))))]
           [e (synth e '())])))
       forms)
+     (set! abstract-here '())
+     (set! current-module #f)
 
      p]))
 

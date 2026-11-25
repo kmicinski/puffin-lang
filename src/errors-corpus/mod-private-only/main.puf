@@ -1,0 +1,2 @@
+(require "lib.puf" #:only (double helper))
+(println (helper 4))
