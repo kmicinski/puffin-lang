@@ -1417,11 +1417,12 @@ export function createBoard({ send, stage, onChange }) {
     }
   }
 
+  // the last camera request seen (board.rs `look`); null until the first
+  let looked = null;
   return {
     receive({ board: next, outline: modules }) {
       const before = board.questions?.length ?? 0;
       const decidedBefore = (board.notes ?? []).filter((n) => n.kind === "decision").length;
-      const looked = board.look?.n;
       if (next) board = next;
       // a new question brings the decisions card out (once; ✕ puts it away)
       const decided = (board.notes ?? []).filter((n) => n.kind === "decision").length;
@@ -1439,7 +1440,11 @@ export function createBoard({ send, stage, onChange }) {
       view?.boardChanged();
       // the voice asked for the board, or the code (board.rs `look`): the
       // camera goes there -- once, and not for the request a reload finds
-      if (next?.look && looked !== undefined && next.look.n !== looked) setTimeout(() => setView(next.look.to === "board" ? "board" : "editor"), 60);
+      if (next) {
+        const n = next.look?.n ?? 0;
+        if (looked !== null && n !== looked) setTimeout(() => setView(next.look.to === "board" ? "board" : "editor"), 60);
+        looked = n;
+      }
     },
     setView,
     toggle,
