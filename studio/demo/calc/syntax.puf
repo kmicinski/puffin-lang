@@ -1,0 +1,18 @@
+;; syntax.puf -- the calculator's language: arithmetic with let.
+(provide Expr Num Var Add Mul Let size)
+
+(define-type Expr
+  (Num Int)
+  (Var Sym)
+  (Add Expr Expr)
+  (Mul Expr Expr)
+  (Let Sym Expr Expr))
+
+;; how many nodes: the measure the generators grow
+(define (size [e : Expr]) : Int
+  (match e
+    [`(Num ,n) 1]
+    [`(Var ,x) 1]
+    [`(Add ,a ,b) (+ 1 (+ (size a) (size b)))]
+    [`(Mul ,a ,b) (+ 1 (+ (size a) (size b)))]
+    [`(Let ,x ,rhs ,body) (+ 1 (+ (size rhs) (size body)))]))

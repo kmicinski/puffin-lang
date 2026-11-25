@@ -1,0 +1,23 @@
+;; vm.puf -- the stack machine: an operand stack and a stack of bound
+;; values (Load n reads the n-th, innermost first).
+(provide execute)
+(require "compile.puf")
+
+(define (pop2 [f : (-> Int Int Int)] [stack : (List Int)]) : (List Int)
+  (cons (f (car (cdr stack)) (car stack)) (cdr (cdr stack))))
+
+(define (step [i : Instr] [stack : (List Int)] [frames : (List Int)]) : (Pairof (List Int) (List Int))
+  (match i
+    [`(Push ,n) (cons (cons n stack) frames)]
+    [`(Load ,k) (cons (cons (list-ref frames k) stack) frames)]
+    [`Plus (cons (pop2 + stack) frames)]
+    [`Times (cons (pop2 * stack) frames)]
+    [`Bind (cons (cdr stack) (cons (car stack) frames))]
+    [`Unbind (cons stack (cdr frames))]))
+
+(define (execute [code : (List Instr)]) : Int
+  (let loop ([code code] [stack '()] [frames '()])
+    (if (null? code)
+        (car stack)
+        (let ([next (step (car code) stack frames)])
+          (loop (cdr code) (car next) (cdr next))))))

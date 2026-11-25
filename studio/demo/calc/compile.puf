@@ -1,0 +1,32 @@
+;; compile.puf -- Expr to stack-machine code. Variables become stack
+;; depths: `scope` is the names bound, innermost first, as the machine
+;; will have them under the temporaries.
+(provide Instr Push Load Plus Times Bind Unbind compile-expr)
+(require "syntax.puf")
+
+(define-type Instr
+  (Push Int)
+  (Load Int)
+  (Plus)
+  (Times)
+  (Bind)
+  (Unbind))
+
+;; where x sits in the scope, counting from the innermost binding
+(define (depth [scope : (List Sym)] [x : Sym]) : Int
+  (cond [(null? scope) (error (string-append "unbound variable " (symbol->string x)))]
+        [(eq? (car scope) x) 0]
+        [else (+ 1 (depth (cdr scope) x))]))
+
+(define (compile-in [e : Expr] [scope : (List Sym)]) : (List Instr)
+  (match e
+    [`(Num ,n) (list (Push n))]
+    [`(Var ,x) (list (Load (depth scope x)))]
+    [`(Add ,a ,b) (append (compile-in a scope) (append (compile-in b scope) (list Plus)))]
+    [`(Mul ,a ,b) (append (compile-in a scope) (append (compile-in b scope) (list Times)))]
+    [`(Let ,x ,rhs ,body)
+     (append (compile-in rhs scope)
+             (cons Bind (append (compile-in body (cons x scope)) (list Unbind))))]))
+
+(define (compile-expr [e : Expr]) : (List Instr)
+  (compile-in e '()))

@@ -1,0 +1,16 @@
+;; eval.puf -- the reference interpreter: the meaning of an Expr.
+(provide evaluate run)
+(require "syntax.puf")
+(require "env.puf")
+
+(define (evaluate [e : Expr] [env : Env]) : Int
+  (match e
+    [`(Num ,n) n]
+    [`(Var ,x) (lookup env x)]
+    [`(Add ,a ,b) (+ (evaluate a env) (evaluate b env))]
+    [`(Mul ,a ,b) (* (evaluate a env) (evaluate b env))]
+    [`(Let ,x ,rhs ,body) (evaluate body (extend env x (evaluate rhs env)))]))
+
+;; a closed expression's value
+(define (run [e : Expr]) : Int
+  (evaluate e empty-env))

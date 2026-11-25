@@ -1,0 +1,19 @@
+;; main.puf -- a calculator, two ways: the interpreter (eval.puf) and the
+;; compiler (compile.puf) to a stack machine (vm.puf), which must agree.
+(require "syntax.puf")
+(require "eval.puf")
+(require "compile.puf")
+(require "vm.puf")
+(require "pretty.puf")
+
+(define example
+  (Let 'x (Add (Num 2) (Num 3))
+       (Mul (Var 'x) (Let 'y (Num 4) (Add (Var 'x) (Var 'y))))))
+
+;; both ways, side by side
+(define (both [e : Expr]) : (List Int)
+  (list (run e) (execute (compile-expr e))))
+
+(println (show example))
+(println (show-code (compile-expr example)))
+(println (both example))
