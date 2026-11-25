@@ -10,6 +10,7 @@
 
 import { markdown } from "./markdown.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 const ICON = {
   edit: "✎", write_file: "✎", delete_file: "✕", add_property: "≡", run_properties: "≡",
@@ -93,8 +94,8 @@ export function createTimeline({ host, go }) {
   function summarize(turn) {
     const { counts } = turn;
     const parts = [];
-    if (counts.edits) parts.push(`${counts.edits} edit${counts.edits === 1 ? "" : "s"}`);
-    if (counts.steps - counts.edits) parts.push(`${counts.steps - counts.edits} step${counts.steps - counts.edits === 1 ? "" : "s"}`);
+    if (counts.edits) parts.push(plural(counts.edits, "edit"));
+    if (counts.steps - counts.edits) parts.push(plural(counts.steps - counts.edits, "step"));
     if (counts.failed) parts.push(`${counts.failed} failed`);
     return parts.join(" · ");
   }

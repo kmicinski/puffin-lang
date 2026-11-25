@@ -15,6 +15,7 @@
 //                              "current", "stale", "redefined", "evaluated", "absent"
 
 import { forms } from "./lexer.js";
+import { plural } from "./words.js";
 
 // A form's key, as the server's form scanner makes it (sexp.rs Form::key).
 export function keyOf(form, index) {
@@ -107,7 +108,7 @@ export function createSession({ editor, files, traced = () => [], canTrace = () 
     if (traced().length) lines.push(`traced: ${traced().join(", ")}`);
     for (const observed of view.observed) {
       if (lines.length && !lines.includes("observed")) lines.push("observed");
-      lines.push(`  ${observed.function}: ${observed.calls} call${observed.calls === 1 ? "" : "s"}`);
+      lines.push(`  ${observed.function}: ${plural(observed.calls, "call")}`);
     }
     return lines.length ? lines.join("\n") : "the session holds nothing of the program yet: ⌘↵ on a form, or Load file";
   }

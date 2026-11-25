@@ -18,6 +18,7 @@
 
 import { basename, dirname, sorted } from "./files.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 // a project this big, or any folder, shows the tree unasked
 const MANY = 4;
@@ -144,7 +145,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     if (editing?.kind === "rename" && editing.path === dir.path) return editRow(node, name, (typed) => files.moveFolder(dir.path, join(dirname(dir.path), typed)));
     if (editing?.kind === "delete" && editing.path === dir.path) {
       const n = files.paths().filter((path) => path.startsWith(`${dir.path}/`)).length;
-      return confirmRow(node, `Delete ${name}${n ? ` and its ${n} file${n === 1 ? "" : "s"}` : ""}?`, () => files.deleteFolder(dir.path));
+      return confirmRow(node, `Delete ${name}${n ? ` and its ${plural(n, "file")}` : ""}?`, () => files.deleteFolder(dir.path));
     }
     node.append(el("span", "tree-caret"), el("span", "tree-name", name));
     node.title = dir.path;

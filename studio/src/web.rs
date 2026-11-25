@@ -139,7 +139,7 @@ macro_rules! assets {
 }
 
 assets!(
-    "index.html", "studio.css", "assist.css", "diff.css", "dom.js", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
+    "index.html", "studio.css", "assist.css", "diff.css", "dom.js", "words.js", "main.js", "editor.js", "lexer.js", "sexp.js", "paredit.js", "emacs.js",
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
         "tree.js", "projects.js", "replay.js", "gist.js", "voice.js", "voice.css", "focus.js", "timeline.js", "progress.js", "excursion.js", "board.js", "board.css", "palette.js",

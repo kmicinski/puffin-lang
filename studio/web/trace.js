@@ -15,6 +15,7 @@
 
 import { highlight } from "./markdown.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 // Calls this deep and deeper start closed.
 const OPEN_DEPTH = 3;
@@ -86,7 +87,7 @@ export function renderTrace(calls) {
   const box = el("div", "trace");
   const head = box.appendChild(el("div", "trace-head"));
   const total = count(calls);
-  head.append(el("span", "", `trace · ${total} call${total === 1 ? "" : "s"} · ${depthOf(calls)} deep`));
+  head.append(el("span", "", `trace · ${plural(total, "call")} · ${depthOf(calls)} deep`));
   const raw = head.appendChild(el("button", "trace-raw", "as text"));
   raw.title = "Show the trace as it was printed (Racket's layout), to read or copy";
   const tree = box.appendChild(el("div", "trace-tree"));
@@ -123,7 +124,7 @@ function appendItems(container, items, depth, budget) {
     const rest = items.slice(i);
     const calls = count(rest);
     const more = container.appendChild(el("button", "trace-more",
-      calls ? `${calls} more call${calls === 1 ? "" : "s"}` : `${rest.length} more line${rest.length === 1 ? "" : "s"}`));
+      calls ? plural(calls, "more call") : plural(rest.length, "more line")));
     more.addEventListener("click", () => {
       more.remove();
       appendItems(container, rest, depth, { rows: PAGE });
@@ -153,7 +154,7 @@ function renderItem(item, depth, budget) {
     node.classList.add("leaf");
     return node;
   }
-  if (nested) row.append(el("span", "trace-count", `${nested} call${nested === 1 ? "" : "s"}`));
+  if (nested) row.append(el("span", "trace-count", plural(nested, "call")));
   const children = node.appendChild(el("div", "trace-children"));
   let filled = false;
   const open = (on, rows) => {

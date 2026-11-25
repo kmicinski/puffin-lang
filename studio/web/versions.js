@@ -6,6 +6,7 @@
 
 import { lineDiff } from "./hunks.js";
 import { el } from "./dom.js";
+import { timeOfDay } from "./words.js";
 
 const ORIGINS = { open: "opened", save: "saved", accept: "accepted", disk: "changed on disk", restore: "restored" };
 
@@ -33,9 +34,8 @@ export function createVersions({ panel, files, send }) {
     if (!versions.length) panel.append(el("p", "hint", "No versions yet."));
     for (const version of [...versions].reverse()) {
       const row = panel.appendChild(el("div", "version-row"));
-      const when = new Date(version.created).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       row.append(el("span", "version-id", `v${version.id}`), el("span", `version-origin ${version.origin}`, ORIGINS[version.origin] ?? version.origin));
-      row.append(el("span", "version-when", when));
+      row.append(el("span", "version-when", timeOfDay(version.created)));
       const what = row.appendChild(el("span", "version-what", version.label || version.forms_changed.map((f) => f.split(":").slice(1).join(":")).join(", ")));
       what.title = version.forms_changed.join("\n");
       const diff = row.appendChild(el("button", "quiet small", "Compare"));

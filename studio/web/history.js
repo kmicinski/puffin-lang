@@ -11,6 +11,7 @@
 // it); `onJump(index)` is a click on a row's time.
 
 import { el } from "./dom.js";
+import { dateOf, plural, timeOfDay } from "./words.js";
 
 // what each kind of moment is called, and the filter it falls under
 const KINDS = {
@@ -37,8 +38,6 @@ const FILTERS = [
   ["sessions", "Sessions"],
 ];
 
-const time = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const day = (at) => new Date(at).toLocaleDateString([], { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 const formName = (key) => key.split(":").slice(2).join(":") || key.split(":").slice(1).join(":");
 
 export function createHistory({ panel, send, onMoments, onJump }) {
@@ -79,11 +78,11 @@ export function createHistory({ panel, send, onMoments, onJump }) {
       case "restore": return `${moment.label} of ${moment.file}`;
       case "disk": return moment.file;
       case "rename": {
-        const what = moment.folder ? `folder ${moment.from} → ${moment.to} (${moment.files} file${moment.files === 1 ? "" : "s"})` : `${moment.from} → ${moment.to}`;
+        const what = moment.folder ? `folder ${moment.from} → ${moment.to} (${plural(moment.files, "file")})` : `${moment.from} → ${moment.to}`;
         const pointed = moment.pointed?.length ? `; ${moment.pointed.join(", ")} now require it there` : "";
         return what + pointed;
       }
-      case "delete": return moment.folder ? `folder ${moment.file} (${moment.files} file${moment.files === 1 ? "" : "s"})` : `${moment.file}${moment.disk ? " (went from disk)" : ""}`;
+      case "delete": return moment.folder ? `folder ${moment.file} (${plural(moment.files, "file")})` : `${moment.file}${moment.disk ? " (went from disk)" : ""}`;
       case "eval": return moment.command || moment.line;
       case "ask": return moment.line;
       case "test": {
@@ -119,13 +118,13 @@ export function createHistory({ panel, send, onMoments, onJump }) {
     let lastDay = null;
     const pending = moments.filter((m) => !m.commit).length;
     for (const [moment, index] of shown.reverse()) {
-      const today = day(moment.at);
+      const today = dateOf(moment.at);
       if (today !== lastDay) {
         list.append(el("div", "history-day", today));
         lastDay = today;
       }
       const row = list.appendChild(el("div", `history-row ${moment.kind}${moment.status === "error" || moment.error ? " failed" : ""}`));
-      const when = row.appendChild(el("span", "history-when", time(moment.at)));
+      const when = row.appendChild(el("span", "history-when", timeOfDay(moment.at)));
       if (onJump) {
         when.title = "Replay: see what was on screen at this moment";
         when.classList.add("jump");
@@ -150,7 +149,7 @@ export function createHistory({ panel, send, onMoments, onJump }) {
       }
     }
     if (pending) {
-      panel.append(el("p", "hint", `${pending} moment${pending === 1 ? "" : "s"} not committed yet: edits settle for a moment first.`));
+      panel.append(el("p", "hint", `${plural(pending, "moment")} not committed yet: edits settle for a moment first.`));
     }
   }
 

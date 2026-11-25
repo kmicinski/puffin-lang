@@ -15,6 +15,7 @@ import { groupHunk, place } from "./hunks.js";
 import { forms } from "./lexer.js";
 import { createInlineDiff } from "./inline-diff.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 const TONES = 5;
 export const toneOf = (thread) => `tone-${(thread - 1) % TONES}`;
@@ -177,7 +178,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
       dot.title = threadOf(t)?.title ?? "";
     }
     const group = state.groups.find((g) => g.ids[0] === state.current) ?? state.groups[0] ?? null;
-    const what = bar.appendChild(el("span", "ip-what", `${total} proposed change${total === 1 ? "" : "s"}`));
+    const what = bar.appendChild(el("span", "ip-what", plural(total, "proposed change")));
     if (group) what.append(el("span", "ip-of", ` · ${changesetOf(group.changeset)?.title ?? ""}`));
     for (const [path, groups] of state.files) {
       if (path === files.active()) continue;
@@ -228,7 +229,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
     const counts = ["accepted", "rejected"].map((status) => [status, ops.filter((op) => op.status === status).length])
       .filter(([, n]) => n).map(([status, n]) => (n === ops.length ? status : `${n} ${status}`));
     const stale = open.filter((op) => op.stale).length;
-    const words = [`Proposed ${ops.length} change${ops.length === 1 ? "" : "s"}`, ...counts, ...(stale ? [`${stale} no longer applies`] : [])];
+    const words = [`Proposed ${plural(ops.length, "change")}`, ...counts, ...(stale ? [`${stale} no longer applies`] : [])];
     const button = el("button", `proposal-chip ${toneOf(ops[0].thread)}${open.length ? "" : " done"}`);
     button.append(el("span", "ip-dot"), el("span", "", words.join(" · ")));
     const files_ = [...new Set(ops.map((op) => op.file))];

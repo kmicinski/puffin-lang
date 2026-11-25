@@ -10,9 +10,8 @@
 //     -> { on, start, goto, receive }
 
 import { el } from "./dom.js";
+import { dateOf, timeOfDay } from "./words.js";
 
-const clockText = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const dateText = (at) => new Date(at).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
 const TRANSCRIPT_KINDS = new Set(["eval", "ask", "test", "echo"]);
 
 export function createReplay({ editor, send, history, clock, panel, past, pastTabs, pastTranscript }) {
@@ -30,7 +29,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
   const face = clock.appendChild(el("span", "clock-face"));
   clock.title = "Replay: slide through the project's history and see what was on screen (← → step · Esc returns)";
   function tick() {
-    if (!on) face.textContent = clockText(Date.now());
+    if (!on) face.textContent = timeOfDay(Date.now());
   }
   tick();
   setInterval(tick, 1000);
@@ -94,9 +93,9 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
     slider.max = moments.length - 1;
     slider.value = index;
     const moment = moments[index];
-    face.textContent = clockText(moment.at);
-    big.textContent = clockText(moment.at);
-    date.textContent = dateText(moment.at);
+    face.textContent = timeOfDay(moment.at);
+    big.textContent = timeOfDay(moment.at);
+    date.textContent = dateOf(moment.at);
     what.textContent = `${index + 1} of ${moments.length} · ${history.summary(moment)}`;
     back.disabled = index === 0;
     forward.disabled = index === moments.length - 1;
@@ -184,7 +183,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
       const line = entry.appendChild(el("div", "line"));
       if (m.kind === "ask") line.append(el("span", "ask-mark", "?? "), el("span", "code", m.line ?? ""));
       else line.append(el("span", "code", m.command || m.line || ""));
-      line.append(el("span", "ms", clockText(m.at)));
+      line.append(el("span", "ms", timeOfDay(m.at)));
       if (m.out) entry.append(el("pre", m.kind === "ask" ? "answer" : "", m.out));
       if (m.error) entry.append(el("pre", "err", m.error));
     }

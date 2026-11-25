@@ -19,6 +19,7 @@
 import { LINT_SOURCE } from "./lint.js";
 import { enclosing, parse } from "./sexp.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 const SOURCES = {
   type: "from the type (the checker)",
@@ -409,7 +410,7 @@ export function hover(word, facts) {
   else if (facts?.type) contents.push({ value: `\`${word} : ${facts.type}\`\n\n*from the checker*` });
   const seen = facts?.observed;
   if (seen && (seen.patterns?.length || seen.shapes?.length)) {
-    const calls = `${seen.calls} call${seen.calls === 1 ? "" : "s"}`;
+    const calls = plural(seen.calls, "call");
     const list = seen.patterns?.length ? seen.patterns : seen.shapes;
     const fence = "```";
     contents.push({

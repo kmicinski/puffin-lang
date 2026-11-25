@@ -20,6 +20,7 @@ import { markdown } from "./markdown.js";
 import { balanced } from "./lexer.js";
 import { renderOutput } from "./trace.js";
 import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 // The question, when `text` asks for ask mode: `??` and what follows.
 export function asking(text) {
@@ -265,7 +266,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     if (calls.length) {
       const list = el("details", "assist-calls");
       const failed = calls.filter((call) => call.status === "error").length;
-      list.append(el("summary", "", `${calls.length} step${calls.length === 1 ? "" : "s"}${failed ? ` · ${failed} refused or failed` : ""}`));
+      list.append(el("summary", "", `${plural(calls.length, "step")}${failed ? ` · ${failed} refused or failed` : ""}`));
       for (const call of calls) {
         const item = list.appendChild(el("div", `assist-call ${call.status ?? ""}`));
         item.append(el("span", "mark", call.status === "error" ? "✗" : call.status === "running" ? "…" : "✓"), el("span", "", describe(call)));
