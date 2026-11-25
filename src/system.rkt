@@ -61,6 +61,54 @@
 (define (module-demangle s) (hash-ref module-demangle-table s s))
 
 ;; ---------------------------------------------------------------------
+;; Abstract types (docs/MODULES.md "Opaque types"). A define-type whose
+;; module exports none of its constructors is ABSTRACT to every other
+;; module: they may name it and pass its values along, never build one
+;; or take one apart. The resolver records each such type -- mangled
+;; name -> (owner module id . owner basename) -- and which module each
+;; flattened top-level form came from (the module id, #f for the
+;; entry); the checker treats the type as a bare name while it checks
+;; any other module's forms. Mirrored by puffincc-src/system.puf.
+;; ---------------------------------------------------------------------
+
+(define module-abstract-types (make-hasheq))
+(define resolved-form-modules-box (box '()))
+(define (resolved-form-modules) (unbox resolved-form-modules-box))
+(define (resolved-form-modules-set! v) (set-box! resolved-form-modules-box v))
+;; and, for the checker's unbound-name message, the names each module
+;; would see but for a dep's privacy: name -> ((module id . dep
+;; basename) ...)
+(define module-private-hints (make-hasheq))
+(define (module-abstract-reset!)
+  (hash-clear! module-abstract-types)
+  (hash-clear! module-private-hints)
+  (resolved-form-modules-set! '()))
+(define (module-abstract-register! t owner base)
+  (hash-set! module-abstract-types t (cons owner base)))
+(define (module-private-hint-register! n mid base)
+  (hash-set! module-private-hints n (cons (cons mid base) (hash-ref module-private-hints n '()))))
+;; the basename of the module that owns abstract type t (messages)
+(define (module-abstract-owner t) (cdr (hash-ref module-abstract-types t)))
+
+;; per top-level form of a checked program, the module it came from.
+;; The resolved forms are the program's TAIL (the prelude comes first,
+;; and sees no user type); REPL evals and programs the resolver did
+;; not produce count as the entry module (#f).
+(define (form-module-ids forms)
+  (define pad (- (length forms) (length (resolved-form-modules))))
+  (if (or (repl-mode?) (< pad 0))
+      (map (λ (_) #f) forms)
+      (append (build-list pad (λ (_) #f)) (resolved-form-modules))))
+;; the abstract types module mid must not see into: everyone's but its own
+(define (abstract-types-in mid)
+  (filter (λ (t) (not (equal? (car (hash-ref module-abstract-types t)) mid)))
+          (hash-keys module-abstract-types)))
+;; the dep that keeps name n private from module mid, or #f
+(define (module-private-hint mid n)
+  (define hit (assoc mid (hash-ref module-private-hints n '())))
+  (and hit (cdr hit)))
+
+;; ---------------------------------------------------------------------
 ;; Source positions for compile-time diagnostics (typechecker errors,
 ;; exhaustiveness warnings, cast blame labels). Granularity is the
 ;; TOP-LEVEL FORM: the reader records each top-level form's line, the

@@ -760,6 +760,44 @@ specs are optional all the way down. And separate compilation falls out:
 <code>bin/puffin -c --separate main.puf -o prog</code> compiles each module in the
 DAG to a cached <code>.o</code> + interface file and links, rebuilding only what
 changed.</p>
+
+<h3>Private definitions and opaque types</h3>
+<p>A provide list is all or nothing. To hide one helper without listing
+everything else, declare it <code>private</code> next to its definition — the
+same way <code>(: name τ)</code> declares a type. And to export a type
+<em>abstractly</em>, the way an ML signature's <code>type t</code> does, declare it
+<code>opaque</code>: its name goes out, its constructors stay home.</p>
+<pre><code>;; ---- counter.puf — no provide list: all but the private ----
+(opaque Counter)                 ;; the name goes out, C stays home
+(define-type Counter (C Int))
+(private step)                   ;; not exported at all
+(define (step n) (+ n 1))
+(define (make) (C 0))
+(define (tick [c : Counter]) : Counter
+  (match c [(C n) (C (step n))]))
+(define (count [c : Counter]) : Int
+  (match c [(C n) n]))
+
+;; ---- main.puf ----------------------------------------------
+(require "counter.puf")
+(define (twice [c : Counter]) : Counter (tick (tick c)))
+(println (count (twice (make))))    ;; 2
+</code></pre>
+<p>Outside <code>counter.puf</code>, <code>Counter</code> is a bare name: annotate
+with it and pass it around, but you cannot build one, take one apart, or pass a
+quoted <code>'(C 41)</code> off as one:</p>
+<pre><code>(define (peek [c : Counter]) : Int
+  (match c [`(C ,n) n]))
+;; error: typecheck: Counter is abstract outside counter.puf:
+;;        a pattern cannot take it apart [main.puf:2]
+(step 1)
+;; error: typecheck: step is private to counter.puf
+</code></pre>
+<p>A provide list that names a type but none of its constructors, or a signature
+with a bare <code>(type T)</code> entry, makes it abstract the same way. The check
+is static — it keeps typed code from depending on a representation, so the
+module is free to change it (docs/MODULES.md has the details and what is left
+out).</p>
 </section>
 
 <section id="xmodules">

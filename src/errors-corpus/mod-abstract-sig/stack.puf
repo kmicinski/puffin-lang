@@ -1,0 +1,6 @@
+(provide #:sig "stack.pufs")
+(define-type Stack (Empty) (Push Int Stack))
+(: empty Stack)
+(define empty Empty)
+(: push (-> Int Stack Stack))
+(define (push x s) (Push x s))

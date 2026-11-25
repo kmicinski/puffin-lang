@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-private-only/main.puf: #:only name helper is private to src/errors-corpus/mod-private-only/lib.puf

@@ -1,0 +1,3 @@
+(signature RING
+  (val zero Int)
+  (fun add 2))

@@ -35,6 +35,11 @@ skipped, not failed — the `z3/` examples need `brew install z3`.
 - **stack-compiler/** — the classic expr→stack-machine compiler,
   split across modules (`require`/`provide` in action), with the
   source and target languages as grammars in `lang.puf`.
+- **abstract-queue/** — hiding, per definition and ML-style: a
+  queue whose helper is `(private ...)` and whose type is
+  `(opaque ...)`, a stack whose signature makes its type abstract,
+  and two modules each keeping a private helper of the same name
+  (`docs/MODULES.md`, "Private definitions and opaque types").
 
 The `lang/` programs share sources with the golden test corpus
 (`src/test-programs/`), which also feeds the web playground's

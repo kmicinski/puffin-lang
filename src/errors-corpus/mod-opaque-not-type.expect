@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-opaque-not-type/lib.puf declares Env opaque, but only a define-type can be opaque [lib.puf:3]

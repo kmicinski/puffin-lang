@@ -1,0 +1,5 @@
+;; one module cannot both keep a name private and provide it
+(provide double helper)
+(private helper)
+(define (helper x) (* x 2))
+(define (double x) (helper x))

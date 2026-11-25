@@ -1,0 +1,5 @@
+;; only a define-type has a representation to hide: an alias IS its
+;; expansion
+(opaque Env)
+(define-type-alias Env (List Int))
+(define (empty-env) '())

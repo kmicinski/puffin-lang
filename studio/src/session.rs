@@ -80,9 +80,9 @@ pub fn definition(form: &Form) -> bool {
 }
 
 /// Whether a form is an expression: not a definition, signature, require,
-/// or provide.
+/// provide, or privacy declaration.
 pub fn expression(form: &Form) -> bool {
-    !definition(form) && !matches!(form.head.as_deref(), Some("require" | "provide" | ":"))
+    !definition(form) && !matches!(form.head.as_deref(), Some("require" | "provide" | "private" | "opaque" | ":"))
 }
 
 impl Session {

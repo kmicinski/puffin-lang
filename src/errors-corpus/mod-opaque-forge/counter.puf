@@ -1,0 +1,4 @@
+(opaque Counter)
+(define-type Counter (C Int))
+(define (make) (C 0))
+(define (count [c : Counter]) : Int (match c [(C n) n]))

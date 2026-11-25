@@ -1,0 +1,7 @@
+;; assist: rename @ "(define (helper" +9 new=step
+;; a private helper: its (private ...) declaration names it too, so a
+;; rename carries it along
+(private helper)
+(define (helper x) (* x 2))
+(define (double x) (helper x))
+(double 4)

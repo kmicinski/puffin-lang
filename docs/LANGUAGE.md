@@ -56,6 +56,27 @@ with `#:as` or `#:rename`. Modules work on every route — the native
 backends, the bytecode VM, and the browser playground's file tabs —
 and a file with no require/provide compiles exactly as before.
 
+Hiding is per definition, declared next to it the way `(: name τ)`
+is. `(private helper)` keeps a name out of the module's exports (a
+private `define-type` keeps its constructors too) — so a module with
+no provide list can still have internals. `(opaque Store)` exports a
+type's name but not its constructors, and a type whose module exports
+none of its constructors is **abstract** everywhere else, ML-style:
+other modules can annotate with it and pass its values along, but not
+build one, match it apart, or pass a quoted datum off as one.
+
+```scheme
+(opaque Queue)                          ;; Queue goes out; Q stays home
+(define-type Queue (Q (List Int) (List Int)))
+(private balance)                       ;; not exported
+(define (balance f b) (if (null? f) (Q (reverse b) '()) (Q f b)))
+(define (enqueue [q : Queue] [x : Int]) : Queue
+  (match q [(Q f b) (balance f (cons x b))]))
+```
+
+Providing a private name, or a signature naming one, is an error; a
+module that reaches for one is told it is private.
+
 ## Values
 
 Fixnums (61-bit), booleans `#t`/`#f`, `(void)`, symbols `'foo`, the

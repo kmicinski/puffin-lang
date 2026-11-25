@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-private-provided/lib.puf provides helper, which it declares private [lib.puf:2]

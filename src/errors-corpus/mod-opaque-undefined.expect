@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-opaque-undefined/lib.puf declares Stack opaque, which it does not define [lib.puf:1]

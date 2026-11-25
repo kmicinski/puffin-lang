@@ -1,0 +1,1 @@
+error: modules: src/errors-corpus/mod-private-undefined/lib.puf declares helpr private, which it does not define [lib.puf:2]

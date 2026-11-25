@@ -77,10 +77,14 @@
 
 (define (require-form? f) (match f [`(require ,_ ...) #t] [_ #f]))
 (define (provide-form? f) (match f [`(provide ,_ ...) #t] [_ #f]))
+;; privacy declarations (docs/MODULES.md "Private definitions"):
+;; (private name ...) and (opaque Type ...), module forms like provide
+;; (pair tests, not match: gensym budget)
+(define (privacy-form? f) (and (pair? f) (memq (car f) '(private opaque)) #t))
 
 ;; does this list of top-level forms use the module system at all?
 (define (module-forms? forms)
-  (ormap (λ (f) (or (require-form? f) (provide-form? f))) forms))
+  (ormap (λ (f) (or (require-form? f) (provide-form? f) (privacy-form? f))) forms))
 
 ;; ---------------------------------------------------------------------
 ;; small pieces
@@ -234,6 +238,7 @@
              body      ; top-level forms minus require/provide
              top-names ; seteq of top-level defined names
              provides  ; seteq of exported (source) names
+             privates  ; seteq of names declared private (see parse-privates)
              reqs      ; list of req, in source order
              lines)    ; per-body-form source line (or #f), parallel to body
   #:transparent)
@@ -276,9 +281,51 @@
          [_ (bad)]))]
     [_ (bad)]))
 
+;; privacy declarations -> the module's private names: every name a
+;; (private n ...) lists (a private define-type takes its constructors
+;; with it) and the constructors of every (opaque T ...): an opaque
+;; type's name is public, its representation stays home. (Plain
+;; recursion over forms and names: gensym budget.)
+(define (parse-privates forms body top-names path lines)
+  (define ls (if (and lines (= (length lines) (length forms))) lines (map (λ (_) #f) forms)))
+  ;; each define-type head -> its constructor names
+  (define type-ctors (make-hasheq))
+  (for-each
+   (λ (f)
+     (match f
+       [`(define-type ,head ,cs ...)
+        (hash-set! type-ctors (match head [`(,n ,_ ...) n] [n n])
+                   (filter-map (λ (c) (match c [`(,cn ,_ ...) cn] [_ #f])) cs))]
+       [_ (void)]))
+   body)
+  (define (at pl) (if pl (format " [~a:~a]" (path-basename path) pl) ""))
+  (define (declared! kind n pl)
+    (unless (symbol? n) (module-error "malformed ~a in ~a" kind path))
+    (unless (set-member? top-names n)
+      (module-error "~a declares ~a ~a, which it does not define~a" path n kind (at pl))))
+  (define privates (mutable-seteq))
+  (for-each
+   (λ (f pl)
+     (when (privacy-form? f)
+       (for-each
+        (λ (n)
+          (declared! (car f) n pl)
+          (cond
+            [(eq? (car f) 'private)
+             (set-add! privates n)
+             (for-each (λ (c) (set-add! privates c)) (hash-ref type-ctors n '()))]
+            [else
+             (unless (hash-has-key? type-ctors n)
+               (module-error "~a declares ~a opaque, but only a define-type can be opaque~a"
+                             path n (at pl)))
+             (for-each (λ (c) (set-add! privates c)) (hash-ref type-ctors n))]))
+        (cdr f))))
+   forms ls)
+  (for/seteq ([n (in-set privates)]) n))
+
 ;; (provide n ...) or (provide #:sig "path.pufs"); a module's provide
 ;; forms are unioned, sig ascription must be the only provide
-(define (parse-provides forms base-dir top-names path lines)
+(define (parse-provides forms base-dir top-names privates path lines)
   (define ls (if (and lines (= (length lines) (length forms))) lines (map (λ (_) #f) forms)))
   ;; boxed so #f lines survive the filter-map (gensym budget: no
   ;; parallel-clause for forms here)
@@ -293,10 +340,11 @@
        (module-error "~a: (provide #:sig ...) must be the module's only provide form" path))
      (match-define `(provide #:sig ,(? string? sig-path)) (car sig-forms))
      (check-signature (simplify-path (path->complete-path sig-path base-dir) #f)
-                      forms top-names path)]
+                      forms top-names privates path)]
     [(null? provide-forms)
-     ;; no provide form at all: everything top-level is provided
-     top-names]
+     ;; no provide form at all: everything top-level not declared
+     ;; private is provided
+     (set-subtract top-names privates)]
     [else
      ;; single-clause for/fold over zipped pairs (gensym budget; see
      ;; the note in load-modules)
@@ -308,6 +356,9 @@
           (for ([n ns])
             (unless (set-member? top-names n)
               (module-error "~a provides ~a, which it does not define~a" path n
+                            (if pl (format " [~a:~a]" (path-basename path) pl) "")))
+            (when (set-member? privates n)
+              (module-error "~a provides ~a, which it declares private~a" path n
                             (if pl (format " [~a:~a]" (path-basename path) pl) ""))))
           (for/fold ([a acc]) ([n ns]) (set-add a n))]
          [_ (module-error "malformed provide in ~a: ~a" path pf)]))]))
@@ -324,7 +375,7 @@
 ;; check across compilation units lives on the separate-compilation
 ;; path (separate.rkt check-signature-iface, against the .pufi's
 ;; recorded types, synthesized ones included).
-(define (check-signature sig-path forms top-names mod-path)
+(define (check-signature sig-path forms top-names privates mod-path)
   (unless (file-exists? sig-path)
     (module-error "~a: signature file not found: ~a" mod-path sig-path))
   (define sig
@@ -416,6 +467,11 @@
     (unless (set-member? top-names n)
       (module-error "~a: signature requires ~a ~a, not defined" mod-path kind n)))
   (for/fold ([acc (seteq)]) ([entry sig])
+    ;; a signature is an interface: it cannot name what the module
+    ;; keeps private
+    (when (and (pair? entry) (pair? (cdr entry)) (set-member? privates (cadr entry)))
+      (module-error "~a: signature names ~a, which the module declares private"
+                    mod-path (cadr entry)))
     (match entry
       [`(val ,(? symbol? n))
        (require-defined! 'val n)
@@ -498,7 +554,7 @@
        ;; load dependencies first (postorder)
        (for ([r reqs]) (visit (req-path r) (cons abs stack) (req-line r)))
        (define body+lines
-         (filter-map (λ (f l) (and (not (or (require-form? f) (provide-form? f)))
+         (filter-map (λ (f l) (and (not (or (require-form? f) (provide-form? f) (privacy-form? f)))
                                    (cons f l)))
                      forms form-lines))
        ;; foreign library paths resolve against THIS module's dir
@@ -510,10 +566,11 @@
        (define top-names
          (for/fold ([acc (seteq)]) ([f body])
            (for/fold ([a acc]) ([n (defn-names f)]) (set-add a n))))
-       (define provides (parse-provides forms (path-only abs) top-names abs form-lines))
+       (define privates (parse-privates forms body top-names abs form-lines))
+       (define provides (parse-provides forms (path-only abs) top-names privates abs form-lines))
        (define m (mod abs
                       (if (equal? abs entry-abs) #f (module-id abs))
-                      body top-names provides reqs body-lines))
+                      body top-names provides privates reqs body-lines))
        (hash-set! loaded key m)
        (set! postorder (cons m postorder))
        m]))
@@ -659,6 +716,10 @@
 ;; resolve-modules: the entry point
 ;; ---------------------------------------------------------------------
 
+;; why dep does not export n, for the importer's error message
+(define (unexported dep n)
+  (if (set-member? (mod-privates dep) n) " is private to " " is not provided by "))
+
 ;; the constructors a body's define-types declare, keyed by (resolve
 ;; name) -> field count, folded onto acc (shared with separate.rkt)
 (define (define-type-ctor-arities body resolve acc)
@@ -710,7 +771,8 @@
         ;; belt-and-braces client-side ascription: re-check the dep
         ;; against a signature at the use site
         (when (req-sig-path r)
-          (check-signature (req-sig-path r) (mod-body dep) (mod-top-names dep) (mod-path dep)))
+          (check-signature (req-sig-path r) (mod-body dep) (mod-top-names dep)
+                           (mod-privates dep) (mod-path dep)))
         (cond
           [(req-alias r) (hash-set! aliases (req-alias r) dep)]
           [else
@@ -718,8 +780,8 @@
              (cond [(req-only r)
                     (for ([n (req-only r)])
                       (unless (set-member? (mod-provides dep) n)
-                        (module-error "~a: #:only name ~a is not provided by ~a"
-                                      (mod-path m) n (mod-path dep))))
+                        (module-error "~a: #:only name ~a~a~a"
+                                      (mod-path m) n (unexported dep n) (mod-path dep))))
                     (req-only r)]
                    [else (set->list (mod-provides dep))]))
            (define rename-map (or (req-renames r) '()))
@@ -750,10 +812,42 @@
                (and dep
                     (let ([n (string->symbol (substring str (add1 i)))])
                       (unless (set-member? (mod-provides dep) n)
-                        (module-error "~a: ~a is not provided by ~a (via ~a)"
-                                      (mod-path m) n (mod-path dep) s))
+                        (module-error "~a: ~a~a~a (via ~a)"
+                                      (mod-path m) n (unexported dep n) (mod-path dep) s))
                       (mangled dep n))))))
       (rename-forms (mod-body m) ren qual ctor-arities)))
+  ;; abstract types for the checker (system.rkt): a non-entry module's
+  ;; define-type none of whose constructors it exports -- and the
+  ;; module every flattened form came from
+  (module-abstract-reset!)
+  (for-each
+   (λ (m)
+     (when (mod-id m)
+       (for-each
+        (λ (f)
+          (match f
+            [`(define-type ,head ,cs ...)
+             (define cns (filter-map (λ (c) (match c [`(,cn ,_ ...) cn] [_ #f])) cs))
+             (when (and (pair? cns)
+                        (not (ormap (λ (c) (set-member? (mod-provides m) c)) cns)))
+               (module-abstract-register! (mangled m (match head [`(,n ,_ ...) n] [n n]))
+                                          (mod-id m)
+                                          (path-basename (mod-path m))))]
+            [_ (void)]))
+        (mod-body m)))
+     ;; a dep's private names, for the unbound-name message
+     (for-each
+      (λ (r)
+        (unless (req-alias r)
+          (define dep (lookup (req-path r)))
+          (for-each (λ (p)
+                      (unless (set-member? (mod-top-names m) p)
+                        (module-private-hint-register! p (mod-id m) (path-basename (mod-path dep)))))
+                    (set->list (mod-privates dep)))))
+      (mod-reqs m)))
+   mods)
+  (resolved-form-modules-set!
+   (append-map (λ (m) (map (λ (_) (mod-id m)) (mod-body m))) mods))
   ;; the renamer is 1:1 per form, so each module's body-lines map
   ;; straight onto its renamed forms; stash the flattened origins for
   ;; read-program-file (see system.rkt: resolved-origins)

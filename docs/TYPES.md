@@ -159,6 +159,18 @@ predicate of the old instance kind, still in the manifest) is `#f`.
 Two modules that declare the same constructor name build the same data:
 grammar types are structural (docs/GRAMMARS.md §4).
 
+### Abstract types
+
+Across modules a define-type can be **abstract**: when its module
+exports none of its constructors (`(opaque T)`, or a provide list or
+signature naming `T` alone; docs/MODULES.md "Private definitions and
+opaque types"), every other module checks against `T` as a bare
+nominal name. It is no grammar there: no template or quoted datum
+fits it, it overlaps no list type, and the only patterns that may
+meet it are binders, `_`, and type tests. Inside its own module it is
+the grammar described above. The check is static; the run-time
+representation is unchanged.
+
 ## 3. Annotations: anything, anywhere, defaulting to `_`
 
 ```scheme

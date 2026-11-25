@@ -1,0 +1,6 @@
+;; an ML-style abstract type: the signature names Stack, not its
+;; constructors
+(signature STACK
+  (type Stack)
+  (val empty Stack)
+  (fun push (-> Int Stack Stack)))
