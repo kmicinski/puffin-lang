@@ -48,6 +48,8 @@ const SET_LIMIT = 8;
 const OFFER_LIMIT = 5;
 // a line of the lane, as the model's budget counts lines
 const LINE = 19;
+// a fragment needed by the one above it sits in this far
+const INDENT = 28;
 // the lane reorders when the author has been still this long
 const IDLE_MS = 2500;
 // a file this short is shown whole when nothing is focused yet
@@ -609,6 +611,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     }
     const byId = new Map(want.map((s) => [s.id, s]));
     const before = new Map([...frags].map(([id, f]) => [id, f.node.getBoundingClientRect().top]));
+    const depth = depths();
     order.forEach((id, i) => {
       const s = byId.get(id);
       let f = frags.get(id);
@@ -618,6 +621,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       // detail changes wait for calm too, unless it is new or just arrived
       if (calm || !f.detail || id === arrived) f.detail = s.detail;
       renderFrag(f);
+      f.node.style.marginLeft = `${(depth.get(id) ?? 0) * INDENT}px`;
       if (lane.children[i] !== f.node) lane.insertBefore(f.node, lane.children[i] ?? null);
     });
     lane.querySelector(".lane-hint")?.remove();
@@ -642,6 +646,21 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       flash(f.node);
       requestAnimationFrame(() => requestAnimationFrame(() => board.reveal(f.node)));
     }
+  }
+
+  // The lane reads as a tree of where each definition is needed: one the
+  // focus uses sits at the left edge; one only a fragment above it uses
+  // sits a step in from that one (two steps at most).
+  function depths() {
+    const depth = new Map();
+    const uses = (def, name) => itemOf(def)?.uses.includes(name);
+    order.forEach((id, i) => {
+      const { name } = defOf(id);
+      if (!focus?.name || uses(focus, name)) return depth.set(id, 0);
+      const parent = order.slice(0, i).find((other) => uses(defOf(other), name));
+      depth.set(id, parent ? Math.min(2, (depth.get(parent) ?? 0) + 1) : 0);
+    });
+    return depth;
   }
 
   // once the author is still, the lane takes the ranking's order

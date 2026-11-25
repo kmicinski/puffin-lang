@@ -3,8 +3,9 @@
 // transform, `translate(x, y) scale(z)` -- so a glide is a CSS transition
 // and anything on the layer (cards, live editors, wires) moves as one.
 //
-//   two-finger scroll or the wheel pans; ⌘/ctrl + wheel (a pinch) zooms
-//   about the pointer; dragging the empty canvas pans
+//   two-finger scroll or the wheel pans; ⌘/ctrl + wheel (a trackpad's
+//   pinch) zooms about the pointer; dragging the empty board pans; on a
+//   touch screen, two fingers pinch
 //   frame(boxes)   glide so the boxes (canvas coordinates) fill the view,
 //                  no closer than `max` and no further than `min`
 //   fitting(boxes) the zoom at which they would just fit
@@ -124,7 +125,7 @@ export function createCamera({ viewport, layer, onChange, onFrame, min = 0.2, ma
     const start = { px: event.clientX, py: event.clientY, x, y };
     let moved = false;
     const move = (e) => {
-      if (!moved && Math.hypot(e.clientX - start.px, e.clientY - start.py) < 3) return;
+      if (pinch || (!moved && Math.hypot(e.clientX - start.px, e.clientY - start.py) < 3)) return;
       moved = true;
       viewport.classList.add("panning");
       x = start.x + e.clientX - start.px;
@@ -139,6 +140,44 @@ export function createCamera({ viewport, layer, onChange, onFrame, min = 0.2, ma
     addEventListener("pointermove", move);
     addEventListener("pointerup", up);
   });
+
+  // Two fingers on a touch screen: a pinch zooms about their middle, and
+  // the middle carries the board with it (the trackpad's pinch arrives as
+  // a ctrl-wheel, above).
+  const touches = new Map();
+  let pinch = null;
+  const fingers = () => {
+    const [a, b] = [...touches.values()];
+    return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  };
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch") return;
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (touches.size === 2) pinch = { ...fingers(), x, y, z };
+  }, { capture: true });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!touches.has(event.pointerId)) return;
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (!pinch || touches.size !== 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const now = fingers();
+    const box = viewport.getBoundingClientRect();
+    const to = clamp((pinch.z * now.d) / pinch.d);
+    // the board's point that was under the fingers' middle stays under it
+    const cx = (pinch.mx - box.left - pinch.x) / pinch.z;
+    const cy = (pinch.my - box.top - pinch.y) / pinch.z;
+    x = now.mx - box.left - cx * to;
+    y = now.my - box.top - cy * to;
+    z = to;
+    apply(false);
+  }, { capture: true });
+  const lift = (event) => {
+    touches.delete(event.pointerId);
+    if (touches.size < 2) pinch = null;
+  };
+  viewport.addEventListener("pointerup", lift, { capture: true });
+  viewport.addEventListener("pointercancel", lift, { capture: true });
 
   return {
     zoom: () => z,

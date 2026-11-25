@@ -41,13 +41,17 @@ it shows.
   code into the lane, ⇧↵ (or a double-click) focuses it, `]` and `[`
   bring what it uses or what uses it, Esc goes back to the code.
 - **The board** (right) is one zoomable surface, moved by a camera
-  (two-finger scroll pans, ⌘/ctrl-wheel or a pinch zooms, dragging empty
-  board pans; programmatic moves glide). On it are the module cards of
+  (two-finger scroll pans, ⌘/ctrl-wheel or a pinch zooms — on a touch
+  screen too — dragging empty board pans; programmatic moves glide). On it are the module cards of
   docs/PLANNING.md — ML signatures, one row per definition, notes, the
   decisions card, questions and slices, plan mode, hiding, the HUD, the
   filter, the lens — and, left of the cards, **the lane**: the working
   set, each definition as live code (a *fragment*: another view of its
   file's model, narrowed to it, growing as it is typed in).
+- **The lane reads as a tree** of where each definition is needed: one
+  the focus uses sits at its left edge, wired from the very line that
+  uses it; one that only a fragment above it uses sits a step in (two at
+  most), wired from that fragment's line round the lane's right side.
 - **Wires** say "this uses that" in one visual language: from the line
   in the focus that uses a name to its fragment (crossing from the focus
   into the board), from a line in one fragment to a fragment below it
@@ -215,13 +219,10 @@ part of its state.
 
 ## 8. Not done
 
-- The lane is one column. A tree (callees indented under their caller)
-  would show the reading order better than wires alone; the order is the
-  model's, not the call graph's.
+- The lane's order is the model's, not the call graph's: a fragment is
+  indented under what needs it, but not moved next to it.
 - Fragments cannot be dragged, and the lane cannot be moved on the
   board; the cards still can.
 - Dwell is hover or typing time, not visible-and-read time.
-- Touch: one-finger drags pan the board, but there is no pinch on
-  touch screens yet (the wheel's ctrl-zoom is the trackpad's pinch).
 - Untested against the live builder here (no credentials): its edits
   reach the model through the same messages as before.
