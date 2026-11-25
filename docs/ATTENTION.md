@@ -4,10 +4,10 @@ Status, 2026-11-25: built on the `view-relevance` branch. The model is
 `studio/web/attention.js` (pure: no DOM, no network, no clock), its
 view of the studio `studio/web/attention-studio.js`, the log
 `studio/src/attention.rs` (`/attention/log`), a demo page at
-`/attention`, tests in `studio/web/test/`. No UI uses it yet: the
-unified code+board views (one zoomable canvas; a focused editor with a
-working set) are the intended callers, and §3 is the contract they
-integrate against.
+`/attention`, tests in `studio/web/test/`. Its caller is the code view
+(docs/VIEW.md): one rank call there decides what the working set's lane
+holds, in what order and at what detail — the author's own set and what
+the model offers beside it.
 
 The question it answers: *of every definition in the program, which
 should be on the screen now, and how much of each* — so that, by
@@ -50,6 +50,7 @@ The rest is the moment (`state`; all optional but `now` and
 | `questions` | `[{ text, about, answered }]` | the board's questions |
 | `voice` | `[{ id, at }]`: just mentioned | voice `focus` targets |
 | `views` | `[{ id, at, ms }]`: what the author read, how long | the session (§3) |
+| `set` | `[{ id, at, pinned }]`: what the author brought into view, each when last touched | the UI's working set |
 | `pins`, `dismissed` | `[id]`, `[{ id, at }]` | the session (§3) |
 
 `createTracker()` (attention-studio.js) folds the WebSocket's messages
@@ -62,6 +63,8 @@ into all of this but the UI's own focus and edits.
 | feature | value | weight | why |
 |---|---|---|---|
 | `focus` | 1 for the focus | 10 | you are here: always shown, in full. Structural, never learned. |
+| `kept` | ½ + ½ · fading (half-life 10 min) for a member of the set | 5 | the author brought it in: its code while fresh, its row after a while, a line always. Never learned. |
+| `pinned` | 1 if pinned | 3.5 | with `kept`, its code whatever its age. Never learned. |
 | `uses` | ½^(d−1) for what the focus uses, d ≤ 3 steps | 4.5 | needed to read the focus; a direct callee in the same module comes out in full |
 | `usedBy` | ½^(d−1) for what uses the focus, d ≤ 2 | 3 | the callers constrain it, and are what a change breaks |
 | `sigType` | 1 for a type in the focus's signature | 2.5 | its one line (`type Kont = Done \| Arg of ...`) says a lot, cheaply |
@@ -99,15 +102,18 @@ folded unless it is the focus: its folded row is its definition. Each
 detail costs screen lines: a signature 1, folded 1 + its comment (≤ 2),
 full its lines + its comment.
 
-`rank` then goes down the list — the focus, then pins, then by score
-(ties by place in the program, so the order is stable) — giving each
-the detail its score buys and *cheapening* it (full → folded →
-signature) until it fits what is left of the budget `{ lines, items,
-full }` (defaults 60 lines, 24 definitions, 4 in full besides the
-focus). Short of room, detail goes before definitions do. The focus and
-pins always get at least a line. A definition dismissed less than ten
-minutes ago is not shown at all, unless it is the focus, pinned, or
-edited since; after that, `dismissed` keeps it lower for a while.
+`rank` then goes down the list — the focus, then by score (ties by
+place in the program, so the order is stable); pins and the set's
+members are scored, not put first — giving each the detail its score
+buys and *cheapening* it (full → folded → signature) until it fits what
+is left of the budget `{ lines, items, full }` (defaults 60 lines, 24
+definitions, 4 in full besides the focus). Short of room, detail goes
+before definitions do. The focus, pins and the set's members are *owed*
+a place: each always gets at least a line, and that line is kept for it
+while those above it spend the budget. A definition dismissed less than
+ten minutes ago is not shown at all, unless it is the focus, pinned, in
+the set, or edited since; after that, `dismissed` keeps it lower for a
+while.
 
 On the demo, focused on `step`, with the builder having just changed
 `bind-and-eval` and the property `closed-terminates` failing:
@@ -159,18 +165,18 @@ Notes for integrators:
   is on the screen changes, and only a non-empty one.
 - `observe` is what the learning is made of. `pull` is the strongest
   and most valuable signal — it is the model's *miss* — so report it
-  wherever the author brings in something the model did not offer: A's
-  materialized cross-reference, B's pulled-in fragment, a search.
+  wherever the author brings in something the model did not offer: a
+  ⌘-clicked name, a row or a node brought into the working set, a search.
   `open` is for a raise in detail of something shown. `dwell` should be
   real attention (in view and the window focused, or hovered), and
   only reported past a couple of seconds.
 - `why(id)` answers for anything, shown or not ("not shown: no room
   (it ranks 14 of 34)", "not shown: it scores 0.6, under 1.5", "hidden:
   you dismissed it"), so a "why isn't X here?" affordance is one call.
-- The model is UI-agnostic about *placement*: A can lay the ranked list
-  out around the focus on the canvas (full = expanded row, folded = the
-  row, signature = a chip), B can take it as the working set's default
-  contents; both keep their own explicit choices as pins.
+- The model is UI-agnostic about *placement*. The code view
+  (docs/VIEW.md) passes its working set as `set` and lays the ranking
+  out in its lane: full = live code, folded = the row with its comment,
+  signature = one line; what is not in the set is offered, dashed.
 - Ids are `path::name`; a property is `properties.puf::<name>`.
 
 ## 4. Learning the author's preferences
@@ -209,7 +215,7 @@ of feature vectors (`preferences(log)`):
 
 Interactions weigh `pull` 1, `edit` 1, `open` 0.7, `focus` 0.5, `dwell`
 (≥ 4 s) 0.3, and one event's pairs share its weight, so a pull among
-twenty items counts what a pull among two does. The focus and pins are
+twenty items counts what a pull among two does. The focus, pins and the set are
 never lessons: they are there because the author put them there.
 Every record carries the feature vectors involved, so the log alone is
 enough to learn from — the program it was about may have changed since.

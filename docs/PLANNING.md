@@ -16,10 +16,11 @@ question is about.
 
 ## 1. The board
 
-The board is no longer a mode: it is the canvas zoomed out
-(docs/VIEW-CANVAS.md), where rows open into live code and a file is a
-card shown whole. ⌘⇧B or "show the board" fits the whole program; "back
-to the code" shows the current file's card whole. One card per module:
+The board is not a mode: it is the right half of the code view
+(docs/VIEW.md), one zoomable surface that holds the module cards and,
+left of them, the working set as live code. Close in it is a column of
+code beside the focus; ⌘⇧B, ▦ or "show the board" glides out to the
+whole program, and back in to the code again. One card per module:
 
 ```
 store   provides 8 of 8  ◌ 4                                  ✕
@@ -39,14 +40,16 @@ requires syntax
   aliases and grammars likewise. The comment right above a definition
   shows under it. `◌` marks a body that is only a hole (planned, not
   written); `◌N` a body with N holes.
-- **Opaque until asked.** Click a row: its body opens in place
-  (colorized), click again to fold. ↗ edits it in the editor; ✕ hides
-  the row on its card ("N hidden" brings them back for a look).
-- **What a card shows is kept.** Open and hidden rows, and where each
-  card sits, are the board's state (`.puffin/board.json`, committed with
-  the project), so a card comes back exactly as it was left.
-- **Bringing modules out.** Drag a file chip from the bar onto the board
-  (or click it while the board shows); ✕ on a card puts it away. A board
+- **Opaque until asked.** Click a row: its code comes into the working
+  set, live, beside the focus (the camera glides back to it), its row
+  marked; double-click or ↗ focuses it. ✕ hides the row on its card
+  ("N hidden" brings them back for a look) — and tells the attention
+  model "show this less".
+- **What a card shows is kept.** Hidden rows, where each card sits, and
+  the working set are the board's state (`.puffin/board.json`, committed
+  with the project), so the board comes back exactly as it was left.
+- **Bringing modules out.** Drag a file chip from the bar onto the board;
+  ✕ on a card puts it away. A board
   with nothing out lays out every module, in dependency order (a module
   right of what it requires), packed in shelves across the width. Dashed
   wires run from a card to the cards it requires.
@@ -61,9 +64,10 @@ itself (`Studio::arrange`, board.rs) — instant, deterministic, no builder:
 
 | said | action |
 |---|---|
-| "show me the board", "back to the code" | show-board / show-editor |
+| "show me the board", "back to the code" | show-board / show-editor: the camera out to the program, back in to the code |
 | "plan mode", "build mode" | plan-mode / build-mode (also local in the tab) |
-| "open step", "fold alloc" | open / close |
+| "pull in step", "bring out step", "open step"; "put alloc away" | pull (into the working set) / close |
+| "show me step next to inject" | beside |
 | "hide the helpers fresh and biggest", "unhide fresh" | hide / unhide |
 | "just show step and inject" | only |
 | "what does step depend on", "what touches alloc" | slice (§4) |
@@ -71,19 +75,21 @@ itself (`Studio::arrange`, board.rs) — instant, deterministic, no builder:
 | "bring out the store", "put the syntax away" | bring / put-away |
 | "put machine to the right of store" | place |
 
-Opening or unhiding something *pins* it: the automatic hiding (below)
-never folds what the author asked for. The builder has the same verbs as
-an `arrange` tool, to put what it is talking about in front of the
-author.
+Unhiding something *pins* it: the automatic hiding (below) never folds
+what the author asked for. What changes the cards glides the camera out
+to show it; what pulls code in glides it back to the code. The builder
+has the same verbs as an `arrange` tool, to put what it is talking about
+in front of the author.
 
 **Hiding as much as possible.** When a builder turn ends, the board
 arranges itself around the edits (`Studio::auto_arrange`): the modules it
 touched come out; on each, the definitions it changed and what they use
 directly stay, the module's interface (its provides) stays, pinned rows
 stay, and the rest of its internals fold into "N hidden" (a card with
-five definitions or fewer is left alone). In build mode the bodies just
-written open (the last three); in plan mode bodies stay folded — the
-signatures are the design.
+five definitions or fewer is left alone). What it just wrote is not
+opened on the cards: the attention model offers the builder's unseen
+changes beside the focus ("the builder changed it just now, not yet
+seen", docs/VIEW.md §3).
 
 ## 3. Plan mode
 
@@ -193,15 +199,19 @@ builder, or the author) writes a body.
 - **The HUD** (top left): modules, types, definitions written / partly
   written / planned (with a bar), the properties' state, plan mode; a
   filter (start typing anywhere on the board, or /; ↵ makes the matches a
-  focus) and the zoom (− 100% +, 0 fits, ⌘/ctrl-wheel).
-- **Keys.** ↑↓ (j k) rows, ←→ cards, ↵ open or fold, n note, h hide, f
-  focus on a definition and what touches it, e edit, t tidy, Esc clears.
+  focus) and the zoom (− 100% +; the label, like ⌘⇧B, out to the program
+  or back to the code; ⌘/ctrl-wheel).
+- **Keys.** ↑↓ (j k) rows, ←→ cards, ↵ its code into the working set,
+  e focus it, ] / [ what it uses / what uses it into the working set, n
+  note, h hide, f focus on a definition and what touches it, t tidy, 0
+  the whole program, 1 back to the code, Esc clears.
 - **Liveness.** Rows the builder just wrote or changed glow for a moment;
   cards glide between layouts; a card that grows pushes the ones below it
   down as shown (the saved places are unchanged); clicking a planned
-  row's ◌ opens the editor with its hole selected.
+  row's ◌ focuses it with its hole selected.
 - **Tidy** (t, or ⌘K) re-packs the cards for the window at hand. Narrower
-  than 700px (a phone) the board stacks its cards in one column.
+  than 700px the board stacks its cards in one column under the working
+  set.
 - **⌘K** finds any command, file or definition (⇧↵: a definition's slice
   on the board). The studio follows the system's light or dark (Solarized
   dark), or the palette's Theme command.

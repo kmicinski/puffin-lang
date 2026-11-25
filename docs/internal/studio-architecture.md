@@ -2,8 +2,9 @@
 
 Internal notes for working on `studio/src/`. What the studio *does* is
 docs/STUDIO.md (the REPL, assists, observations, the assistant),
-docs/VOICE.md (voice mode, excursions, properties) and docs/PLANNING.md
-(the module board). This is the map of the code that does it: which file
+docs/VOICE.md (voice mode, excursions, properties), docs/PLANNING.md
+(the module board) and docs/VIEW.md (the code view the page is built
+around). This is the map of the code that does it: which file
 holds what, and how a keystroke, an evaluation, a question or a spoken
 phrase travels through it.
 
@@ -85,7 +86,7 @@ units**. Conversion happens at the edge -- web.rs (`point`,
 | `voice/builder.rs` | The voice builder: its runs, its stream, its tools, its questions to the author, the properties it is held to. |
 | `voice/places.rs` | Places navigation moves the view to: definitions by spoken name, uses, lines, files, text. |
 | `excursion.rs` | Excursions: explaining fragments of the program by voice, pulling in more as they go. |
-| `board.rs` | The module board: the outline (ML-style signatures), the board's view state, arrangements, the slicer. |
+| `board.rs` | The module board: the outline (ML-style signatures), the board's view state (cards, the working set `set`, the camera request `look`), arrangements, the slicer. |
 | `tests.rs` | End-to-end tests over the real compiler and VM (skipped when they are not built; set `PUFFIN_ROOT` to a checkout that has them). |
 
 ## How things travel
@@ -124,6 +125,25 @@ an instruction for the builder, which queues behind or interrupts its run
 (voice/builder.rs `instruct` → `drive` → `build`). The builder's edits land
 at once (`land`), each checked and shown as `Event::Voice`; when a run
 ends the properties run, and failing ones send it back.
+
+## The page's code view
+
+The page (`studio/web/`, plain modules, no build step) is laid out
+around one code view (docs/VIEW.md). Its pieces, so a change lands in
+one place:
+
+| file | holds |
+|---|---|
+| `view.js` | the focus (the main editor narrowed to a definition), the neighbourhood, the working set and its ranking, the lane's fragments, the wires across the panes, what is told to the attention model |
+| `board.js` | the board: module cards and rows (`renderItem`), notes, decisions, questions, plan mode, the HUD, the lens; the lane's place on it; the camera's `home` (the code) and `overview` (the program) |
+| `camera.js` | the board's pan and zoom, and its glides |
+| `fragment.js` · `span.js` · `names.js` · `wires.js` | a live view of one definition · a definition's lines and narrowing a view to them · cross-references and ⌘-click · the curves |
+| `attention.js` · `attention-studio.js` | the attention model (docs/ATTENTION.md) and its view of the socket's messages |
+| `editor.js` · `files.js` | one Monaco model per file, any number of views of it; edits from any view to the studio |
+
+The working set and the camera requests are the board's state
+(`board.json`'s `set` and `look`), so `Studio::arrange` can change them
+by voice; the focus and its history are each tab's own.
 
 ## Adding to it
 

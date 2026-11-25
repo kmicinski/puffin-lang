@@ -82,11 +82,13 @@ to fix them, at most twice per instruction from the author.
 
 ## 3. What the author sees
 
-No fixed layout: the editor, alone and centered (about 105 characters
-wide, near full height), and components that float in when they are used
-(`studio/web/focus.js`, `voice.js`). This is how the studio opens; the
-microphone waits for a click. "Show all panes" in ⋯ brings back the
-classic layout (tree, tabs, REPL), remembered per browser.
+No fixed layout: the code view (docs/VIEW.md) — the definition being
+worked on, its neighbourhood, and beside it the board holding the
+working set as live code — and components that float in when they are
+used (`studio/web/focus.js`, `voice.js`). This is how the studio opens;
+the microphone waits for a click. "Show all panes" in ⋯ brings back the
+classic chrome (tree, tabs, REPL) around the same view, remembered per
+browser.
 
 - **The canvas**: a project with no code yet shows no editor at all —
   only the pill, centered, asking what to build; the editor fades in when
@@ -144,6 +146,11 @@ classic layout (tree, tabs, REPL), remembered per browser.
   with the English statement and the counterexample.
 - **Follow**: each builder edit moves the view to the changed lines and
   flashes them, unless the author moved the view in the last 8 seconds.
+- **The board and the working set**: "show the board" / "zoom out" glides
+  the camera out to the whole program, "back to the code" back in to the
+  working set; "pull in alloc" (or "bring out", "open") puts a definition
+  into the working set beside the focus, "show me step next to inject"
+  both, "put alloc away" takes it out (docs/VIEW.md §5).
 
 ## 4. Properties
 
@@ -233,7 +240,8 @@ over https (or localhost) for the microphone.
 
 The module board (signatures with bodies opaque, arranged by voice),
 plan mode (bodies left as typed holes, checked and run past), and the
-builder's questions with their slices are docs/PLANNING.md.
+builder's questions with their slices are docs/PLANNING.md; the board
+and the code as one zoomable view, docs/VIEW.md.
 
 ## 9. Not yet
 

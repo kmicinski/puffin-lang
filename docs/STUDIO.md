@@ -702,7 +702,11 @@ names a machine or a login yet.
   selected as `F8` leaves it, first deletes the hole, so `(` opens a
   list there (paredit would otherwise wrap the hole: `(??)`) and a
   word does not glue onto it (`??x`). Space and `?` are typed as is.
-- **The page is the playground's** (`web/src/App.jsx`): the editor
-  with file tabs on the left, the output and the `puffin>` prompt on
-  the right, Run / Reset session in the header. Panels are the
+- **The page is the playground's** (`web/src/App.jsx`): the code on
+  the left, the output and the `puffin>` prompt on the right, Run /
+  Reset session in the header. The code is one view (docs/VIEW.md): the
+  editor narrowed to the definition in focus, its neighbourhood under
+  it, and beside it the board — the module cards and the working set of
+  other definitions as live code, on one zoomable surface; the whole
+  file is the focus widened. Panels are the
   exception: History (`,history`) is the only one.

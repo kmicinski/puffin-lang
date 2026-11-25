@@ -133,7 +133,18 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // sticky scroll pins the lines above it (they are context, or hidden)
   main.updateOptions({ wordWrap: "on", wrappingIndent: "deepIndent", stickyScroll: { enabled: false } });
 
-  new ResizeObserver(() => { sizeFocus(); drawGraphWires(); drawWires(); }).observe(column);
+  // the column's room changed: the focus takes its share again (the lines
+  // around the definition fill it), the wires follow
+  let columnSize = [0, 0];
+  new ResizeObserver(() => {
+    const [w, h] = [column.clientWidth, column.clientHeight];
+    if (Math.abs(w - columnSize[0]) > 20 || Math.abs(h - columnSize[1]) > 20) {
+      columnSize = [w, h];
+      if (restored) requestAnimationFrame(narrowFocus);
+    } else sizeFocus();
+    drawGraphWires();
+    drawWires();
+  }).observe(column);
   // the board's room changed: the lane's code fits it again
   let boardWidth = 0;
   new ResizeObserver(() => {
@@ -182,32 +193,36 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     sizeFocus();
   }
 
-  // The lines around `span`: a third of the spare room above, the rest
-  // below, given back a line at a time while the text (wrapped lines
-  // count) is taller than the room.
+  // The lines around `span`: a line above for every two below, added
+  // while they fit the room (a long line counts the rows it wraps to).
   function around(span) {
     const model = main.getModel();
     const lines = model.getLineCount();
     const lineHeight = main.getOption(monaco.editor.EditorOption.lineHeight);
-    const target = room().focusMin;
-    const spare = Math.max(0, Math.floor((target - (span.end - span.start + 1) * lineHeight - 16) / lineHeight));
-    let above = Math.min(span.start - 1, Math.floor(spare / 3));
-    let below = Math.min(lines - span.end, spare - above);
-    const show = () => {
-      const start = span.start - above;
-      const end = span.end + below;
-      const hidden = [];
-      if (start > 1) hidden.push(new monaco.Range(1, 1, start - 1, 1));
-      if (end < lines) hidden.push(new monaco.Range(end + 1, 1, lines, 1));
-      main.setHiddenAreas(hidden);
-      return start;
-    };
-    let start = show();
-    while ((above || below) && main.getContentHeight() > target) {
-      if (below) below--;
-      else above--;
-      start = show();
+    const char = main.getOption(monaco.editor.EditorOption.fontInfo).typicalHalfwidthCharacterWidth || 8;
+    const columns = Math.max(20, Math.floor(main.getLayoutInfo().contentWidth / char) - 2);
+    const rows = (line) => Math.max(1, Math.ceil(model.getLineLength(line) / columns));
+    let left = Math.floor((room().focusMin - 16) / lineHeight);
+    for (let line = span.start; line <= span.end; line++) left -= rows(line);
+    let above = 0;
+    let below = 0;
+    for (let turn = 0; left > 0; turn++) {
+      const canUp = span.start - above > 1;
+      const canDown = span.end + below < lines;
+      if (!canUp && !canDown) break;
+      const up = canUp && (turn % 3 === 2 || !canDown);
+      const line = up ? span.start - above - 1 : span.end + below + 1;
+      if (rows(line) > left) break;
+      left -= rows(line);
+      if (up) above++;
+      else below++;
     }
+    const start = span.start - above;
+    const end = span.end + below;
+    const hidden = [];
+    if (start > 1) hidden.push(new monaco.Range(1, 1, start - 1, 1));
+    if (end < lines) hidden.push(new monaco.Range(end + 1, 1, lines, 1));
+    main.setHiddenAreas(hidden);
     const dim = [];
     if (above) dim.push(new monaco.Range(start, 1, span.start - 1, 1));
     if (below) dim.push(new monaco.Range(span.end + 1, 1, span.end + below, 1));
