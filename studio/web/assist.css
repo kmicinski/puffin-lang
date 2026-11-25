@@ -121,7 +121,7 @@ a.assist-why { float: right; margin-left: 12px; font: 11px var(--sans); }
 /* seen in this session's runs: evidence, not the checker's certainty */
 .assist-item .source-observed {
   padding: 0 5px;
-  border: 1px solid rgba(42, 161, 152, 0.5);
+  border: 1px solid color-mix(in srgb, var(--cyan) 50%, transparent);
   border-radius: 999px;
   color: var(--cyan);
   font-family: var(--sans);

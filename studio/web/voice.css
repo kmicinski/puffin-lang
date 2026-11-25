@@ -320,11 +320,11 @@ body.voice-on .focus-close:hover { color: var(--strong); }
 }
 
 /* where the voice moved the view, and where the builder just wrote */
-.voice-focus { background: rgba(108, 113, 196, 0.16); }
+.voice-focus { background: color-mix(in srgb, var(--violet) 16%, transparent); }
 .voice-focus-gutter { border-left: 3px solid var(--violet); }
-.voice-edit { background: rgba(133, 153, 0, 0.16); }
+.voice-edit { background: color-mix(in srgb, var(--green) 16%, transparent); }
 .voice-edit-gutter { border-left: 3px solid var(--green); }
-.voice-flash { background: rgba(181, 137, 0, 0.14); }
+.voice-flash { background: color-mix(in srgb, var(--yellow) 14%, transparent); }
 .voice-flash-gutter { border-left: 3px solid var(--yellow); }
 
 /* ---- The canvas: nothing yet but the question (focus.js) ------------------- */
@@ -413,7 +413,7 @@ body.focus-canvas .timeline, body.focus-canvas .timeline-tab { display: none; }
 .timeline-error { margin: 4px 0; color: var(--red); font-size: 12px; }
 
 .timeline-turn { margin: 6px 0 4px; border-left: 2px solid var(--violet-tint); padding-left: 8px; }
-.timeline-turn.open { border-left-color: rgba(108, 113, 196, 0.35); }
+.timeline-turn.open { border-left-color: color-mix(in srgb, var(--violet) 35%, transparent); }
 .timeline-turn-head {
   display: flex;
   flex-wrap: wrap;
@@ -642,8 +642,8 @@ body.voice-on.excursion-open .voice-rail { width: var(--excursion-w); }
   overflow-x: auto;
 }
 .voice-excursion-line { display: flex; white-space: pre; cursor: pointer; padding-right: 8px; }
-.voice-excursion-line:hover { background: rgba(108, 113, 196, 0.08); }
-.voice-excursion-line.hot { background: rgba(181, 137, 0, 0.16); }
+.voice-excursion-line:hover { background: color-mix(in srgb, var(--violet) 8%, transparent); }
+.voice-excursion-line.hot { background: color-mix(in srgb, var(--yellow) 16%, transparent); }
 .voice-excursion-n { flex: none; width: 34px; padding-right: 8px; text-align: right; color: var(--base1); user-select: none; }
 .voice-excursion-src { flex: 1; }
 .voice-excursion-thread { border-top: 1px solid var(--border); padding-top: 6px; }
@@ -659,5 +659,5 @@ body.voice-on.excursion-open .voice-rail { width: var(--excursion-w); }
 .voice-excursion-cite:hover { text-decoration: underline; }
 .voice-excursion-wait { color: var(--violet); font-size: 12.5px; animation: voice-busy 1.4s ease-in-out infinite; }
 /* in the editor: what the excursion is about */
-.voice-excursion-range { background: rgba(108, 113, 196, 0.07); }
+.voice-excursion-range { background: color-mix(in srgb, var(--violet) 7%, transparent); }
 .voice-excursion-gutter { border-left: 3px solid var(--violet); }

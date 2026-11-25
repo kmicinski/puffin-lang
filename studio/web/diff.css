@@ -13,15 +13,15 @@
 
 /* ---- In the editor ------------------------------------------------------ */
 
-.ip-del { background: rgba(220, 50, 47, 0.09); }
-.ip-del-chars { background: rgba(220, 50, 47, 0.2); text-decoration: line-through rgba(220, 50, 47, 0.55); }
+.ip-del { background: color-mix(in srgb, var(--red) 9%, transparent); }
+.ip-del-chars { background: color-mix(in srgb, var(--red) 20%, transparent); text-decoration: line-through color-mix(in srgb, var(--red) 55%, transparent); }
 .ip-form { border-left: 3px solid var(--tone); margin-left: 4px; }
 /* Zones never share space with text, so they can sit over the text layer,
    which would otherwise take the clicks meant for their buttons. */
 .monaco-editor .view-zones { z-index: 1; }
 .ip-zone { box-sizing: border-box; }
-.ip-add { white-space: pre; overflow: hidden; color: var(--diff-add); background: rgba(133, 153, 0, 0.11); }
-.ip-add-chars { background: rgba(133, 153, 0, 0.3); }
+.ip-add { white-space: pre; overflow: hidden; color: var(--diff-add); background: color-mix(in srgb, var(--green) 11%, transparent); }
+.ip-add-chars { background: color-mix(in srgb, var(--green) 30%, transparent); }
 .ip-zone-margin { box-sizing: border-box; height: 100%; margin-left: 4px; border-left: 3px solid var(--tone); }
 .ip-plus { color: var(--green); font-family: var(--mono); font-size: 12px; padding-left: 3px; }
 .ip-head {
@@ -56,7 +56,7 @@
   gap: 8px;
   padding: 3px 10px 3px 14px;
   background: var(--violet-tint);
-  border-bottom: 1px solid rgba(108, 113, 196, 0.35);
+  border-bottom: 1px solid color-mix(in srgb, var(--violet) 35%, transparent);
   font-size: 12px;
   white-space: nowrap;
 }
