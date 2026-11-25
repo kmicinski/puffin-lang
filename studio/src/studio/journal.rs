@@ -124,10 +124,8 @@ impl Studio {
         }
         records.sort_by_key(|record| record.at);
         let subject = subject_of(&records);
-        let directory = self.directory.clone();
         let moved = records.clone();
-        let outcome = tokio::task::spawn_blocking(move || project::commit(&directory, &subject, &moved)).await.unwrap_or_else(|e| Err(e.to_string()));
-        match outcome {
+        match self.in_repository(move |directory| project::commit(directory, &subject, &moved)).await {
             Ok(_) => {
                 *self.committed.lock().expect("committed lock") = files;
                 *self.journal_failed.lock().expect("journal lock") = false;
@@ -151,12 +149,7 @@ impl Studio {
 
     /// The timeline, oldest first: what git holds, then what is pending.
     pub async fn history(&self) -> Result<Vec<Moment>, String> {
-        let directory = self.directory.clone();
-        let mut moments = if self.tracked {
-            tokio::task::spawn_blocking(move || project::history(&directory)).await.unwrap_or_else(|e| Err(e.to_string()))?
-        } else {
-            Vec::new()
-        };
+        let mut moments = if self.tracked { self.in_repository(project::history).await? } else { Vec::new() };
         for record in self.journal.lock().expect("journal lock").iter() {
             moments.push(Moment { at: record.at, kind: record.kind.clone(), commit: None, data: record.data.clone() });
         }
@@ -165,14 +158,19 @@ impl Studio {
 
     /// The files as commit `hash` left them (the replay slider).
     pub async fn files_at(&self, hash: String) -> Result<Files, String> {
-        let directory = self.directory.clone();
-        tokio::task::spawn_blocking(move || project::files_at(&directory, &hash)).await.unwrap_or_else(|e| Err(e.to_string()))
+        self.in_repository(move |directory| project::files_at(directory, &hash)).await
     }
 
     /// What commit `hash` changed, as a unified diff.
     pub async fn history_diff(&self, hash: String) -> Result<String, String> {
+        self.in_repository(move |directory| project::diff(directory, &hash)).await
+    }
+
+    /// Run `git` work (project.rs) on the project's directory, off the
+    /// async threads.
+    async fn in_repository<T: Send + 'static>(&self, work: impl FnOnce(&std::path::Path) -> Result<T, String> + Send + 'static) -> Result<T, String> {
         let directory = self.directory.clone();
-        tokio::task::spawn_blocking(move || project::diff(&directory, &hash)).await.unwrap_or_else(|e| Err(e.to_string()))
+        tokio::task::spawn_blocking(move || work(&directory)).await.unwrap_or_else(|error| Err(error.to_string()))
     }
 }
 
