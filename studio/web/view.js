@@ -979,7 +979,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     boardChanged() {
       if (!restored && outline().length) return restore();
       // a member that arrived from elsewhere (the voice): brought into view
-      const came = setOf().find((s) => !frags.has(s.id) || frags.get(s.id).offered);
+      const came = setOf().find((s) => !(focus?.name && s.id === idFor(focus)) && (!frags.has(s.id) || frags.get(s.id).offered));
       render({ arrived: came?.id ?? null });
     },
     opened,
