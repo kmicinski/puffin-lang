@@ -231,11 +231,11 @@ pub fn outline(files: &Files) -> Vec<Module> {
     files
         .iter()
         .filter(|(path, _)| !HIDDEN.contains(&path.as_str()) && (path.ends_with(".puf") || path.ends_with(".scm")))
-        .map(|(path, text)| module(path, text, &names))
+        .map(|(path, text)| module(path, text, &names, files))
         .collect()
 }
 
-fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
+fn module(path: &str, text: &str, names: &BTreeSet<String>, files: &Files) -> Module {
     let forms = sexp::forms(text);
     let lines: Vec<&str> = text.lines().collect();
     // (: name τ) declarations, by name
@@ -263,6 +263,11 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
                     match atom(item) {
                         Some(k) if k.starts_with("#:") => skip = true,
                         Some(a) if !skip => list.push(a.to_owned()),
+                        // (provide #:sig "x.pufs"): the signature's entries are the interface
+                        Some(sig) if items.get(1).and_then(atom) == Some("#:sig") => {
+                            list.extend(signature_names(files, path, sig.trim_matches('"')));
+                            skip = false;
+                        }
                         _ => skip = false,
                     }
                 }
@@ -411,6 +416,20 @@ fn function_or_value(name: &str, parts: &[T], declared: Option<&T>) -> (String, 
 }
 
 /// `type Expr = Num of Int | Add of Expr * Expr`
+/// The names a signature file (a module's `#:sig`, relative to it) lists:
+/// `(signature NAME (val n ...) (fun n ...) (type n) ...)`.
+fn signature_names(files: &Files, module: &str, sig: &str) -> Vec<String> {
+    let path = match module.rsplit_once('/') {
+        Some((dir, _)) => format!("{dir}/{sig}"),
+        None => sig.to_owned(),
+    };
+    let Some(T::List(form)) = files.get(&path).and_then(|text| read_all(text).into_iter().next()) else { return Vec::new() };
+    form.iter().skip(2).filter_map(|entry| match entry {
+        T::List(parts) => parts.get(1).and_then(atom).map(str::to_owned),
+        _ => None,
+    }).collect()
+}
+
 /// A define-type's constructor names.
 fn constructors(parts: &[T]) -> Vec<String> {
     parts[2.min(parts.len())..].iter().filter_map(|c| match c {
@@ -1211,13 +1230,18 @@ mod tests {
         let text = "(private helper)\n(define (helper x) x)\n(define (run x) (helper x))\n(opaque Counter)\n(define-type Counter (C Int))\n";
         // a provide list that names a type but none of its constructors
         let listed = "(provide Stack push)\n(define-type Stack (Bottom) (Push Int Stack))\n(define (push x s) (Push x s))\n(define (depth s) 0)\n";
-        let o = outline(&files(&[("a.puf", text), ("b.puf", listed)]));
+        // a signature that names the type alone
+        let sealed = "(provide #:sig \"stack.pufs\")\n(define-type Stack (Bottom) (Push Int Stack))\n(define (push x s) (Push x s))\n(define (depth s) 0)\n";
+        let sig = "(signature STACK (type Stack) (fun push 2))\n";
+        let o = outline(&files(&[("a.puf", text), ("b.puf", listed), ("lib/c.puf", sealed), ("lib/stack.pufs", sig)]));
         let item = |file: &str, name: &str| o.iter().find(|m| m.path == file).unwrap().items.iter().find(|i| i.name == name).unwrap().clone();
         assert!(item("a.puf", "helper").internal && !item("a.puf", "run").internal);
         assert_eq!(item("a.puf", "Counter").sig, "abstype Counter = C of Int");
         assert_eq!(o.iter().find(|m| m.path == "a.puf").unwrap().effects, 0);
         assert!(item("b.puf", "depth").internal && !item("b.puf", "push").internal);
         assert_eq!(item("b.puf", "Stack").sig, "abstype Stack = Bottom | Push of Int * Stack");
+        assert!(item("lib/c.puf", "depth").internal && !item("lib/c.puf", "push").internal);
+        assert_eq!(item("lib/c.puf", "Stack").sig, "abstype Stack = Bottom | Push of Int * Stack");
     }
 
     #[test]

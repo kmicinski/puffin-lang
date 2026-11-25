@@ -38,7 +38,7 @@ requires syntax
   (`(opaque T)`, docs/MODULES.md) as ML's `abstype T = ...`. The
   comment right above a definition shows under it. A module's
   internals -- definitions declared `(private ...)`, or left off its
-  provide list -- read plain beside the bold interface, marked `·`,
+  provide list or signature -- read quieter than the bold interface,
   and the card counts "N of M provided". `◌` marks a body that is only a hole (planned, not
   written); `◌N` a body with N holes.
 - **Opaque until asked.** Click a row: its body opens in place
