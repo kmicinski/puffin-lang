@@ -28,6 +28,16 @@
 //   caretBox()               the cursor's box on screen, for menus, or null
 //   focus()
 //   raw                      { monaco, editor } for Monaco, else null
+//   model(key, text)         document `key`'s Monaco model, made (holding
+//                            `text`) if it has none yet, for another view
+//                            of the same text (the working set's
+//                            fragments, workset.js); an edit through any
+//                            view of a document that is not shown calls
+//                            onOtherChange(key, text)
+//   setText(key, text)       a document that is not shown takes `text` as
+//                            an undoable edit (the studio changed it)
+//   fragment(element, key)   another small editor on document `key`, with
+//                            the Puffin keys (paredit, Emacs, TeX, holes)
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
 // Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
 // puffincc can), F8 and ⇧F8 the next and previous typed hole, ⌥↵ a TeX
@@ -182,22 +192,28 @@ function followTheme(monaco) {
 
 const SEVERITY = { warning: "Warning", info: "Info", hint: "Hint" };
 
-function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole, onTrace }) {
+// What every Monaco view of Puffin shares: the main editor and the
+// working set's fragments.
+const OPTIONS = {
+  language: "puffin",
+  automaticLayout: true,
+  minimap: { enabled: false },
+  folding: false,
+  quickSuggestions: false,
+  // ghost text: the rest of a match (assists.js); Tab takes it
+  inlineSuggest: { enabled: true, showToolbar: "never" },
+  scrollBeyondLastLine: false,
+  fontFamily: "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
+  tabSize: 2,
+};
+
+function monacoEditor(monaco, element, { onChange, onOtherChange, onSave, onEvalForm, onLoadFile, onAssist, onCursor, onRename, onHole, onTrace }) {
   register(monaco);
   followTheme(monaco);
   const editor = monaco.editor.create(element, {
-    language: "puffin",
+    ...OPTIONS,
     theme: currentTheme(),
-    automaticLayout: true,
-    minimap: { enabled: false },
-    folding: false,
-    quickSuggestions: false,
-    // ghost text: the rest of a match (assists.js); Tab takes it
-    inlineSuggest: { enabled: true, showToolbar: "never" },
-    scrollBeyondLastLine: false,
-    fontFamily: "\"JetBrains Mono\", \"SF Mono\", Menlo, Consolas, monospace",
     fontSize: 14,
-    tabSize: 2,
     // the session's marks on each top-level form (session.js)
     glyphMargin: true,
     // the trace marks beside the line numbers (session.js)
@@ -212,6 +228,17 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
   let quiet = false;
   const current = () => editor.getModel();
   const uriOf = (key) => monaco.Uri.from({ scheme: "studio", path: `/${key}` });
+  // A document's model, made on first use. An edit to it while it is not
+  // the shown one came from another view of it (a fragment): the shown
+  // one's edits arrive through the editor's own onChange.
+  function documentOf(key, text) {
+    if (!documents.has(key)) {
+      const model = monaco.editor.createModel(text, "puffin", uriOf(key));
+      model.onDidChangeContent(() => { if (!quiet && key !== shown) onOtherChange?.(key, model.getValue()); });
+      documents.set(key, { model, view: null, glyphs: [], spans: new Map() });
+    }
+    return documents.get(key);
+  }
 
   editor.onDidChangeModelContent(() => { if (!quiet) onChange(); });
   editor.onDidChangeCursorPosition(() => onCursor?.());
@@ -255,8 +282,7 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
     show(key, text) {
       if (key !== shown) {
         if (documents.has(shown)) documents.get(shown).view = editor.saveViewState();
-        if (!documents.has(key)) documents.set(key, { model: monaco.editor.createModel(text, "puffin", uriOf(key)), view: null, glyphs: [], spans: new Map() });
-        const { model, view } = documents.get(key);
+        const { model, view } = documentOf(key, text);
         quiet = true;
         editor.setModel(model);
         quiet = false;
@@ -271,6 +297,39 @@ function monacoEditor(monaco, element, { onChange, onSave, onEvalForm, onLoadFil
       if (shown === key) shown = null;
     },
     get: () => current().getValue(),
+    model: (key, text) => documentOf(key, text).model,
+    setText(key, text) {
+      const model = documents.get(key)?.model;
+      if (!model || key === shown || model.getValue() === text) return;
+      quiet = true;
+      model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+      quiet = false;
+    },
+    fragment(element, key) {
+      const view = monaco.editor.create(element, {
+        ...OPTIONS,
+        theme: currentTheme(),
+        model: documents.get(key)?.model ?? null,
+        fontSize: 12.5,
+        lineNumbersMinChars: 3,
+        lineDecorationsWidth: 6,
+        glyphMargin: false,
+        padding: { top: 4, bottom: 4 },
+        renderLineHighlight: "none",
+        // a fragment is narrow: its long lines wrap rather than hide
+        wordWrap: "on",
+        wrappingIndent: "deepIndent",
+        overviewRulerLanes: 0,
+        hideCursorInOverviewRuler: true,
+        scrollbar: { vertical: "hidden", alwaysConsumeMouseWheel: false, horizontalScrollbarSize: 6 },
+      });
+      view.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, onSave);
+      bindHoles(monaco, view);
+      bindTex(monaco, view);
+      bindMonaco(monaco, view);
+      bindEmacs(monaco, view, { onSave });
+      return view;
+    },
     set(text) {
       if (current().getValue() === text) return;
       const selection = editor.getSelection();
@@ -422,6 +481,10 @@ function textareaEditor(element, { onChange, onSave, onEvalForm, onLoadFile, onA
       if (area.value !== text) area.value = text;
     },
     forget(key) { texts.delete(key); if (shown === key) shown = null; },
+    // no second views without Monaco: the working set is Monaco's
+    model: () => null,
+    setText() {},
+    fragment: () => null,
     get: () => area.value,
     set(text) {
       if (area.value === text) return;

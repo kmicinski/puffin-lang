@@ -33,6 +33,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
     opened: [], // the tabs, in order
     active: null,
     editTimer: null,
+    otherTimer: null,
     inFlight: null, // { path, text } of the unanswered edit
     held: [], // messages waiting behind it
     // what the next files message should do: open a file this tab made,
@@ -150,6 +151,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
     state.active = null;
     if (active) open(active);
     else showNothing();
+    for (const [path, file] of state.files) if (path !== state.active) editor.setText(path, file.local);
     // after the editor has moved on: disposing the shown model upsets Monaco
     for (const path of known.keys()) if (!state.files.has(path)) editor.forget(path);
     pump();
@@ -213,6 +215,13 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
     }));
   }
 
+  // The studio's text for `path`, in whichever view holds it: the editor
+  // when it is shown, else its model if another view (a fragment) has one.
+  function showText(path, text) {
+    if (path === state.active) editor.set(text);
+    else editor.setText(path, text);
+  }
+
   // Errors and warnings per file, for the tabs and the tree.
   const counts = new Map();
 
@@ -236,7 +245,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
     stale({ file, version, text }) {
       const known = state.files.get(file);
       if (known) Object.assign(known, { text, version, local: text });
-      if (file === state.active) editor.set(text);
+      showText(file, text);
       note(`${file} changed elsewhere; showing that version`);
       answered();
       onTexts();
@@ -251,7 +260,7 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
       // the studio changed it (an accepted proposal, a restore, disk): an
       // undoable edit in the editor
       Object.assign(known, { text, version, local: text, saved: false });
-      if (file === state.active) editor.set(text);
+      showText(file, text);
       render();
       onTexts();
     },
@@ -268,6 +277,17 @@ export function createFiles({ editor, transmit, note, onOpen, onTexts, onFiles }
     send,
     changed,
     flush,
+    // `path`, not the shown file, was edited in another view of it (a
+    // working-set fragment): sent like typing in the editor
+    edited(path, text) {
+      const file = state.files.get(path);
+      if (!file || path === state.active) return;
+      file.local = text;
+      clearTimeout(state.otherTimer);
+      state.otherTimer = setTimeout(pump, EDIT_DELAY);
+      render();
+      onTexts();
+    },
     receive,
     open,
     close,

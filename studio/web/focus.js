@@ -347,6 +347,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     renderFiles();
     update();
     setTimeout(measure, 0);
+    api.onLayout?.(true);
   }
 
   function leave() {
@@ -360,6 +361,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     document.body.classList.remove("focus-canvas");
     document.body.style.removeProperty("--focus-width");
     setTimeout(() => view?.layout(), 0);
+    api.onLayout?.(false);
   }
 
   window.addEventListener("keydown", (event) => {
@@ -369,6 +371,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
 
   const api = {
     onCanvas: null,
+    onLayout: null,
     enter,
     leave,
     slot,
