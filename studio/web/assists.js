@@ -19,6 +19,7 @@
 import { LINT_SOURCE } from "./lint.js";
 import { enclosing, parse } from "./sexp.js";
 import { el } from "./dom.js";
+import { requests } from "./requests.js";
 import { plural } from "./words.js";
 
 const SOURCES = {
@@ -34,27 +35,16 @@ const BADGES = { observed: "▶ seen" };
 export const badge = (source) => BADGES[source] ?? source;
 
 export function createAssists({ editor, files, send, note, facts }) {
-  const waiting = new Map(); // seq -> resolve
-  let seq = 0;
+  const asks = requests(files);
   let available = false;
   const menu = document.body.appendChild(el("div", "assist-menu"));
   menu.hidden = true;
   let shown = null; // { file, assists, index }
 
-  // Ask the studio, behind any edit still in flight.
-  function request(message) {
-    files.flush();
-    const id = ++seq;
-    return new Promise((resolve) => {
-      waiting.set(id, resolve);
-      files.send({ ...message, seq: id });
-    });
-  }
-
   // The assists at UTF-16 offset `pos` of `file` (for the selection [pos,
   // end) when `end` is given), or { error }.
   async function at(file, pos, end = null) {
-    const reply = await request({ t: "assists", file, pos, ...(end !== null && end > pos ? { end } : {}) });
+    const reply = await asks.ask({ t: "assists", file, pos, ...(end !== null && end > pos ? { end } : {}) });
     if (reply.version !== files.version(file) || !files.synced(file)) {
       return { error: "the text changed while the compiler looked; try again", assists: [] };
     }
@@ -64,7 +54,7 @@ export function createAssists({ editor, files, send, note, facts }) {
   // The clause patterns the match at UTF-16 offset `pos` still lacks
   // (`--assist complete`): [{ pattern, clause, source }], or [].
   async function complete(file, pos) {
-    const reply = await request({ t: "complete", file, pos });
+    const reply = await asks.ask({ t: "complete", file, pos });
     if (reply.version !== files.version(file) || !files.synced(file)) return [];
     return reply.candidates ?? [];
   }
@@ -322,18 +312,9 @@ export function createAssists({ editor, files, send, note, facts }) {
     complete,
     setAvailable(on) { available = on; },
     receive: {
-      assists(reply) {
-        waiting.get(reply.seq)?.({ ...reply, error: reply.error ?? null });
-        waiting.delete(reply.seq);
-      },
-      completions(reply) {
-        waiting.get(reply.seq)?.(reply);
-        waiting.delete(reply.seq);
-      },
-      type(reply) {
-        waiting.get(reply.seq)?.(reply);
-        waiting.delete(reply.seq);
-      },
+      assists: (reply) => asks.answer({ ...reply, error: reply.error ?? null }),
+      completions: asks.answer,
+      type: asks.answer,
     },
   };
 }
