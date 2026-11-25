@@ -73,10 +73,10 @@ impl Results {
 pub fn declared(text: &str) -> Vec<Property> {
     let mut statement_of = std::collections::HashMap::new();
     for line in text.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix(";; @property") {
-            if let Some((name, statement)) = rest.split_once(':') {
-                statement_of.insert(name.trim().to_owned(), statement.trim().to_owned());
-            }
+        if let Some(rest) = line.trim_start().strip_prefix(";; @property")
+            && let Some((name, statement)) = rest.split_once(':')
+        {
+            statement_of.insert(name.trim().to_owned(), statement.trim().to_owned());
         }
     }
     let mut out = Vec::new();

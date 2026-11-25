@@ -331,9 +331,7 @@ impl Studio {
             }
             board["questions"].as_array_mut().unwrap().push(json!({ "id": id, "text": question, "about": about, "why": why, "answered": false }));
             for (file, _) in &items {
-                if !board["cards"].as_array().into_iter().flatten().any(|c| c["path"] == json!(file)) {
-                    board["cards"].as_array_mut().unwrap().push(json!({ "path": file, "x": null, "y": null, "open": [], "hidden": [], "pinned": [] }));
-                }
+                crate::board::card_mut(board, file);
             }
             board["focus"] = json!({ "items": items, "question": id, "label": format!("question #{id}") });
             board["view"] = json!("board");
