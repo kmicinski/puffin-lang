@@ -144,7 +144,7 @@ const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
 // the board and the working set are one surface beside the focus (docs/VIEW.md)
-const board = createBoard({ send, stage: document.querySelector(".board-pane"), onShow: (on) => focus?.boardShown(on) });
+const board = createBoard({ send, stage: document.querySelector(".board-pane"), onChange: () => focus?.boardChanged() });
 focus.attachBoard(board);
 view = createView({ editor, files, board, stage: document.querySelector(".editor-pane"), onEvalAt: evalAt });
 // the welcome's other path: design on the board, plan mode, the first

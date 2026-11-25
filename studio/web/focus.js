@@ -376,8 +376,8 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     },
     canvasMode,
     attachBoard(b) { board = b; },
-    // the board showed or went: the bar's buttons say so
-    boardShown(shown) {
+    // the board changed: the bar's Plan button says which mode it is in
+    boardChanged() {
       modeButton.classList.toggle("on", board?.mode() === "plan");
       modeButton.textContent = board?.mode() === "plan" ? "Plan ✓" : "Plan";
     },

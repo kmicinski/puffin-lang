@@ -80,7 +80,7 @@ const short = (path) => path.replace(/\.puf$/, "");
 const keyOf = (path, name) => `${path}\u001f${name}`;
 const typing = (target) => target?.closest?.("input, textarea, [contenteditable], .monaco-editor");
 
-export function createBoard({ send, stage, onShow }) {
+export function createBoard({ send, stage, onChange }) {
   // what the working set (view.js) does with a row: { pull(path, name),
   // focus(path, line, find), along(path, name, "uses" | "users"),
   // hover(key) }; bound once it exists
@@ -353,12 +353,8 @@ export function createBoard({ send, stage, onShow }) {
 
   // ---- showing it -----------------------------------------------------------------------
 
-  // The board is always there; "the board" and "the code" are where the
-  // camera is (voice.js, the palette, ⌘⇧B).
-  function shown() {
-    return true;
-  }
-
+  // "The board" and "the code" are where the camera is (voice.js, the
+  // palette, ⌘⇧B): out at the program, or in at the lane.
   function setView(where) {
     if (where === "editor") home();
     else overview();
@@ -390,8 +386,7 @@ export function createBoard({ send, stage, onShow }) {
       board = next;
       save();
     }
-    document.body.classList.add("board-on");
-    onShow?.(true);
+    onChange?.();
     const now = Date.now();
     for (const [key, until] of fresh) if (until < now) fresh.delete(key);
     const focus = focusNames();
@@ -472,7 +467,7 @@ export function createBoard({ send, stage, onShow }) {
     if (!empty.hidden) {
       empty.append(
         el("div", "board-empty-title", outline.length ? "Nothing on the board" : "No modules yet"),
-        el("div", "board-empty-text", outline.length ? "Drag a module from the bar onto the board, or click it." : "Describe what to build — the design lands here as signatures."),
+        el("div", "board-empty-text", outline.length ? "Drag a module from the bar onto the board." : "Describe what to build — the design lands here as signatures."),
       );
     }
   }
@@ -942,7 +937,10 @@ export function createBoard({ send, stage, onShow }) {
     atHome = !box;
     const top = canvasBox(lane);
     const head = { ...top, h: Math.min(top.h, root.clientHeight * 0.8) };
-    const z = Math.max(READABLE, Math.min(1, (root.clientWidth - 48) / Math.max(1, top.w)));
+    // as close as lets the code be read whole (a long signature line may
+    // run off the side)
+    const code = Math.max(0, ...[...lane.querySelectorAll(".frag.is-full")].map((f) => f.offsetWidth)) || top.w;
+    const z = Math.max(READABLE, Math.min(1, (root.clientWidth - 48) / Math.max(1, code)));
     const v = { x: 24 - head.x * z, y: TOP() - head.y * z, z };
     if (box) {
       // the least move that shows it, at that zoom, clear of what floats
@@ -1443,7 +1441,6 @@ export function createBoard({ send, stage, onShow }) {
       // camera goes there -- once, and not for the request a reload finds
       if (next?.look && looked !== undefined && next.look.n !== looked) setTimeout(() => setView(next.look.to === "board" ? "board" : "editor"), 60);
     },
-    shown,
     setView,
     toggle,
     home,
