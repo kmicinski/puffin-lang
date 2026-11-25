@@ -4,9 +4,9 @@
 //! (docs/STUDIO.md). The semantics all live in puffincc; this is the
 //! server that drives it and the page that shows it.
 
-pub mod board;
 pub mod agent;
 pub mod ask;
+pub mod board;
 pub mod claude_api;
 pub mod claude_cli;
 pub mod excursion;

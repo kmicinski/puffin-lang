@@ -733,13 +733,9 @@ impl Studio {
         self.publish(Event::EntryOut { id, stream, text });
     }
 
+    /// Finish entry `id`.
     pub fn finish(&self, id: u64, status: &str, error: Option<String>, ms: u64) {
-        self.finish_with(id, status, error, ms, Vec::new());
-    }
-
-    /// Finish entry `id` with what would fix its failure.
-    pub fn finish_with(&self, id: u64, status: &str, error: Option<String>, ms: u64, fixes: Vec<Fix>) {
-        self.finish_entry(id, status, error, ms, fixes, None);
+        self.finish_entry(id, status, error, ms, Vec::new(), None);
     }
 
     /// Finish entry `id`, with what would fix its failure, or a test run's

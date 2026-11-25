@@ -420,7 +420,7 @@ impl Studio {
                 } else {
                     ""
                 };
-                self.finish_with(id, "error", Some(format!("the unit failed (exit {code}){hole}; the session is as it was")), ms, fixes);
+                self.finish_entry(id, "error", Some(format!("the unit failed (exit {code}){hole}; the session is as it was")), ms, fixes, None);
                 self.merge_spill().await;
             }
             Status::Interrupted => {
