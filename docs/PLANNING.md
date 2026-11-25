@@ -17,7 +17,9 @@ question is about.
 ## 1. The board
 
 ⌘⇧B, the ▦ Board button in the bar, or "show the board" / "back to the
-code". One card per module:
+code". In the focused layout the board comes out *beside* the focused
+definition, over its working set, and its neighbourhood of the focus is
+always under the editor (docs/VIEW-FOCUS.md). One card per module:
 
 ```
 store   provides 8 of 8  ◌ 4                                  ✕

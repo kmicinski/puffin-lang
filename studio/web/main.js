@@ -23,6 +23,7 @@ import { createVoice } from "./voice.js";
 import { createFocus } from "./focus.js";
 import { createBoard } from "./board.js";
 import { createPalette } from "./palette.js";
+import { createWorkset } from "./workset.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -48,6 +49,7 @@ let session = null;
 // the focused layout (focus.js), made once the files are
 let focus = null;
 let holes = null;
+let workset = null;
 let rename = null;
 // the traced function names, and what the toolchain can do (the studio's)
 let traced = [];
@@ -62,6 +64,7 @@ const editor = await createEditor($("editor"), {
   onRename: () => rename?.open(),
   onHole: (dir) => holes?.next(dir),
   onCursor: () => {},
+  onOtherChange: (path, text) => files.edited(path, text),
   onSave: save,
   onEvalForm: evalForm,
   onLoadFile: () => load(null),
@@ -82,6 +85,7 @@ const files = createFiles({
     proposals?.refresh();
     versions?.opened();
     focus?.changed();
+    workset?.opened(path);
   },
   onTexts: () => {
     proposals?.refresh();
@@ -138,8 +142,12 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on) });
+const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => { focus?.boardShown(on); workset?.boardShown(on); }, navigate: (path, line, find) => workset?.navigate(path, line, find) });
 focus.attachBoard(board);
+// the focused layout is focus and context: one definition, what it is read
+// with, and its neighbourhood of the board (workset.js)
+workset = createWorkset({ editor, files, board, stage: document.querySelector(".editor-pane") });
+focus.onLayout = (on) => workset.setOn(on);
 // the welcome's other path: design on the board, plan mode, the first
 // module's "+ plan a definition" open
 focus.onPlanHere = () => {
@@ -436,6 +444,7 @@ const handlers = {
     $("project").title = snapshot.directory;
     files.receive.init(snapshot);
     if (snapshot.board) board.receive(snapshot.board);
+    workset.changed();
     tree.receive.init(snapshot);
     reports = snapshot.diagnostics;
     proposals.update(snapshot.review);
@@ -508,7 +517,10 @@ const handlers = {
     voice.notice(message);
   },
   voice: (event) => voice.receive(event),
-  board: (view) => board.receive(view),
+  board: (view) => {
+    board.receive(view);
+    workset.changed();
+  },
   "voice-state": (state) => voice.receiveState(state),
 };
 
@@ -518,6 +530,7 @@ function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     handlers[message.t]?.(message);
+    workset?.receive(message);
   });
   socket.addEventListener("close", () => {
     renderConnection(false);

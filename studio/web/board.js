@@ -54,7 +54,7 @@ const short = (path) => path.replace(/\.puf$/, "");
 const keyOf = (path, name) => `${path}\u001f${name}`;
 const typing = (target) => target?.closest?.("input, textarea, [contenteditable], .monaco-editor");
 
-export function createBoard({ editor, files, send, stage, onShow }) {
+export function createBoard({ editor, files, send, stage, onShow, navigate }) {
   const monaco = editor.raw?.monaco;
   let board = { view: "editor", mode: "build", cards: [], focus: null, questions: [] };
   let outline = [];
@@ -839,7 +839,10 @@ export function createBoard({ editor, files, send, stage, onShow }) {
 
   // Into the editor at `line` of `path`; with `find`, at its first
   // occurrence from there (a hole), selected, so typing replaces it.
+  // With the focus beside the board (workset.js), the definition there
+  // is focused instead, and the board stays.
   function editAt(path, line, find) {
+    if (navigate?.(path, line, find)) return;
     setView("editor");
     if (files.active() !== path) files.open(path);
     const view = editor.raw?.editor;

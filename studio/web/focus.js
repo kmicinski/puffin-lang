@@ -190,8 +190,11 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     const host = stage.getBoundingClientRect();
     if (top < 0 || top > box.height - 20) return (chip.hidden = true);
     chip.style.top = `${box.top - host.top + top}px`;
-    chip.style.left = `${box.right - host.left + 8}px`;
     chip.hidden = false;
+    // beside the editor; inside its right edge when the working set is
+    // beside it (workset.js)
+    const inside = document.body.classList.contains("ws-on");
+    chip.style.left = `${inside ? box.right - host.left - chip.offsetWidth - 24 : box.right - host.left + 8}px`;
   }
 
   if (view) {
@@ -347,6 +350,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     renderFiles();
     update();
     setTimeout(measure, 0);
+    api.onLayout?.(true);
   }
 
   function leave() {
@@ -360,6 +364,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     document.body.classList.remove("focus-canvas");
     document.body.style.removeProperty("--focus-width");
     setTimeout(() => view?.layout(), 0);
+    api.onLayout?.(false);
   }
 
   window.addEventListener("keydown", (event) => {
@@ -369,6 +374,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
 
   const api = {
     onCanvas: null,
+    onLayout: null,
     enter,
     leave,
     slot,

@@ -1,0 +1,13 @@
+(require "prop.puf")
+(require "syntax.puf")
+(require "eval.puf")
+(require "compile.puf")
+(require "vm.puf")
+
+;; @property compile-agrees: the compiled code computes what the interpreter does
+(check-example 'compile-agrees
+  (eq? (run (Let 'x (Num 6) (Mul (Var 'x) (Num 7))))
+     (execute (compile-expr (Let 'x (Num 6) (Mul (Var 'x) (Num 7)))))))
+
+;; @property size-positive: every expression has at least one node
+(check-example 'size-positive (> (size (Add (Num 1) (Num 2))) 0))

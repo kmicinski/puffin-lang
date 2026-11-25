@@ -1,0 +1,25 @@
+;; pretty.puf -- Exprs and code as text.
+(provide show show-code)
+(require "syntax.puf")
+(require "compile.puf")
+
+(define (show [e : Expr]) : Str
+  (match e
+    [`(Num ,n) (number->string n)]
+    [`(Var ,x) (symbol->string x)]
+    [`(Add ,a ,b) (string-append "(" (string-append (show a) (string-append " + " (string-append (show b) ")"))))]
+    [`(Mul ,a ,b) (string-append (show a) (string-append " * " (show b)))]
+    [`(Let ,x ,rhs ,body)
+     (string-append "let " (string-append (symbol->string x) (string-append " = " (string-append (show rhs) (string-append " in " (show body))))))]))
+
+(define (show-instr [i : Instr]) : Str
+  (match i
+    [`(Push ,n) (string-append "push " (number->string n))]
+    [`(Load ,k) (string-append "load " (number->string k))]
+    [`Plus "add"]
+    [`Times "mul"]
+    [`Bind "bind"]
+    [`Unbind "unbind"]))
+
+(define (show-code [code : (List Instr)]) : Str
+  (foldl (lambda (i acc) (string-append acc (string-append (show-instr i) "; "))) "" code))
