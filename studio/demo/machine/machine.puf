@@ -1,0 +1,84 @@
+;; machine.puf -- a CESK machine: control, environment, store, continuation.
+;; One `step` is one transition; `run` steps until the control is a value
+;; and the continuation is done, or the fuel runs out.
+(provide State Kont Outcome inject step run final?)
+(require "lang.puf")
+(require "store.puf")
+(require "prims.puf")
+
+;; what is left to do once the control is a value
+(define-type Kont
+  (Done)
+  (Arg Expr Env Kont)
+  (Fun Value Kont)
+  (Let Var Expr Env Kont)
+  (Branch Expr Expr Env Kont)
+  (Add1 Expr Env Kont)
+  (Add2 Value Kont))
+
+;; the control is an expression to evaluate or a value to return
+(define-type State
+  (Eval Expr Env Store Kont)
+  (Ret Value Store Kont))
+
+;; how a run ends
+(define-type Outcome
+  (Halted Value)
+  (OutOfFuel))
+
+;; a program's first state
+(: inject (-> Expr State))
+(define (inject e) (Eval e empty-env empty-store Done))
+
+(: final? (-> State Bool))
+(define (final? st)
+  (match st
+    [(Ret _ _ Done) #t]
+    [_ #f]))
+
+;; one transition
+(: step (-> State State))
+(define (step st)
+  (match st
+    [(Eval e env s k) (step-eval e env s k)]
+    [(Ret v s k) (apply-kont k v s)]))
+
+;; an expression in control: look it up, or push a frame and descend
+(: step-eval (-> Expr Env Store Kont State))
+(define (step-eval e env s k)
+  (match e
+    [(? fixnum? n) (Ret (Num n) s k)]
+    [(? symbol? x) (Ret (store-ref s (env-ref env x)) s k)]
+    [`(lambda (,x) ,b) (Ret (Clo x b env) s k)]
+    [`(let ([,x ,rhs]) ,b) (Eval rhs env s (Let x b env k))]
+    [`(if0 ,c ,t ,f) (Eval c env s (Branch t f env k))]
+    [`(+ ,a ,b) (Eval a env s (Add1 b env k))]
+    [`(,f ,a) (Eval f env s (Arg a env k))]))
+
+;; a value returned to the continuation's top frame
+(: apply-kont (-> Kont Value Store State))
+(define (apply-kont k v s)
+  (match k
+    [(Arg a env k2) (Eval a env s (Fun v k2))]
+    [(Fun f k2) (apply-closure f v s k2)]
+    [(Let x b env k2) (bind-and-eval x v b env s k2)]
+    [(Branch t f env k2) (Eval (if (zero-value? v) t f) env s k2)]
+    [(Add1 b env k2) (Eval b env s (Add2 v k2))]
+    [(Add2 a k2) (Ret (add-values a v) s k2)]
+    [Done (Ret v s Done)]))
+
+(: apply-closure (-> Value Value Store Kont State))
+(define (apply-closure f v s k)
+  (match f
+    [(Clo x b env) (bind-and-eval x v b env s k)]
+    [_ (error `(not-a-function ,f))]))
+
+;; allocate x, store v there, evaluate the body
+(: bind-and-eval (-> Var Value Expr Env Store Kont State))
+(define (bind-and-eval x v b env s k)
+  (let ([a (alloc s)])
+    (Eval b (env-extend env x a) (store-set s a v) k)))
+
+;; step until final, or until the fuel runs out
+(: run (-> Expr Int Outcome))
+(define (run e fuel) ??)

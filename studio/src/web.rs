@@ -77,6 +77,9 @@ pub fn router(web: Arc<Web>) -> Router {
         .route("/vs/{*path}", get(monaco))
         .route("/ws", get(socket))
         .route("/mcp", post(mcp))
+        // the attention model's demo page, and its log (attention.rs)
+        .route("/attention", get(|| async { page(asset_text("attention.html")) }))
+        .route("/attention/log", get(attention_log).post(attention_append))
         .with_state(web)
 }
 
@@ -89,6 +92,31 @@ pub fn mcp_router(web: Arc<Web>) -> Router {
 async fn mcp(State(web): State<Arc<Web>>, headers: HeaderMap, body: String) -> Response {
     let studio = web.current();
     crate::mcp::handle(&studio, headers, body).await
+}
+
+/// The attention log is the author's behaviour: only this studio's own
+/// pages may read or add to it (a fetch from another site carries its
+/// Origin, or says cross-site in Sec-Fetch-Site).
+fn own_page(headers: &HeaderMap) -> bool {
+    same_origin(headers) && headers.get("sec-fetch-site").is_none_or(|site| site != "cross-site")
+}
+
+async fn attention_log(State(web): State<Arc<Web>>, headers: HeaderMap) -> Response {
+    if !own_page(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let log = crate::attention::read(&web.current().directory);
+    ([(header::CONTENT_TYPE, "application/x-ndjson"), (header::CACHE_CONTROL, "no-store")], log).into_response()
+}
+
+async fn attention_append(State(web): State<Arc<Web>>, headers: HeaderMap, body: String) -> Response {
+    if !own_page(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match crate::attention::append(&web.current().directory, &body) {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+    }
 }
 
 fn page(html: String) -> Response {
@@ -115,6 +143,7 @@ assets!(
     "files.js", "repl.js", "assist.js", "assists.js", "markdown.js", "hunks.js", "inline-diff.js", "proposals.js",
     "versions.js", "session.js", "holes.js", "lint.js", "rename.js", "trace.js", "tex.js", "history.js",
         "tree.js", "projects.js", "replay.js", "gist.js", "voice.js", "voice.css", "focus.js", "timeline.js", "progress.js", "excursion.js", "board.js", "board.css", "palette.js",
+    "attention.js", "attention-studio.js", "attention.html",
 );
 
 fn asset_text(name: &str) -> String {

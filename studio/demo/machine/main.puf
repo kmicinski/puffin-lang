@@ -1,0 +1,13 @@
+;; main.puf -- run a few programs
+(require "lang.puf")
+(require "machine.puf")
+
+(define examples
+  '((+ 1 2)
+    ((lambda (x) (+ x x)) 21)
+    (let ([f (lambda (n) (if0 n 1 n))]) (f 0))))
+
+;; each example's answer, with fuel proportional to its size
+(define (answers) (map (lambda (e) (run e (* 100 (expr-size e)))) examples))
+
+(println (answers))
