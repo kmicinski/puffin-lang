@@ -12,7 +12,7 @@
 
 use crate::sexp;
 use crate::studio::Studio;
-use crate::toolchain::{Files, Ran};
+use crate::toolchain::{self, Files, Ran};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -151,7 +151,7 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
     let mut declared = declared(text);
     // every module's holes become stubs that raise "??", so a property
     // that needs an unwritten definition is open, not a compile error
-    let mut files: Files = files.iter().map(|(path, text)| (path.clone(), sexp::stub_holes(text).0)).collect();
+    let mut files = toolchain::runnable(files);
     files.insert(PROPERTIES.to_owned(), guarded(&files[PROPERTIES]));
     files.insert(HARNESS.to_owned(), HARNESS_TEXT.to_owned());
     let ran = studio.toolchain.build_and_run(&files, PROPERTIES, LIMIT).await;

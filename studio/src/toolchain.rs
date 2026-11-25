@@ -769,6 +769,14 @@ pub fn resolve(files: &Files, entry: &str, base: &str) -> String {
     files.keys().find(|path| base_of(path) == base).cloned().unwrap_or_else(|| base.to_owned())
 }
 
+/// `files` as they run with typed holes in them: every `??` becomes a stub
+/// that raises "??" when reached (sexp::stub_holes), so the parts that are
+/// written run -- as the check and the properties already treat holes --
+/// instead of the compile failing on an unbound name.
+pub fn runnable(files: &Files) -> Files {
+    files.iter().map(|(path, text)| (path.clone(), sexp::stub_holes(text).0)).collect()
+}
+
 /// `entry` and every module it requires, transitively, entry first.
 pub fn program_files(files: &Files, entry: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();

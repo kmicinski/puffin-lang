@@ -112,10 +112,8 @@ pub async fn call(studio: &Arc<Studio>, thread: Option<u32>, name: &str, argumen
     let text = |key: &str| string_argument(arguments, key);
     let note = arguments["note"].as_str().unwrap_or("").to_owned();
     let fork = || studio.fork_of(thread);
-    // what runs runs past the typed holes (plan mode leaves bodies as `??`):
-    // each one raises "??" when reached, as the check and the properties
-    // already treat them, instead of failing the compile as unbound
-    let runnable = || -> toolchain::Files { fork().iter().map(|(path, text)| (path.clone(), crate::sexp::stub_holes(text).0)).collect() };
+    // what runs runs past the typed holes (plan mode leaves bodies as `??`)
+    let runnable = || toolchain::runnable(&fork());
     let file_text = |fork: &toolchain::Files, file: &str| fork.get(file).cloned().ok_or_else(|| format!("there is no file {file}"));
     match name {
         "list_files" => {
