@@ -34,8 +34,12 @@ requires syntax
   declaration (`(-> A B C)` reads `A * B -> C`), else its parameters'
   annotations and result type, an untyped parameter shown by its name
   (`val run : e -> _`); `define-type` as `type T = C of A * B | D`;
-  aliases and grammars likewise. The comment right above a definition
-  shows under it. `◌` marks a body that is only a hole (planned, not
+  aliases and grammars likewise; a type whose constructors stay home
+  (`(opaque T)`, docs/MODULES.md) as ML's `abstype T = ...`. The
+  comment right above a definition shows under it. A module's
+  internals -- definitions declared `(private ...)`, or left off its
+  provide list -- read plain beside the bold interface, marked `·`,
+  and the card counts "N of M provided". `◌` marks a body that is only a hole (planned, not
   written); `◌N` a body with N holes.
 - **Opaque until asked.** Click a row: its body opens in place
   (colorized), click again to fold. ↗ edits it in the editor; ✕ hides
@@ -77,8 +81,9 @@ author.
 **Hiding as much as possible.** When a builder turn ends, the board
 arranges itself around the edits (`Studio::auto_arrange`): the modules it
 touched come out; on each, the definitions it changed and what they use
-directly stay, the module's interface (its provides) stays, pinned rows
-stay, and the rest of its internals fold into "N hidden" (a card with
+directly stay, the module's interface (what it provides) stays, pinned
+rows stay, and the rest of its internals -- private definitions first
+among them -- fold into "N hidden" (a card with
 five definitions or fewer is left alone). In build mode the bodies just
 written open (the last three); in plan mode bodies stay folded — the
 signatures are the design.
@@ -178,6 +183,8 @@ its body a typed hole, the provide list kept current:
 | `val limit : Int` | `(: limit Int)` `(define limit ??)` |
 | `type Kont = Done \| Arg of Expr * Env` | `(define-type Kont (Done) (Arg Expr Env))` |
 | `type Env = Hash Var Addr` | `(define-type-alias Env (Hash Var Addr))` |
+| `abstype Counter = C of Int` | `(opaque Counter)` `(define-type Counter (C Int))` |
+| `private val step : Int -> Int` | `(private step)` + the planned definition, kept off the provide list |
 
 So a design can be sketched, annotated and decided entirely on the board
 — checked as it grows, since holes are checked past — before anyone (the

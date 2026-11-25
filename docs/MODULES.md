@@ -32,15 +32,17 @@ A **file is a module** (Racket's discipline). Its name is its path.
 (require "vec.puf")                 ; plain import: provided names in scope
 (require "matrix.puf" #:as M)       ; qualified import: M.transpose, M.det
 
-(define pi 314159)                  ; private unless provided
+(define pi 314159)                  ; not provided: stays inside
 (define (area r) (* pi (* r r)))
 (define (perimeter r) (* 2 (* pi r)))
 ```
 
 - `(provide name ...)` — anywhere at top level, unioned. **No provide
-  form at all means everything top-level is provided** (specs are
-  optional all the way down; a library grows a provide list when it
-  wants one).
+  form at all means everything top-level is provided** — except what
+  the module declares `(private ...)` (specs are optional all the way
+  down; a library grows a provide list when it wants one, and hides a
+  helper with one declaration when it doesn't; see "Private
+  definitions and opaque types").
 - `(require "path.puf")` — imports the module's provided names
   unqualified. Collisions between two requires are a compile-time
   error (no silent shadowing across module boundaries).
@@ -155,8 +157,13 @@ boundary is unchecked at run time under separate compilation.
 - Ascription checks: every sig name is defined; `fun` arities match
   the definition (variadics satisfy any arity ≥ their fixed count);
   and it **narrows** — names outside the sig are private even if
-  defined. This is SML's opaque-ish ascription for namespace
-  purposes.
+  defined. This is SML's opaque ascription (`:>`) for namespace
+  purposes, and for types too: a `(type T)` entry whose
+  constructors the signature does not list makes `T` abstract
+  outside the module (ML's `type t` in a signature); listing them —
+  `(type T)` plus `(val Leaf)`/`(fun Node 2)` entries — is the
+  transparent datatype spec. A signature cannot name a name the
+  module declares `(private ...)`.
 - **Typed entries**: `(val zero Int)`,
   `(fun add (-> Int Int Int))` (the arrow supplies the arity check),
   `(fun fmt (->* (Str) _ Str))`, and `(type Shape)` are accepted
@@ -170,6 +177,94 @@ boundary is unchecked at run time under separate compilation.
   (`(require "int-ring.puf" #:sig "ring.pufs")` re-checks the
   interface at the use site — belt and braces for published
   libraries), but this is never required.
+
+## Private definitions and opaque types
+
+Explicit exports are the first design goal, but a provide list is
+all-or-nothing: until now the only way to hide one helper was to list
+every other name. Hiding is now **per definition**, declared next to
+the definition the way a type is declared with `(: name τ)`:
+
+```scheme
+;; queue.puf -- no provide form: everything not private is exported
+(opaque Queue)                         ; the type's name goes out,
+(define-type Queue                     ; its constructor stays home
+  (Q (List Int) (List Int)))
+
+(: empty Queue)
+(define empty (Q '() '()))
+
+(private balance)                      ; not exported at all
+(define (balance [f : (List Int)] [b : (List Int)]) : Queue
+  (if (null? f) (Q (reverse b) '()) (Q f b)))
+
+(define (enqueue [q : Queue] [x : Int]) : Queue
+  (match q [(Q f b) (balance f (cons x b))]))
+```
+
+### Private definitions
+
+- `(private name ...)` — anywhere at top level, unioned, like
+  `provide`. Any top-level binder can be private: a function, a
+  value, a type alias, a grammar, a foreign import. A private
+  `define-type` takes its constructors with it.
+- A module with no provide form exports everything **not** private.
+  With a provide list, `private` is documentation the resolver holds
+  you to: providing a private name is an error, and so is a
+  signature that names one.
+- Private names are never imported, so they never collide: two
+  modules may each keep a private `helper`, and a client may define
+  its own.
+- Reaching for one is reported as privacy, not as a typo:
+  `M.helper`, `#:only (helper)`, and an unqualified `helper` all say
+  `helper is private to lib.puf`.
+- The entry module may declare privates too (nothing imports it, so
+  it only documents).
+
+### Opaque types
+
+A `define-type` whose module exports **none of its constructors** is
+**abstract** to every other module — ML's abstract type. Three ways
+to get one, all meaning the same thing:
+
+- `(opaque T ...)` — export `T`'s name, keep its constructors private
+  (the convenient spelling in a module with no provide list, and a
+  guard in one with a provide list: providing a constructor of an
+  opaque type is then an error). Only a `define-type` can be opaque:
+  a type alias *is* its expansion, so there is nothing to hide.
+- a provide list that names `T` and none of its constructors;
+- a signature with a `(type T)` entry and no constructor entries.
+
+Outside its module an abstract type is a **bare name**. A client can
+annotate with it, pass its values along, store them in lists, and
+compare them with `eq?`/`equal?`; type tests (`(? symbol? x)`),
+binders and `_` may match it. What it cannot do:
+
+- **build one** — the constructors are not in scope
+  (`C is private to counter.puf`);
+- **take one apart** — any other pattern against a value whose type
+  is abstract is an error (`Counter is abstract outside counter.puf:
+  a pattern cannot take it apart`), constructor patterns and
+  quasiquote templates alike;
+- **forge one from data** — constructors build plain data (a list
+  headed by the constructor's name, docs/GRAMMARS.md), so inside its
+  module `'(C 41)` *is* a `Counter`; outside, an abstract type has no
+  productions for a template or quoted datum to match, so
+  `(: c Counter) (define c '(C 41))` is a type error.
+
+The owning module sees through its own types as before — constructor
+patterns, templates, exhaustiveness. The rule is checked per
+top-level form: the resolver records which module every flattened
+form came from, and the checker treats another module's abstract
+types as opaque names while it checks that form (implementation
+notes in [internal/modules.md](internal/modules.md)).
+
+**What abstraction does not do** (deliberately — see Limitations):
+it is static. Puffin is gradual and its data is data, so code typed
+`_` can still build a value that looks like a `Counter`, and the
+runtime cast at a typed boundary checks the *shape*, not who built
+it. An abstract type keeps typed code honest and makes the module's
+representation free to change; it is not a security boundary.
 
 ## Separate compilation
 
@@ -213,6 +308,26 @@ and cache layout are specified in the
 - No functors, no nested modules, no first-class modules. The
   file-DAG + signatures covers the daily need; functors wait until
   the type system gives them something to abstract over.
+- Privacy is per module. ML's `local ... in ... end` (helpers visible
+  to a group of declarations only) has no counterpart: a module is a
+  file, so a group that wants its own helpers is a small module of
+  its own. There is no `define-private` either: privacy is a
+  declaration beside an ordinary `define`, so every tool that reads
+  definitions (the checker, assists, the studio) sees the same forms
+  it always did.
+- No opaque type **aliases** (SML's `type t = int` sealed by `:>`):
+  an alias unfolds everywhere before checking, and keeping it nominal
+  outside its module would mean unfolding per module. Make the
+  representation a one-constructor `define-type` and declare it
+  opaque instead.
+- Abstraction is static (see "Opaque types"): no runtime sealing or
+  branding of abstract values, and `equal?` still compares their
+  representation (ML would ask for an equality type).
+- Under separate compilation privacy narrows the interface (private
+  names never reach a `.pufi`), but abstract types are enforced by
+  whole-program checking only: an imported `.pufi`'s ADT rows carry
+  no abstract mark yet, so a separately compiled importer still sees
+  the representation.
 - Separate compilation is Racket-toolchain-only and arm64-only.
   puffincc compiles module programs whole-program; the x86-64
   backend rejects `--separate`.
