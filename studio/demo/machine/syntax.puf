@@ -1,0 +1,32 @@
+;; syntax.puf -- the language the machine runs: numbers, variables,
+;; one-argument functions, application, addition and a zero test.
+(provide Term Num Var Lam App Add If0 parse free-vars)
+
+(define-type Term
+  (Num Int)
+  (Var Sym)
+  (Lam Sym Term)
+  (App Term Term)
+  (Add Term Term)
+  (If0 Term Term Term))
+
+;; a program written as an s-expression: (lambda (x) body), (f a),
+;; (+ a b), (if0 c t e), numbers and names
+(define (parse sexp) : Term
+  (match sexp
+    [(? fixnum? n) (Num n)]
+    [(? symbol? x) (Var x)]
+    [`(lambda (,x) ,body) (Lam x (parse body))]
+    [`(+ ,a ,b) (Add (parse a) (parse b))]
+    [`(if0 ,c ,t ,e) (If0 (parse c) (parse t) (parse e))]
+    [`(,f ,a) (App (parse f) (parse a))]))
+
+;; the names a term mentions but does not bind
+(define (free-vars [t : Term]) : (List Sym)
+  (match t
+    [(Num _) '()]
+    [(Var x) (list x)]
+    [(Lam x body) (filter (lambda (y) (not (eq? x y))) (free-vars body))]
+    [(App f a) (append (free-vars f) (free-vars a))]
+    [(Add a b) (append (free-vars a) (free-vars b))]
+    [(If0 c t e) (append (free-vars c) (append (free-vars t) (free-vars e)))]))

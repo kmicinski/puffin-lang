@@ -1,0 +1,18 @@
+;; main.puf -- a small CEK machine across four modules: the syntax, the
+;; store, the machine and a printer. Run it, or open the canvas and
+;; follow run into step, step-eval and the store.
+(require "syntax.puf")
+(require "machine.puf")
+(require "pretty.puf")
+
+(define examples
+  (list '(+ 1 2)
+        '((lambda (x) (+ x x)) 21)
+        '(((lambda (f) (lambda (x) (f (f x)))) (lambda (n) (+ n 3))) 10)
+        '(if0 (+ 1 -1) 100 200)))
+
+(define (evaluate sexp) : Str
+  (let ([t (parse sexp)])
+    (string-append (show-term t) (string-append "  ⇒  " (show-value (run t 1000))))))
+
+(define shown (map (lambda (e) (println (evaluate e))) examples))

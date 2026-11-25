@@ -1,0 +1,39 @@
+;; store.puf -- addresses, environments and the store: where the
+;; machine keeps the values its variables are bound to.
+(require "syntax.puf")
+(provide Addr Env Value NumV Clo Store empty-store alloc store-ref env-lookup env-extend)
+
+(define-type-alias Addr Int)
+(define-type-alias Env (List (Pairof Sym Addr)))
+
+;; what a term evaluates to: a number, or a closure over its environment
+(define-type Value
+  (NumV Int)
+  (Clo Sym Term Env))
+
+;; the next free address, and every binding made so far
+(define-type Store (Store Addr (List (Pairof Addr Value))))
+
+(define empty-store (Store 0 '()))
+
+;; a fresh address: deterministic, so runs are reproducible
+(define (alloc [s : Store] [v : Value]) : (Pairof Addr Store)
+  (match s
+    [(Store next cells) (cons next (Store (+ next 1) (cons (cons next v) cells)))]))
+
+(define (store-ref [s : Store] [a : Addr]) : Value
+  (match s
+    [(Store _ cells) (cell-ref cells a)]))
+
+(define (cell-ref [cells : (List (Pairof Addr Value))] [a : Addr]) : Value
+  (cond [(null? cells) (error "dangling address")]
+        [(eq? (car (car cells)) a) (cdr (car cells))]
+        [else (cell-ref (cdr cells) a)]))
+
+(define (env-lookup [env : Env] [x : Sym]) : Addr
+  (cond [(null? env) (error (string-append "unbound variable " (symbol->string x)))]
+        [(eq? (car (car env)) x) (cdr (car env))]
+        [else (env-lookup (cdr env) x)]))
+
+(define (env-extend [env : Env] [x : Sym] [a : Addr]) : Env
+  (cons (cons x a) env))

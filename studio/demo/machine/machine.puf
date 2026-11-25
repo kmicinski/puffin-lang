@@ -1,0 +1,76 @@
+;; machine.puf -- a CEK machine: a term, its environment, the store and
+;; a continuation, stepped until the continuation is done.
+(require "syntax.puf")
+(require "store.puf")
+(provide Kont State inject step final? run)
+
+;; what to do with the value being computed
+(define-type Kont
+  (Done)
+  (Arg Term Env Kont)
+  (Call Value Kont)
+  (AddR Term Env Kont)
+  (AddL Value Kont)
+  (Branch Term Term Env Kont))
+
+;; either evaluating a term, or returning a value to the continuation
+(define-type State
+  (Eval Term Env Store Kont)
+  (Return Value Store Kont))
+
+(define (inject [t : Term]) : State
+  (Eval t '() empty-store Done))
+
+;; one transition
+(define (step [st : State]) : State
+  (match st
+    [(Eval t env s k) (step-eval t env s k)]
+    [(Return v s k) (step-return v s k)]))
+
+(define (step-eval [t : Term] [env : Env] [s : Store] [k : Kont]) : State
+  (match t
+    [(Num n) (Return (NumV n) s k)]
+    [(Var x) (Return (store-ref s (env-lookup env x)) s k)]
+    [(Lam x body) (Return (Clo x body env) s k)]
+    [(App f a) (Eval f env s (Arg a env k))]
+    [(Add a b) (Eval a env s (AddR b env k))]
+    [(If0 c th el) (Eval c env s (Branch th el env k))]))
+
+(define (step-return [v : Value] [s : Store] [k : Kont]) : State
+  (match k
+    [Done (Return v s k)]
+    [(Arg a env k2) (Eval a env s (Call v k2))]
+    [(Call f k2) (apply-closure f v s k2)]
+    [(AddR b env k2) (Eval b env s (AddL v k2))]
+    [(AddL u k2) (Return (add-values u v) s k2)]
+    [(Branch th el env k2) (Eval (if (zero-value? v) th el) env s k2)]))
+
+;; calling a closure binds its parameter at a fresh address
+(define (apply-closure [f : Value] [v : Value] [s : Store] [k : Kont]) : State
+  (match f
+    [(Clo x body env)
+     (let ([made (alloc s v)])
+       (Eval body (env-extend env x (car made)) (cdr made) k))]
+    [(NumV _) (error "applied a number")]))
+
+(define (add-values [a : Value] [b : Value]) : Value
+  (match (cons a b)
+    [(cons (NumV x) (NumV y)) (NumV (+ x y))]
+    [_ (error "added a closure")]))
+
+(define (zero-value? [v : Value]) : Bool
+  (match v
+    [(NumV n) (zero? n)]
+    [_ #f]))
+
+(define (final? [st : State]) : Bool
+  (match st
+    [(Return _ _ Done) #t]
+    [_ #f]))
+
+;; step from the injected term until done, at most `fuel` steps
+(define (run [t : Term] [fuel : Int]) : Value
+  (let loop ([st (inject t)] [n fuel])
+    (cond [(final? st) (match st [(Return v _ _) v] [_ (error "not final")])]
+          [(zero? n) (error "out of fuel")]
+          [else (loop (step st) (- n 1))])))
