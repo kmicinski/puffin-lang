@@ -17,7 +17,7 @@
 // canvas it is one line, since the edits themselves are on screen.
 
 import { el } from "./dom.js";
-import { plural } from "./words.js";
+import { outcomeWord, plural, turnLabel } from "./words.js";
 
 const clock = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -147,9 +147,7 @@ export function createProgress({ host }) {
     },
     // the builder took up the instructions
     turn({ turn: id, instructions = [], at }) {
-      const automatic = instructions.length === 1 && instructions[0].startsWith("(Automatic");
-      const label = automatic ? "fixing the failing properties" : instructions.map((i) => i.split("\n")[0]).join(" · ") || "working";
-      turn = { id, label: clip(label, 200), since: at ?? Date.now(), edits: 0, steps: [] };
+      turn = { id, label: clip(turnLabel(instructions), 200), since: at ?? Date.now(), edits: 0, steps: [] };
       doing = "";
       noted = "";
       flash = null;
@@ -190,8 +188,7 @@ export function createProgress({ host }) {
       turn = null;
       doing = "";
       if (replaying) return render();
-      const word = { done: "done", interrupted: "redirected", stopped: "stopped", failed: "failed" }[outcome] ?? outcome;
-      const parts = [word, clock(ms ?? 0)];
+      const parts = [outcomeWord(outcome), clock(ms ?? 0)];
       if (edits) parts.push(plural(edits, "edit"));
       passing(outcome === "failed" ? "bad" : "done", parts.join(" · "), "", DONE_MS);
     },

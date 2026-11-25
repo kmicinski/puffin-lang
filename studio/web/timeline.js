@@ -10,7 +10,7 @@
 
 import { markdown } from "./markdown.js";
 import { el } from "./dom.js";
-import { plural } from "./words.js";
+import { outcomeWord, plural, turnLabel } from "./words.js";
 
 const ICON = {
   edit: "✎", write_file: "✎", delete_file: "✕", add_property: "≡", run_properties: "≡",
@@ -112,9 +112,7 @@ export function createTimeline({ host, go }) {
     for (const other of turns.values()) if (other.open && other.status.dataset.state !== "running") setOpen(other, false);
     const node = el("div", "timeline-turn open");
     const header = el("button", "timeline-turn-head");
-    const automatic = instructions.length === 1 && instructions[0].startsWith("(Automatic");
-    const label = automatic ? "fixing the failing properties" : instructions.map((i) => i.split("\n")[0]).join(" · ") || "working";
-    header.append(el("span", "timeline-turn-who", "builder"), el("span", "timeline-turn-what", label));
+    header.append(el("span", "timeline-turn-who", "builder"), el("span", "timeline-turn-what", turnLabel(instructions)));
     const status = el("span", "timeline-status running", interrupted ? "redirected" : "working");
     status.dataset.state = "running";
     const summary = el("span", "timeline-summary");
@@ -238,7 +236,7 @@ export function createTimeline({ host, go }) {
       if (!turn) return;
       turn.status.className = `timeline-status ${outcome}`;
       turn.status.dataset.state = outcome;
-      turn.status.textContent = `${{ done: "done", interrupted: "redirected", stopped: "stopped", failed: "failed" }[outcome] ?? outcome} · ${seconds(ms)}`;
+      turn.status.textContent = `${outcomeWord(outcome)} · ${seconds(ms)}`;
       for (const step of steps.values()) {
         if (step.turn === turn && step.row.classList.contains("running")) step.row.classList.replace("running", "cut");
       }
