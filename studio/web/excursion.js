@@ -9,13 +9,7 @@
 // apply-fn do?"); ✕ or "close the excursion" ends it.
 
 import { markdown } from "./markdown.js";
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const escape = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 

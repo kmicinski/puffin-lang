@@ -11,13 +11,7 @@
 
 import { tokens } from "./lexer.js";
 import { utf16Of } from "./assists.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 // The word of `text` at `pos` (or ending at it): { start, end, word }.
 export function nameAt(text, pos) {
@@ -29,11 +23,11 @@ export function createRename({ editor, files, send, note }) {
   const waiting = new Map(); // seq -> resolve
   let seq = 0;
   let available = false;
-  const box = document.body.appendChild(element("div", "rename-box"));
+  const box = document.body.appendChild(el("div", "rename-box"));
   box.hidden = true;
-  const input = box.appendChild(element("input", "rename-input"));
+  const input = box.appendChild(el("input", "rename-input"));
   input.spellcheck = false;
-  const said = box.appendChild(element("div", "rename-error"));
+  const said = box.appendChild(el("div", "rename-error"));
   let target = null; // { file, start, word }
 
   function request(file, pos, name) {

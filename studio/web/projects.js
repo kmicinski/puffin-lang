@@ -6,12 +6,7 @@
 //
 //   createProjects({ button, menu, send }) -> { receive }
 
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const when = (ms) => {
   if (!ms) return "";
@@ -37,12 +32,12 @@ export function createProjects({ button, menu, send }) {
 
   function render() {
     menu.replaceChildren();
-    const make = menu.appendChild(element("form", "projects-new"));
-    const name = make.appendChild(element("input"));
+    const make = menu.appendChild(el("form", "projects-new"));
+    const name = make.appendChild(el("input"));
     name.placeholder = "name (empty: a random one)";
     name.spellcheck = false;
     name.autocomplete = "off";
-    const go = make.appendChild(element("button", "btn new small", "New project"));
+    const go = make.appendChild(el("button", "btn new small", "New project"));
     go.type = "submit";
     make.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -51,19 +46,19 @@ export function createProjects({ button, menu, send }) {
       go.disabled = true;
       go.textContent = "making…";
     });
-    const list = menu.appendChild(element("div", "projects-list"));
+    const list = menu.appendChild(el("div", "projects-list"));
     const { projects, current, home } = listing;
-    if (!projects.length) list.append(element("p", "hint", home ? `No projects in ${home} yet.` : "Loading…"));
+    if (!projects.length) list.append(el("p", "hint", home ? `No projects in ${home} yet.` : "Loading…"));
     for (const project of projects) {
       const here = project.directory === current;
-      const row = list.appendChild(element("button", `projects-row${here ? " here" : ""}`));
+      const row = list.appendChild(el("button", `projects-row${here ? " here" : ""}`));
       row.type = "button";
       row.title = project.directory;
-      row.append(element("span", "projects-name", project.name), element("span", "projects-when", here ? "open now" : when(project.modified)));
+      row.append(el("span", "projects-name", project.name), el("span", "projects-when", here ? "open now" : when(project.modified)));
       row.disabled = here;
       row.addEventListener("click", () => send({ t: "open-project", name: project.name }));
     }
-    if (home) menu.append(element("div", "projects-home", home));
+    if (home) menu.append(el("div", "projects-home", home));
     setTimeout(() => name.focus(), 0);
   }
 

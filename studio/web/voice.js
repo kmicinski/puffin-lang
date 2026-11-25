@@ -23,6 +23,7 @@
 import { createTimeline } from "./timeline.js";
 import { createProgress } from "./progress.js";
 import { createExcursion } from "./excursion.js";
+import { el } from "./dom.js";
 
 const STORE = "puffin-voice";
 // after the author moves the view, the builder's edits do not pull it away
@@ -41,13 +42,6 @@ function load() {
 function store(value) {
   try { localStorage.setItem(STORE, JSON.stringify(value)); } catch { /* private window */ }
 }
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
 
 // A word of Puffin at `column` of `line`: an atom's characters.
 function wordAt(line, column) {

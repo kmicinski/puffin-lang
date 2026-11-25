@@ -18,13 +18,7 @@
 
 import { LINT_SOURCE } from "./lint.js";
 import { enclosing, parse } from "./sexp.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const SOURCES = {
   type: "from the type (the checker)",
@@ -42,7 +36,7 @@ export function createAssists({ editor, files, send, note, facts }) {
   const waiting = new Map(); // seq -> resolve
   let seq = 0;
   let available = false;
-  const menu = document.body.appendChild(element("div", "assist-menu"));
+  const menu = document.body.appendChild(el("div", "assist-menu"));
   menu.hidden = true;
   let shown = null; // { file, assists, index }
 
@@ -90,14 +84,14 @@ export function createAssists({ editor, files, send, note, facts }) {
 
   function renderMenu() {
     menu.replaceChildren();
-    menu.append(element("div", "assist-menu-head", "Assists from the compiler"));
+    menu.append(el("div", "assist-menu-head", "Assists from the compiler"));
     shown.assists.forEach((assist, i) => {
-      const item = menu.appendChild(element("button", `assist-item${i === shown.index ? " chosen" : ""}`));
-      item.append(element("span", "title", assist.title), element("span", `source source-${assist.source}`, badge(assist.source)));
+      const item = menu.appendChild(el("button", `assist-item${i === shown.index ? " chosen" : ""}`));
+      item.append(el("span", "title", assist.title), el("span", `source source-${assist.source}`, badge(assist.source)));
       item.title = SOURCES[assist.source] ?? assist.source;
       item.addEventListener("mousedown", (event) => { event.preventDefault(); choose(i); });
     });
-    if (shown.stopped) menu.append(element("div", "assist-menu-foot", "the checker stopped early; there may be more"));
+    if (shown.stopped) menu.append(el("div", "assist-menu-foot", "the checker stopped early; there may be more"));
     const box = editor.caretBox();
     menu.hidden = false;
     if (box) {

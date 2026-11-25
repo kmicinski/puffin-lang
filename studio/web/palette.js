@@ -5,12 +5,7 @@
 // Matching is by letters in order (as VS Code's quick open), scored so a
 // match at the start of a word, or of the whole title, ranks first.
 
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 // a score for `typed` in `text` (higher is better), or -1
 function score(text, typed) {

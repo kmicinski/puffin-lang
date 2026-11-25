@@ -9,13 +9,7 @@
 // the foot says what the builder is doing now.
 
 import { markdown } from "./markdown.js";
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const ICON = {
   edit: "✎", write_file: "✎", delete_file: "✕", add_property: "≡", run_properties: "≡",

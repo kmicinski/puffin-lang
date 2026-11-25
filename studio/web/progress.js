@@ -16,12 +16,7 @@
 // steps aside and the card is larger, with the steps as they come. Off the
 // canvas it is one line, since the edits themselves are on screen.
 
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const clock = (ms) => {
   const s = Math.max(0, Math.floor(ms / 1000));

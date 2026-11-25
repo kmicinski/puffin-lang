@@ -17,13 +17,7 @@
 //     -> { toggle, show, newFile, quickOpen, receive }
 
 import { basename, dirname, sorted } from "./files.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 // a project this big, or any folder, shows the tree unasked
 const MANY = 4;
@@ -59,7 +53,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function renderToggle() {
     const n = files.paths().length;
-    toggle.replaceChildren(element("span", "tabs-toggle-word", "Files"), element("span", "tabs-toggle-count", String(n)));
+    toggle.replaceChildren(el("span", "tabs-toggle-word", "Files"), el("span", "tabs-toggle-count", String(n)));
     toggle.title = `The project's ${n === 1 ? "file" : `${n} files`} (⌘⇧E · ,files)`;
   }
 
@@ -94,19 +88,19 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     const live = panel.querySelector(".tree-input");
     const typing = live && document.activeElement === live ? { value: live.value, start: live.selectionStart, end: live.selectionEnd } : null;
     panel.replaceChildren();
-    const head = panel.appendChild(element("div", "tree-head"));
-    head.append(element("span", "tree-title", "Files"));
-    const actions = head.appendChild(element("span", "tree-actions"));
+    const head = panel.appendChild(el("div", "tree-head"));
+    head.append(el("span", "tree-title", "Files"));
+    const actions = head.appendChild(el("span", "tree-actions"));
     actions.append(
       action("＋", "A new file (,new NAME)", () => startNew("new-file", "")),
       action("⊞", "A new folder", () => startNew("new-folder", "")),
       action("×", "Hide the tree (⌘⇧E)", () => show(false, true)),
     );
-    const list = panel.appendChild(element("div", "tree-list"));
+    const list = panel.appendChild(el("div", "tree-list"));
     list.setAttribute("role", "tree");
     const root = build();
     renderChildren(list, root, 0);
-    if (!files.paths().length && !editing) list.append(element("p", "hint tree-empty", "No files yet. ＋ makes one."));
+    if (!files.paths().length && !editing) list.append(el("p", "hint tree-empty", "No files yet. ＋ makes one."));
     dropTarget(list, "", true);
     if (typing) {
       const field = panel.querySelector(".tree-input");
@@ -136,7 +130,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
   }
 
   function row(className, depth, path) {
-    const node = element("div", `tree-row ${className}`);
+    const node = el("div", `tree-row ${className}`);
     node.style.paddingLeft = `${8 + depth * 14}px`;
     node.tabIndex = 0;
     node.dataset.path = path;
@@ -152,7 +146,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
       const n = files.paths().filter((path) => path.startsWith(`${dir.path}/`)).length;
       return confirmRow(node, `Delete ${name}${n ? ` and its ${n} file${n === 1 ? "" : "s"}` : ""}?`, () => files.deleteFolder(dir.path));
     }
-    node.append(element("span", "tree-caret"), element("span", "tree-name", name));
+    node.append(el("span", "tree-caret"), el("span", "tree-name", name));
     node.title = dir.path;
     node.addEventListener("click", () => { fold(dir.path); });
     node.append(more(() => folderItems(dir.path, name)));
@@ -167,12 +161,12 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     const node = row(`file${path === files.active() ? " active" : ""}${files.opened().includes(path) ? " open" : ""}`, depth, path);
     if (editing?.kind === "rename" && editing.path === path) return editRow(node, name, (typed) => files.moveFile(path, join(dirname(path), typed)));
     if (editing?.kind === "delete" && editing.path === path) return confirmRow(node, `Delete ${name}?`, () => files.deleteFile(path));
-    node.append(element("span", "tree-name", name));
+    node.append(el("span", "tree-name", name));
     node.title = path;
-    if (files.unsaved(path)) node.append(element("span", "unsaved-dot", "●"));
+    if (files.unsaved(path)) node.append(el("span", "unsaved-dot", "●"));
     const counts = files.counts(path);
-    if (counts?.errors) node.append(element("span", "count error", String(counts.errors)));
-    else if (counts?.warnings) node.append(element("span", "count warning", String(counts.warnings)));
+    if (counts?.errors) node.append(el("span", "count error", String(counts.errors)));
+    else if (counts?.warnings) node.append(el("span", "count warning", String(counts.warnings)));
     node.addEventListener("click", () => files.open(path));
     node.append(more(() => fileItems(path, name)));
     node.addEventListener("contextmenu", (event) => { event.preventDefault(); event.stopPropagation(); openMenu(event.clientX, event.clientY, fileItems(path, name)); });
@@ -187,7 +181,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
   }
 
   function action(text, title, onClick) {
-    const node = element("button", "quiet small tree-action", text);
+    const node = el("button", "quiet small tree-action", text);
     node.title = title;
     node.addEventListener("click", (event) => { event.stopPropagation(); onClick(); });
     return node;
@@ -195,7 +189,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   // the ⋯ at a row's end: its menu
   function more(items) {
-    const node = element("button", "quiet small tree-more", "⋯");
+    const node = el("button", "quiet small tree-more", "⋯");
     node.title = "Rename, delete, …";
     node.tabIndex = -1;
     node.addEventListener("click", (event) => {
@@ -223,7 +217,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function entryRow(depth) {
     const node = row(`entry ${editing.kind}`, depth, "");
-    const field = node.appendChild(element("input", "tree-input"));
+    const field = node.appendChild(el("input", "tree-input"));
     field.placeholder = editing.kind === "new-file" ? "name.puf" : "folder";
     field.spellcheck = false;
     field.autocomplete = "off";
@@ -241,7 +235,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     const slot = document.getElementById("tab-list");
     const old = slot.querySelector(".tab-entry");
     if (old) return;
-    const field = element("input", "tree-input tab-entry");
+    const field = el("input", "tree-input tab-entry");
     field.placeholder = editing.kind === "new-file" ? "new file: name.puf" : "new folder";
     field.spellcheck = false;
     field.autocomplete = "off";
@@ -277,7 +271,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function editRow(node, name, done) {
     node.classList.add("editing");
-    const field = node.appendChild(element("input", "tree-input"));
+    const field = node.appendChild(el("input", "tree-input"));
     field.value = name;
     field.spellcheck = false;
     field.autocomplete = "off";
@@ -292,10 +286,10 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function confirmRow(node, question, done) {
     node.classList.add("confirming");
-    node.append(element("span", "tree-question", question));
-    const yes = node.appendChild(element("button", "btn small danger", "Delete"));
-    const no = node.appendChild(element("button", "quiet small", "Cancel"));
-    node.append(element("span", "hint tree-hint", files.tracked() ? "the history keeps it" : "this cannot be undone"));
+    node.append(el("span", "tree-question", question));
+    const yes = node.appendChild(el("button", "btn small danger", "Delete"));
+    const no = node.appendChild(el("button", "quiet small", "Cancel"));
+    node.append(el("span", "hint tree-hint", files.tracked() ? "the history keeps it" : "this cannot be undone"));
     const finish = (commit) => {
       editing = null;
       if (commit) done();
@@ -348,9 +342,9 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function openMenu(x, y, items) {
     closeMenu();
-    menu = document.body.appendChild(element("div", "tree-menu"));
+    menu = document.body.appendChild(el("div", "tree-menu"));
     for (const [word, run] of items) {
-      const item = menu.appendChild(element("button", "tree-menu-item", word));
+      const item = menu.appendChild(el("button", "tree-menu-item", word));
       item.addEventListener("click", (event) => { event.stopPropagation(); closeMenu(); run(); });
     }
     menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
@@ -435,22 +429,22 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     closeMenu();
     quick.hidden = false;
     quick.replaceChildren();
-    const field = quick.appendChild(element("input", "quick-input"));
+    const field = quick.appendChild(el("input", "quick-input"));
     field.placeholder = "open a file: type part of its path";
     field.spellcheck = false;
     field.autocomplete = "off";
-    const list = quick.appendChild(element("div", "quick-list"));
+    const list = quick.appendChild(el("div", "quick-list"));
     const refresh = () => {
       const typed = field.value.trim().toLowerCase();
       quickRows = sorted(files.paths()).filter((path) => matches(path.toLowerCase(), typed)).slice(0, 12);
       quickAt = Math.min(quickAt, Math.max(0, quickRows.length - 1));
       list.replaceChildren(...quickRows.map((path, i) => {
-        const node = element("div", `quick-row${i === quickAt ? " on" : ""}`);
-        node.append(element("span", "quick-name", basename(path)), element("span", "quick-dir", dirname(path)));
+        const node = el("div", `quick-row${i === quickAt ? " on" : ""}`);
+        node.append(el("span", "quick-name", basename(path)), el("span", "quick-dir", dirname(path)));
         node.addEventListener("mousedown", (event) => { event.preventDefault(); done(path); });
         return node;
       }));
-      if (!quickRows.length) list.append(element("div", "hint quick-none", typed ? "no file matches" : "no files"));
+      if (!quickRows.length) list.append(el("div", "hint quick-none", typed ? "no file matches" : "no files"));
     };
     const done = (path) => {
       quick.hidden = true;

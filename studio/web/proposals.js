@@ -14,16 +14,10 @@
 import { groupHunk, place } from "./hunks.js";
 import { forms } from "./lexer.js";
 import { createInlineDiff } from "./inline-diff.js";
+import { el } from "./dom.js";
 
 const TONES = 5;
 export const toneOf = (thread) => `tone-${(thread - 1) % TONES}`;
-
-const node = (tag, className, text) => {
-  const element = document.createElement(tag);
-  if (className) element.className = className;
-  if (text !== undefined) element.textContent = text;
-  return element;
-};
 
 export function createProposals({ editor, files, send, bar, onChange = () => {} }) {
   const state = {
@@ -96,29 +90,29 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
   // The slim line over a change: whose it is, what for, and its controls.
   function header(group) {
     const ops = group.ids.map(opOf);
-    const line = node("div", `ip-head ${toneOf(group.thread)}`);
-    line.append(node("span", "ip-dot"));
+    const line = el("div", `ip-head ${toneOf(group.thread)}`);
+    line.append(el("span", "ip-dot"));
     const title = threadOf(group.thread)?.title ?? `thread ${group.thread}`;
-    line.append(node("span", "ip-who", `✦ ${title} · ${group.ids.map((id) => `#${id}`).join(" ")}`));
+    line.append(el("span", "ip-who", `✦ ${title} · ${group.ids.map((id) => `#${id}`).join(" ")}`));
     const note = ops.map((op) => op?.note).filter(Boolean).join("; ");
-    if (note) line.append(node("span", "ip-note", note));
+    if (note) line.append(el("span", "ip-note", note));
     const rivals = conflictsOf(group);
-    if (rivals.length) line.append(node("span", "ip-flag", `conflicts with ${rivals.join(", ")}`));
+    if (rivals.length) line.append(el("span", "ip-flag", `conflicts with ${rivals.join(", ")}`));
     const check = checkOf(group);
-    if (check.state === "ok") line.append(node("span", "ip-checks", "✓ checks"));
-    if (check.state === "checking") line.append(node("span", "ip-checking", "checking…"));
+    if (check.state === "ok") line.append(el("span", "ip-checks", "✓ checks"));
+    if (check.state === "checking") line.append(el("span", "ip-checking", "checking…"));
     if (check.state === "fails") {
-      const flag = line.appendChild(node("span", "ip-flag", "fails the check"));
+      const flag = line.appendChild(el("span", "ip-flag", "fails the check"));
       flag.title = check.reason;
     }
-    const accept = line.appendChild(node("button", "ip-accept", check.with.length ? `Accept with ${ids(check.with)}` : "Accept"));
+    const accept = line.appendChild(el("button", "ip-accept", check.with.length ? `Accept with ${ids(check.with)}` : "Accept"));
     accept.disabled = rivals.length > 0 || check.state === "fails";
     accept.title = rivals.length ? "Reject one side of the conflict first"
       : check.state === "fails" ? check.reason
       : check.with.length ? `It builds on ${ids(check.with)}, which are accepted with it, as one new version`
       : "Make this change, as a new version";
     accept.addEventListener("click", () => acceptIds(group.ids));
-    const reject = line.appendChild(node("button", "ip-reject", "Reject"));
+    const reject = line.appendChild(el("button", "ip-reject", "Reject"));
     reject.addEventListener("click", () => rejectIds(group.ids));
     return line;
   }
@@ -179,30 +173,30 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
     bar.replaceChildren();
     const threads = [...new Set(pending().map((op) => op.thread))];
     for (const t of threads) {
-      const dot = bar.appendChild(node("span", `ip-dot ${toneOf(t)}`));
+      const dot = bar.appendChild(el("span", `ip-dot ${toneOf(t)}`));
       dot.title = threadOf(t)?.title ?? "";
     }
     const group = state.groups.find((g) => g.ids[0] === state.current) ?? state.groups[0] ?? null;
-    const what = bar.appendChild(node("span", "ip-what", `${total} proposed change${total === 1 ? "" : "s"}`));
-    if (group) what.append(node("span", "ip-of", ` · ${changesetOf(group.changeset)?.title ?? ""}`));
+    const what = bar.appendChild(el("span", "ip-what", `${total} proposed change${total === 1 ? "" : "s"}`));
+    if (group) what.append(el("span", "ip-of", ` · ${changesetOf(group.changeset)?.title ?? ""}`));
     for (const [path, groups] of state.files) {
       if (path === files.active()) continue;
-      const show = bar.appendChild(node("button", "secondary small", `${path} (${groups.length})`));
+      const show = bar.appendChild(el("button", "secondary small", `${path} (${groups.length})`));
       show.title = `Show the changes to ${path}`;
       show.addEventListener("click", () => focus(path));
     }
     if (state.unplaced.length) {
-      const gone = bar.appendChild(node("button", "quiet small", `${state.unplaced.length} no longer applies`));
+      const gone = bar.appendChild(el("button", "quiet small", `${state.unplaced.length} no longer applies`));
       gone.title = `${ids(state.unplaced)}: their text changed since they were proposed. Click to reject them.`;
       gone.addEventListener("click", () => rejectIds(state.unplaced));
     }
     if (state.groups.length) {
-      const nav = bar.appendChild(node("span", "ip-nav"));
-      const previous = nav.appendChild(node("button", "quiet small", "‹"));
+      const nav = bar.appendChild(el("span", "ip-nav"));
+      const previous = nav.appendChild(el("button", "quiet small", "‹"));
       previous.title = "Previous change (Shift+F7)";
       previous.addEventListener("click", () => step(-1));
-      nav.append(node("span", "ip-index", `${state.groups.indexOf(group) + 1}/${state.groups.length}`));
-      const next = nav.appendChild(node("button", "quiet small", "›"));
+      nav.append(el("span", "ip-index", `${state.groups.indexOf(group) + 1}/${state.groups.length}`));
+      const next = nav.appendChild(el("button", "quiet small", "›"));
       next.title = "Next change (F7)";
       next.addEventListener("click", () => step(1));
     }
@@ -210,7 +204,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
     if (changeset) {
       const open = pending().filter((op) => op.changeset === changeset);
       const title = changesetOf(changeset)?.title ?? "";
-      const all = bar.appendChild(node("button", "primary small", "Accept all"));
+      const all = bar.appendChild(el("button", "primary small", "Accept all"));
       const failing = open.find((op) => op.check && !op.check.ok);
       all.disabled = Boolean(failing) || open.some((op) => op.stale);
       all.title = failing ? `#${failing.id}: ${failing.check.reason}` : `Accept every change of “${title}”, as one version per file`;
@@ -218,7 +212,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
         files.flush();
         send({ t: "accept-changeset", changeset });
       });
-      const none = bar.appendChild(node("button", "secondary small", "Reject all"));
+      const none = bar.appendChild(el("button", "secondary small", "Reject all"));
       none.title = `Reject every change of “${title}”`;
       none.addEventListener("click", () => rejectIds(open.map((op) => op.id)));
     }
@@ -235,12 +229,12 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
       .filter(([, n]) => n).map(([status, n]) => (n === ops.length ? status : `${n} ${status}`));
     const stale = open.filter((op) => op.stale).length;
     const words = [`Proposed ${ops.length} change${ops.length === 1 ? "" : "s"}`, ...counts, ...(stale ? [`${stale} no longer applies`] : [])];
-    const button = node("button", `proposal-chip ${toneOf(ops[0].thread)}${open.length ? "" : " done"}`);
-    button.append(node("span", "ip-dot"), node("span", "", words.join(" · ")));
+    const button = el("button", `proposal-chip ${toneOf(ops[0].thread)}${open.length ? "" : " done"}`);
+    button.append(el("span", "ip-dot"), el("span", "", words.join(" · ")));
     const files_ = [...new Set(ops.map((op) => op.file))];
-    button.append(node("span", "chip-files", files_.join(", ")));
+    button.append(el("span", "chip-files", files_.join(", ")));
     if (open.length) {
-      button.append(node("span", "chip-view", "view"));
+      button.append(el("span", "chip-view", "view"));
       button.title = "Show them in the editor";
     }
     button.addEventListener("click", () => {
@@ -248,7 +242,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
       if (first) focus(first.file, first.id);
     });
     if (open.length && open.every((op) => op.check?.ok && !op.stale)) {
-      const link = button.appendChild(node("span", "chip-view", "accept"));
+      const link = button.appendChild(el("span", "chip-view", "accept"));
       link.title = "Accept them, as a new version";
       link.addEventListener("click", (event) => {
         event.stopPropagation();

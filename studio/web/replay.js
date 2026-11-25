@@ -9,12 +9,7 @@
 //   createReplay({ editor, send, history, clock, panel, past, pastTabs, pastTranscript })
 //     -> { on, start, goto, receive }
 
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
 
 const clockText = (at) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const dateText = (at) => new Date(at).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" });
@@ -32,7 +27,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
   let lastEditFile = null;
 
   // ---- The clock ------------------------------------------------------------
-  const face = clock.appendChild(element("span", "clock-face"));
+  const face = clock.appendChild(el("span", "clock-face"));
   clock.title = "Replay: slide through the project's history and see what was on screen (← → step · Esc returns)";
   function tick() {
     if (!on) face.textContent = clockText(Date.now());
@@ -42,18 +37,18 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
   clock.addEventListener("click", () => (on ? stop() : start()));
 
   // ---- The slider panel --------------------------------------------------------
-  const slider = element("input", "replay-slider");
+  const slider = el("input", "replay-slider");
   slider.type = "range";
   slider.min = 0;
   slider.step = 1;
-  const big = element("div", "replay-clock");
-  const date = element("div", "replay-date");
-  const what = element("div", "replay-what");
-  const back = element("button", "quiet small", "◀");
-  const forward = element("button", "quiet small", "▶");
-  const live = element("button", "btn small", "Live");
+  const big = el("div", "replay-clock");
+  const date = el("div", "replay-date");
+  const what = el("div", "replay-what");
+  const back = el("button", "quiet small", "◀");
+  const forward = el("button", "quiet small", "▶");
+  const live = el("button", "btn small", "Live");
   live.title = "Back to now (Esc)";
-  const row = element("div", "replay-row");
+  const row = el("div", "replay-row");
   row.append(back, slider, forward, live);
   panel.append(big, date, what, row);
   slider.addEventListener("input", () => goto(Number(slider.value)));
@@ -114,7 +109,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
 
   function renderFiles(commit) {
     if (!commit) {
-      pastTabs.replaceChildren(element("span", "hint", "nothing committed yet at this moment"));
+      pastTabs.replaceChildren(el("span", "hint", "nothing committed yet at this moment"));
       viewerText("");
       return;
     }
@@ -124,16 +119,16 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
         waiting.set(commit, ++seq);
         send({ t: "files-at", seq, commit });
       }
-      pastTabs.replaceChildren(element("span", "hint", "loading…"));
+      pastTabs.replaceChildren(el("span", "hint", "loading…"));
       return;
     }
     const paths = Object.keys(files).sort((a, b) => (a === "main.puf" ? -1 : b === "main.puf" ? 1 : a.localeCompare(b)));
     if (!paths.includes(shownFile)) shownFile = paths.includes(lastEditFile) ? lastEditFile : paths[0] ?? null;
     if (lastEditFile && paths.includes(lastEditFile) && moments[index]?.file === lastEditFile) shownFile = lastEditFile;
     pastTabs.replaceChildren(
-      element("span", "past-badge", "then"),
+      el("span", "past-badge", "then"),
       ...paths.map((path) => {
-        const tab = element("button", `file-tab${path === shownFile ? " active" : ""}`, path);
+        const tab = el("button", `file-tab${path === shownFile ? " active" : ""}`, path);
         tab.addEventListener("click", () => { shownFile = path; renderFiles(commit); });
         return tab;
       }),
@@ -171,7 +166,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
       if (viewer.getValue() !== text) viewer.setValue(text);
     } else {
       let pre = past.querySelector("pre");
-      if (!pre) pre = past.querySelector(".past-editor").appendChild(element("pre", "past-plain"));
+      if (!pre) pre = past.querySelector(".past-editor").appendChild(el("pre", "past-plain"));
       pre.textContent = text;
     }
   }
@@ -180,18 +175,18 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
   // this moment, the latest last, as the live one draws them.
   function renderTranscript() {
     pastTranscript.replaceChildren();
-    const head = pastTranscript.appendChild(element("div", "pane-title past-title"));
-    head.append("Output ", element("span", "past-badge", "then"));
+    const head = pastTranscript.appendChild(el("div", "pane-title past-title"));
+    head.append("Output ", el("span", "past-badge", "then"));
     const shown = moments.slice(0, index + 1).filter((m) => TRANSCRIPT_KINDS.has(m.kind));
-    if (!shown.length) pastTranscript.append(element("div", "welcome", "Nothing had been evaluated yet."));
+    if (!shown.length) pastTranscript.append(el("div", "welcome", "Nothing had been evaluated yet."));
     for (const m of shown) {
-      const entry = pastTranscript.appendChild(element("div", `entry ${m.kind}${m.origin ? ` ${m.origin}` : ""}${m.status === "error" ? " failed" : ""}`));
-      const line = entry.appendChild(element("div", "line"));
-      if (m.kind === "ask") line.append(element("span", "ask-mark", "?? "), element("span", "code", m.line ?? ""));
-      else line.append(element("span", "code", m.command || m.line || ""));
-      line.append(element("span", "ms", clockText(m.at)));
-      if (m.out) entry.append(element("pre", m.kind === "ask" ? "answer" : "", m.out));
-      if (m.error) entry.append(element("pre", "err", m.error));
+      const entry = pastTranscript.appendChild(el("div", `entry ${m.kind}${m.origin ? ` ${m.origin}` : ""}${m.status === "error" ? " failed" : ""}`));
+      const line = entry.appendChild(el("div", "line"));
+      if (m.kind === "ask") line.append(el("span", "ask-mark", "?? "), el("span", "code", m.line ?? ""));
+      else line.append(el("span", "code", m.command || m.line || ""));
+      line.append(el("span", "ms", clockText(m.at)));
+      if (m.out) entry.append(el("pre", m.kind === "ask" ? "answer" : "", m.out));
+      if (m.error) entry.append(el("pre", "err", m.error));
     }
     pastTranscript.scrollTop = pastTranscript.scrollHeight;
   }
