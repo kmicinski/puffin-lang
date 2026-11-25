@@ -37,7 +37,8 @@
 import { createCamera } from "./camera.js";
 import { svg, curve } from "./wires.js";
 
-const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?", decision: "◇" };
+// the mark of each kind of definition, wherever one is named (view.js too)
+export const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?", decision: "◇" };
 // the card of the builder's questions and the author's answers
 const DECISIONS = "#decisions";
 const PROP_MARK = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run": "·", pending: "…" };

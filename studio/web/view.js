@@ -32,15 +32,14 @@
 // in in the lane, so a jump never loses where it came from.
 
 import { forms } from "./lexer.js";
-import { DEFINES, nameAt, narrow, lineOf } from "./span.js";
+import { DEFINES, nameAt, narrow, lineOf, spanOf } from "./span.js";
 import { bindNames } from "./names.js";
 import { createFragment } from "./fragment.js";
 import { overlay, wire, svg, curve } from "./wires.js";
 import { createAttention, httpLog, idOf } from "./attention.js";
 import { createTracker } from "./attention-studio.js";
-import { clicks } from "./board.js";
+import { KIND, clicks } from "./board.js";
 
-const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?" };
 // the set holds at most this many; an arrival beyond sends the least
 // wanted to the shelf
 const SET_LIMIT = 8;
@@ -301,11 +300,9 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       if (name && name !== focus.name) return show({ path: files.active(), name });
     }
     narrowFocus();
-    if (whole && focus?.name) {
-      const span = focused.span();
-      const def = forms(main.getModel().getValue()).find((f) => f.name === focus.name && DEFINES.has(f.head));
-      if (span && def) main.revealLineNearTop(def.line);
-    }
+    // widened: the file, with the definition that was in focus at the top
+    const span = whole && focus?.name && spanOf(main.getModel().getValue(), focus.name);
+    if (span) main.revealLineNearTop(span.start);
     render();
   }
 
@@ -982,9 +979,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     boardChanged() {
       if (!restored && outline().length) return restore();
       // a member that arrived from elsewhere (the voice): brought into view
-      const now = new Set(setOf().map((s) => s.id));
-      const came = [...now].find((id) => !frags.has(id) || frags.get(id).offered);
-      render({ arrived: came && !order.includes(came) ? came : null });
+      const came = setOf().find((s) => !frags.has(s.id) || frags.get(s.id).offered);
+      render({ arrived: came?.id ?? null });
     },
     opened,
     // every socket message: the model's view of the studio -- and a moment
