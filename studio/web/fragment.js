@@ -15,7 +15,7 @@ import { narrow, lineOf } from "./span.js";
 import { bindNames } from "./names.js";
 
 const MIN_WIDTH = 360;
-export const MAX_WIDTH = 820;
+const MAX_WIDTH = 820;
 
 export function createFragment({ editor, model, path, name, maxWidth, find, onPull, onFocusDef, onHover, onFocus, onBlur, onEscape, onEvalForm, onEdit, onResize }) {
   const monaco = editor.raw.monaco;
@@ -32,10 +32,10 @@ export function createFragment({ editor, model, path, name, maxWidth, find, onPu
     onHover,
   });
 
-  let gone = false;
+  // (a definition renamed or deleted under it shows faded, until the
+  // outline lets it go)
   function refresh() {
-    gone = !span.refresh();
-    node.classList.toggle("gone", gone);
+    node.classList.toggle("gone", !span.refresh());
     names.refresh();
     resize();
     requestAnimationFrame(measure);
@@ -103,24 +103,12 @@ export function createFragment({ editor, model, path, name, maxWidth, find, onPu
     node,
     view,
     refresh,
-    gone: () => gone,
-    size: () => size,
     // the y (in the fragment's own pixels, from its top) of the first line
     // using `word`, for a wire's start
     yOf(word) {
       const shown = span.span();
       if (!shown) return 0;
       return view.getTopForLineNumber(lineOf(model, shown, word)) - view.getTopForLineNumber(shown.start) + 4 + view.getOption(monaco.editor.EditorOption.lineHeight) / 2;
-    },
-    focus(at) {
-      view.focus();
-      const shown = span.span();
-      if (at) view.setPosition(at);
-      else if (shown) view.setPosition({ lineNumber: shown.start, column: 1 });
-    },
-    select(range) {
-      view.setSelection(range);
-      view.focus();
     },
     dispose() {
       cancelAnimationFrame(pending);

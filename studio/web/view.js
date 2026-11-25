@@ -368,8 +368,9 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   main.onDidFocusEditorText(() => editedHere.clear());
   main.onDidChangeModelContent((event) => {
     if (main.hasTextFocus()) for (const c of event.changes) noteEdit(files.active(), c.range.startLineNumber, c.range.startLineNumber + c.text.split("\n").length - 1, editedHere);
+    // (narrowed or whole, the names in it are marked again)
     requestAnimationFrame(() => {
-      if (focus?.name && !whole && files.active() === focus.path) narrowFocus();
+      if (focus && files.active() === focus.path) narrowFocus();
     });
   });
 
