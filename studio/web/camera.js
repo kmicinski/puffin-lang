@@ -7,6 +7,7 @@
 //   about the pointer; dragging the empty canvas pans
 //   frame(boxes)   glide so the boxes (canvas coordinates) fill the view,
 //                  no closer than `max` and no further than `min`
+//   fitting(boxes) the zoom at which they would just fit
 //   toCanvas(x, y) a point on screen, in canvas coordinates
 //
 // `onChange(z, moved)` is called after every change; `moved` is false while
@@ -45,6 +46,13 @@ export function createCamera({ viewport, layer, onChange, min = 0.2, max = 1.6 }
     y = py - ((py - y) * to) / z;
     z = to;
     apply(animate);
+  }
+
+  // the zoom at which the boxes would just fit
+  function fitting(boxes, { pad = 36, top: above = 0 } = {}) {
+    const w = Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x));
+    const h = Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y));
+    return Math.min((viewport.clientWidth - pad * 2) / w, (viewport.clientHeight - pad * 2 - above) / h);
   }
 
   // (`top`: room kept clear above, for what floats over the view)
@@ -133,6 +141,7 @@ export function createCamera({ viewport, layer, onChange, min = 0.2, max = 1.6 }
     },
     zoomAbout,
     frame,
+    fitting,
     reveal,
     toCanvas(sx, sy) {
       const box = viewport.getBoundingClientRect();

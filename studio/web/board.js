@@ -54,6 +54,8 @@ const PULL_LIMIT = 4;
 // the zoom below which code gives way to signatures, and signatures to names
 const NEAR = 0.62;
 const FAR = 0.38;
+// the zoom at which code is comfortably read: a trail is framed no further out
+const READABLE = 0.8;
 // a file this short opens whole on a fresh canvas
 const SHORT_FILE = 40;
 // the room the bar and the HUD take over the top of the canvas
@@ -1043,8 +1045,19 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     const view = there ?? `pull:${key}`;
     touched.set(view, Date.now());
     flash(view);
-    // after the glide the new code is where the eye lands
-    requestAnimationFrame(() => frameViews([fromView, view]));
+    requestAnimationFrame(() => frameChain(view, fromView));
+  }
+
+  // Frame newly pulled code with the code it was pulled from, and as much
+  // of the trail that led there (what that was pulled from, and so on) as
+  // fits with the code still readable.
+  function frameChain(view, fromView) {
+    const chain = [view, fromView];
+    for (let v = fromView, p; (p = (board.pulled ?? []).find((x) => `pull:${x.key}` === v)) && !chain.includes(p.from); v = p.from) chain.push(p.from);
+    const boxes = chain.map(boxOfView).filter(Boolean);
+    let k = boxes.length;
+    while (k > 2 && camera.fitting(boxes.slice(0, k), { top: TOP }) < READABLE) k--;
+    camera.frame(boxes.slice(0, k), { min: NEAR, max: 1, top: TOP });
   }
 
   // more than PULL_LIMIT pulled: the one touched longest ago folds back
@@ -1137,7 +1150,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   // last pulled out, with what it was pulled from; else the whole program.
   function firstLook() {
     const last = (board.pulled ?? []).at(-1);
-    if (last && nodeOfView(`pull:${last.key}`)) frameViews([last.from, `pull:${last.key}`]);
+    if (last && nodeOfView(`pull:${last.key}`)) frameChain(`pull:${last.key}`, last.from);
     else fit(false);
   }
 
