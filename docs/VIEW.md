@@ -6,7 +6,7 @@ focused editor with a working set; their branches `view-canvas` and
 `view-focus` keep their write-ups) around the attention model
 (docs/ATTENTION.md). Page: `studio/web/view.js` + `view.css` (the focus,
 the neighbourhood, the working set), `board.js` + `board.css` (the
-board and its lane), `camera.js`, `fragment.js`, `span.js`, `names.js`,
+board and its lane), `neighbourhood.js`, `camera.js`, `fragment.js`, `span.js`, `names.js`,
 `wires.js`; server: the working set and the camera requests in the
 board's JSON (`board.rs`), and the voice verbs that use them.
 
@@ -202,7 +202,8 @@ not replay the last one. The builder has the same verbs in its
 
 | piece | file | what it is |
 |---|---|---|
-| the view | `view.js` | the focus (narrowing, the lines around it, history, whole file), the neighbourhood and its keys, the set and the ranking, the lane's fragments, the wires across the panes, the learning signals |
+| the view | `view.js` | the focus (narrowing, the lines around it, history, whole file), the set and the ranking, the lane's fragments and its tree, the wires across the panes, the learning signals |
+| the neighbourhood | `neighbourhood.js` | callers, callees, properties and the module's rows under the focus, wired; its keys |
 | the board | `board.js` | cards, rows (`renderItem`), notes, decisions, questions and slices, plan mode, the HUD, filter, keys, the lens; the lane's place, its wires to rows, the row marks; `home` / `overview` |
 | the camera | `camera.js` | one transform, glides, wheel/pinch/drag; `onFrame` on every frame of a glide (for the wires across the panes) |
 | a fragment | `fragment.js` | a Monaco view of one definition on its file's model, sized to it, wrapping past the board's reading width |

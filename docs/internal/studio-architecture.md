@@ -134,7 +134,8 @@ one place:
 
 | file | holds |
 |---|---|
-| `view.js` | the focus (the main editor narrowed to a definition), the neighbourhood, the working set and its ranking, the lane's fragments, the wires across the panes, what is told to the attention model |
+| `view.js` | the focus (the main editor narrowed to a definition), the working set and its ranking, the lane's fragments, the wires across the panes, what is told to the attention model |
+| `neighbourhood.js` | under the focus: what uses it, what it uses, its properties and module, as key stops |
 | `board.js` | the board: module cards and rows (`renderItem`), notes, decisions, questions, plan mode, the HUD, the lens; the lane's place on it; the camera's `home` (the code) and `overview` (the program) |
 | `camera.js` | the board's pan and zoom, and its glides |
 | `fragment.js` · `span.js` · `names.js` · `wires.js` | a live view of one definition · a definition's lines and narrowing a view to them · cross-references and ⌘-click · the curves |

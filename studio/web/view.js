@@ -35,10 +35,11 @@ import { forms } from "./lexer.js";
 import { DEFINES, nameAt, narrow, lineOf, spanOf } from "./span.js";
 import { bindNames } from "./names.js";
 import { createFragment } from "./fragment.js";
-import { overlay, wire, svg, curve } from "./wires.js";
+import { overlay, wire } from "./wires.js";
+import { createNeighbourhood } from "./neighbourhood.js";
 import { createAttention, httpLog, idOf } from "./attention.js";
 import { createTracker } from "./attention-studio.js";
-import { KIND, clicks } from "./board.js";
+import { KIND } from "./board.js";
 
 // the set holds at most this many; an arrival beyond sends the least
 // wanted to the shelf
@@ -55,7 +56,6 @@ const IDLE_MS = 2500;
 const SHORT_FILE = 60;
 // the focus is never wider than this many columns
 const WIDEST = 100;
-const NODES_MAX = 10;
 const PHONE = window.matchMedia("(max-width: 700px)");
 
 const el = (tag, className, text) => {
@@ -123,8 +123,18 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   const column = stage.querySelector(".editor-column");
   const head = el("div", "view-head");
   column.prepend(head);
-  const graph = el("div", "view-graph");
-  column.append(graph);
+  const graph = createNeighbourhood({
+    outline,
+    itemOf,
+    neighbours,
+    inSet: (def) => setOf().some((s) => s.id === idFor(def)),
+    pull: (def) => pull(def),
+    focus: (def) => show(def),
+    along: (def, direction) => along(def, direction),
+    hover: (key) => hover(key),
+    back: () => main.focus(),
+  });
+  column.append(graph.node);
   const wrap = column.querySelector("#editor-wrap");
   const lane = board.lane;
   // the wires from a line of code to the fragment it uses, across the panes
@@ -143,7 +153,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
       columnSize = [w, h];
       if (restored) requestAnimationFrame(narrowFocus);
     } else sizeFocus();
-    drawGraphWires();
+    graph.drawWires();
     drawWires();
   }).observe(column);
   // the board's room changed: the lane's code fits it again
@@ -708,10 +718,10 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // hovering a name, a node, a row: everything showing that definition lights
   function hover(key) {
     board.light(key);
-    for (const n of document.querySelectorAll(".frag.lit, .view-node.lit")) n.classList.remove("lit");
+    graph.light(key);
+    for (const n of lane.querySelectorAll(".frag.lit")) n.classList.remove("lit");
     if (!key) return;
     lane.querySelector(`.frag[data-key="${CSS.escape(key)}"]`)?.classList.add("lit");
-    graph.querySelector(`.view-node[data-key="${CSS.escape(key)}"]`)?.classList.add("lit");
   }
   const lit = (def, on) => hover(on ? keyOf(def.path, def.name) : null);
 
@@ -753,156 +763,14 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     });
   }
 
-  // ---- the neighbourhood ---------------------------------------------------------------------
-
-  const graphWires = svg("svg", { class: "view-graph-wires" });
-
-  function node(def, role) {
-    const item = itemOf(def);
-    const chip = el("button", `view-node ${role}`);
-    chip.dataset.key = keyOf(def.path, def.name);
-    chip.dataset.role = role;
-    chip.append(el("span", "view-kind", KIND[item?.kind] ?? "·"), el("span", "view-node-name", item?.kind === "property" ? item.sig : def.name));
-    if (def.path !== focus?.path && role !== "focus" && item?.kind !== "property") chip.append(el("span", "view-module", short(def.path)));
-    if (frags.has(idFor(def)) && !frags.get(idFor(def)).offered) chip.classList.add("in-set");
-    if (item?.opaque) chip.classList.add("planned");
-    chip.title = `${item?.sig ?? def.name}${item?.doc ? `\n${item.doc}` : ""}\nclick or ↵: into the lane · double-click or ⇧↵: focus on it`;
-    if (role !== "focus") clicks(chip, (event) => (event.metaKey || event.ctrlKey || event.shiftKey ? show(def) : pull(def)), () => show(def));
-    chip.addEventListener("pointerenter", () => lit(def, true));
-    chip.addEventListener("pointerleave", () => lit(def, false));
-    chip.addEventListener("focus", () => lit(def, true));
-    chip.addEventListener("blur", () => lit(def, false));
-    chip.addEventListener("keydown", (event) => graphKey(event, def, chip));
-    return chip;
-  }
-
-  function nodes(list, role) {
-    const row = el("div", `view-row ${role}`);
-    const sorted = [...list].sort((a, b) => (a.path === focus.path ? 0 : 1) - (b.path === focus.path ? 0 : 1) || a.path.localeCompare(b.path) || a.name.localeCompare(b.name));
-    for (const def of sorted.slice(0, NODES_MAX)) row.append(node(def, role));
-    if (sorted.length > NODES_MAX) row.append(el("span", "view-more", `+${sorted.length - NODES_MAX}`));
-    return row;
-  }
-
-  function renderGraph() {
-    const had = graph.contains(document.activeElement) ? document.activeElement.dataset.key : null;
-    graph.replaceChildren();
-    const item = focus?.name && itemOf(focus);
-    const body = el("div", "view-graph-body");
-    const map = el("div", "view-map");
-    const aside = el("div", "view-aside");
-    body.append(map, aside);
-    graph.append(body);
-    if (item) {
-      const { uses, users } = neighbours(focus);
-      const callers = users.filter((d) => itemOf(d)?.kind !== "property");
-      const properties = users.filter((d) => itemOf(d)?.kind === "property");
-      const group = (role, list, label) => {
-        const part = el("div", `view-part ${role}`);
-        part.append(el("div", "view-row-label", label), nodes(list, role));
-        return part;
-      };
-      const middle = el("div", "view-part focus");
-      middle.append(node(focus, "focus"));
-      map.append(group("caller", callers, callers.length ? "used by" : "used by nothing"), middle, group("callee", uses, uses.length ? "uses" : "uses nothing of the program's"));
-      map.append(graphWires);
-      if (properties.length) {
-        aside.append(el("div", "view-section", "properties"));
-        const list = el("div", "view-props");
-        for (const def of properties) list.append(node(def, "property"));
-        aside.append(list);
-      }
-    }
-    // the focus's module: its other definitions, a click away
-    const m = focus && outline().find((mm) => mm.path === focus.path);
-    if (m) {
-      aside.append(el("div", "view-section", `${short(m.path)}${m.requires.length ? ` · requires ${m.requires.map(short).join(", ")}` : ""}`));
-      const card = el("div", "view-card");
-      for (const i of m.items) {
-        const def = { path: m.path, name: i.name };
-        const row = node(def, "row");
-        row.replaceChildren(el("span", "view-kind", KIND[i.kind] ?? "·"), el("span", "view-card-sig", i.kind === "property" ? i.sig : i.sig.replace(/^val /, "")));
-        row.classList.toggle("current", i.name === focus.name);
-        card.append(row);
-      }
-      aside.append(card);
-    }
-    if (had) graph.querySelector(`.view-node[data-key="${CSS.escape(had)}"]`)?.focus({ preventScroll: true });
-    requestAnimationFrame(() => {
-      sizeFocus();
-      drawGraphWires();
-    });
-  }
-
-  // curves from each caller to the focus, and from it to each callee:
-  // left to right, or top to bottom when the map is stacked (narrow)
-  function drawGraphWires() {
-    if (!graphWires.isConnected) return;
-    const map = graphWires.parentNode;
-    const box = map.getBoundingClientRect();
-    const down = getComputedStyle(map).flexDirection !== "row";
-    graphWires.replaceChildren();
-    const center = map.querySelector(".view-node.focus")?.getBoundingClientRect();
-    if (!center) return;
-    // the point a wire leaves (end) or enters a box
-    const point = (r, end) => (down
-      ? { x: r.left + r.width / 2 - box.left, y: (end ? r.bottom : r.top) - box.top }
-      : { x: (end ? r.right : r.left) - box.left, y: r.top + r.height / 2 - box.top });
-    for (const chip of map.querySelectorAll(".view-node.caller, .view-node.callee")) {
-      const r = chip.getBoundingClientRect();
-      const caller = chip.classList.contains("caller");
-      const [a, b] = caller ? [point(r, true), point(center, false)] : [point(center, true), point(r, false)];
-      graphWires.append(svg("path", { d: curve(a, b, { down }), class: `wire ${caller ? "caller" : "callee"}` }));
-    }
-  }
-
-  // Arrow keys walk the neighbourhood's nodes by where they are on the
-  // screen (the nearest one that way); ↵ pulls the node's definition into
-  // the lane, ⇧↵ or ⌘↵ focuses it, ] and [ pull what it uses or what uses
-  // it, Esc goes back to the code.
-  function graphKey(event, def, chip) {
-    const go = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
-    if (go) {
-      event.preventDefault();
-      const from = chip.getBoundingClientRect();
-      const cx = from.left + from.width / 2;
-      const cy = from.top + from.height / 2;
-      let best = null;
-      for (const other of graph.querySelectorAll(".view-node")) {
-        if (other === chip) continue;
-        const r = other.getBoundingClientRect();
-        const dx = r.left + r.width / 2 - cx;
-        const dy = r.top + r.height / 2 - cy;
-        // that way, and nearer that way than across it
-        const along = dx * go[0] + dy * go[1];
-        const off = Math.abs(dx * go[1]) + Math.abs(dy * go[0]);
-        if (along <= 2) continue;
-        const cost = along + off * 2.5;
-        if (!best || cost < best.cost) best = { other, cost };
-      }
-      best?.other.focus();
-      return;
-    }
-    const act = {
-      Enter: () => (event.shiftKey || event.metaKey || event.ctrlKey ? show(def) : chip.dataset.role === "focus" ? main.focus() : pull(def)),
-      "]": () => along(def, "uses"),
-      "[": () => along(def, "users"),
-      Escape: () => main.focus(),
-    }[event.key];
-    if (act) {
-      event.preventDefault();
-      event.stopPropagation();
-      act();
-    }
-  }
-
   // ---- all of it -----------------------------------------------------------------------------
 
   function render({ arrived = null } = {}) {
     if (!restored) return;
     renderHead();
     layLane({ arrived });
-    renderGraph();
+    graph.render(focus?.name ? focus : null, focus?.path);
+    requestAnimationFrame(sizeFocus);
     save();
     requestAnimationFrame(drawWires);
   }
@@ -937,7 +805,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   }
 
   function firstScreen(kept, known) {
-    if (known(kept?.focus) && !kept.whole) return show(kept.focus, { push: false });
+    // (the focus is the history's current place, or becomes it)
+    if (known(kept?.focus) && !kept.whole) return show(kept.focus, { push: !same(past[at], kept.focus) });
     const path = kept?.focus?.path && files.paths().includes(kept.focus.path) ? kept.focus.path : files.active();
     moving = true;
     if (path && files.active() !== path) files.open(path);
@@ -977,7 +846,7 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     else if (event.key === "F6") {
       // the focus, the neighbourhood, then each fragment's code in turn
       event.preventDefault();
-      const stops = [main, { focus: () => graph.querySelector(".view-node.focus, .view-node")?.focus(), hasTextFocus: () => graph.contains(document.activeElement) }, ...order.map((id) => frags.get(id)?.fragment?.view).filter(Boolean)];
+      const stops = [main, { focus: graph.enter, hasTextFocus: graph.has }, ...order.map((id) => frags.get(id)?.fragment?.view).filter(Boolean)];
       const now = stops.findIndex((v) => v.hasTextFocus());
       const next = stops[(now + (event.shiftKey ? -1 : 1) + stops.length) % stops.length];
       next.focus();
