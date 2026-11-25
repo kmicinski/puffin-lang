@@ -496,6 +496,12 @@ export function createAttention({ write = () => {}, now = Date.now, weights = DE
     write([{ t: event.type, v: LOG_VERSION, at, imp: last?.imp ?? null, id, ms: event.ms, detail: event.detail, f: f && compact(f) }]);
   }
 
+  // new weights: the next ranking is a new impression, whatever it shows
+  function setWeights(next) {
+    w = { ...DEFAULT_WEIGHTS, ...next };
+    if (last) last.signature = null;
+  }
+
   return {
     rank: rankAndLog,
     observe,
@@ -505,11 +511,11 @@ export function createAttention({ write = () => {}, now = Date.now, weights = DE
     showLess: (id) => observe({ type: "dismiss", id }),
     why: (id, budget) => (last?.state ? explain(last.state, id, budget, w) : null),
     weights: () => ({ ...w }),
-    setWeights: (next) => { w = { ...DEFAULT_WEIGHTS, ...next }; last = last && { ...last, signature: null }; },
+    setWeights,
     // tune the weights to this project's log (see learn); returns the report
     learnFrom(log, options) {
       const result = learn(log, options);
-      this.setWeights(result.weights);
+      setWeights(result.weights);
       return result;
     },
   };
