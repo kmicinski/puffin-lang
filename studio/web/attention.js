@@ -22,16 +22,23 @@
 //
 // The order is the order reasons are listed in when two contribute alike.
 // `focus` is structural (the definition the author is in is always shown
-// in full) and never learned; every other weight is.
+// in full) and never learned; so are `kept` and `pinned`, the author's own
+// choices (what they brought into view, what they asked to keep). Those
+// two are scored like everything else -- a definition the author brought
+// in long ago, that nothing now relates to, shrinks to its signature line
+// -- but they are what the author did, not what the model guessed, so the
+// log never learns from them. Every other weight is learned.
 
 export const FEATURES = [
-  "focus", "uses", "usedBy", "sigType", "context", "failing", "question",
+  "focus", "kept", "pinned", "uses", "usedBy", "sigType", "context", "failing", "question",
   "builderEdit", "authorEdit", "voice", "looked", "unfinished", "propertyOpen",
   "sameModule", "interface", "dismissed",
 ];
 
 export const DEFAULT_WEIGHTS = Object.freeze({
   focus: 10, // you are here
+  kept: 3, // the author brought it into view: it stays, at least as a line
+  pinned: 3.5, // the author pinned it: with `kept`, enough for its code in full
   uses: 4.5, // what the focus calls: needed to read it
   usedBy: 3, // what calls the focus: what constrains it
   sigType: 2.5, // a type in the focus's signature: its one line says a lot
@@ -51,6 +58,7 @@ export const DEFAULT_WEIGHTS = Object.freeze({
 
 // Half-lives, in milliseconds, of the features that fade.
 export const HALF_LIFE = Object.freeze({
+  kept: 10 * 60e3,
   builderEdit: 10 * 60e3,
   authorEdit: 15 * 60e3,
   voice: 3 * 60e3,
@@ -189,6 +197,9 @@ function reach(g, start, edge, depth) {
 //   questions    [{ text, about: [id], answered }]
 //   voice        [{ id, at, by }]: mentioned by voice or the builder
 //   views        [{ id, at, ms }]: what the author looked at, how long
+//   set          [{ id, at, pinned }]: what the author brought into view
+//                (a working set), each when it was last touched; a
+//                member is always shown, its detail by its score
 //   pins         [id]
 //   dismissed    [{ id, at }]
 
@@ -239,7 +250,9 @@ function prepare(state) {
     builderEdits: latest(state.edits, "builder"), authorEdits: latest(state.edits, "author"),
     voice: latest(state.voice), looked, lastLook, failing, open,
     errors: new Set(ids(state.errors)), questions,
-    pins: new Set(ids(state.pins)), dismissed: latest(state.dismissed),
+    kept: latest(state.set),
+    pins: new Set([...ids(state.pins), ...ids((state.set ?? []).filter((s) => s.pinned).map((s) => s.id))]),
+    dismissed: latest(state.dismissed),
   };
 }
 
@@ -251,6 +264,10 @@ function featuresOf(p, id) {
   const f = Object.fromEntries(FEATURES.map((k) => [k, 0]));
   const why = {};
   if (id === p.focus) f.focus = 1;
+  // brought in: half for being there, half more while it was touched lately
+  const kept = p.kept.get(id);
+  if (kept != null) f.kept = 0.5 + 0.5 * fade(p.now - kept, HALF_LIFE.kept);
+  if (p.pins.has(id)) f.pinned = 1;
   const down = p.down.get(id);
   if (down) [f.uses, why.uses] = [DECAY ** (down.d - 1), down];
   const up = p.up.get(id);
@@ -295,6 +312,8 @@ function phrase(k, p, node, why) {
   const focus = p.focus ? name(p.focus) : "";
   switch (k) {
     case "focus": return "you are here";
+    case "kept": return "you brought it in";
+    case "pinned": return "you pinned it";
     case "uses": return why.uses.via ? `${focus} uses it, through ${name(why.uses.via)}` : `${focus} uses it`;
     case "usedBy": return why.usedBy.via ? `it leads to ${focus}, through ${name(why.usedBy.via)}` : `it uses ${focus}`;
     case "sigType": return `in ${focus}'s signature`;
@@ -354,47 +373,56 @@ export function scoreAll(state, weights = DEFAULT_WEIGHTS) {
     const score = round(dot(f, weights));
     const dismissedAt = p.dismissed.get(node.id);
     const editedSince = Math.max(p.builderEdits.get(node.id) ?? -Infinity, p.authorEdits.get(node.id) ?? -Infinity) > (dismissedAt ?? Infinity);
-    const suppressed = dismissedAt != null && p.now - dismissedAt < SUPPRESS_MS && node.id !== p.focus && !p.pins.has(node.id) && !editedSince;
+    const kept = p.kept.has(node.id);
+    const suppressed = dismissedAt != null && p.now - dismissedAt < SUPPRESS_MS && node.id !== p.focus && !p.pins.has(node.id) && !kept && !editedSince;
     out.push({
       id: node.id, name: node.name, path: node.path, kind: node.kind, score, features: f,
-      pinned: p.pins.has(node.id), focus: node.id === p.focus, suppressed,
+      pinned: p.pins.has(node.id), kept, focus: node.id === p.focus, suppressed,
       reasons: reasonsOf(p, node, f, why, weights),
       node,
     });
   }
-  // the focus, then pins, then by score; ties by place in the program, so the order is stable
-  return out.sort((a, b) => b.focus - a.focus || b.pinned - a.pinned || b.score - a.score || a.path.localeCompare(b.path) || a.node.line - b.node.line);
+  // the focus, then by score -- pins and the set are scored, not put first;
+  // ties by place in the program, so the order is stable
+  return out.sort((a, b) => b.focus - a.focus || b.score - a.score || a.path.localeCompare(b.path) || a.node.line - b.node.line);
 }
 
 // rank(state, budget) -> the definitions to show, best first:
-//   { id, name, path, kind, detail, score, cost, reasons, pinned, focus }
+//   { id, name, path, kind, detail, score, cost, reasons, pinned, kept, focus }
 // `budget`: { lines, items, full } -- screen lines in all, how many
 // definitions at most, how many shown in full besides the focus.
 // Greedy, in score order: each gets the detail its score buys, cheapened
-// until it fits; the focus and pins come first and always get at least a
-// signature line.
+// until it fits. The focus, pins and the set's members are *owed* a place:
+// each always gets at least a signature line, and the line is kept for it
+// while those above it spend the budget.
 export function rank(state, budget = DEFAULT_BUDGET, weights = DEFAULT_WEIGHTS) {
   return allocate(scoreAll(state, weights), { ...DEFAULT_BUDGET, ...budget }).shown;
 }
 
+const owed = (s) => s.focus || s.pinned || s.kept;
+
 function allocate(scored, budget) {
   let lines = budget.lines;
   let full = 0;
+  // the lines still owed to those below
+  let reserved = scored.filter(owed).length;
   const shown = [];
   const rest = [];
   for (const s of scored) {
-    const must = s.focus || s.pinned;
+    const must = owed(s);
+    if (must) reserved--;
     let detail = s.suppressed ? null : wanted(s.node, s.score, s.focus) ?? (must ? "signature" : null);
     if (!detail || (!must && shown.length >= budget.items)) {
       rest.push(s);
       continue;
     }
     if (detail === "full" && !s.focus && full >= budget.full) detail = "folded";
+    const room = lines - reserved;
     let i = DETAILS.indexOf(detail);
-    while (i < DETAILS.length - 1 && cost(s.node, DETAILS[i]) > lines) i++;
+    while (i < DETAILS.length - 1 && cost(s.node, DETAILS[i]) > room) i++;
     detail = DETAILS[i];
     const c = cost(s.node, detail);
-    if (c > lines && !must) {
+    if (c > room && !must) {
       rest.push(s);
       continue;
     }
@@ -407,7 +435,7 @@ function allocate(scored, budget) {
 
 const present = (s, detail, c) => ({
   id: s.id, name: s.name, path: s.path, kind: s.kind, detail, score: s.score, cost: c,
-  reasons: s.reasons.map((r) => r.text), pinned: s.pinned, focus: s.focus,
+  reasons: s.reasons.map((r) => r.text), pinned: s.pinned, kept: s.kept, focus: s.focus,
 });
 
 // Why one definition is or is not shown: its score, the detail it got (or
@@ -472,7 +500,7 @@ export function createAttention({ write = () => {}, now = Date.now, weights = DE
       const byId = new Map(scored.map((s) => [s.id, s]));
       write([{
         t: "shown", v: LOG_VERSION, at: full.now, imp, focus: full.focus ?? null,
-        items: shown.map((s, i) => ({ id: s.id, detail: s.detail, rank: i + 1, pinned: s.pinned || undefined, focus: s.focus || undefined, f: compact(byId.get(s.id).features) })),
+        items: shown.map((s, i) => ({ id: s.id, detail: s.detail, rank: i + 1, pinned: s.pinned || undefined, kept: s.kept || undefined, focus: s.focus || undefined, f: compact(byId.get(s.id).features) })),
         pool: rest.filter((s) => !s.suppressed).slice(0, POOL).map((s) => ({ id: s.id, f: compact(s.features) })),
       }]);
       last = { imp, signature };
@@ -588,7 +616,7 @@ export const parseLog = (text) => text.split("\n").filter((l) => l.trim()).flatM
 // flips). And they are kept only if they order a held-out, most recent
 // fifth of the pairs at least as well as the defaults do.
 
-export const LEARNED = FEATURES.filter((k) => k !== "focus");
+export const LEARNED = FEATURES.filter((k) => !["focus", "kept", "pinned"].includes(k));
 
 export const LEARNING = Object.freeze({ rate: 0.1, epochs: 50, prior: 0.002, band: 3, minPairs: 20, holdout: 0.2, margin: 0.02 });
 
@@ -608,7 +636,8 @@ export function preferences(log) {
   const pairs = [];
   const push = (a, b, weight, at) => pairs.push({ a, b, weight, at });
   for (const imp of impressions.values()) {
-    const structural = (s) => s.pinned || s.focus;
+    // what the author put there themselves teaches nothing about the model
+    const structural = (s) => s.pinned || s.kept || s.focus;
     const idle = imp.items.filter((s) => !structural(s) && !imp.engaged.has(s.id) && !imp.dismissed.some((d) => d.id === s.id));
     for (const [id, { strength, f }] of imp.engaged) {
       const placed = imp.items.find((s) => s.id === id);

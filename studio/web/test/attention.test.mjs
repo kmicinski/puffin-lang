@@ -115,8 +115,56 @@ test("a dismissal hides, then lowers, and an edit since brings it back", () => {
 test("pins are shown whatever they score", () => {
   const state = at({ focus: STEP, pins: ["main.puf::examples"] });
   const shown = byId(rank(state, { lines: 8 }));
-  assert.equal(shown.get("main.puf::examples").detail, "signature");
+  assert.ok(["folded", "signature"].includes(shown.get("main.puf::examples").detail));
   assert.ok(shown.get("main.puf::examples").pinned);
+});
+
+// ---- the working set: scored, not special-cased
+
+test("the set's members are always shown, their detail by their score", () => {
+  const examples = "main.puf::examples";
+  const fresh = byId(rank(at({ focus: STEP, set: [{ id: examples, at: now }] })));
+  // unrelated to step, but just brought in: its folded row
+  assert.equal(fresh.get(examples).detail, "folded");
+  assert.ok(fresh.get(examples).kept);
+  assert.equal(fresh.get(examples).reasons[0], "you brought it in");
+  // an hour on, still there, as a line
+  const old = byId(rank(at({ focus: STEP, set: [{ id: examples, at: now - 3600e3 }] })));
+  assert.equal(old.get(examples).detail, "signature");
+  // what the focus uses comes out in full, kept or not
+  const callee = byId(rank(at({ focus: STEP, set: [{ id: "machine.puf::apply-kont", at: now - 3600e3 }] })));
+  assert.equal(callee.get("machine.puf::apply-kont").detail, "full");
+  // pinned: enough for its code
+  const pinned = byId(rank(at({ focus: STEP, set: [{ id: examples, at: now - 3600e3, pinned: true }] }), { lines: 200 }));
+  assert.equal(pinned.get(examples).detail, "full");
+});
+
+test("the set is ordered by score among the rest, not put first", () => {
+  const shown = rank(at({ focus: STEP, set: [{ id: "main.puf::examples", at: now - 3600e3 }] }), { lines: 200 });
+  const ids = shown.map((s) => s.id);
+  assert.ok(ids.indexOf("machine.puf::apply-kont") < ids.indexOf("main.puf::examples"));
+  for (let i = 2; i < shown.length; i++) assert.ok(shown[i - 1].score >= shown[i].score);
+});
+
+test("short of room, the set's lines are kept for it", () => {
+  const set = ["main.puf::examples", "main.puf::answers", "lang.puf::free-vars"].map((id) => ({ id, at: now - 3600e3 }));
+  const tight = rank(at({ focus: STEP, set }), { lines: 9 });
+  for (const { id } of set) assert.ok(tight.some((s) => s.id === id), id);
+  assert.ok(tight.reduce((sum, s) => sum + s.cost, 0) <= 9);
+  // step-eval, which outscores them, had to give up its code for them
+  assert.notEqual(byId(tight).get("machine.puf::step-eval")?.detail, "full");
+});
+
+test("what the author put in the set teaches the learner nothing", () => {
+  const pairs = preferences([
+    { t: "shown", imp: "k", at: 1, items: [
+      { id: "a", rank: 1, kept: true, f: { kept: 1 } },
+      { id: "b", rank: 2, f: { uses: 1 } },
+    ] },
+    { t: "edit", imp: "k", id: "a", f: { kept: 1 } },
+  ]);
+  assert.equal(pairs.length, 0);
+  assert.ok(!LEARNED.includes("kept") && !LEARNED.includes("pinned"));
 });
 
 // ---- the budget
