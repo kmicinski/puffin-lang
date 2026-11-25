@@ -270,10 +270,7 @@ impl Lane {
             Session::Replay(replay) => self.replay(replay, pbc, false, sink).await,
         };
         if let Status::Dead(why) = &status {
-            *session = None;
-            *self.group.lock().expect("group lock") = None;
-            self.observing.store(false, Ordering::SeqCst);
-            self.set_status("idle", self.status().mode, format!("the session ended: {why}"));
+            self.ended(&mut session, self.status().mode, why);
         }
         Some(status)
     }
@@ -308,14 +305,19 @@ impl Lane {
             Session::Replay(replay) => self.replay(replay, pbc, keep, sink).await,
         };
         if let Status::Dead(why) = &status {
-            *session = None;
-            *self.group.lock().expect("group lock") = None;
-            self.observing.store(false, Ordering::SeqCst);
-            self.set_status("idle", mode, format!("the session ended: {why}"));
+            self.ended(&mut session, mode, why);
         } else {
             self.set_status("ready", mode, if mode == "replay" { REPLAY_NOTE } else { "" });
         }
         status
+    }
+
+    /// The session died (`why`): forget it; the next command starts anew.
+    fn ended(&self, session: &mut Option<Session>, mode: &'static str, why: &str) {
+        *session = None;
+        *self.group.lock().expect("group lock") = None;
+        self.observing.store(false, Ordering::SeqCst);
+        self.set_status("idle", mode, format!("the session ended: {why}"));
     }
 
     fn mode_name(&self, session: Option<&Session>) -> &'static str {
@@ -415,9 +417,7 @@ impl Lane {
         let source = self.toolchain.fresh("spill-to").with_extension("puf");
         let path = spill.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
         std::fs::write(&source, format!("(#%observe-spill-to! \"{path}\")\n")).ok()?;
-        let out = source.with_extension("pbc");
-        let compiled = self.toolchain.compile_unit(&self.toolchain.scratch, &source.to_string_lossy(), &out, false).await.ok()?;
-        (compiled.success && out.is_file()).then_some(out)
+        self.compile_own(&source, source.with_extension("pbc")).await
     }
 
     /// The observer unit, when the compiler can observe and it compiles.
@@ -426,7 +426,11 @@ impl Lane {
         if !source.is_file() || !self.toolchain.observe_available().await {
             return None;
         }
-        let out = self.toolchain.fresh("observer").with_extension("pbc");
+        self.compile_own(&source, self.toolchain.fresh("observer").with_extension("pbc")).await
+    }
+
+    /// One of the session's own units, `source`, compiled plainly to `out`.
+    async fn compile_own(&self, source: &Path, out: PathBuf) -> Option<PathBuf> {
         let compiled = self.toolchain.compile_unit(&self.toolchain.scratch, &source.to_string_lossy(), &out, false).await.ok()?;
         (compiled.success && out.is_file()).then_some(out)
     }
