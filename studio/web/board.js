@@ -1,12 +1,26 @@
-// The module board (docs/PLANNING.md; the server side is studio/src/board.rs).
+// The canvas (docs/VIEW-CANVAS.md; it grew out of the module board,
+// docs/PLANNING.md; the server side is studio/src/board.rs).
 //
-// The program as module cards, each a module's ML-style signature: one
-// row per definition (ƒ function, · value, τ type, ≡ alias, G grammar,
-// and the spec's properties), bodies opaque until a row is clicked open.
-// The point is to keep as much of the design on the screen as possible,
-// so a card shows only what it was left showing: rows hidden stay hidden
-// (behind "N hidden"), rows opened stay open, and both come back when the
-// card does.
+// One zoomable surface holds the program at every level of detail. Far
+// out, a card per module: its ML-style signature, one row per definition
+// (ƒ function, · value, τ type, ≡ alias, G grammar, and the spec's
+// properties). A row opens in place into a live editor over that
+// definition (span-editor.js): the code itself, edited where it sits, on
+// the file's own model, so every other view of the file follows as it is
+// typed. ⌘-click (or alt-click) a name in that code and its definition is
+// pulled out beside it, a wire from the use, and the camera (camera.js)
+// glides to frame the two: definitions that are far apart in the files sit
+// side by side. A card shown whole (≡, or double-click its title) is the
+// file's plain editor. There is no board mode and no editor mode: zooming
+// out is the board, zooming in is the code.
+//
+// What shows when (the defaults, docs/VIEW-CANVAS.md §3):
+//   - the whole program's signatures, always; opened and pulled code on top
+//   - at most PULL_LIMIT pulled definitions: the oldest the author has not
+//     touched folds back into its row when a new one comes
+//   - with code pulled out, the cards it does not come from recede
+//   - detail follows the zoom: far out, names only; close in, code
+//   - the builder's edits open where they land (board.rs auto_arrange)
 //
 //   the HUD (top left): how much of the plan is written, the properties,
 //     a filter, the zoom
@@ -14,17 +28,20 @@
 //     to everything it uses (blue) and from everything that uses it
 //     (violet), across cards
 //   keys: type or / to filter · ↑↓ rows · ←→ cards · ↵ open/close ·
-//     h hide · f just this and what touches it · e edit · Esc clears ·
-//     + − 0 zoom (also ⌘/ctrl + wheel)
-//   drag a card by its title; drag a file chip from the bar onto the
-//     board to bring that module out; ✕ puts a card away
+//     e edit · ] pull what it calls · [ pull a caller · x fold back ·
+//     w the whole file · h hide · f just this and what touches it ·
+//     Esc clears (in code: back to the canvas) · + − 0 1 zoom
+//   drag a card by its title; drag the canvas to pan; ⌘/ctrl + wheel zooms
 //   rows the builder just wrote or changed glow for a moment
 //   a focus (a question's slice, "just show ...") packs only what it
 //     names under the question; the author's layout comes back after
 //
 // The board's state is the server's (Event::Board, .puffin/board.json);
-// every change here is sent back whole with `board-set`. The zoom, the
+// every change here is sent back whole with `board-set`. The camera, the
 // filter and the cursor are this tab's own.
+
+import { createCamera } from "./camera.js";
+import { createSpanEditor } from "./span-editor.js";
 
 const KIND = { fun: "ƒ", val: "·", type: "τ", alias: "≡", grammar: "G", property: "?", decision: "◇" };
 // the card of the builder's questions and the author's answers
@@ -32,7 +49,17 @@ const DECISIONS = "#decisions";
 const PROP_MARK = { ok: "✓", fail: "✗", crashed: "!", open: "◌", "not-run": "·", pending: "…" };
 const GRID = { x: 28, y: 92, w: 380, gap: 24 };
 const FRESH_MS = 2600;
-const ZOOM_KEY = "puffin-board-zoom";
+// pulled definitions out at once, before the oldest untouched folds back
+const PULL_LIMIT = 4;
+// the zoom below which code gives way to signatures, and signatures to names
+const NEAR = 0.62;
+const FAR = 0.38;
+// the zoom at which code is comfortably read: a trail is framed no further out
+const READABLE = 0.8;
+// a file this short opens whole on a fresh canvas
+const SHORT_FILE = 40;
+// the room the bar and the HUD take over the top of the canvas
+const TOP = 72;
 // narrower than this, the board stacks its cards (a phone)
 const COMPACT = 700;
 const SVG = "http://www.w3.org/2000/svg";
@@ -54,7 +81,7 @@ const short = (path) => path.replace(/\.puf$/, "");
 const keyOf = (path, name) => `${path}\u001f${name}`;
 const typing = (target) => target?.closest?.("input, textarea, [contenteditable], .monaco-editor");
 
-export function createBoard({ editor, files, send, stage, onShow, navigate }) {
+export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSave, attention, tracker }) {
   const monaco = editor.raw?.monaco;
   let board = { view: "editor", mode: "build", cards: [], focus: null, questions: [] };
   let outline = [];
@@ -66,7 +93,6 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
   let query = "";
   let seen = null; // key -> what each row was, to see what the builder changed
   const fresh = new Map(); // key -> until when it glows
-  let zoom = Number(load(ZOOM_KEY)) || 1;
   // the note being written: { file, name (null: the module), id (editing
   // one), kind, text }
   let writing = null;
@@ -88,16 +114,16 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
   const root = el("div", "board");
   root.hidden = true;
   root.tabIndex = -1;
-  const sizer = el("div", "board-sizer");
-  const canvas = el("div", "board-canvas");
+  const canvas = el("div", "board-canvas canvas-pan");
   const wires = svg("svg", { class: "board-wires" });
   const lensLayer = svg("svg", { class: "board-lens" });
+  // the wires from a use in code to the definition pulled out for it
+  const pullLayer = svg("svg", { class: "board-pulls" });
   const question = el("div", "board-question");
   question.hidden = true;
   const empty = el("div", "board-empty");
-  canvas.append(wires, lensLayer);
-  sizer.append(canvas);
-  root.append(sizer, empty);
+  canvas.append(wires, pullLayer, lensLayer);
+  root.append(canvas, empty);
 
   // the HUD: progress, properties, filter, zoom
   const hud = el("div", "board-hud");
@@ -121,11 +147,36 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
   hud.append(progress, bar, tools);
   stage.append(root, question, hud);
 
+  // semantic zoom: the root says how close the camera is, the styles
+  // decide what each distance shows
+  const camera = createCamera({
+    viewport: root,
+    layer: canvas,
+    onChange(z) {
+      const level = z >= NEAR ? "z-near" : z >= FAR ? "z-mid" : "z-far";
+      // a new level of detail changes the cards' heights: what hangs off
+      // them is placed again
+      if (!root.classList.contains(level)) requestAnimationFrame(layoutAfterResize);
+      root.classList.toggle("z-near", z >= NEAR);
+      root.classList.toggle("z-mid", z < NEAR && z >= FAR);
+      root.classList.toggle("z-far", z < FAR);
+      root.style.setProperty("--unzoom", String(Math.min(3, 1 / z)));
+      zoomLabel.textContent = `${Math.round(z * 100)}%`;
+    },
+  });
+
   // the board appearing (the canvas going, a resize) lets unplaced cards be placed
   let lastWidth = 0;
+  // and a window that changes size (a layout switched, a pane dragged) is
+  // looked at again: what was framed is framed for the new size
+  let reframe = 0;
   new ResizeObserver(() => {
     const width = root.offsetWidth;
     if (width && !lastWidth && shown()) render();
+    if (width && lastWidth && Math.abs(width - lastWidth) > 40) {
+      clearTimeout(reframe);
+      reframe = setTimeout(firstLook, 120);
+    }
     lastWidth = width;
   }).observe(root);
 
@@ -241,7 +292,7 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     // the program in dependency order, then the spec, then the decisions
     const tail = (path) => (path === DECISIONS ? 2 : path === "properties.puf" ? 1 : 0);
     const order = [...cards].sort((a, b) => tail(a.path) - tail(b.path) || depthOf(a.path) - depthOf(b.path) || a.path.localeCompare(b.path));
-    const limit = Math.max(root.clientWidth / zoom - GRID.x, GRID.w * 2);
+    const limit = Math.max(root.clientWidth - GRID.x, GRID.w * 2);
     const out = new Map();
     let x = GRID.x;
     let y = top;
@@ -301,26 +352,48 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
 
   // ---- showing it -----------------------------------------------------------------------
 
+  // The canvas is always the view; what used to be the editor view is
+  // the shown file's card, whole, framed.
   function shown() {
-    return board.view === "board";
+    return true;
   }
 
   function setView(view) {
-    if (board.view === view) return;
-    change((b) => {
-      b.view = view;
-      if (view === "board" && !b.cards.length) for (const m of outline) ensureCard(b, m.path);
+    if (view === "editor") return openFile(files.active());
+    fit();
+    setTimeout(() => root.focus({ preventScroll: true }), 0);
+  }
+
+  // `path`'s card out and whole, the camera on it
+  function openFile(path) {
+    if (!path || !outline.some((m) => m.path === path)) return;
+    change((b) => { ensureCard(b, path).file = true; });
+    requestAnimationFrame(() => {
+      frameViews([`file:${path}`]);
+      spans.get(`file:${path}`)?.focus();
     });
-    if (view === "board") setTimeout(() => root.focus({ preventScroll: true }), 0);
   }
 
   // a re-render (the builder's edit arriving) must not take the cursor
   // out of a note being written
+  // (and code being typed keeps the keyboard: its card is rebuilt around it)
+  let rendering = false;
+  // whether the camera has been put where a focus is laid out
+  let focusFramed = false;
   function render() {
     const active = document.activeElement;
     const kind = ["board-note-text-input", "board-add-input"].find((c) => active?.classList?.contains(c));
     const at = kind ? [active.selectionStart, active.selectionEnd] : null;
-    renderBoard();
+    const typingIn = editing && spans.get(editing)?.editor.hasTextFocus() ? editing : null;
+    rendering = true;
+    used = new Set();
+    try {
+      renderBoard();
+    } finally {
+      rendering = false;
+    }
+    disposeUnused();
+    if (typingIn) spans.get(typingIn)?.editor.focus();
     if (kind) {
       const box = canvas.querySelector(`.${kind}`);
       if (box) {
@@ -335,6 +408,10 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     if (shown() && !board.cards.length && outline.length) {
       const next = clone(board);
       for (const m of outline) ensureCard(next, m.path);
+      // and the file that was being edited, whole, when it is short enough
+      // to read at a glance: the code is there from the first moment
+      const active = next.cards.find((c) => c.path === files.active());
+      if (active && (files.texts()[active.path] ?? "").split("\n").length <= SHORT_FILE) active.file = true;
       board = next;
       save();
     }
@@ -380,45 +457,55 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     root.classList.toggle("compact", compact);
     if (compact && !focus) {
       for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
-      const below = hud.hidden ? GRID.y : (hud.offsetTop + hud.offsetHeight) / zoom + 14;
+      const below = hud.hidden ? GRID.y : hud.offsetTop + hud.offsetHeight + 14;
       for (const [path, spot] of shelves(board.cards.filter((c) => nodeOf(c.path)), sizeOf, Math.max(GRID.y, below))) {
         const node = nodeOf(path);
         node.style.left = `${spot.x}px`;
         node.style.top = `${spot.y}px`;
       }
     } else if (focus) {
+      // the question and its slice are laid out for the window as it is
+      if (!focusFramed) camera.set({ x: 0, y: 0, z: 1 });
+      focusFramed = true;
       const focused = board.cards.filter((c) => (moduleOf(c.path)?.items ?? []).some((i) => focus.has(keyOf(c.path, i.name))));
       for (const card of board.cards) {
         const node = nodeOf(card.path);
         if (node) node.hidden = !focused.includes(card);
       }
-      const top = (question.hidden ? 0 : (question.offsetTop + question.offsetHeight) / zoom) + 24;
+      const top = (question.hidden ? 0 : question.offsetTop + question.offsetHeight) + 24;
       const spots = shelves(focused, sizeOf, Math.max(GRID.y, top));
       // centered under the question
       const right = Math.max(0, ...[...spots].map(([path, spot]) => spot.x + sizeOf(path).w));
-      const shift = Math.max(0, (root.clientWidth / zoom - right - GRID.x) / 2);
+      const shift = Math.max(0, (root.clientWidth - right - GRID.x) / 2);
       for (const [path, spot] of spots) {
         const node = nodeOf(path);
         node.style.left = `${spot.x + shift}px`;
         node.style.top = `${spot.y}px`;
       }
     } else {
+      focusFramed = false;
       for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
       settle();
     }
+    renderPulled();
+    placePulled();
+    // with code pulled out, the cards showing no code recede
+    const pulled = (board.pulled ?? []).length > 0;
+    for (const node of canvas.querySelectorAll(".board-card")) node.classList.toggle("receded", pulled && !node.querySelector(".span-editor"));
     let maxX = 0;
     let maxY = 0;
-    for (const node of canvas.querySelectorAll(".board-card:not([hidden])")) {
+    for (const node of canvas.querySelectorAll(".board-card:not([hidden]), .canvas-frag")) {
       maxX = Math.max(maxX, parseFloat(node.style.left) + node.offsetWidth);
       maxY = Math.max(maxY, parseFloat(node.style.top) + node.offsetHeight);
     }
     canvas.style.width = `${maxX + 200}px`;
     canvas.style.height = `${maxY + 200}px`;
-    applyZoom();
     renderEmpty();
     renderHud();
     renderWires();
+    renderPulls();
     renderLens();
+    applyAttention();
   }
 
   function renderEmpty() {
@@ -473,12 +560,22 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     noteButton.title = m.path === DECISIONS ? "" : "A decision or comment on the whole module";
     noteButton.addEventListener("click", (event) => { event.stopPropagation(); startNote(m.path, null); });
     if (m.path === DECISIONS) noteButton.hidden = true;
-    head.append(title, meta, noteButton, close);
+    const whole = el("button", `board-x board-whole${card.file ? " on" : ""}`, "≡");
+    whole.title = card.file ? "Back to the signatures (w)" : "The whole file, to edit as it is (w)";
+    whole.addEventListener("click", (event) => { event.stopPropagation(); toggleFile(m.path); });
+    if (m.path === DECISIONS) whole.hidden = true;
+    head.append(title, meta, whole, noteButton, close);
     head.addEventListener("pointerdown", (event) => startDrag(event, node, card));
-    head.addEventListener("dblclick", () => editAt(m.path, 1));
+    head.addEventListener("dblclick", () => m.path !== DECISIONS && toggleFile(m.path));
     node.append(head);
     const requires = m.requires.filter((r) => r !== "prop.puf");
     if (requires.length) node.append(el("div", "board-requires", `requires ${requires.map(short).join(", ")}`));
+    node.classList.toggle("is-file", Boolean(card.file));
+    if (card.file && m.path !== DECISIONS) {
+      // the file, fully expanded: its plain editor
+      node.append(spanHost(`file:${m.path}`, m.path, null));
+      return;
+    }
     const moduleNotes = notesOn(m.path, null);
     if (moduleNotes.length || (writing && writing.file === m.path && writing.name == null)) {
       const block = el("div", "board-module-notes");
@@ -801,9 +898,12 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
       // what the author opens, the studio's automatic hiding leaves alone
       if (!isOpen && !(card.pinned ?? []).includes(name)) card.pinned = [...(card.pinned ?? []), name];
     });
+    // the code just opened comes into view, the least move that shows it
+    if (!isOpen) requestAnimationFrame(() => { const box = boxOfView(`row:${keyOf(path, name)}`); if (box) camera.reveal(box); });
   }
 
   function toggleHidden(path, name, isHidden) {
+    if (!isHidden) attention?.showLess(idOf(keyOf(path, name)));
     change((b) => {
       const card = ensureCard(b, path);
       card.hidden = isHidden ? card.hidden.filter((n) => n !== name) : [...card.hidden, name];
@@ -824,41 +924,453 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     return node;
   }
 
+  // An open row: the definition's code, live (a span editor) when Monaco
+  // is there, else as text.
   function body(m, item) {
+    if (monaco) return spanHost(`row:${keyOf(m.path, item.name)}`, m.path, item.name, item.line);
     const text = files.texts()[m.path] ?? "";
-    const source = text.split("\n").slice(item.line - 1, item.end_line).join("\n");
     const pre = el("pre", "board-body");
-    pre.textContent = source;
-    if (monaco?.editor?.colorize) {
-      monaco.editor.colorize(source, "puffin", {}).then((html) => { pre.innerHTML = html; }).catch(() => {});
-    }
-    pre.title = "Double-click to edit";
-    pre.addEventListener("dblclick", () => editAt(m.path, item.line));
+    pre.textContent = text.split("\n").slice(item.line - 1, item.end_line).join("\n");
     return pre;
   }
 
-  // Into the editor at `line` of `path`; with `find`, at its first
-  // occurrence from there (a hole), selected, so typing replaces it.
-  // With the focus beside the board (workset.js), the definition there
-  // is focused instead, and the board stays.
-  function editAt(path, line, find) {
-    if (navigate?.(path, line, find)) return;
-    setView("editor");
-    if (files.active() !== path) files.open(path);
-    const view = editor.raw?.editor;
-    setTimeout(() => {
-      if (!view) return editor.reveal?.({ line });
-      const model = view.getModel();
-      let range = null;
-      if (find && model) {
-        const found = model.findNextMatch(find, { lineNumber: line, column: 1 }, false, true, null, false);
-        if (found) range = found.range;
+  // ---- code on the canvas: span editors -------------------------------------------------------
+
+  // view -> span editor: "row:KEY" (opened in its card), "pull:KEY" (pulled
+  // out beside a use), "file:PATH" (a card shown whole)
+  const spans = new Map();
+  // the views a render used; the rest are disposed after it
+  let used = new Set();
+  // the view whose code has the keyboard, kept through re-renders
+  let editing = null;
+  // view -> when the author last touched it (the pulled ones' order of going)
+  const touched = new Map();
+  // every top-level name in the program: what code can pull
+  let refNames = new Set();
+  let focusedAt = 0;
+  // definitions edited since the code last took the keyboard
+  const editedNow = new Set();
+
+  const keyOfView = (view) => view.slice(view.indexOf(":") + 1);
+
+  function spanHost(view, path, name, line) {
+    used.add(view);
+    let span = spans.get(view);
+    if (!span) {
+      span = createSpanEditor({
+        monaco,
+        model: editor.model(path, files.texts()[path] ?? ""),
+        name,
+        line,
+        isRef: (word) => refNames.has(word),
+        onPull: (word, at) => pull(word, view, path, at),
+        onHoverRef: (word) => hoverRef(word, path),
+        onFocus() {
+          editing = view;
+          focusedAt = Date.now();
+          editedNow.clear();
+          touched.set(view, Date.now());
+          if (name) attention?.observe({ type: "focus", id: idOf(keyOf(path, name)) });
+          // the shown file follows the code being edited: the session's
+          // marks, the assists and the check speak about it
+          if (files.active() !== path) files.open(path);
+          if (name) { cursor = keyOf(path, name); applyAttention(); }
+        },
+        onBlur() {
+          // the time spent in this code, for the model's sense of what is read
+          if (name && Date.now() - focusedAt > 2000) attention?.observe({ type: "dwell", id: idOf(keyOf(path, name)), ms: Date.now() - focusedAt });
+          setTimeout(() => { if (editing === view && !spans.get(view)?.editor.hasTextFocus()) editing = null; }, 0);
+        },
+        onEscape() {
+          editing = null;
+          root.focus({ preventScroll: true });
+          afterCursor();
+        },
+        onEvalForm: (pos) => onEvalAt?.(path, { pos }),
+        onSave: () => onSave?.(),
+        onResize: () => { if (!rendering) layoutAfterResize(); },
+        onEdit(from, to) {
+          // each definition typed in is one edit to the model, per time in it
+          for (const id of tracker?.edit(path, from, to) ?? []) {
+            if (editedNow.has(id)) continue;
+            editedNow.add(id);
+            attention?.observe({ type: "edit", id });
+          }
+        },
+      });
+      spans.set(view, span);
+      // measured once it is on the page
+      requestAnimationFrame(() => span.refresh());
+    }
+    span.node.dataset.view = view;
+    return span.node;
+  }
+
+  function disposeUnused() {
+    for (const [view, span] of spans) {
+      if (used.has(view)) continue;
+      span.dispose();
+      spans.delete(view);
+      touched.delete(view);
+    }
+  }
+
+  // a span grew or shrank as it was typed in: what sits around it moves
+  let resizeFrame = 0;
+  function layoutAfterResize() {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => {
+      settle();
+      placePulled();
+      renderWires();
+      renderPulls();
+    });
+  }
+
+  // the definition `word` names, seen from `path`: its own module's first,
+  // then a module it requires, then any
+  function resolve(word, path) {
+    const holders = outline.filter((m) => m.items.some((i) => i.name === word && i.kind !== "property"));
+    const from = moduleOf(path);
+    const m = holders.find((h) => h.path === path) ?? holders.find((h) => from?.requires.includes(h.path)) ?? holders[0];
+    return m && keyOf(m.path, word);
+  }
+
+  // where a definition's code is out now, if it is: its view
+  function viewOf(key) {
+    const [path, name] = key.split("\u001f");
+    const card = board.cards.find((c) => c.path === path);
+    if (card?.file) return `file:${path}`;
+    if (card?.open.includes(name)) return `row:${key}`;
+    if ((board.pulled ?? []).some((p) => p.key === key)) return `pull:${key}`;
+    return null;
+  }
+
+  // ⌘-click on a use: its definition comes out beside the code it was
+  // used in, and the camera frames the two
+  function pull(word, fromView, fromPath) {
+    const key = resolve(word, fromPath);
+    if (!key) return;
+    const there = viewOf(key);
+    // the model's miss (it did not offer this) is its best lesson; a
+    // suggestion taken is a smaller one
+    if (!there) attention?.observe({ type: suggested.has(key) ? "open" : "pull", id: idOf(key) });
+    if (!there) {
+      change((b) => {
+        b.pulled = (b.pulled ?? []).filter((p) => p.key !== key);
+        b.pulled.push({ key, from: fromView, use: word });
+        ensureCard(b, key.split("\u001f")[0]);
+        evict(b, `pull:${key}`);
+      });
+    }
+    const view = there ?? `pull:${key}`;
+    touched.set(view, Date.now());
+    flash(view);
+    requestAnimationFrame(() => frameChain(view, fromView));
+  }
+
+  // Frame newly pulled code with the code it was pulled from, and as much
+  // of the trail that led there (what that was pulled from, and so on) as
+  // fits with the code still readable.
+  function frameChain(view, fromView) {
+    const chain = [view, fromView];
+    for (let v = fromView, p; (p = (board.pulled ?? []).find((x) => `pull:${x.key}` === v)) && !chain.includes(p.from); v = p.from) chain.push(p.from);
+    const boxes = chain.map(boxOfView).filter(Boolean);
+    let k = boxes.length;
+    while (k > 2 && camera.fitting(boxes.slice(0, k), { top: TOP }) < READABLE) k--;
+    camera.frame(boxes.slice(0, k), { min: NEAR, max: 1, top: TOP });
+  }
+
+  // more than PULL_LIMIT pulled: the one touched longest ago folds back
+  // (not the one just pulled, nor what it was pulled from)
+  function evict(b, keep) {
+    const keepers = new Set([keep]);
+    for (let v = keep, p; (p = b.pulled.find((x) => `pull:${x.key}` === v)); v = p.from) keepers.add(p.from);
+    while (b.pulled.length > PULL_LIMIT) {
+      const order = b.pulled.filter((p) => !keepers.has(`pull:${p.key}`)).sort((x, y) => (touched.get(`pull:${x.key}`) ?? 0) - (touched.get(`pull:${y.key}`) ?? 0));
+      if (!order.length) break;
+      b.pulled = b.pulled.filter((p) => p !== order[0]);
+    }
+  }
+
+  // fold a pulled definition back into its row (and what was pulled from
+  // it); the camera goes back to the code it was pulled for
+  function fold(key) {
+    const from = (board.pulled ?? []).find((p) => p.key === key)?.from;
+    if (from) requestAnimationFrame(() => frameViews([from]));
+    change((b) => {
+      const gone = new Set([`pull:${key}`]);
+      let more = true;
+      while (more) {
+        more = false;
+        for (const p of b.pulled ?? []) if (gone.has(p.from) && !gone.has(`pull:${p.key}`)) { gone.add(`pull:${p.key}`); more = true; }
       }
-      view.revealLineInCenter(range ? range.startLineNumber : line);
-      if (range) view.setSelection(range);
-      else view.setPosition({ lineNumber: line, column: 1 });
-      view.focus();
-    }, 30);
+      b.pulled = (b.pulled ?? []).filter((p) => !gone.has(`pull:${p.key}`));
+    });
+  }
+
+  // a pulled definition put into its card's row, open there
+  function dock(key) {
+    const [path, name] = key.split("\u001f");
+    change((b) => {
+      b.pulled = (b.pulled ?? []).filter((p) => p.key !== key);
+      const card = ensureCard(b, path);
+      if (!card.open.includes(name)) card.open.push(name);
+    });
+    requestAnimationFrame(() => frameViews([`row:${key}`]));
+  }
+
+  function toggleFile(path) {
+    let on = false;
+    change((b) => {
+      const card = ensureCard(b, path);
+      card.file = !card.file;
+      on = card.file;
+    });
+    requestAnimationFrame(() => (on ? frameViews([`file:${path}`]) : fit()));
+  }
+
+  function nodeOfView(view) {
+    return canvas.querySelector(`[data-view="${CSS.escape(view)}"]`);
+  }
+
+  // the box to frame for a view: a pulled one's whole fragment, an open
+  // row's code with its signature line, a whole file's card
+  function boxOfView(view) {
+    const node = nodeOfView(view);
+    if (!node) return null;
+    const frame = node.closest(".canvas-frag") ?? (view.startsWith("file:") ? node.closest(".board-card") : node.closest(".board-item")) ?? node;
+    return canvasBox(frame);
+  }
+
+  function frameViews(views) {
+    const boxes = views.map(boxOfView).filter(Boolean);
+    if (boxes.length) camera.frame(boxes, { min: NEAR, max: 1, top: TOP });
+  }
+
+  function flash(view) {
+    requestAnimationFrame(() => {
+      const node = nodeOfView(view)?.closest(".canvas-frag, .board-item, .board-card");
+      if (!node) return;
+      node.classList.remove("flash");
+      void node.offsetWidth;
+      node.classList.add("flash");
+    });
+  }
+
+  // hovering a use in code points at its definition on the board
+  function hoverRef(word, path) {
+    for (const n of canvas.querySelectorAll(".ref-target")) n.classList.remove("ref-target");
+    const key = word && resolve(word, path);
+    if (!key) return;
+    canvas.querySelector(`.board-item[data-key="${CSS.escape(key)}"]`)?.classList.add("ref-target");
+    canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(key)}"]`)?.classList.add("ref-target");
+  }
+
+  // Coming back to the canvas (or to a window of another size): the code
+  // last pulled out, with what it was pulled from; else the whole program.
+  function firstLook() {
+    const last = (board.pulled ?? []).at(-1);
+    if (last && nodeOfView(`pull:${last.key}`)) frameChain(`pull:${last.key}`, last.from);
+    else fit(false);
+  }
+
+  // ---- attention: what the code in focus wants beside it ---------------------------------------
+
+  // The attention model (attention.js, docs/ATTENTION.md) ranks every
+  // definition against the one in focus. The canvas does not move code
+  // around on its say-so; it marks what it suggests where it sits -- a
+  // definition it would show in full gets a strong mark and a ⇥ to pull
+  // it beside the focus, one it would show folded a faint mark -- the
+  // cards with nothing suggested recede, and each mark says why. `a`
+  // takes the suggestions: every one it would show in full is pulled.
+  const idOf = (key) => key.replace("\u001f", "::");
+  const keyOfId = (id) => id.replace("::", "\u001f");
+  // key -> { detail, reasons } for the focus now
+  let suggested = new Map();
+  let attendedFocus = null;
+
+  function attend() {
+    const focusKey = cursor && itemOf(cursor)?.item && !cursor.startsWith(DECISIONS) ? cursor : null;
+    attendedFocus = focusKey;
+    suggested = new Map();
+    if (!attention || !tracker || !focusKey) return;
+    const shown = attention.rank(tracker.state({ focus: idOf(focusKey) }), { lines: 80, items: 20, full: PULL_LIMIT });
+    for (const s of shown) if (!s.focus) suggested.set(keyOfId(s.id), { detail: s.detail, reasons: s.reasons });
+  }
+
+  function applyAttention() {
+    attend();
+    const some = suggested.size > 0;
+    root.classList.toggle("attending", some);
+    for (const row of canvas.querySelectorAll(".board-item")) {
+      const s = suggested.get(row.dataset.key);
+      row.classList.toggle("att-full", s?.detail === "full");
+      row.classList.toggle("att-some", Boolean(s) && s.detail !== "full");
+      const line = row.querySelector(".board-item-line");
+      const old = line?.querySelector(".board-suggest");
+      old?.remove();
+      if (s && line) {
+        const mark = el("button", "board-suggest", s.detail === "full" ? "⇥" : "·");
+        mark.title = `Suggested beside ${itemOf(attendedFocus)?.item?.name}: ${s.reasons.join("; ")}${s.detail === "full" ? "\nClick to pull it in (a takes them all)" : ""}`;
+        mark.addEventListener("click", (event) => { event.stopPropagation(); takeSuggestion(row.dataset.key); });
+        line.insertBefore(mark, line.querySelector(".board-tools"));
+      }
+    }
+    for (const node of canvas.querySelectorAll(".board-card")) {
+      const relevant = [...node.querySelectorAll(".board-item")].some((r) => suggested.has(r.dataset.key) || r.dataset.key === attendedFocus);
+      node.classList.toggle("unattended", some && !relevant && !node.querySelector(".span-editor"));
+    }
+  }
+
+  // a suggestion taken: pulled beside the code in focus
+  function takeSuggestion(key) {
+    if (viewOf(key)) return frameViews([viewOf(key)]);
+    const from = viewOf(attendedFocus) ?? (attendedFocus && `row:${attendedFocus}`);
+    if (!from) return;
+    if (!viewOf(attendedFocus)) toggleOpen(...attendedFocus.split("\u001f"), false);
+    const [path, name] = key.split("\u001f");
+    requestAnimationFrame(() => pull(name, from, attendedFocus.split("\u001f")[0]));
+  }
+
+  function takeSuggestions() {
+    const keys = [...suggested].filter(([k, s]) => s.detail === "full" && !viewOf(k)).map(([k]) => k);
+    keys.forEach((k, i) => setTimeout(() => takeSuggestion(k), i * 90));
+  }
+
+  // ---- pulled definitions ------------------------------------------------------------------------
+
+  function renderPulled() {
+    const list = (board.pulled ?? []).filter((p) => itemOf(p.key)?.item);
+    const keep = new Set(list.map((p) => p.key));
+    for (const node of [...canvas.querySelectorAll(".canvas-frag")]) if (!keep.has(node.dataset.key)) node.remove();
+    for (const p of list) {
+      const { m, item } = itemOf(p.key);
+      let node = canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(p.key)}"]`);
+      if (!node) {
+        node = el("div", "canvas-frag arriving");
+        node.dataset.key = p.key;
+        canvas.append(node);
+        setTimeout(() => node.classList.remove("arriving"), 30);
+      }
+      node.replaceChildren();
+      const head = el("div", "canvas-frag-head");
+      head.append(el("span", "board-kind", KIND[item.kind] ?? "·"), signature(item));
+      const where = el("span", "canvas-frag-module", short(m.path));
+      where.title = `${m.path}:${item.line} — in its card`;
+      where.addEventListener("click", (event) => { event.stopPropagation(); frameViews([`pull:${p.key}`]); setLens(p.key); });
+      const dockButton = el("button", "board-x", "⤓");
+      dockButton.title = "Put it in its card, open there";
+      dockButton.addEventListener("click", (event) => { event.stopPropagation(); dock(p.key); });
+      const foldButton = el("button", "board-x", "✕");
+      foldButton.title = "Fold it back into its row (x)";
+      foldButton.addEventListener("click", (event) => { event.stopPropagation(); fold(p.key); });
+      head.append(where, dockButton, foldButton);
+      head.addEventListener("pointerenter", () => setLens(p.key));
+      head.addEventListener("pointerleave", () => setLens(null));
+      node.append(head);
+      if (item.doc) node.append(el("div", "board-doc", item.doc));
+      node.append(spanHost(`pull:${p.key}`, m.path, item.name, item.line));
+    }
+  }
+
+  // Each pulled definition sits right of what it was pulled from, its top
+  // level with the line that uses it. It does not cover other pulled code
+  // or a card showing code: where it would, it moves down below that or
+  // right past it, whichever is the shorter way.
+  function placePulled() {
+    const compact = root.classList.contains("compact");
+    const obstacles = [...canvas.querySelectorAll(".board-card:not([hidden])")].filter((n) => n.querySelector(".span-editor")).map(canvasBox);
+    // in the order of their uses down the code, so that wires do not cross
+    // (a pulled one's source is placed before it: it was pulled first)
+    const pulled = board.pulled ?? [];
+    const group = (p) => pulled.findIndex((q) => q.from === p.from);
+    const order = pulled.map((p) => ({ p, g: group(p), y: useAnchor(p)?.y ?? 0 }));
+    order.sort((a, b) => a.g - b.g || a.y - b.y);
+    for (const { p } of order) {
+      const node = canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(p.key)}"]`);
+      if (!node) continue;
+      const source = useAnchor(p);
+      // a narrow window has no room to the right: below the code instead
+      const start = !source ? { x: GRID.x, y: GRID.y }
+        : compact ? { x: source.left, y: source.bottom + 30 }
+        : { x: source.right + 64, y: source.y - 18 };
+      let { x, y } = start;
+      const w = node.offsetWidth;
+      const h = node.offsetHeight;
+      for (let tries = 0; tries < 24; tries++) {
+        const hit = obstacles.find((q) => x < q.x + q.w + 16 && q.x < x + w + 16 && y < q.y + q.h + 16 && q.y < y + h + 16);
+        if (!hit) break;
+        const down = { x, y: hit.y + hit.h + 18 };
+        const right = { x: hit.x + hit.w + 24, y };
+        const far = (spot) => Math.hypot(spot.x - start.x, spot.y - start.y);
+        ({ x, y } = compact || far(down) <= far(right) ? down : right);
+      }
+      node.style.left = `${x}px`;
+      node.style.top = `${y}px`;
+      obstacles.push({ x, y, w, h });
+    }
+  }
+
+  // where the use a definition was pulled for is: the right edge of the
+  // card or fragment holding that code, and the line of the use
+  function useAnchor(p) {
+    const span = spans.get(p.from);
+    const host = nodeOfView(p.from);
+    if (!span || !host) return null;
+    const holder = host.closest(".canvas-frag, .board-card");
+    const box = canvasBox(host);
+    const outer = canvasBox(holder);
+    const name = p.use ?? p.key.split("\u001f")[1];
+    return { left: outer.x, right: outer.x + outer.w, bottom: outer.y + outer.h, y: box.y + span.lineTop(span.lineOf(name)) + 9 };
+  }
+
+  function renderPulls() {
+    pullLayer.replaceChildren();
+    for (const p of board.pulled ?? []) {
+      const node = canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(p.key)}"]`);
+      const from = useAnchor(p);
+      if (!node || !from) continue;
+      const to = { x: parseFloat(node.style.left), y: parseFloat(node.style.top) + 15 };
+      // from the code's right edge, or (pulled below it) its left edge
+      const fromX = to.x > from.right - 1 ? from.right : from.left;
+      const bend = Math.max(30, Math.abs(to.x - fromX) / 2) * (fromX === from.right ? 1 : -1);
+      pullLayer.append(svg("path", { d: `M ${fromX} ${from.y} C ${fromX + bend} ${from.y} ${to.x - bend} ${to.y} ${to.x} ${to.y}`, class: "board-pull-wire" }));
+      pullLayer.append(svg("circle", { cx: fromX, cy: from.y, r: 3.5, class: "board-pull-dot" }));
+      pullLayer.append(svg("circle", { cx: to.x, cy: to.y, r: 3.5, class: "board-pull-dot" }));
+    }
+  }
+
+  // Into the code at `line` of `path`: in its card when that is whole,
+  // else the definition holding the line opens in its row; with `find`,
+  // its first occurrence from there (a hole) is selected, so typing
+  // replaces it. The camera glides to it.
+  function editAt(path, line, find) {
+    const m = moduleOf(path);
+    if (!m) return;
+    const card = board.cards.find((c) => c.path === path);
+    const item = m.items.find((i) => i.line <= line && line <= i.end_line);
+    let view = `file:${path}`;
+    if (!card?.file && item) {
+      view = viewOf(keyOf(path, item.name)) ?? `row:${keyOf(path, item.name)}`;
+      if (view.startsWith("row:")) {
+        change((b) => {
+          const c = ensureCard(b, path);
+          if (!c.open.includes(item.name)) c.open.push(item.name);
+        });
+      }
+    } else if (!card?.file) {
+      change((b) => { ensureCard(b, path).file = true; });
+    }
+    requestAnimationFrame(() => {
+      const span = spans.get(view);
+      if (!span) return;
+      frameViews([view]);
+      const model = span.editor.getModel();
+      const found = find && model.findNextMatch(find, { lineNumber: line, column: 1 }, false, true, null, false);
+      if (found) span.select(found.range);
+      else span.focus({ lineNumber: line, column: 1 });
+    });
   }
 
   // ---- the HUD -----------------------------------------------------------------------------
@@ -914,7 +1426,6 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
       bar.append(seg);
     }
     bar.title = `${written} of ${defs.length} definitions written${planned ? `, ${planned} planned (??)` : ""}${partial ? `, ${partial} with holes left` : ""}`;
-    zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
   }
 
   // ---- wires: modules, and the lens --------------------------------------------------------
@@ -1061,43 +1572,42 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
       const spots = shelves(b.cards.filter((c) => nodeOf(c.path)), sizeOf, GRID.y);
       for (const card of b.cards) Object.assign(card, spots.get(card.path) ?? {});
     });
-    root.scrollTo({ left: 0, top: 0, behavior: "smooth" });
+    setTimeout(fit, 0);
   }
 
-  // ---- zoom ------------------------------------------------------------------------------------
+  // ---- the camera ------------------------------------------------------------------------------
 
-  function applyZoom() {
-    canvas.style.transform = `scale(${zoom})`;
-    sizer.style.width = `${parseFloat(canvas.style.width || "0") * zoom}px`;
-    sizer.style.height = `${parseFloat(canvas.style.height || "0") * zoom}px`;
-    zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+  // the box of a node on the canvas, in canvas coordinates, from the
+  // layout (offsets up to its card or fragment, and where that sits), not
+  // from the screen: right during a glide, when the screen is mid-way
+  function canvasBox(node) {
+    let x = 0;
+    let y = 0;
+    let at = node;
+    while (at && at !== canvas && !at.classList.contains("board-card") && !at.classList.contains("canvas-frag")) {
+      x += at.offsetLeft;
+      y += at.offsetTop;
+      at = at.offsetParent;
+    }
+    if (at && at !== canvas) {
+      x += parseFloat(at.style.left) || 0;
+      y += parseFloat(at.style.top) || 0;
+    }
+    return { x, y, w: node.offsetWidth, h: node.offsetHeight };
   }
 
-  function setZoom(value) {
-    zoom = Math.min(2, Math.max(0.35, Math.round(value * 100) / 100));
-    store(ZOOM_KEY, String(zoom));
-    applyZoom();
-    renderLens();
+  const visibleCards = () => [...canvas.querySelectorAll(".board-card:not([hidden]):not(.unplaced), .canvas-frag")];
+
+  // the whole canvas in the window
+  function fit(animate = true) {
+    const boxes = visibleCards().map(canvasBox);
+    if (!boxes.length) return camera.set({ x: 0, y: 0, z: 1 }, animate);
+    camera.frame(boxes, { min: 0.2, max: 1, pad: 28, top: TOP - 28, animate, align: "start" });
   }
 
-  // the whole board in the window
-  function fit() {
-    const visible = [...canvas.querySelectorAll(".board-card:not([hidden])")];
-    if (!visible.length) return setZoom(1);
-    const right = Math.max(...visible.map((n) => parseFloat(n.style.left) + n.offsetWidth)) + GRID.x;
-    const bottom = Math.max(...visible.map((n) => parseFloat(n.style.top) + n.offsetHeight)) + 120;
-    setZoom(Math.min(1.25, root.clientWidth / right, root.clientHeight / bottom));
-    root.scrollTo({ left: 0, top: 0 });
-  }
-
-  zoomOut.addEventListener("click", () => setZoom(zoom - 0.1));
-  zoomIn.addEventListener("click", () => setZoom(zoom + 0.1));
-  zoomLabel.addEventListener("click", fit);
-  root.addEventListener("wheel", (event) => {
-    if (!(event.ctrlKey || event.metaKey)) return;
-    event.preventDefault();
-    setZoom(zoom * (event.deltaY > 0 ? 0.92 : 1.08));
-  }, { passive: false });
+  zoomOut.addEventListener("click", () => camera.zoomBy(1 / 1.25));
+  zoomIn.addEventListener("click", () => camera.zoomBy(1.25));
+  zoomLabel.addEventListener("click", () => fit());
 
   // ---- filter and keys --------------------------------------------------------------------------
 
@@ -1166,9 +1676,10 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     for (const node of canvas.querySelectorAll(".board-item.cursor")) node.classList.remove("cursor");
     const row = canvas.querySelector(`.board-item[data-key="${CSS.escape(cursor)}"]`);
     row?.classList.add("cursor");
-    row?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (row) camera.reveal(canvasBox(row));
     lens = null;
     renderLens();
+    applyAttention();
   }
 
   // a question back in front of the author: open, its slice; decided,
@@ -1197,6 +1708,44 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     change((b) => { b.focus = { items, label: `${found.item.name} and what touches it`, question: null }; });
   }
 
+  // ] and [ on a row: the call graph from the keyboard. Each press pulls
+  // the next of what it uses (or of what uses it) that is not out yet --
+  // functions before types -- beside its code. The cursor stays, so ]]]
+  // brings out what a definition calls, one after another; Tab goes into
+  // them.
+  function pullAlong(found, direction) {
+    const view = viewOf(cursor) ?? (toggleOpen(found.m.path, found.item.name, false), `row:${cursor}`);
+    const { uses, users } = neighbours(found.item.name);
+    const rank = (k) => (["fun", "val"].includes(itemOf(k)?.item?.kind) ? 0 : 1);
+    const next = [...(direction === "uses" ? uses : users)].filter((k) => !viewOf(k) && !k.startsWith(DECISIONS)).sort((a, b) => rank(a) - rank(b))[0];
+    if (!next) return;
+    requestAnimationFrame(() => {
+      const [path, name] = next.split("\u001f");
+      if (direction === "uses") return pull(name, view, found.m.path);
+      // a caller comes out beside the code it calls, the wire from that
+      // code's own name
+      change((b) => {
+        b.pulled = (b.pulled ?? []).filter((p) => p.key !== next);
+        b.pulled.push({ key: next, from: view, use: found.item.name });
+        ensureCard(b, path);
+        evict(b, `pull:${next}`);
+      });
+      requestAnimationFrame(() => frameViews([view, `pull:${next}`]));
+    });
+  }
+
+  // Tab: from one piece of code out on the canvas to the next
+  function cyclePulled(delta) {
+    const views = [...canvas.querySelectorAll(".span-editor")].map((n) => n.dataset.view);
+    if (!views.length) return;
+    const at = views.indexOf(viewOf(cursor ?? "") ?? "");
+    const view = views[(at + delta + views.length) % views.length];
+    const key = view.startsWith("file:") ? null : keyOfView(view);
+    if (key) cursor = key;
+    afterCursor();
+    frameViews([view]);
+  }
+
   root.addEventListener("keydown", (event) => {
     if (typing(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
     const found = cursor && itemOf(cursor);
@@ -1210,13 +1759,20 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
       j: () => moveCursor(1),
       k: () => moveCursor(-1),
       Enter: () => found?.item && toggleOpen(found.m.path, found.item.name, open),
+      "]": () => found?.item && pullAlong(found, "uses"),
+      "[": () => found?.item && pullAlong(found, "users"),
+      x: () => found?.item && (viewOf(cursor)?.startsWith("pull:") ? fold(cursor) : open && toggleOpen(found.m.path, found.item.name, true)),
+      w: () => found?.m && found.m.path !== DECISIONS && toggleFile(found.m.path),
+      a: () => takeSuggestions(),
+      1: () => found?.item && frameViews([viewOf(cursor) ?? `row:${cursor}`]),
       h: () => found?.item && (toggleHidden(found.m.path, found.item.name, hidden), moveCursor(0)),
       e: () => found?.item && editAt(found.m.path, found.item.line),
+      Tab: () => cyclePulled(event.shiftKey ? -1 : 1),
       f: () => cursor && sliceAt(cursor),
       "/": () => filter.focus(),
-      "+": () => setZoom(zoom + 0.1),
-      "=": () => setZoom(zoom + 0.1),
-      "-": () => setZoom(zoom - 0.1),
+      "+": () => camera.zoomBy(1.25),
+      "=": () => camera.zoomBy(1.25),
+      "-": () => camera.zoomBy(1 / 1.25),
       0: () => fit(),
       t: () => tidy(),
       n: () => found?.item && found.m.path !== DECISIONS && startNote(found.m.path, found.item.name),
@@ -1245,8 +1801,8 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     node.setPointerCapture(event.pointerId);
     lensLayer.replaceChildren();
     const at = (e) => ({
-      x: Math.max(0, Math.round(start.left + (e.clientX - start.x) / zoom)),
-      y: Math.max(0, Math.round(start.top + (e.clientY - start.y) / zoom)),
+      x: Math.round(start.left + (e.clientX - start.x) / camera.zoom()),
+      y: Math.round(start.top + (e.clientY - start.y) / camera.zoom()),
     });
     const move = (e) => {
       const p = at(e);
@@ -1288,8 +1844,8 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
     const path = event.dataTransfer?.getData("text/x-puffin-module");
     if (!path) return;
     event.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const at = { x: Math.max(0, Math.round((event.clientX - rect.left) / zoom - 40)), y: Math.max(0, Math.round((event.clientY - rect.top) / zoom - 12)) };
+    const point = camera.toCanvas(event.clientX, event.clientY);
+    const at = { x: Math.round(point.x - 40), y: Math.round(point.y - 12) };
     change((b) => {
       const card = ensureCard(b, path, at);
       card.x = at.x;
@@ -1300,7 +1856,7 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "b") {
       event.preventDefault();
-      setView(shown() ? "editor" : "board");
+      fit();
     } else if (shown() && event.key === "Escape" && !event.defaultPrevented && !typing(event.target)) {
       if (board.focus) change((b) => { b.focus = null; });
       else if (cursor) {
@@ -1341,9 +1897,11 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
         board = b;
         save();
       }
+      if (modules && !outline.length) requestAnimationFrame(() => requestAnimationFrame(firstLook));
       if (modules) {
         noteChanges(modules);
         outline = modules;
+        refNames = new Set(modules.filter((m) => m.path !== "properties.puf").flatMap((m) => m.items.map((i) => i.name)));
       }
       render();
     },
@@ -1354,11 +1912,20 @@ export function createBoard({ editor, files, send, stage, onShow, navigate }) {
       propertyStatus = new Map((results?.properties ?? []).map((p) => [p.name, p]));
       if (shown()) render();
     },
-    toggle: () => setView(shown() ? "editor" : "board"),
+    toggle: () => setView("board"),
+    openFile,
+    // the studio changed files (an accepted proposal, the builder): the
+    // models of files not in the hidden editor take the new text
+    texts() {
+      for (const view of spans.keys()) {
+        const path = view.startsWith("file:") ? view.slice(5) : keyOfView(view).split("\u001f")[0];
+        if (path !== files.active()) editor.model(path, files.texts()[path]);
+      }
+    },
     mode: () => board.mode,
     setMode: (mode) => change((b) => { b.mode = mode; }),
     // a module brought out (a chip clicked while the board shows)
-    bringOut: (path) => change((b) => { ensureCard(b, path); }),
+    bringOut: (path) => openFile(path),
     fit,
     tidy,
     // the welcome's "plan it yourself": the field on `path`'s card, open

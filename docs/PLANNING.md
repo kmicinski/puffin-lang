@@ -16,10 +16,10 @@ question is about.
 
 ## 1. The board
 
-⌘⇧B, the ▦ Board button in the bar, or "show the board" / "back to the
-code". In the focused layout the board comes out *beside* the focused
-definition, over its working set, and its neighbourhood of the focus is
-always under the editor (docs/VIEW-FOCUS.md). One card per module:
+The board is no longer a mode: it is the canvas zoomed out
+(docs/VIEW-CANVAS.md), where rows open into live code and a file is a
+card shown whole. ⌘⇧B or "show the board" fits the whole program; "back
+to the code" shows the current file's card whole. One card per module:
 
 ```
 store   provides 8 of 8  ◌ 4                                  ✕
