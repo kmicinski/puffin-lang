@@ -81,7 +81,7 @@ const short = (path) => path.replace(/\.puf$/, "");
 const keyOf = (path, name) => `${path}\u001f${name}`;
 const typing = (target) => target?.closest?.("input, textarea, [contenteditable], .monaco-editor");
 
-export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSave }) {
+export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSave, attention, tracker }) {
   const monaco = editor.raw?.monaco;
   let board = { view: "editor", mode: "build", cards: [], focus: null, questions: [] };
   let outline = [];
@@ -505,6 +505,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     renderWires();
     renderPulls();
     renderLens();
+    applyAttention();
   }
 
   function renderEmpty() {
@@ -902,6 +903,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   }
 
   function toggleHidden(path, name, isHidden) {
+    if (!isHidden) attention?.showLess(idOf(keyOf(path, name)));
     change((b) => {
       const card = ensureCard(b, path);
       card.hidden = isHidden ? card.hidden.filter((n) => n !== name) : [...card.hidden, name];
@@ -945,6 +947,9 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   const touched = new Map();
   // every top-level name in the program: what code can pull
   let refNames = new Set();
+  let focusedAt = 0;
+  // definitions edited since the code last took the keyboard
+  const editedNow = new Set();
 
   const keyOfView = (view) => view.slice(view.indexOf(":") + 1);
 
@@ -962,13 +967,18 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
         onHoverRef: (word) => hoverRef(word, path),
         onFocus() {
           editing = view;
+          focusedAt = Date.now();
+          editedNow.clear();
           touched.set(view, Date.now());
+          if (name) attention?.observe({ type: "focus", id: idOf(keyOf(path, name)) });
           // the shown file follows the code being edited: the session's
           // marks, the assists and the check speak about it
           if (files.active() !== path) files.open(path);
-          if (name) cursor = keyOf(path, name);
+          if (name) { cursor = keyOf(path, name); applyAttention(); }
         },
         onBlur() {
+          // the time spent in this code, for the model's sense of what is read
+          if (name && Date.now() - focusedAt > 2000) attention?.observe({ type: "dwell", id: idOf(keyOf(path, name)), ms: Date.now() - focusedAt });
           setTimeout(() => { if (editing === view && !spans.get(view)?.editor.hasTextFocus()) editing = null; }, 0);
         },
         onEscape() {
@@ -979,6 +989,14 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
         onEvalForm: (pos) => onEvalAt?.(path, { pos }),
         onSave: () => onSave?.(),
         onResize: () => { if (!rendering) layoutAfterResize(); },
+        onEdit(from, to) {
+          // each definition typed in is one edit to the model, per time in it
+          for (const id of tracker?.edit(path, from, to) ?? []) {
+            if (editedNow.has(id)) continue;
+            editedNow.add(id);
+            attention?.observe({ type: "edit", id });
+          }
+        },
       });
       spans.set(view, span);
       // measured once it is on the page
@@ -1034,6 +1052,9 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     const key = resolve(word, fromPath);
     if (!key) return;
     const there = viewOf(key);
+    // the model's miss (it did not offer this) is its best lesson; a
+    // suggestion taken is a smaller one
+    if (!there) attention?.observe({ type: suggested.has(key) ? "open" : "pull", id: idOf(key) });
     if (!there) {
       change((b) => {
         b.pulled = (b.pulled ?? []).filter((p) => p.key !== key);
@@ -1152,6 +1173,69 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     const last = (board.pulled ?? []).at(-1);
     if (last && nodeOfView(`pull:${last.key}`)) frameChain(`pull:${last.key}`, last.from);
     else fit(false);
+  }
+
+  // ---- attention: what the code in focus wants beside it ---------------------------------------
+
+  // The attention model (attention.js, docs/ATTENTION.md) ranks every
+  // definition against the one in focus. The canvas does not move code
+  // around on its say-so; it marks what it suggests where it sits -- a
+  // definition it would show in full gets a strong mark and a ⇥ to pull
+  // it beside the focus, one it would show folded a faint mark -- the
+  // cards with nothing suggested recede, and each mark says why. `a`
+  // takes the suggestions: every one it would show in full is pulled.
+  const idOf = (key) => key.replace("\u001f", "::");
+  const keyOfId = (id) => id.replace("::", "\u001f");
+  // key -> { detail, reasons } for the focus now
+  let suggested = new Map();
+  let attendedFocus = null;
+
+  function attend() {
+    const focusKey = cursor && itemOf(cursor)?.item && !cursor.startsWith(DECISIONS) ? cursor : null;
+    attendedFocus = focusKey;
+    suggested = new Map();
+    if (!attention || !tracker || !focusKey) return;
+    const shown = attention.rank(tracker.state({ focus: idOf(focusKey) }), { lines: 80, items: 20, full: PULL_LIMIT });
+    for (const s of shown) if (!s.focus) suggested.set(keyOfId(s.id), { detail: s.detail, reasons: s.reasons });
+  }
+
+  function applyAttention() {
+    attend();
+    const some = suggested.size > 0;
+    root.classList.toggle("attending", some);
+    for (const row of canvas.querySelectorAll(".board-item")) {
+      const s = suggested.get(row.dataset.key);
+      row.classList.toggle("att-full", s?.detail === "full");
+      row.classList.toggle("att-some", Boolean(s) && s.detail !== "full");
+      const line = row.querySelector(".board-item-line");
+      const old = line?.querySelector(".board-suggest");
+      old?.remove();
+      if (s && line) {
+        const mark = el("button", "board-suggest", s.detail === "full" ? "⇥" : "·");
+        mark.title = `Suggested beside ${itemOf(attendedFocus)?.item?.name}: ${s.reasons.join("; ")}${s.detail === "full" ? "\nClick to pull it in (a takes them all)" : ""}`;
+        mark.addEventListener("click", (event) => { event.stopPropagation(); takeSuggestion(row.dataset.key); });
+        line.insertBefore(mark, line.querySelector(".board-tools"));
+      }
+    }
+    for (const node of canvas.querySelectorAll(".board-card")) {
+      const relevant = [...node.querySelectorAll(".board-item")].some((r) => suggested.has(r.dataset.key) || r.dataset.key === attendedFocus);
+      node.classList.toggle("unattended", some && !relevant && !node.querySelector(".span-editor"));
+    }
+  }
+
+  // a suggestion taken: pulled beside the code in focus
+  function takeSuggestion(key) {
+    if (viewOf(key)) return frameViews([viewOf(key)]);
+    const from = viewOf(attendedFocus) ?? (attendedFocus && `row:${attendedFocus}`);
+    if (!from) return;
+    if (!viewOf(attendedFocus)) toggleOpen(...attendedFocus.split("\u001f"), false);
+    const [path, name] = key.split("\u001f");
+    requestAnimationFrame(() => pull(name, from, attendedFocus.split("\u001f")[0]));
+  }
+
+  function takeSuggestions() {
+    const keys = [...suggested].filter(([k, s]) => s.detail === "full" && !viewOf(k)).map(([k]) => k);
+    keys.forEach((k, i) => setTimeout(() => takeSuggestion(k), i * 90));
   }
 
   // ---- pulled definitions ------------------------------------------------------------------------
@@ -1595,6 +1679,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     if (row) camera.reveal(canvasBox(row));
     lens = null;
     renderLens();
+    applyAttention();
   }
 
   // a question back in front of the author: open, its slice; decided,
@@ -1678,6 +1763,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
       "[": () => found?.item && pullAlong(found, "users"),
       x: () => found?.item && (viewOf(cursor)?.startsWith("pull:") ? fold(cursor) : open && toggleOpen(found.m.path, found.item.name, true)),
       w: () => found?.m && found.m.path !== DECISIONS && toggleFile(found.m.path),
+      a: () => takeSuggestions(),
       1: () => found?.item && frameViews([viewOf(cursor) ?? `row:${cursor}`]),
       h: () => found?.item && (toggleHidden(found.m.path, found.item.name, hidden), moveCursor(0)),
       e: () => found?.item && editAt(found.m.path, found.item.line),

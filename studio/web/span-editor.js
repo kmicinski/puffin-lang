@@ -25,7 +25,7 @@ const MAX_WIDTH = 820;
 // what a define-like head names (its second element)
 const DEFINING = /^(define|define-type|define-grammar|define-type-alias|define-foreign-type)$/;
 
-export function createSpanEditor({ monaco, model, name, line = 1, isRef, onPull, onHoverRef, onFocus, onBlur, onEscape, onEvalForm, onSave, onResize }) {
+export function createSpanEditor({ monaco, model, name, line = 1, isRef, onPull, onHoverRef, onFocus, onBlur, onEscape, onEvalForm, onSave, onResize, onEdit }) {
   const node = document.createElement("div");
   node.className = "span-editor";
   const ed = monaco.editor.create(node, {
@@ -134,7 +134,9 @@ export function createSpanEditor({ monaco, model, name, line = 1, isRef, onPull,
   }
 
   let pending = 0;
-  const changed = model.onDidChangeContent(() => {
+  const changed = model.onDidChangeContent((event) => {
+    // typed here (not in another view of the file): the lines it touched
+    if (ed.hasTextFocus()) for (const c of event.changes) onEdit?.(c.range.startLineNumber, c.range.startLineNumber + c.text.split("\n").length - 1);
     cancelAnimationFrame(pending);
     pending = requestAnimationFrame(refresh);
   });

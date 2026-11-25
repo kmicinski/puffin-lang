@@ -474,3 +474,13 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board.z-mid .board-card-title, .board.z-far .board-card-title { font-size: calc(13px * var(--unzoom, 1)); }
 .board.z-mid .span-editor { opacity: 0.7; }
 .board.z-far .board-card-meta, .board.z-far .board-tools, .board.z-far .board-add { display: none; }
+.board.z-far .canvas-frag-head .board-sig-name { font-size: calc(12px * var(--unzoom, 1)); }
+.board.z-far .canvas-frag-head .board-sig-rest, .board.z-far .canvas-frag-head .board-sig-kw, .board.z-far .canvas-frag-head button, .board.z-far .canvas-frag-module { display: none; }
+
+/* attention (docs/ATTENTION.md): what the code in focus would want beside it */
+.board-item.att-full > .board-item-line { box-shadow: inset 3px 0 0 var(--green); background: var(--green-tint); }
+.board-item.att-some > .board-item-line { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--green) 45%, transparent); }
+.board-suggest { flex: none; border: 0; background: none; color: var(--green); cursor: pointer; font: 12px var(--mono); padding: 0 3px; }
+.board-suggest:hover { text-shadow: 0 0 6px var(--green); }
+.board-card.unattended { opacity: 0.4; filter: saturate(0.4); }
+.board-card.unattended:hover { opacity: 0.9; filter: none; }

@@ -22,6 +22,8 @@ import { createRename } from "./rename.js";
 import { createVoice } from "./voice.js";
 import { createFocus } from "./focus.js";
 import { createBoard } from "./board.js";
+import { createAttention, httpLog } from "./attention.js";
+import { createTracker } from "./attention-studio.js";
 import { createPalette } from "./palette.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
@@ -139,7 +141,14 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on), onEvalAt: evalAt, onSave: save });
+// what the canvas shows around the code in focus (docs/ATTENTION.md): the
+// tracker folds the socket's messages into the model's state; the log of
+// what the author does with it tunes the model to them
+const tracker = createTracker();
+const attentionLog = httpLog();
+const attention = createAttention({ write: attentionLog.write });
+attentionLog.read().then((log) => attention.learnFrom(log)).catch(() => {});
+const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => focus?.boardShown(on), onEvalAt: evalAt, onSave: save, attention, tracker });
 focus.attachBoard(board);
 // the welcome's other path: design on the board, plan mode, the first
 // module's "+ plan a definition" open
@@ -519,6 +528,7 @@ function connect() {
   socket.addEventListener("open", () => renderConnection(true));
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
+    tracker.receive(message);
     handlers[message.t]?.(message);
   });
   socket.addEventListener("close", () => {
