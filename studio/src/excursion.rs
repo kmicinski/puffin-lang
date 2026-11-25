@@ -140,52 +140,11 @@ fn settle(text: &str, from: usize, to: usize) -> Option<(usize, usize)> {
         // the smallest form that starts on that line, at any depth
         let start = sexp::offset_of(text, from, 1);
         let line_end = text[start..].find('\n').map_or(text.len(), |i| start + i);
-        let first = text[start..line_end].find(['(', '[']).map(|i| start + i);
-        if let Some(open) = first
-            && let Some(close) = matching(text, open)
-        {
-            to = text[..close].bytes().filter(|&b| b == b'\n').count() + 1;
+        if let Some((_, close)) = sexp::first_list_in(text, start, line_end) {
+            to = sexp::line_of(text, close);
         }
     }
     Some((from, to.min(from + MAX_LINES - 1)))
-}
-
-/// The offset of the bracket closing the one at `open` (strings and
-/// comments skipped), if it closes.
-fn matching(text: &str, open: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut depth = 0i32;
-    let mut i = open;
-    let mut in_string = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if in_string {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'"' {
-                in_string = false;
-            }
-        } else {
-            match b {
-                b'"' => in_string = true,
-                b';' => {
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                b'(' | b'[' => depth += 1,
-                b')' | b']' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(i);
-                    }
-                }
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 impl Studio {
@@ -234,7 +193,7 @@ impl Studio {
             && let Some(text) = files.get(file)
             && let Some(form) = sexp::form_at(text, sexp::offset_of(text, line, 1))
         {
-            let end = text[..form.end].bytes().filter(|&b| b == b'\n').count() + 1;
+            let end = sexp::line_of(text, form.end);
             place = Some((file.clone(), form.line, end.min(form.line + MAX_LINES - 1)));
         }
         let index = self.voice_excursion(|slot| {

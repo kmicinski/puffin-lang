@@ -120,7 +120,6 @@ pub fn constructors_at(text: &str, form: &Form) -> Vec<(String, usize)> {
     if form.head.as_deref() != Some("define-type") {
         return Vec::new();
     }
-    let line_of = |at: usize| text[..at].bytes().filter(|&b| b == b'\n').count() + 1;
     let mut out = Vec::new();
     let mut depth = 0usize;
     // the form's children at depth 1: 0 the head, 1 the type's name
@@ -148,12 +147,12 @@ pub fn constructors_at(text: &str, form: &Form) -> Vec<(String, usize)> {
                 let upper = atom.chars().next().is_some_and(char::is_uppercase);
                 if depth == 1 {
                     if child >= 2 && upper {
-                        out.push((atom.to_owned(), line_of(start)));
+                        out.push((atom.to_owned(), line_of(text, start)));
                     }
                     child += 1;
                 } else if depth == 2 && first_in_list {
                     if opened_at_child.is_some_and(|c| c >= 2) && upper {
-                        out.push((atom.to_owned(), line_of(start)));
+                        out.push((atom.to_owned(), line_of(text, start)));
                     }
                     first_in_list = false;
                 }
@@ -173,7 +172,6 @@ pub fn constructors_at(text: &str, form: &Form) -> Vec<(String, usize)> {
 /// The top-level forms of `text`, in order. A stray closer at the top level
 /// is skipped.
 pub fn forms(text: &str) -> Vec<Form> {
-    let line_of = |at: usize| text[..at].bytes().filter(|&b| b == b'\n').count() + 1;
     let mut found = Vec::new();
     let mut depth = 0usize;
     // the form being read: its start, and the atoms and strings seen at
@@ -197,7 +195,7 @@ pub fn forms(text: &str) -> Vec<Form> {
             Token::Open => {
                 if depth == 0 {
                     let at = prefix.take().unwrap_or(start);
-                    current = Some(Form { start: at, end: text.len(), line: line_of(at), head: None, name: None, string: None, index: found.len() });
+                    current = Some(Form { start: at, end: text.len(), line: line_of(text, at), head: None, name: None, string: None, index: found.len() });
                     child = 0;
                     name_list = false;
                 } else if depth == 1 {
@@ -224,7 +222,7 @@ pub fn forms(text: &str) -> Vec<Form> {
             Token::Atom | Token::Str => {
                 if depth == 0 {
                     let at = prefix.take().unwrap_or(start);
-                    found.push(Form { start: at, end, line: line_of(at), head: None, name: None, string: None, index: found.len() });
+                    found.push(Form { start: at, end, line: line_of(text, at), head: None, name: None, string: None, index: found.len() });
                     continue;
                 }
                 let Some(form) = current.as_mut() else { continue };
@@ -484,6 +482,28 @@ pub fn constructors(text: &str) -> Vec<String> {
     out
 }
 
+/// The first bracketed form of `text` that opens in `start..end`, outside
+/// strings and comments: the offsets of its open and close brackets, if it
+/// closes.
+pub fn first_list_in(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    let tokens = tokens(text);
+    let first = tokens.iter().position(|&(kind, at, _)| kind == Token::Open && (start..end).contains(&at))?;
+    let mut depth = 0;
+    for &(kind, at, _) in &tokens[first..] {
+        match kind {
+            Token::Open => depth += 1,
+            Token::Close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((tokens[first].1, at));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Whether the brackets of `text` balance, outside strings and comments,
 /// and every string closes.
 pub fn balanced(text: &str) -> bool {
@@ -683,6 +703,15 @@ mod tests {
         let names: Vec<String> = define_types(text).into_iter().map(|(name, _)| name).collect();
         assert_eq!(names, ["Expr", "Tree"]);
         assert_eq!(forms(text)[0].key(), "define-grammar:Expr");
+    }
+
+    #[test]
+    fn the_first_list_on_a_line_skips_comments_and_strings() {
+        let text = "x ; (not this\n\"(nor this\" [(a b)\n c]\n";
+        let line = text.find('\n').unwrap() + 1;
+        let (open, close) = first_list_in(text, line, text.len()).unwrap();
+        assert_eq!((&text[open..open + 1], &text[close..close + 1]), ("[", "]"));
+        assert_eq!(first_list_in(text, 0, line), None);
     }
 
     #[test]
