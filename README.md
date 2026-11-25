@@ -106,7 +106,8 @@ bin/refresh-boot                    # refresh the seed at release points
 ```
 
 Multi-file programs use the module system (`(require "lib.puf")` /
-`(provide ...)`); all backends (native, the bytecode VM, the web
+`(provide ...)`, with `(private ...)` and `(opaque ...)` to hide a
+definition or a type's representation); all backends (native, the bytecode VM, the web
 playground) resolve via puffincc's resolver.
 
 ## Documentation

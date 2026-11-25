@@ -1,0 +1,2 @@
+(private (helper x))
+(define (helper x) x)

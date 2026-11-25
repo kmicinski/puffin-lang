@@ -1,0 +1,8 @@
+;; ML-style: Stack is an abstract type -- the signature names it but
+;; none of its constructors, so outside stack.puf it is just a name
+(signature STACK
+  (type Stack)
+  (val empty-stack Stack)
+  (fun push (-> Int Stack Stack))
+  (fun pop (-> Stack Stack))
+  (fun top (-> Stack Int)))

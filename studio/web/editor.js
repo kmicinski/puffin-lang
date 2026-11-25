@@ -89,7 +89,7 @@ const SOL = {
 export const KEYWORDS = [
   "define", "define-type", "define-grammar", "define-type-alias", "define-foreign-type", "foreign", "lambda", "λ", "let", "let*", "letrec", "if", "cond",
   "case", "match", "when", "unless", "begin", "while", "set!", "quote", "quasiquote", "unquote", "and", "or", "not",
-  "else", "program", "require", "provide", "ann", ":",
+  "else", "program", "require", "provide", "private", "opaque", "ann", ":",
 ];
 
 export const BUILTINS = [...surfacePrimNames(), "list", "vector", "<=", ">", ">=", "<", "eq?", "+", "-", "*", "map", "filter", "foldl", "foldr", "append", "length", "reverse", "format", "apply"];

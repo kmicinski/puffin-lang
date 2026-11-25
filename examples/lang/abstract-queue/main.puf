@@ -1,0 +1,32 @@
+;; (the golden-corpus program src/test-programs/modules-private, with a fixed size in place of (read))
+;; Private definitions and abstract types (docs/MODULES.md): queue.puf
+;; hides a helper and its Queue representation, stack.puf ascribes a
+;; signature whose Stack is abstract, tally.puf keeps its own helper.
+(require "queue.puf")
+(require "queue.puf" #:as Q)
+(require "stack.puf")
+(require "tally.puf")
+
+;; this module's own helper: queue.puf's and tally.puf's are private,
+;; so nothing collides
+(define (helper q) (size q))
+
+;; an abstract type is still a type: annotate with it, pass it along
+(define (fill [q : Queue] [n : Int]) : Queue
+  (if (zero? n) q (fill (enqueue q n) (- n 1))))
+
+(define q (fill empty 3))
+(println (list (peek q) (size q) (helper q)))
+(println (Q.peek (Q.dequeue (Q.dequeue q))))
+
+;; only binders, _ and type tests may meet an abstract value
+(define (kind [q : Queue]) : Sym
+  (match q
+    [(? symbol? _) 'symbol]
+    [other 'queue]))
+(println (kind q))
+
+(define s (push 3 (push 2 (push 1 empty-stack))))
+(println (list (top s) (top (pop s)) (top (pop (pop (pop s))))))
+
+(println (tally (list 1 2 3)))

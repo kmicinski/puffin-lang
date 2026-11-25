@@ -113,6 +113,8 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board-opaque { color: var(--violet); flex: none; cursor: pointer; }
 .board-opaque:hover { text-shadow: 0 0 6px var(--violet); }
 .board-item.opaque .board-sig-name { color: var(--violet); }
+/* internals (private, or off the provide list) read quieter than the interface */
+.board-item.internal .board-sig-name { font-weight: 400; color: var(--muted); }
 .board-item.is-hidden { opacity: 0.55; }
 .board-item.focused > .board-item-line { background: var(--violet-tint); box-shadow: inset 2px 0 0 var(--violet); }
 .board-tools { visibility: hidden; flex: none; }

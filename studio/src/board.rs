@@ -48,6 +48,10 @@ pub struct Item {
     /// The comment lines right above it, without their `;;`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub doc: String,
+    /// Not part of the module's interface: declared `(private ...)`, or
+    /// left off its provide list (docs/MODULES.md).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
     /// The other top-level names (of any module) it mentions.
     pub uses: Vec<String>,
 }
@@ -230,16 +234,19 @@ pub fn outline(files: &Files) -> Vec<Module> {
     files
         .iter()
         .filter(|(path, _)| !HIDDEN.contains(&path.as_str()) && (path.ends_with(".puf") || path.ends_with(".scm")))
-        .map(|(path, text)| module(path, text, &names))
+        .map(|(path, text)| module(path, text, &names, files))
         .collect()
 }
 
-fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
+fn module(path: &str, text: &str, names: &BTreeSet<String>, files: &Files) -> Module {
     let forms = sexp::forms(text);
     let lines: Vec<&str> = text.lines().collect();
     // (: name τ) declarations, by name
     let mut declared: BTreeMap<String, T> = BTreeMap::new();
     let mut provides: Option<Vec<String>> = None;
+    // (private ...) and (opaque ...) declarations
+    let mut private: BTreeSet<String> = BTreeSet::new();
+    let mut opaque_types: BTreeSet<String> = BTreeSet::new();
     for form in &forms {
         let Some(T::List(items)) = read_all(&text[form.start..form.end]).into_iter().next() else { continue };
         match form.head.as_deref() {
@@ -248,6 +255,10 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
                     declared.insert(name.to_owned(), items[2].clone());
                 }
             }
+            Some(kind @ ("private" | "opaque")) => {
+                let into = if kind == "private" { &mut private } else { &mut opaque_types };
+                into.extend(items[1..].iter().filter_map(atom).map(str::to_owned));
+            }
             Some("provide") => {
                 let list = provides.get_or_insert_with(Vec::new);
                 let mut skip = false;
@@ -255,6 +266,11 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
                     match atom(item) {
                         Some(k) if k.starts_with("#:") => skip = true,
                         Some(a) if !skip => list.push(a.to_owned()),
+                        // (provide #:sig "x.pufs"): the signature's entries are the interface
+                        Some(sig) if items.get(1).and_then(atom) == Some("#:sig") => {
+                            list.extend(signature_names(files, path, sig.trim_matches('"')));
+                            skip = false;
+                        }
                         _ => skip = false,
                     }
                 }
@@ -269,7 +285,7 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
         let tree = read_all(body).into_iter().next();
         let head = form.head.as_deref().unwrap_or("");
         // a declaration is part of its definition's signature
-        if matches!(head, ":" | "#%prelude:" | "provide" | "require") {
+        if matches!(head, ":" | "#%prelude:" | "provide" | "require" | "private" | "opaque") {
             continue;
         }
         // sexp::forms names any form by its second atom: only define* forms define
@@ -282,7 +298,13 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
         };
         let (kind, sig, opaque) = match (head, &tree) {
             ("define", Some(T::List(parts))) => function_or_value(&name, parts, declared.get(&name)),
-            ("define-type", Some(T::List(parts))) => ("type".to_owned(), type_sig(parts), false),
+            ("define-type", Some(T::List(parts))) => {
+                // an abstract type -- its constructors kept home -- reads as ML's abstype
+                let abstract_type = opaque_types.contains(&name)
+                    || provides.as_ref().is_some_and(|p| p.contains(&name) && !constructors(parts).iter().any(|c| p.contains(c)));
+                let sig = type_sig(parts);
+                ("type".to_owned(), if abstract_type { format!("abs{sig}") } else { sig }, false)
+            }
             ("define-type-alias", Some(T::List(parts))) if parts.len() >= 3 => {
                 ("alias".to_owned(), format!("type {} = {}", render(&parts[1]), render(&parts[2])), false)
             }
@@ -308,7 +330,6 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
         }
         doc.reverse();
         items.push(Item {
-            name,
             kind,
             line: form.line,
             end_line: sexp::line_of(text, form.end.saturating_sub(1)),
@@ -316,6 +337,8 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
             holes: sexp::holes(body).len(),
             opaque,
             doc: doc.join(" "),
+            internal: private.contains(&name) || provides.as_ref().is_some_and(|p| !p.contains(&name)),
+            name,
             uses,
         });
     }
@@ -335,6 +358,7 @@ fn module(path: &str, text: &str, names: &BTreeSet<String>) -> Module {
                     holes: 0,
                     opaque: false,
                     doc: String::new(),
+                    internal: false,
                     uses: sexp::mentions(body).into_iter().filter(|n| names.contains(n)).collect(),
                     name: p.name,
                 }
@@ -395,6 +419,28 @@ fn function_or_value(name: &str, parts: &[T], declared: Option<&T>) -> (String, 
 }
 
 /// `type Expr = Num of Int | Add of Expr * Expr`
+/// The names a signature file (a module's `#:sig`, relative to it) lists:
+/// `(signature NAME (val n ...) (fun n ...) (type n) ...)`.
+fn signature_names(files: &Files, module: &str, sig: &str) -> Vec<String> {
+    let path = match module.rsplit_once('/') {
+        Some((dir, _)) => format!("{dir}/{sig}"),
+        None => sig.to_owned(),
+    };
+    let Some(T::List(form)) = files.get(&path).and_then(|text| read_all(text).into_iter().next()) else { return Vec::new() };
+    form.iter().skip(2).filter_map(|entry| match entry {
+        T::List(parts) => parts.get(1).and_then(atom).map(str::to_owned),
+        _ => None,
+    }).collect()
+}
+
+/// A define-type's constructor names.
+fn constructors(parts: &[T]) -> Vec<String> {
+    parts[2.min(parts.len())..].iter().filter_map(|c| match c {
+        T::List(xs) => xs.first().and_then(atom).map(str::to_owned),
+        T::Atom(a) => Some(a.clone()),
+    }).collect()
+}
+
 fn type_sig(parts: &[T]) -> String {
     let head = parts.get(1).map(render).unwrap_or_default();
     let ctors: Vec<String> = parts[2.min(parts.len())..]
@@ -440,6 +486,23 @@ fn grammar_sig(parts: &[T]) -> String {
 /// -> C` none; `List Int` is `(List Int)`; parentheses group.
 pub fn define_from_signature(text: &str) -> Result<String, String> {
     let text = text.trim().trim_end_matches(';');
+    // ML has no `private`: a value left out of the signature is one. On a
+    // card the author says so up front, and the definition gets its
+    // (private name) declaration (docs/MODULES.md)
+    if let Some(rest) = text.strip_prefix("private ") {
+        let code = define_from_signature(rest)?;
+        let name = defined_name(&code).ok_or("nothing to make private")?;
+        return Ok(format!("(private {name})\n{code}"));
+    }
+    // ML's abstype: the type goes out, its constructors stay home
+    if let Some(rest) = text.strip_prefix("abstype ") {
+        let code = define_from_signature(&format!("type {rest}"))?;
+        if !code.starts_with("(define-type ") {
+            return Err("an abstype needs constructors: abstype T = A | B of Int".to_owned());
+        }
+        let name = defined_name(&code).unwrap_or_default();
+        return Ok(format!("(opaque {name})\n{code}"));
+    }
     if let Some(rest) = text.strip_prefix("type ") {
         let (head, body) = rest.split_once('=').ok_or("a type needs `= ...`: type T = A | B of Int")?;
         let head_words: Vec<&str> = head.split_whitespace().collect();
@@ -496,6 +559,18 @@ pub fn define_from_signature(text: &str) -> Result<String, String> {
         }
         _ => Ok(format!("(: {name} {})\n(define {name} ??)", parsed.puffin())),
     }
+}
+
+/// The name the first define-something in `code` defines.
+fn defined_name(code: &str) -> Option<String> {
+    read_all(code).iter().find_map(|t| match t {
+        T::List(items) if items.first().and_then(atom).is_some_and(|h| h.starts_with("define")) => match items.get(1) {
+            Some(T::Atom(a)) => Some(a.clone()),
+            Some(T::List(h)) => h.first().and_then(atom).map(str::to_owned),
+            None => None,
+        },
+        _ => None,
+    })
 }
 
 fn check_name(name: &str) -> Result<(), String> {
@@ -642,24 +717,16 @@ impl Studio {
     pub fn board_define(&self, file: &str, text: &str) -> Result<String, String> {
         let current = self.text_of(file).ok_or_else(|| format!("there is no module {file}"))?;
         let code = define_from_signature(text)?;
-        let defined = read_all(&code)
-            .iter()
-            .find_map(|t| match t {
-                T::List(items) if items.first().and_then(atom).is_some_and(|h| h.starts_with("define")) => match items.get(1) {
-                    Some(T::Atom(a)) => Some(a.clone()),
-                    Some(T::List(h)) => h.first().and_then(atom).map(str::to_owned),
-                    None => None,
-                },
-                _ => None,
-            })
-            .unwrap_or_default();
+        let defined = defined_name(&code).unwrap_or_default();
         let names: BTreeSet<String> = sexp::forms(&current).into_iter().filter(|f| f.head.as_deref().is_some_and(|h| h.starts_with("define"))).filter_map(|f| f.name).collect();
         if names.contains(&defined) {
             return Err(format!("{file} already defines {defined}"));
         }
         let mut next = current.trim_end().to_owned();
-        // a provide list names what the module offers: the new definition too
-        if let Some(form) = sexp::forms(&current).into_iter().find(|f| f.head.as_deref() == Some("provide")) {
+        // a provide list names what the module offers: the new definition
+        // too, unless it is private
+        let private = code.starts_with("(private ");
+        if let Some(form) = sexp::forms(&current).into_iter().find(|f| !private && f.head.as_deref() == Some("provide")) {
             let provide = &current[form.start..form.end];
             if !provide.contains("#:") && !provide.split(|c: char| c.is_whitespace() || c == '(' || c == ')').any(|w| w == defined) {
                 let extended = format!("{} {defined})", provide.trim_end_matches(')'));
@@ -990,7 +1057,8 @@ impl Studio {
     /// (`touched`: file, first and last line of each edit), hiding as much
     /// as can go. The modules it touched come out; on each, the
     /// definitions it changed and everything they use stay, the module's
-    /// interface (its provides) stays, and the rest of its internals --
+    /// interface (what it provides) stays, and the rest of its internals --
+    /// private definitions among them --
     /// helpers the turn neither touched nor needs -- fold into "N hidden".
     /// What the author pinned (opened or unhid themselves) is never
     /// hidden. (What it just wrote is not opened here: the attention model
@@ -1030,7 +1098,7 @@ impl Studio {
                     m.items
                         .iter()
                         .filter(|i| !relevant.contains(&i.name) && !pinned.contains(&i.name))
-                        .filter(|i| m.provides.as_ref().is_some_and(|p| !p.contains(&i.name)))
+                        .filter(|i| i.internal)
                         .map(|i| i.name.clone())
                         .collect()
                 };
@@ -1187,6 +1255,29 @@ mod tests {
         assert!(define_from_signature("alloc Store").is_err());
         assert!(define_from_signature("f : (Int -> Int").is_err());
         assert!(define_from_signature("type = A").is_err());
+        assert_eq!(define_from_signature("private val helper : Int -> Int").unwrap(), "(private helper)\n(: helper (-> Int Int))\n(define (helper int) ??)");
+        assert_eq!(define_from_signature("abstype Counter = C of Int").unwrap(), "(opaque Counter)\n(define-type Counter\n  (C Int))");
+        assert!(define_from_signature("abstype Env = Hash Var Addr").is_err());
+    }
+
+    #[test]
+    fn private_definitions_are_internals_and_abstract_types_read_as_abstype() {
+        // export-all, with declarations
+        let text = "(private helper)\n(define (helper x) x)\n(define (run x) (helper x))\n(opaque Counter)\n(define-type Counter (C Int))\n";
+        // a provide list that names a type but none of its constructors
+        let listed = "(provide Stack push)\n(define-type Stack (Bottom) (Push Int Stack))\n(define (push x s) (Push x s))\n(define (depth s) 0)\n";
+        // a signature that names the type alone
+        let sealed = "(provide #:sig \"stack.pufs\")\n(define-type Stack (Bottom) (Push Int Stack))\n(define (push x s) (Push x s))\n(define (depth s) 0)\n";
+        let sig = "(signature STACK (type Stack) (fun push 2))\n";
+        let o = outline(&files(&[("a.puf", text), ("b.puf", listed), ("lib/c.puf", sealed), ("lib/stack.pufs", sig)]));
+        let item = |file: &str, name: &str| o.iter().find(|m| m.path == file).unwrap().items.iter().find(|i| i.name == name).unwrap().clone();
+        assert!(item("a.puf", "helper").internal && !item("a.puf", "run").internal);
+        assert_eq!(item("a.puf", "Counter").sig, "abstype Counter = C of Int");
+        assert_eq!(o.iter().find(|m| m.path == "a.puf").unwrap().effects, 0);
+        assert!(item("b.puf", "depth").internal && !item("b.puf", "push").internal);
+        assert_eq!(item("b.puf", "Stack").sig, "abstype Stack = Bottom | Push of Int * Stack");
+        assert!(item("lib/c.puf", "depth").internal && !item("lib/c.puf", "push").internal);
+        assert_eq!(item("lib/c.puf", "Stack").sig, "abstype Stack = Bottom | Push of Int * Stack");
     }
 
     #[test]

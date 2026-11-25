@@ -1,0 +1,5 @@
+;; Two modules may each keep a private helper of the same name: a
+;; private name is never imported, so it can never collide.
+(private helper)
+(define (helper x) (* x 10))
+(define (tally xs) (foldl (lambda (x acc) (+ acc (helper x))) 0 xs))

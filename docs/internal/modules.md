@@ -65,6 +65,54 @@ Corpus: `src/test-programs/modules-typed/` exercises the type-export
 story positively on every route (interpreter, bytecode VM, native
 arm64, puffincc-on-wasm).
 
+## Privacy and abstract types
+
+`(private n ...)` and `(opaque T ...)` are module forms, stripped
+from the body like `provide` (`privacy-form?`; `module-forms?` counts
+them, so a single file that uses only them resolves as an entry
+module). `parse-privates` folds them into the module's private set —
+a private `define-type` head brings its constructors, an opaque head
+brings only its constructors — before `parse-provides`, which
+subtracts the set from export-all and rejects a provide-list entry in
+it; `check-signature` rejects a signature entry naming one (both the
+module's own ascription and a client's `#:sig` re-check). The set
+rides on the module record (`'privates` / `mod-privates`) so an
+importer's `M.name` / `#:only` error can say "is private to".
+
+**Abstract types** need the checker, which sees one flattened
+program. `resolve-modules` leaves two side tables in system.rkt /
+system.puf, next to the demangle table:
+
+- `module-abstract-types`: mangled type name → (owner module id .
+  owner basename), for every non-entry `define-type` none of whose
+  constructors the module provides;
+- `resolved-form-modules`: the owning module id (`#f` for the entry)
+  of every flattened top-level form, in order.
+
+The checker's program is the prelude followed by the resolved forms,
+so `form-module-ids` aligns the list with the program's TAIL (REPL
+evals, and a program whose length does not fit, count as the entry).
+The main check loop sets `abstract-here` per form to every abstract
+type not owned by that form's module, and `gram-name` answers `#f`
+for those: a define-type is a grammar to the checker (its
+constructors are its productions, docs/GRAMMARS.md), and denying the
+grammar is exactly what turns it into a nominal name — no template
+inclusion, no overlap, no pattern alignment. On top of that,
+`pattern-bindings` rejects any pattern other than a binder, `_` or a
+type test against an abstract scrutinee (otherwise a template pattern
+would quietly bind `_` and still take the value apart). Both tables
+are reset at the start of each resolution, and `abstract-here` at the
+start of each check (an error can leave it set mid-form).
+
+`module-private-hints` (name → ((module id . dep basename) ...)) lets
+the checker's unbound-variable message say `helper is private to
+lib.puf` when a module unqualifiedly requires a dep that keeps
+`helper` private.
+
+Corpus: `src/test-programs/modules-private` (passing), and the
+`mod-private-*`, `mod-opaque-*`, `mod-abstract-sig` cases in
+`src/errors-corpus`.
+
 ## Separate compilation
 
 `src/separate.rkt` is the build orchestrator, plus sep-mode hooks in

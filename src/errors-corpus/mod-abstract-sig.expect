@@ -1,0 +1,1 @@
+error: typecheck: Stack is abstract outside stack.puf: a pattern cannot take it apart [main.puf:2]

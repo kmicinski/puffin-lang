@@ -1,0 +1,13 @@
+(provide #:sig "stack.pufs")
+(define-type Stack (Bottom) (Push Int Stack))
+(: empty-stack Stack)
+(define empty-stack Bottom)
+(: push (-> Int Stack Stack))
+(define (push x s) (Push x s))
+(: pop (-> Stack Stack))
+(define (pop s) (match s [Bottom Bottom] [(Push _ rest) rest]))
+(: top (-> Stack Int))
+(define (top s) (match s [Bottom 0] [(Push x _) x]))
+;; not in the signature: private to this module
+(define (depth [s : Stack]) : Int
+  (match s [Bottom 0] [(Push _ rest) (+ 1 (depth rest))]))

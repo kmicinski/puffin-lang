@@ -104,12 +104,15 @@ export function graph(outline) {
   };
   for (const m of outline ?? []) {
     modules.set(m.path, m);
+    // whether the module says what is public: a provide list, or private
+    // definitions (board.rs marks both `internal`); if not, all of it is
+    const declares = m.provides != null || (m.items ?? []).some((i) => i.internal);
     for (const item of m.items ?? []) {
       const id = idOf(m.path, item.name);
       nodes.set(id, {
         id, path: m.path, name: item.name, kind: item.kind, sig: item.sig ?? "", doc: item.doc ?? "",
         line: item.line, endLine: item.end_line ?? item.line, holes: item.holes ?? 0, opaque: !!item.opaque,
-        provided: m.provides == null ? null : m.provides.includes(item.name),
+        provided: declares ? !item.internal && (m.provides == null || m.provides.includes(item.name)) : null,
         names: item.uses ?? [], uses: [], usedBy: [],
       });
       add(item.name, id);

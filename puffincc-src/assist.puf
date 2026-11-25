@@ -127,6 +127,8 @@
       [`(: ,x ,_) #:when (symbol? x) (str-cat "sig:" (symbol->string x))]
       [`(require ,m ,_ ...) #:when (string? m) (str-cat "require:" m)]
       [`(provide ,_ ...) "provide"]
+      [`(private ,_ ...) "private"]
+      [`(opaque ,_ ...) "opaque"]
       [_ (str-cat "expr:" (number->string expr-index))])))
 
 (define (op-forms)
@@ -789,7 +791,7 @@
 
 (define special-forms
   '(define lambda λ let let* letrec if cond case match when unless begin while set!
-    quote quasiquote unquote and or not else ann : define-type define-grammar define-type-alias require provide
+    quote quasiquote unquote and or not else ann : define-type define-grammar define-type-alias require provide private opaque
     foreign define-foreign-type list vector hash set))
 
 ;; names bound around the cursor by the forms on its path
@@ -1897,7 +1899,8 @@
       [(eq? h 'define) (walk-define-rest n env)]
       [(member h '(define-type require define-foreign-type foreign)) (void)]
       [(eq? h ':) (when (pair? (cdr kids)) (ref! (car (cdr kids)) env))]
-      [(eq? h 'provide) (for-each-node (lambda (k) (when (atom? k) (ref! k env))) (cdr kids))]
+      ;; provide and the privacy declarations name top-level definitions
+      [(member h '(provide private opaque)) (for-each-node (lambda (k) (when (atom? k) (ref! k env))) (cdr kids))]
       [else (walk-expr n env)])))
 
 ;; formals: a list of names or [x : T], a dotted tail, or one name

@@ -1,0 +1,6 @@
+(require "counter.puf")
+(define (peek [c : Counter]) : Int
+  (match c
+    [`(C ,n) n]
+    [_ 0]))
+(println (peek (tick (make))))

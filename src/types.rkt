@@ -526,10 +526,24 @@
 (define (unstar e) (if (star? e) (cadr e) e))
 
 ;; the grammar a type names, or #f
+;; An abstract type (docs/MODULES.md "Opaque types") is no grammar to
+;; the form being checked: its productions -- its constructors -- are
+;; private to the module that owns it, so to everyone else it is a
+;; bare name. The main check loop sets abstract-here per form (a box:
+;; gensym budget, system.rkt).
+(define abstract-here (box '()))
+;; the module whose form is being checked (#f: the entry), for the
+;; unbound-name message
+(define current-module (box #f))
 (define (gram-name t)
-  (cond [(and (symbol? t) (hash-has-key? grammar-table t)) t]
-        [(and (pair? t) (symbol? (car t)) (hash-has-key? grammar-table (car t))) (car t)]
-        [else #f]))
+  (define n (cond [(symbol? t) t]
+                  [(and (pair? t) (symbol? (car t))) (car t)]
+                  [else #f]))
+  (and n (hash-has-key? grammar-table n) (not (memq n (unbox abstract-here))) n))
+;; the abstract type t names here, or #f
+(define (abstract-name t)
+  (define n (if (pair? t) (car t) t))
+  (and (memq n (unbox abstract-here)) n))
 (define (sexpy? t) (or (sexp-type? t) (and (gram-name t) #t)))
 
 ;; substitution into a shape: literals are data, never parameters
@@ -1030,6 +1044,9 @@
     [_ e]))
 
 (define (typecheck-program p0)
+  ;; a previous program's check may have stopped at an error mid-form
+  (set-box! abstract-here '())
+  (set-box! current-module #f)
   (match p0
     [`(program ,forms000 ...)
      (define forms00 (map expand-with-handlers forms000))
@@ -1290,6 +1307,10 @@
              ;; happily dispatched as function index 0 = the program
              ;; entry -- calling a typo'd name re-entered main until
              ;; the stack died. Scope errors are compile-time errors.
+             ;; ... and when a required module keeps the name private,
+             ;; the message says so
+             [(module-private-hint (unbox current-module) x)
+              => (λ (dep) (type-error "~a is private to ~a" (nm x) dep))]
              [else (type-error "unbound variable ~a" (nm x))]))
 
      ;; check an application of `ft` to synthesized arg types.
@@ -1364,6 +1385,12 @@
 
      ;; pattern: returns bindings ((x . t) ...) and checks ctor shapes
      (define (pattern-bindings pat scrut-t)
+       ;; only binders, _ and type tests may meet an abstract type:
+       ;; every other pattern looks at the representation
+       (define a (abstract-name scrut-t))
+       (when (and a (pair? pat) (not (eq? (car pat) '?)))
+         (type-error "~a is abstract outside ~a: a pattern cannot take it apart"
+                     (ty scrut-t) (module-abstract-owner a)))
        (match pat
          ['_ '()]
          [(? symbol? s)
@@ -1788,9 +1815,14 @@
        (match f [`(,_ : ,t) (check-type-wf t '() adts) t] [_ '_]))
      (define (formal-name* f) (match f [`(,x : ,_) x] [x x]))
 
-     ;; check every top-level form under `top`
+     ;; check every top-level form under `top`; each form sees through
+     ;; the abstract types of its own module only
+     (define form-mids (form-module-ids forms))
      (for-each-form forms
       (λ (f)
+       (set-box! current-module (car form-mids))
+       (set-box! abstract-here (abstract-types-in (car form-mids)))
+       (set! form-mids (cdr form-mids))
        ;; FFI forms were validated above (plain test, not a match
        ;; clause: gensym budget)
        (if (and (pair? f) (memq (car f) '(foreign define-foreign-type #%extern-foreign-type)))
@@ -1845,6 +1877,8 @@
             (type-error "~a is declared ~a but its value has type ~a" (nm x) (ty dt) (ty et)))
           (when (eq? dt '_) (hash-set! top x (if (set-member? assigned x) (loosen et) et)))]
          [e (synth e '())]))))
+     (set-box! abstract-here '())
+     (set-box! current-module #f)
      ;; typed interfaces (separate compilation): deposit the final
      ;; top-level environment -- declared, derived, and synthesized
      ;; types alike -- for the .pufi writer. Inert when unset.

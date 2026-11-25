@@ -502,8 +502,8 @@ export function createBoard({ send, stage, onShow }) {
       if (counts.bad) meta.append(el("span", "board-meta-bad", ` · ✗ ${counts.bad}`));
       if (counts.open) meta.append(el("span", "board-holes", ` · ◌ ${counts.open}`));
     } else {
-      if (m.provides) {
-        const exported = m.items.filter((i) => m.provides.includes(i.name)).length;
+      if (m.items.some((i) => i.internal)) {
+        const exported = m.items.filter((i) => !i.internal).length;
         meta.textContent = `${exported} of ${m.items.length} provided`;
       } else meta.textContent = `${m.items.length} definition${m.items.length === 1 ? "" : "s"}`;
       if (planned) meta.append(el("span", "board-holes", ` · ◌ ${planned} planned`));
@@ -570,6 +570,7 @@ export function createBoard({ send, stage, onShow }) {
       "board-item",
       `kind-${item.kind}`,
       item.opaque && "opaque",
+      item.internal && "internal",
       isHidden && "is-hidden",
       focused && "focused",
       fresh.has(key) && "fresh",
@@ -654,7 +655,7 @@ export function createBoard({ send, stage, onShow }) {
     hide.addEventListener("click", (event) => { event.stopPropagation(); toggleHidden(m.path, item.name, isHidden); });
     actions.append(edit, hide);
     line.append(actions);
-    line.title = [item.doc, `${m.path}:${item.line}`, item.uses.length ? `uses ${item.uses.join(", ")}` : ""].filter(Boolean).join("\n");
+    line.title = [item.doc, `${m.path}:${item.line}`, item.uses.length ? `uses ${item.uses.join(", ")}` : "", item.internal ? "internal: not part of the module's interface" : ""].filter(Boolean).join("\n");
     // a click: its code into the lane; a double-click: the focus
     line.addEventListener("click", () => { cursor = key; });
     clicks(line, () => view?.pull(m.path, item.name), () => view?.focus(m.path, item.line));
@@ -850,7 +851,7 @@ export function createBoard({ send, stage, onShow }) {
   // `val step : State -> State`, the name picked out
   function signature(item) {
     const node = el("span", "board-sig");
-    const m = item.sig.match(/^(val|type|grammar) (\S+)(.*)$/s);
+    const m = item.sig.match(/^(val|type|abstype|grammar) (\S+)(.*)$/s);
     if (!m) {
       node.textContent = item.sig;
       return node;
