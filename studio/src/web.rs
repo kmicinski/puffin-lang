@@ -376,22 +376,41 @@ async fn send_init(socket: &mut WebSocket, studio: &Studio) -> Result<(), axum::
 
 /// Tell the tab why its request failed, if it did.
 fn notice(direct: &mpsc::UnboundedSender<String>, outcome: Result<(), String>) {
-    if let Err(message) = outcome {
-        let _ = direct.send(json(&Reply::Notice { message: &message }));
-    }
+    told(direct, outcome.map(|()| String::new()));
 }
 
 /// As `notice`, for an outcome with something to say when it went well.
 fn told(direct: &mpsc::UnboundedSender<String>, outcome: Result<String, String>) {
-    match outcome {
-        Ok(message) if !message.is_empty() => {
-            let _ = direct.send(json(&Reply::Notice { message: &message }));
-        }
-        Ok(_) => {}
-        Err(message) => {
-            let _ = direct.send(json(&Reply::Notice { message: &message }));
-        }
+    let (Ok(message) | Err(message)) = outcome;
+    if !message.is_empty() {
+        let _ = direct.send(json(&Reply::Notice { message: &message }));
     }
+}
+
+/// An outcome as a reply carries it: the value (`otherwise` when there is
+/// none) and the error.
+fn parts<T>(outcome: Result<T, String>, otherwise: T) -> (T, Option<String>) {
+    match outcome {
+        Ok(value) => (value, None),
+        Err(error) => (otherwise, Some(error)),
+    }
+}
+
+/// Where a request points: the program as it is now, the version and text
+/// of `file` in it, and the UTF-16 offset `pos` there as a byte offset.
+struct Point {
+    files: crate::toolchain::Files,
+    version: u64,
+    text: String,
+    at: usize,
+}
+
+fn point(studio: &Studio, file: &str, pos: usize) -> Point {
+    let files = studio.files();
+    let version = studio.version_of(file).unwrap_or(0);
+    let text = files.get(file).cloned().unwrap_or_default();
+    let at = sexp::byte_of_utf16(&text, pos);
+    Point { files, version, text, at }
 }
 
 /// Edits' byte offsets into `text` as UTF-16 offsets.
@@ -409,17 +428,17 @@ fn edits_in_utf16(text: &str, edits: &mut Value) {
 /// with the byte `pos` (and `end`) it was asked at; and the version they
 /// are for.
 async fn assists_at(studio: &Studio, file: &str, pos: usize, end: Option<usize>) -> (u64, Value, Option<String>) {
-    let files = studio.files();
-    let version = studio.version_of(file).unwrap_or(0);
-    let Some(text) = files.get(file) else { return (version, json!([]), Some(format!("no file {file}"))) };
-    let at = sexp::byte_of_utf16(text, pos);
-    let until = end.map(|end| sexp::byte_of_utf16(text, end)).filter(|until| *until > at);
+    let Point { files, version, text, at } = point(studio, file, pos);
+    if !files.contains_key(file) {
+        return (version, json!([]), Some(format!("no file {file}")));
+    }
+    let until = end.map(|end| sexp::byte_of_utf16(&text, end)).filter(|until| *until > at);
     let args = [Some(at), until].into_iter().flatten().map(|n| n.to_string()).collect();
     match studio.toolchain.assist_with(&files, "assists", file, args).await {
         Ok(answer) => {
             let mut assists = answer["assists"].clone();
             for assist in assists.as_array_mut().into_iter().flatten() {
-                edits_in_utf16(text, &mut assist["edits"]);
+                edits_in_utf16(&text, &mut assist["edits"]);
                 assist["pos"] = json!(at);
                 if let Some(until) = until {
                     assist["end"] = json!(until);
@@ -435,10 +454,10 @@ async fn assists_at(studio: &Studio, file: &str, pos: usize, end: Option<usize>)
 /// The clause patterns the match at UTF-16 offset `pos` of `file` still
 /// lacks, from the type, the session and the call sites.
 async fn completions_at(studio: &Studio, file: &str, pos: usize) -> (u64, Value, Option<String>) {
-    let files = studio.files();
-    let version = studio.version_of(file).unwrap_or(0);
-    let Some(text) = files.get(file) else { return (version, json!([]), Some(format!("no file {file}"))) };
-    let at = sexp::byte_of_utf16(text, pos);
+    let Point { files, version, at, .. } = point(studio, file, pos);
+    if !files.contains_key(file) {
+        return (version, json!([]), Some(format!("no file {file}")));
+    }
     match studio.toolchain.assist_with(&files, "complete", file, vec![at.to_string()]).await {
         Ok(answer) => (version, answer["candidates"].clone(), None),
         Err(report) => (version, json!([]), Some(report.describe())),
@@ -553,61 +572,40 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
         }
         Request::Rename { seq, file, pos, name } => {
             tokio::spawn(async move {
-                let files = studio.files();
-                let version = studio.version_of(&file).unwrap_or(0);
-                let text = files.get(&file).cloned().unwrap_or_default();
-                let at = sexp::byte_of_utf16(&text, pos);
-                let (edits, error) = match studio.toolchain.rename(&files, &file, at, &name).await {
-                    Ok(mut edits) => {
-                        edits_in_utf16(&text, &mut edits);
-                        (edits, None)
-                    }
-                    Err(error) => (json!([]), Some(error)),
-                };
+                let Point { files, version, text, at } = point(&studio, &file, pos);
+                let renamed = studio.toolchain.rename(&files, &file, at, &name).await.map(|mut edits| {
+                    edits_in_utf16(&text, &mut edits);
+                    edits
+                });
+                let (edits, error) = parts(renamed, json!([]));
                 let note = error.is_none().then(|| importers_note(&files, &file, at)).flatten();
                 let _ = direct.send(json(&Reply::Renamed { seq, version, pos: at, edits, error, note }));
             });
         }
         Request::TypeAt { seq, file, pos } => {
             tokio::spawn(async move {
-                let files = studio.files();
-                let text = files.get(&file).cloned().unwrap_or_default();
-                let at = sexp::byte_of_utf16(&text, pos);
-                let (kind, error) = match studio.toolchain.assist(&files, "type-at", &file, Some(at)).await {
-                    Ok(answer) => (answer["type"].clone(), None),
-                    Err(report) => (Value::Null, Some(report.describe())),
-                };
+                let Point { files, at, .. } = point(&studio, &file, pos);
+                let answer = studio.toolchain.assist(&files, "type-at", &file, Some(at)).await;
+                let (kind, error) = parts(answer.map(|answer| answer["type"].clone()).map_err(|report| report.describe()), Value::Null);
                 let _ = direct.send(json(&Reply::Type { seq, r#type: kind, error }));
             });
         }
         Request::Facts { seq, file, pos, full } => {
             tokio::spawn(async move {
-                let files = studio.files();
-                let version = studio.version_of(&file).unwrap_or(0);
-                let text = files.get(&file).cloned().unwrap_or_default();
-                let at = sexp::byte_of_utf16(&text, pos);
-                let (facts, error) = match studio.facts_at(&files, &file, at, full).await {
-                    Ok(facts) => (facts, None),
-                    Err(error) => (Value::Null, Some(error)),
-                };
+                let Point { files, version, at, .. } = point(&studio, &file, pos);
+                let (facts, error) = parts(studio.facts_at(&files, &file, at, full).await, Value::Null);
                 let _ = direct.send(json(&Reply::Facts { seq, version, facts, error }));
             });
         }
         Request::Echo { line } => studio.echo(&line),
-        Request::Pin { entry } => match studio.pin(entry) {
-            Ok(message) => reply(json(&Reply::Notice { message: &message })),
-            Err(error) => notice(&direct, Err(format!("cannot pin: {error}"))),
-        },
+        Request::Pin { entry } => told(&direct, studio.pin(entry).map_err(|error| format!("cannot pin: {error}"))),
         Request::Test => {
             tokio::spawn(async move {
                 studio.run_tests().await;
             });
         }
         Request::Ask { thread, message, context } => {
-            let (thread, error) = match studio.ask(thread, message.clone(), context) {
-                Ok(thread) => (Some(thread), None),
-                Err(error) => (None, Some(error)),
-            };
+            let (thread, error) = parts(studio.ask(thread, message.clone(), context).map(Some), None);
             reply(json(&Reply::Asked { thread, message: &message, error }));
         }
         Request::Voice { text, context } => match studio.voice.unavailable() {
@@ -635,28 +633,19 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
         Request::History { seq } => {
             tokio::spawn(async move {
                 let tracked = studio.tracked;
-                let (moments, error) = match studio.history().await {
-                    Ok(moments) => (moments, None),
-                    Err(error) => (Vec::new(), Some(error)),
-                };
+                let (moments, error) = parts(studio.history().await, Vec::new());
                 let _ = direct.send(json(&Reply::History { seq, tracked, moments, error }));
             });
         }
         Request::HistoryDiff { seq, commit } => {
             tokio::spawn(async move {
-                let (diff, error) = match studio.history_diff(commit.clone()).await {
-                    Ok(diff) => (diff, None),
-                    Err(error) => (String::new(), Some(error)),
-                };
+                let (diff, error) = parts(studio.history_diff(commit.clone()).await, String::new());
                 let _ = direct.send(json(&Reply::HistoryDiff { seq, commit, diff, error }));
             });
         }
         Request::FilesAt { seq, commit } => {
             tokio::spawn(async move {
-                let (files, error) = match studio.files_at(commit.clone()).await {
-                    Ok(files) => (files, None),
-                    Err(error) => (Default::default(), Some(error)),
-                };
+                let (files, error) = parts(studio.files_at(commit.clone()).await, Default::default());
                 let _ = direct.send(json(&Reply::FilesAt { seq, commit, files, error }));
             });
         }
