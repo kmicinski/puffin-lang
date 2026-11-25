@@ -6,7 +6,7 @@
 //
 //   createProjects({ button, menu, send }) -> { receive }
 
-import { el } from "./dom.js";
+import { el, nameField } from "./dom.js";
 
 const when = (ms) => {
   if (!ms) return "";
@@ -33,10 +33,7 @@ export function createProjects({ button, menu, send }) {
   function render() {
     menu.replaceChildren();
     const make = menu.appendChild(el("form", "projects-new"));
-    const name = make.appendChild(el("input"));
-    name.placeholder = "name (empty: a random one)";
-    name.spellcheck = false;
-    name.autocomplete = "off";
+    const name = make.appendChild(nameField("", "name (empty: a random one)"));
     const go = make.appendChild(el("button", "btn new small", "New project"));
     go.type = "submit";
     make.addEventListener("submit", (event) => {

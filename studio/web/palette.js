@@ -5,7 +5,7 @@
 // Matching is by letters in order (as VS Code's quick open), scored so a
 // match at the start of a word, or of the whole title, ranks first.
 
-import { el } from "./dom.js";
+import { el, nameField } from "./dom.js";
 
 // a score for `typed` in `text` (higher is better), or -1
 function score(text, typed) {
@@ -36,10 +36,7 @@ export function createPalette({ stage, commands }) {
   const shade = el("div", "palette-shade");
   shade.hidden = true;
   const box = el("div", "palette");
-  const field = el("input", "palette-input");
-  field.placeholder = "Type a command, a file, or a definition";
-  field.spellcheck = false;
-  field.autocomplete = "off";
+  const field = nameField("palette-input", "Type a command, a file, or a definition");
   const list = el("div", "palette-list");
   const foot = el("div", "palette-foot");
   foot.append(el("span", "", "↑↓ choose"), el("span", "", "↵ run"), el("span", "", "⇧↵ definition on the board"), el("span", "", "Esc close"));

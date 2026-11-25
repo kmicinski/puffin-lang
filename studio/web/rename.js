@@ -11,7 +11,7 @@
 
 import { tokens } from "./lexer.js";
 import { utf16Of } from "./assists.js";
-import { el } from "./dom.js";
+import { el, nameField } from "./dom.js";
 import { requests } from "./requests.js";
 
 // The word of `text` at `pos` (or ending at it): { start, end, word }.
@@ -25,8 +25,7 @@ export function createRename({ editor, files, send, note }) {
   let available = false;
   const box = document.body.appendChild(el("div", "rename-box"));
   box.hidden = true;
-  const input = box.appendChild(el("input", "rename-input"));
-  input.spellcheck = false;
+  const input = box.appendChild(nameField("rename-input"));
   const said = box.appendChild(el("div", "rename-error"));
   let target = null; // { file, start, word }
 

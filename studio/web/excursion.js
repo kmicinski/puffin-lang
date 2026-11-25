@@ -9,16 +9,14 @@
 // apply-fn do?"); ✕ or "close the excursion" ends it.
 
 import { escape, markdown } from "./markdown.js";
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 
 export function createExcursion({ host, view, monaco, files, go, close }) {
   const card = el("div", "voice-excursion voice-float");
   card.hidden = true;
   const head = el("div", "voice-card-head");
   const title = el("span", "voice-excursion-title", "Excursion");
-  const x = el("button", "voice-x", "✕");
-  x.title = "Close the excursion (say “close the excursion”)";
-  x.addEventListener("click", () => close());
+  const x = button("voice-x", "✕", () => close(), "Close the excursion (say “close the excursion”)");
   head.append(title, x);
   const body = el("div", "voice-excursion-body");
   const pieces = el("div", "voice-excursion-fragments");

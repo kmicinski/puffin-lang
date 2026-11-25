@@ -23,7 +23,7 @@
 import { createTimeline } from "./timeline.js";
 import { createProgress } from "./progress.js";
 import { createExcursion } from "./excursion.js";
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 import { recallJSON, remember } from "./stored.js";
 
 const STORE = "puffin-voice";
@@ -52,7 +52,7 @@ function wordAt(line, column) {
   return line.slice(start, end + 1);
 }
 
-export function createVoice({ editor, files, send, note, button, stage, layout, board, run }) {
+export function createVoice({ editor, files, send, note, button: voiceButton, stage, layout, board, run }) {
   const saved = load();
   // replies are written, not spoken, unless asked for (its own key: an
   // older `speak` was the old default, on)
@@ -170,8 +170,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
   function renderMenu() {
     menu.replaceChildren();
     const item = (label, action, checked) => {
-      const row = el("button", `voice-menu-item${checked ? " checked" : ""}`, label);
-      row.addEventListener("click", () => { menu.hidden = true; action(); });
+      const row = button(`voice-menu-item${checked ? " checked" : ""}`, label, () => { menu.hidden = true; action(); });
       menu.append(row);
     };
     item("Follow the builder's edits", () => setFollow(!settings.follow), settings.follow);
@@ -256,9 +255,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     lensTimer = setTimeout(() => { lensCard.hidden = true; }, LENS_IDLE_MS);
     lensCard.replaceChildren();
     const head = el("div", "voice-card-head");
-    const close = el("button", "voice-x", "✕");
-    close.title = "Close (Esc)";
-    close.addEventListener("click", () => { lensCard.hidden = true; });
+    const close = button("voice-x", "✕", () => { lensCard.hidden = true; }, "Close (Esc)");
     head.append(el("span", "", `${lens.label} · ${lens.index + 1} of ${lens.targets.length}`), close);
     lensCard.append(head);
     const list = el("div", "voice-lens-list");
@@ -324,8 +321,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     badge.title = "The properties (say “run the properties”)";
     propCard.replaceChildren();
     const head = el("div", "voice-card-head");
-    const close = el("button", "voice-x", "✕");
-    close.addEventListener("click", () => { propCard.hidden = true; });
+    const close = button("voice-x", "✕", () => { propCard.hidden = true; });
     head.append(el("span", "", "Properties"), close);
     propCard.append(head);
     if (properties.error) propCard.append(el("div", "voice-prop-error", properties.error));
@@ -813,7 +809,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     on = value;
     document.body.classList.toggle("voice-on", on);
     layer.hidden = !on;
-    button.classList.toggle("on", on);
+    voiceButton.classList.toggle("on", on);
     // remembered under its own name: an older "voice off" (`on`) predates
     // the focused layout being the default, and does not count
     store({ ...load(), layout: on ? "focus" : "panes" });
@@ -831,7 +827,7 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     setTimeout(() => view?.layout(), 0);
   }
 
-  button.addEventListener("click", () => toggle());
+  voiceButton.addEventListener("click", () => toggle());
   window.addEventListener("keydown", (event) => {
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "v") {
       event.preventDefault();

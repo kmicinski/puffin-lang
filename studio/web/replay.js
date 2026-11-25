@@ -9,7 +9,7 @@
 //   createReplay({ editor, send, history, clock, panel, past, pastTabs, pastTranscript })
 //     -> { on, start, goto, receive }
 
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 import { dateOf, timeOfDay } from "./words.js";
 
 const TRANSCRIPT_KINDS = new Set(["eval", "ask", "test", "echo"]);
@@ -127,8 +127,7 @@ export function createReplay({ editor, send, history, clock, panel, past, pastTa
     pastTabs.replaceChildren(
       el("span", "past-badge", "then"),
       ...paths.map((path) => {
-        const tab = el("button", `file-tab${path === shownFile ? " active" : ""}`, path);
-        tab.addEventListener("click", () => { shownFile = path; renderFiles(commit); });
+        const tab = button(`file-tab${path === shownFile ? " active" : ""}`, path, () => { shownFile = path; renderFiles(commit); });
         return tab;
       }),
     );

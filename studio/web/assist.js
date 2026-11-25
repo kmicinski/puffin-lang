@@ -19,7 +19,7 @@
 import { markdown } from "./markdown.js";
 import { balanced } from "./lexer.js";
 import { renderOutput } from "./trace.js";
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 import { plural } from "./words.js";
 import { recall, remember } from "./stored.js";
 
@@ -325,9 +325,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       repl.run(step.command);
       item.classList.add("done");
     });
-    const edit = item.appendChild(el("button", "small secondary", "Insert"));
-    edit.title = "Put it in the prompt to edit";
-    edit.addEventListener("click", () => insert(step.command));
+    item.append(button("small secondary", "Insert", () => insert(step.command), "Put it in the prompt to edit"));
     if (step.note) item.append(el("div", "note", step.note));
     return item;
   }

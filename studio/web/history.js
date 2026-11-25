@@ -10,7 +10,7 @@
 // `onMoments(list)` gets every timeline received (replay.js slides over
 // it); `onJump(index)` is a click on a row's time.
 
-import { el } from "./dom.js";
+import { button, debounce, el } from "./dom.js";
 import { dateOf, plural, timeOfDay } from "./words.js";
 
 // what each kind of moment is called, and the filter it falls under
@@ -49,7 +49,6 @@ export function createHistory({ panel, send, onMoments, onJump }) {
   let error = null;
   const diffs = new Map(); // commit -> diff text, once fetched
   const expanded = new Set(); // moment indexes shown in full
-  let refreshTimer = 0;
 
   function show(on) {
     open = on;
@@ -65,6 +64,7 @@ export function createHistory({ panel, send, onMoments, onJump }) {
   function load() {
     send({ t: "history", seq: ++seq });
   }
+  const refreshSoon = debounce(request, 700);
 
   // one line for a moment: what it was
   function summary(moment) {
@@ -103,11 +103,9 @@ export function createHistory({ panel, send, onMoments, onJump }) {
     head.append(el("span", "", "History"));
     const filters = head.appendChild(el("span", "history-filters"));
     for (const [key, word] of FILTERS) {
-      const chip = filters.appendChild(el("button", `chip${filter === key ? " on" : ""}`, word));
-      chip.addEventListener("click", () => { filter = key; render(); });
+      filters.append(button(`chip${filter === key ? " on" : ""}`, word, () => { filter = key; render(); }));
     }
-    const x = head.appendChild(el("button", "quiet small", "×"));
-    x.addEventListener("click", () => show(false));
+    head.append(button("quiet small", "×", () => show(false)));
     if (error) panel.append(el("p", "hint", error));
     if (!tracked) {
       panel.append(el("p", "hint", "This project is not a repository of its own, so only this run is here. A project made from the Projects menu keeps its whole history in git."));
@@ -196,9 +194,7 @@ export function createHistory({ panel, send, onMoments, onJump }) {
     },
     // something happened: refresh, a little later, if shown
     changed() {
-      if (!open) return;
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(request, 700);
+      if (open) refreshSoon();
     },
     load,
     summary,

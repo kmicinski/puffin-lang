@@ -17,7 +17,7 @@
 //     -> { toggle, show, newFile, quickOpen, receive }
 
 import { basename, dirname, sorted } from "./files.js";
-import { el } from "./dom.js";
+import { button, el, nameField } from "./dom.js";
 import { plural } from "./words.js";
 import { recall, remember } from "./stored.js";
 
@@ -183,12 +183,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     render();
   }
 
-  function action(text, title, onClick) {
-    const node = el("button", "quiet small tree-action", text);
-    node.title = title;
-    node.addEventListener("click", (event) => { event.stopPropagation(); onClick(); });
-    return node;
-  }
+  const action = (text, title, onClick) => button("quiet small tree-action", text, (event) => { event.stopPropagation(); onClick(); }, title);
 
   // the ⋯ at a row's end: its menu
   function more(items) {
@@ -220,10 +215,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function entryRow(depth) {
     const node = row(`entry ${editing.kind}`, depth, "");
-    const field = node.appendChild(el("input", "tree-input"));
-    field.placeholder = editing.kind === "new-file" ? "name.puf" : "folder";
-    field.spellcheck = false;
-    field.autocomplete = "off";
+    const field = node.appendChild(nameField("tree-input", editing.kind === "new-file" ? "name.puf" : "folder"));
     bindEntry(field, (typed, was) => {
       const path = join(was.folder, typed);
       if (was.kind === "new-file") files.newFile(path);
@@ -238,10 +230,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     const slot = document.getElementById("tab-list");
     const old = slot.querySelector(".tab-entry");
     if (old) return;
-    const field = el("input", "tree-input tab-entry");
-    field.placeholder = editing.kind === "new-file" ? "new file: name.puf" : "new folder";
-    field.spellcheck = false;
-    field.autocomplete = "off";
+    const field = nameField("tree-input tab-entry", editing.kind === "new-file" ? "new file: name.puf" : "new folder");
     bindEntry(field, (typed, was) => {
       if (was.kind === "new-file") files.newFile(typed);
       else files.newFolder(typed);
@@ -274,10 +263,8 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
 
   function editRow(node, name, done) {
     node.classList.add("editing");
-    const field = node.appendChild(el("input", "tree-input"));
+    const field = node.appendChild(nameField("tree-input"));
     field.value = name;
-    field.spellcheck = false;
-    field.autocomplete = "off";
     bindEntry(field, (typed) => { if (typed !== name) done(typed); else render(); });
     setTimeout(() => {
       field.focus();
@@ -347,8 +334,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     closeMenu();
     menu = document.body.appendChild(el("div", "tree-menu"));
     for (const [word, run] of items) {
-      const item = menu.appendChild(el("button", "tree-menu-item", word));
-      item.addEventListener("click", (event) => { event.stopPropagation(); closeMenu(); run(); });
+      menu.append(button("tree-menu-item", word, (event) => { event.stopPropagation(); closeMenu(); run(); }));
     }
     menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
     menu.style.top = `${Math.min(y, window.innerHeight - items.length * 28 - 12)}px`;
@@ -432,10 +418,7 @@ export function createTree({ panel, toggle, add, quick, files, editor, note }) {
     closeMenu();
     quick.hidden = false;
     quick.replaceChildren();
-    const field = quick.appendChild(el("input", "quick-input"));
-    field.placeholder = "open a file: type part of its path";
-    field.spellcheck = false;
-    field.autocomplete = "off";
+    const field = quick.appendChild(nameField("quick-input", "open a file: type part of its path"));
     const list = quick.appendChild(el("div", "quick-list"));
     const refresh = () => {
       const typed = field.value.trim().toLowerCase();

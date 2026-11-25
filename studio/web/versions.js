@@ -5,7 +5,7 @@
 // the text again, as a new version.
 
 import { lineDiff } from "./hunks.js";
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 import { timeOfDay } from "./words.js";
 
 const ORIGINS = { open: "opened", save: "saved", accept: "accepted", disk: "changed on disk", restore: "restored" };
@@ -29,8 +29,7 @@ export function createVersions({ panel, files, send }) {
     panel.replaceChildren();
     const head = panel.appendChild(el("div", "versions-head"));
     head.append(el("span", "", `Versions of ${file}`));
-    const x = head.appendChild(el("button", "quiet small", "×"));
-    x.addEventListener("click", () => show(false));
+    head.append(button("quiet small", "×", () => show(false)));
     if (!versions.length) panel.append(el("p", "hint", "No versions yet."));
     for (const version of [...versions].reverse()) {
       const row = panel.appendChild(el("div", "version-row"));
@@ -38,8 +37,7 @@ export function createVersions({ panel, files, send }) {
       row.append(el("span", "version-when", timeOfDay(version.created)));
       const what = row.appendChild(el("span", "version-what", version.label || version.forms_changed.map((f) => f.split(":").slice(1).join(":")).join(", ")));
       what.title = version.forms_changed.join("\n");
-      const diff = row.appendChild(el("button", "quiet small", "Compare"));
-      diff.addEventListener("click", () => send({ t: "version-text", id: version.id }));
+      row.append(button("quiet small", "Compare", () => send({ t: "version-text", id: version.id })));
       const restore = row.appendChild(el("button", "secondary small", "Restore"));
       restore.title = "Make this the file's text again, as a new version (undo takes it back)";
       restore.addEventListener("click", () => {
@@ -56,8 +54,7 @@ export function createVersions({ panel, files, send }) {
     const box = panel.appendChild(el("div", "version-compare"));
     const head = box.appendChild(el("div", "versions-head"));
     head.append(el("span", "", `v${compare.id} → now`));
-    const x = head.appendChild(el("button", "quiet small", "×"));
-    x.addEventListener("click", () => { compare = null; request(); });
+    head.append(button("quiet small", "×", () => { compare = null; request(); }));
     const pre = box.appendChild(el("pre", "version-diff"));
     const diff = lineDiff(compare.text.split("\n"), now.split("\n"));
     if (!diff.some((d) => d.kind !== "same")) pre.append(el("span", "same", "the same as now"));

@@ -9,7 +9,7 @@
 // the foot says what the builder is doing now.
 
 import { markdown } from "./markdown.js";
-import { el } from "./dom.js";
+import { button, el } from "./dom.js";
 import { outcomeWord, plural, turnLabel } from "./words.js";
 import { recall, remember } from "./stored.js";
 
@@ -29,9 +29,7 @@ export function createTimeline({ host, go }) {
   const box = el("div", "timeline voice-float");
   const head = el("div", "timeline-head");
   const title = el("span", "timeline-title", "What happened");
-  const fold = el("button", "voice-x", "‹");
-  fold.title = "Hide (say “hide history”)";
-  fold.addEventListener("click", () => setCollapsed(true));
+  const fold = button("voice-x", "‹", () => setCollapsed(true), "Hide (say “hide history”)");
   head.append(title, fold);
   const list = el("div", "timeline-list");
   const live = el("div", "timeline-live");
@@ -166,8 +164,7 @@ export function createTimeline({ host, go }) {
     // a navigation's result, as a way back to it
     focus(label, targets, again) {
       if (!exchange) return;
-      const link = el("button", "timeline-focus", `→ ${label}${targets.length > 1 ? ` (${targets.length} places)` : ""}`);
-      link.addEventListener("click", again);
+      const link = button("timeline-focus", `→ ${label}${targets.length > 1 ? ` (${targets.length} places)` : ""}`, again);
       exchange.node.append(link);
       scroll();
     },
@@ -213,9 +210,7 @@ export function createTimeline({ host, go }) {
       }
       step.lines = true;
       step.turn.counts.edits++;
-      const where = el("button", "timeline-where", `${file}:${from}${to > from ? `–${to}` : ""}`);
-      where.title = "Show these lines";
-      where.addEventListener("click", () => go(file, from, to));
+      const where = button("timeline-where", `${file}:${from}${to > from ? `–${to}` : ""}`, () => go(file, from, to), "Show these lines");
       step.line.append(where);
       if (code) {
         const more = el("button", "timeline-more", "▾");

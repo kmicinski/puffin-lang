@@ -14,7 +14,7 @@
 import { groupHunk, place } from "./hunks.js";
 import { forms } from "./lexer.js";
 import { createInlineDiff } from "./inline-diff.js";
-import { el } from "./dom.js";
+import { button, debounce, el } from "./dom.js";
 import { plural } from "./words.js";
 
 const TONES = 5;
@@ -34,11 +34,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
     },
   });
   if (editor.raw) {
-    let timer = null;
-    editor.raw.editor.onDidChangeModelContent(() => {
-      clearTimeout(timer);
-      timer = setTimeout(refresh, 120);
-    });
+    editor.raw.editor.onDidChangeModelContent(debounce(refresh, 120));
     editor.raw.editor.onDidChangeModel(() => setTimeout(refresh, 0));
   }
 
@@ -113,8 +109,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
       : check.with.length ? `It builds on ${ids(check.with)}, which are accepted with it, as one new version`
       : "Make this change, as a new version";
     accept.addEventListener("click", () => acceptIds(group.ids));
-    const reject = line.appendChild(el("button", "ip-reject", "Reject"));
-    reject.addEventListener("click", () => rejectIds(group.ids));
+    const reject = line.appendChild(button("ip-reject", "Reject", () => rejectIds(group.ids)));
     return line;
   }
 
@@ -182,24 +177,16 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
     if (group) what.append(el("span", "ip-of", ` · ${changesetOf(group.changeset)?.title ?? ""}`));
     for (const [path, groups] of state.files) {
       if (path === files.active()) continue;
-      const show = bar.appendChild(el("button", "secondary small", `${path} (${groups.length})`));
-      show.title = `Show the changes to ${path}`;
-      show.addEventListener("click", () => focus(path));
+      bar.append(button("secondary small", `${path} (${groups.length})`, () => focus(path), `Show the changes to ${path}`));
     }
     if (state.unplaced.length) {
-      const gone = bar.appendChild(el("button", "quiet small", `${state.unplaced.length} no longer applies`));
-      gone.title = `${ids(state.unplaced)}: their text changed since they were proposed. Click to reject them.`;
-      gone.addEventListener("click", () => rejectIds(state.unplaced));
+      bar.append(button("quiet small", `${state.unplaced.length} no longer applies`, () => rejectIds(state.unplaced), `${ids(state.unplaced)}: their text changed since they were proposed. Click to reject them.`));
     }
     if (state.groups.length) {
       const nav = bar.appendChild(el("span", "ip-nav"));
-      const previous = nav.appendChild(el("button", "quiet small", "‹"));
-      previous.title = "Previous change (Shift+F7)";
-      previous.addEventListener("click", () => step(-1));
+      nav.append(button("quiet small", "‹", () => step(-1), "Previous change (Shift+F7)"));
       nav.append(el("span", "ip-index", `${state.groups.indexOf(group) + 1}/${state.groups.length}`));
-      const next = nav.appendChild(el("button", "quiet small", "›"));
-      next.title = "Next change (F7)";
-      next.addEventListener("click", () => step(1));
+      nav.append(button("quiet small", "›", () => step(1), "Next change (F7)"));
     }
     const changeset = group?.changeset ?? pending()[0]?.changeset;
     if (changeset) {
@@ -213,9 +200,7 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
         files.flush();
         send({ t: "accept-changeset", changeset });
       });
-      const none = bar.appendChild(el("button", "secondary small", "Reject all"));
-      none.title = `Reject every change of “${title}”`;
-      none.addEventListener("click", () => rejectIds(open.map((op) => op.id)));
+      bar.append(button("secondary small", "Reject all", () => rejectIds(open.map((op) => op.id)), `Reject every change of “${title}”`));
     }
   }
 
@@ -230,27 +215,27 @@ export function createProposals({ editor, files, send, bar, onChange = () => {} 
       .filter(([, n]) => n).map(([status, n]) => (n === ops.length ? status : `${n} ${status}`));
     const stale = open.filter((op) => op.stale).length;
     const words = [`Proposed ${plural(ops.length, "change")}`, ...counts, ...(stale ? [`${stale} no longer applies`] : [])];
-    const button = el("button", `proposal-chip ${toneOf(ops[0].thread)}${open.length ? "" : " done"}`);
-    button.append(el("span", "ip-dot"), el("span", "", words.join(" · ")));
+    const node = el("button", `proposal-chip ${toneOf(ops[0].thread)}${open.length ? "" : " done"}`);
+    node.append(el("span", "ip-dot"), el("span", "", words.join(" · ")));
     const files_ = [...new Set(ops.map((op) => op.file))];
-    button.append(el("span", "chip-files", files_.join(", ")));
+    node.append(el("span", "chip-files", files_.join(", ")));
     if (open.length) {
-      button.append(el("span", "chip-view", "view"));
-      button.title = "Show them in the editor";
+      node.append(el("span", "chip-view", "view"));
+      node.title = "Show them in the editor";
     }
-    button.addEventListener("click", () => {
+    node.addEventListener("click", () => {
       const first = open.find((op) => !op.stale);
       if (first) focus(first.file, first.id);
     });
     if (open.length && open.every((op) => op.check?.ok && !op.stale)) {
-      const link = button.appendChild(el("span", "chip-view", "accept"));
+      const link = node.appendChild(el("span", "chip-view", "accept"));
       link.title = "Accept them, as a new version";
       link.addEventListener("click", (event) => {
         event.stopPropagation();
         acceptIds(open.map((op) => op.id));
       });
     }
-    return button;
+    return node;
   }
 
   return {
