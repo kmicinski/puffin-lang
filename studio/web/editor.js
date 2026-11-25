@@ -31,13 +31,13 @@
 //   model(key, text)         document `key`'s Monaco model, made (holding
 //                            `text`) if it has none yet, for another view
 //                            of the same text (the working set's
-//                            fragments, workset.js); an edit through any
+//                            fragments, fragment.js); an edit through any
 //                            view of a document that is not shown calls
 //                            onOtherChange(key, text)
 //   setText(key, text)       a document that is not shown takes `text` as
 //                            an undoable edit (the studio changed it)
-//   fragment(element, key)   another small editor on document `key`, with
-//                            the Puffin keys (paredit, Emacs, TeX, holes)
+//   fragment(element, key)   another editor on document `key`, with the
+//                            Puffin keys (paredit, Emacs, TeX, holes)
 // Monaco also gets the Puffin language: its tokens, brackets and theme.
 // Keys: ⌘S save, ⌘↵ eval form, ⇧⌘↵ load file, ⌘. assists, F2 rename (when
 // puffincc can), F8 and ⇧F8 the next and previous typed hole, ⌥↵ a TeX
@@ -305,23 +305,28 @@ function monacoEditor(monaco, element, { onChange, onOtherChange, onSave, onEval
       model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
       quiet = false;
     },
+    // Another view of document `key` (a fragment of the working set,
+    // fragment.js): the same model, the Puffin keys, sized by its caller --
+    // it never scrolls, it is as tall as what it shows.
     fragment(element, key) {
       const view = monaco.editor.create(element, {
         ...OPTIONS,
         theme: currentTheme(),
         model: documents.get(key)?.model ?? null,
-        fontSize: 12.5,
+        automaticLayout: false,
+        fontSize: 13,
         lineNumbersMinChars: 3,
         lineDecorationsWidth: 6,
         glyphMargin: false,
         padding: { top: 4, bottom: 4 },
         renderLineHighlight: "none",
-        // a fragment is narrow: its long lines wrap rather than hide
-        wordWrap: "on",
-        wrappingIndent: "deepIndent",
+        matchBrackets: "always",
+        bracketPairColorization: { enabled: true },
         overviewRulerLanes: 0,
         hideCursorInOverviewRuler: true,
-        scrollbar: { vertical: "hidden", alwaysConsumeMouseWheel: false, horizontalScrollbarSize: 6 },
+        // the board pans on the wheel; a fragment shows all it holds
+        scrollbar: { vertical: "hidden", horizontal: "hidden", handleMouseWheel: false, alwaysConsumeMouseWheel: false },
+        fixedOverflowWidgets: true,
       });
       view.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, onSave);
       bindHoles(monaco, view);

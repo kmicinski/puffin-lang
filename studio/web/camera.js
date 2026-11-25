@@ -1,5 +1,5 @@
-// The canvas camera (docs/VIEW-CANVAS.md): where the canvas is looked at
-// from, and how far out. The layer is moved, never scrolled -- one
+// The board's camera (docs/VIEW.md): where the board is looked at from,
+// and how far out. The layer is moved, never scrolled -- one
 // transform, `translate(x, y) scale(z)` -- so a glide is a CSS transition
 // and anything on the layer (cards, live editors, wires) moves as one.
 //
@@ -11,15 +11,25 @@
 //   toCanvas(x, y) a point on screen, in canvas coordinates
 //
 // `onChange(z, moved)` is called after every change; `moved` is false while
-// a glide is still under way, then true once it lands.
+// a glide is still under way, then true once it lands. `onFrame()` is
+// called after every move and on every frame of a glide, for what is
+// drawn over the board from outside it (wires into the focus pane), which
+// must follow the board as it moves on the screen.
 
 const GLIDE_MS = 420;
 
-export function createCamera({ viewport, layer, onChange, min = 0.2, max = 1.6 }) {
+export function createCamera({ viewport, layer, onChange, onFrame, min = 0.2, max = 1.6 }) {
   let x = 0;
   let y = 0;
   let z = 1;
   let gliding = 0;
+  let until = 0;
+
+  // every frame until the glide lands
+  function frames() {
+    onFrame?.();
+    if (performance.now() < until) requestAnimationFrame(frames);
+  }
 
   function apply(animate) {
     clearTimeout(gliding);
@@ -27,11 +37,14 @@ export function createCamera({ viewport, layer, onChange, min = 0.2, max = 1.6 }
     layer.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
     onChange?.(z, !animate);
     if (animate) {
+      const running = performance.now() < until;
+      until = performance.now() + GLIDE_MS + 40;
+      if (!running) requestAnimationFrame(frames);
       gliding = setTimeout(() => {
         layer.classList.remove("gliding");
         onChange?.(z, true);
       }, GLIDE_MS);
-    }
+    } else onFrame?.();
   }
 
   const clamp = (value) => Math.min(max, Math.max(min, value));

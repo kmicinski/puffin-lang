@@ -23,7 +23,7 @@ import { createVoice } from "./voice.js";
 import { createFocus } from "./focus.js";
 import { createBoard } from "./board.js";
 import { createPalette } from "./palette.js";
-import { createWorkset } from "./workset.js";
+import { createView } from "./view.js";
 import { formAt, forms, lineIndex } from "./lexer.js";
 import { structured } from "./paredit.js";
 
@@ -49,7 +49,8 @@ let session = null;
 // the focused layout (focus.js), made once the files are
 let focus = null;
 let holes = null;
-let workset = null;
+// the code view: the focus, its neighbourhood, the working set (view.js)
+let view = null;
 let rename = null;
 // the traced function names, and what the toolchain can do (the studio's)
 let traced = [];
@@ -85,7 +86,7 @@ const files = createFiles({
     proposals?.refresh();
     versions?.opened();
     focus?.changed();
-    workset?.opened(path);
+    view?.opened(path);
   },
   onTexts: () => {
     proposals?.refresh();
@@ -142,17 +143,14 @@ holes = createHoles({ editor, files, note, onCount: () => renderCheck() });
 const assists = createAssists({ editor, files, send, note, facts: askFacts });
 rename = createRename({ editor, files, send, note });
 focus = createFocus({ editor, files, run: () => load(null), evalAt, stage: document.querySelector(".editor-pane") });
-const board = createBoard({ editor, files, send, stage: document.querySelector(".editor-pane"), onShow: (on) => { focus?.boardShown(on); workset?.boardShown(on); }, navigate: (path, line, find) => workset?.navigate(path, line, find) });
+// the board and the working set are one surface beside the focus (docs/VIEW.md)
+const board = createBoard({ files, send, stage: document.querySelector(".board-pane"), onShow: (on) => focus?.boardShown(on) });
 focus.attachBoard(board);
-// the focused layout is focus and context: one definition, what it is read
-// with, and its neighbourhood of the board (workset.js)
-workset = createWorkset({ editor, files, board, stage: document.querySelector(".editor-pane") });
-focus.onLayout = (on) => workset.setOn(on);
+view = createView({ editor, files, board, stage: document.querySelector(".editor-pane"), onEvalAt: evalAt });
 // the welcome's other path: design on the board, plan mode, the first
 // module's "+ plan a definition" open
 focus.onPlanHere = () => {
   board.setMode("plan");
-  board.setView("board");
   const first = files.paths().filter((p) => /\.puf$/.test(p) && !["prop.puf", "properties.puf"].includes(p)).sort()[0];
   if (first) setTimeout(() => board.startAdding(first), 350);
 };
@@ -164,17 +162,14 @@ const palette = createPalette({
   commands() {
     const list = [];
     const add = (group, title, run, extra = {}) => list.push({ group, title, run, ...extra });
-    const onBoard = board.shown();
-    add("Board", onBoard ? "Show the editor" : "Show the module board", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
+    const out = board.zoom() < 0.62;
+    add("Board", out ? "Back to the code: the working set beside the focus" : "Show the board: glide out to the whole program", () => board.toggle(), { icon: "▦", keys: "⌘⇧B", rank: 1 });
     add("Board", board.mode() === "plan" ? "Leave plan mode (build)" : "Plan mode: signatures first, bodies as holes", () => board.setMode(board.mode() === "plan" ? "build" : "plan"), { icon: "◌", rank: 1 });
     const planned = board.outline().flatMap((m) => m.items.filter((i) => i.opaque)).length;
     if (planned) add("Board", `Build the plan: write the ${planned} planned bod${planned === 1 ? "y" : "ies"}`, () => board.buildPlan(), { icon: "▸", keywords: "implement fill holes dive in", rank: 1 });
-    if (onBoard) {
-      add("Board", "Fit the board to the window", () => board.fit(), { icon: "⤢", keys: "0" });
-      add("Board", "Tidy the board: re-pack the cards for this window", () => board.tidy(), { icon: "▤", keys: "t", keywords: "arrange layout pack" });
-      add("Board", "Filter the board", () => board.focusFilter(), { icon: "⌕", keys: "/" });
-      if (board.state().focus) add("Board", "Show everything (clear the focus)", () => board.clearFocus(), { icon: "◎", keys: "Esc" });
-    }
+    add("Board", "Tidy the board: re-pack the cards for this window", () => board.tidy(), { icon: "▤", keys: "t", keywords: "arrange layout pack" });
+    add("Board", "Filter the board", () => board.focusFilter(), { icon: "⌕", keys: "/" });
+    if (board.state().focus) add("Board", "Show everything (clear the focus)", () => board.clearFocus(), { icon: "◎", keys: "Esc" });
     add("Run", "Run the shown file", () => load(null), { icon: "▸", keys: "⇧⌘↵", rank: 1 });
     add("Run", "Run the properties", () => send({ t: "voice-control", command: "run-properties" }), { icon: "✓" });
     add("Run", "Show the output and REPL", () => focus.showOutput(true), { icon: "›" });
@@ -195,11 +190,11 @@ const palette = createPalette({
     add("Voice", "Undo the builder's last edit", () => send({ t: "voice-control", command: "undo" }), { icon: "↶" });
     add("Voice", "Start a new conversation with the builder", () => send({ t: "voice-control", command: "new-conversation" }), { icon: "✦" });
     for (const path of files.paths().filter((p) => p !== "prop.puf")) {
-      add("Files", path, () => { board.setView("editor"); files.open(path); }, { icon: "▤", detail: path === files.active() ? "shown" : "", rank: 3 });
+      add("Files", path, () => files.open(path), { icon: "▤", detail: path === files.active() ? "shown" : "", rank: 3 });
     }
     for (const m of board.outline()) {
       for (const item of m.items) {
-        add("Definitions", item.kind === "property" ? item.sig : item.name, () => board.editAt(m.path, item.line), {
+        add("Definitions", item.kind === "property" ? item.sig : item.name, () => view.focusAt(m.path, item.line), {
           icon: KIND_ICON[item.kind] ?? "·",
           detail: item.kind === "property" ? m.path : `${item.sig.replace(/^(val|type|grammar) \S+\s*/, "")} — ${m.path.replace(/\.puf$/, "")}${item.opaque ? " ◌" : ""}`,
           keywords: `${item.sig} ${item.doc ?? ""}`,
@@ -444,7 +439,6 @@ const handlers = {
     $("project").title = snapshot.directory;
     files.receive.init(snapshot);
     if (snapshot.board) board.receive(snapshot.board);
-    workset.changed();
     tree.receive.init(snapshot);
     reports = snapshot.diagnostics;
     proposals.update(snapshot.review);
@@ -517,10 +511,7 @@ const handlers = {
     voice.notice(message);
   },
   voice: (event) => voice.receive(event),
-  board: (view) => {
-    board.receive(view);
-    workset.changed();
-  },
+  board: (message) => board.receive(message),
   "voice-state": (state) => voice.receiveState(state),
 };
 
@@ -530,7 +521,7 @@ function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     handlers[message.t]?.(message);
-    workset?.receive(message);
+    view?.receive(message);
   });
   socket.addEventListener("close", () => {
     renderConnection(false);

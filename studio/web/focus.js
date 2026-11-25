@@ -64,7 +64,7 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
   const chips = el("div", "focus-files");
   const right = el("div", "focus-right");
   const slot = el("span", "focus-slot"); // voice mode's badge
-  // the canvas (board.js) and plan mode
+  // the board (board.js) and plan mode
   let board = null;
   const modeButton = el("button", "focus-mode", "Plan");
   modeButton.title = "Plan mode: the builder writes signatures and leaves bodies as holes (say “plan mode” / “build mode”)";
@@ -93,9 +93,8 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
         continue;
       }
       const chip = el("button", `focus-file${path === active ? " current" : ""}`, path);
-      chip.title = path === active ? "The whole file on the canvas · double-click to rename" : `${path}, whole, on the canvas · drag onto the canvas`;
-      // the file's card comes out whole, and the camera goes to it
-      chip.addEventListener("click", () => (board ? board.openFile(path) : files.open(path)));
+      chip.title = path === active ? "The whole file in the focus · double-click to rename" : `${path}, whole, in the focus · drag onto the board`;
+      chip.addEventListener("click", () => files.open(path));
       chip.draggable = true;
       chip.addEventListener("dragstart", (event) => {
         event.dataTransfer.setData("text/x-puffin-module", path);
@@ -184,10 +183,8 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     if (top < 0 || top > box.height - 20) return (chip.hidden = true);
     chip.style.top = `${box.top - host.top + top}px`;
     chip.hidden = false;
-    // beside the editor; inside its right edge when the working set is
-    // beside it (workset.js)
-    const inside = document.body.classList.contains("ws-on");
-    chip.style.left = `${inside ? box.right - host.left - chip.offsetWidth - 24 : box.right - host.left + 8}px`;
+    // inside the editor's right edge: the board is beside it (view.js)
+    chip.style.left = `${box.right - host.left - chip.offsetWidth - 24}px`;
   }
 
   if (view) {
@@ -343,7 +340,6 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     renderFiles();
     update();
     setTimeout(measure, 0);
-    api.onLayout?.(true);
   }
 
   function leave() {
@@ -357,7 +353,6 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
     document.body.classList.remove("focus-canvas");
     document.body.style.removeProperty("--focus-width");
     setTimeout(() => view?.layout(), 0);
-    api.onLayout?.(false);
   }
 
   window.addEventListener("keydown", (event) => {
@@ -367,7 +362,6 @@ export function createFocus({ editor, files, run, evalAt, stage }) {
 
   const api = {
     onCanvas: null,
-    onLayout: null,
     enter,
     leave,
     slot,

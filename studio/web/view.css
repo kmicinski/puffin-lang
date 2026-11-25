@@ -1,0 +1,142 @@
+/* The view (view.js, docs/VIEW.md): the focus over its neighbourhood,
+   and beside them the board -- the working set and the program on one
+   zoomable surface (board.css). No modes. */
+
+/* ---- the layout: the focus and its neighbourhood | the board ---- */
+
+body.view .editor-pane { justify-content: flex-start; }
+body.view .editor-column {
+  flex: 0 1 var(--view-focus-width, 860px);
+  max-width: var(--view-focus-width, 860px);
+  min-width: 420px;
+  transition: flex-basis 0.3s ease, max-width 0.3s ease;
+}
+body.voice-on.view .editor-pane { padding-left: 18px; }
+body.voice-on.view .editor-column { padding: 46px 0 12px; }
+body.view #editor-wrap { transition: flex-basis 0.25s ease; }
+body.voice-on.view .focus-bar { width: calc(100% - 36px); left: 18px; transform: none; }
+.board-pane { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; border-left: 1px solid var(--border); margin-left: 14px; }
+body.voice-on .board-hud { top: 46px; }
+.board-hud { top: 10px; }
+body.focus-canvas .board-pane, body.focus-canvas .view-head, body.focus-canvas .view-graph { visibility: hidden; }
+
+/* the wires from a line in the focus to a fragment in the lane */
+.wire-overlay { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; z-index: 26; }
+.wire { fill: none; }
+.wire.use { stroke: var(--violet); stroke-width: 1.3; opacity: 0.55; }
+.wire-dot.use { fill: var(--violet); opacity: 0.7; }
+
+/* ---- the focus: its header, and the lines around it ---- */
+
+.view-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px 8px 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  font: 12px var(--sans);
+  color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+}
+.view-nav { display: inline-flex; gap: 1px; }
+.view-head .view-title { font: 600 14px var(--mono); color: var(--strong); }
+.view-kind { font: 13px var(--mono); color: var(--blue); }
+.view-sub { font-style: italic; }
+.view-head .view-sig { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.view-module { font: 11px var(--sans); color: var(--muted); background: var(--base2); padding: 0 6px; border-radius: 8px; }
+.view-icon {
+  border: none; background: transparent; color: var(--muted);
+  font: 13px var(--sans); padding: 0 5px; border-radius: 5px; line-height: 20px; cursor: pointer;
+}
+.view-icon:hover:not(:disabled) { color: var(--strong); background: var(--base2); }
+.view-icon:disabled { opacity: 0.35; }
+.view-icon.on { color: var(--violet); }
+.view-toggle {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  font: 11.5px var(--sans); padding: 1px 9px; border-radius: 10px; flex: none; cursor: pointer;
+}
+.view-toggle:hover:not(:disabled) { border-color: var(--violet); color: var(--violet); }
+/* the file around the definition, where there is room: there, not the focus */
+.focus-context { background: color-mix(in srgb, var(--base2) 55%, transparent); }
+.focus-context-text { opacity: 0.45; }
+
+/* names that are definitions: ⌘-click pulls them into the lane */
+.code-ref { text-decoration: underline dotted color-mix(in srgb, var(--violet) 45%, transparent); text-underline-offset: 3px; }
+.code-ref-armed { text-decoration: underline solid var(--violet); color: var(--violet) !important; cursor: pointer; }
+
+/* ---- the neighbourhood: callers -> focus -> callees, its module beside ---- */
+
+.view-graph { container-type: inline-size; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; border-top: 1px solid var(--border); padding-top: 8px; }
+.view-graph-body { display: flex; gap: 18px; align-items: flex-start; }
+.view-map { position: relative; flex: 1 1 auto; min-width: 0; display: flex; flex-direction: row; align-items: center; gap: 44px; padding: 4px 0 8px; }
+.view-aside { flex: 0 1 280px; min-width: 0; }
+/* not wide enough for both: the module under the map */
+@container (max-width: 820px) {
+  .view-graph-body { flex-direction: column; align-items: stretch; gap: 4px; }
+  .view-aside { flex: none; width: 100%; }
+}
+.view-part { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.view-part.caller { flex: 1 1 0; align-items: flex-end; }
+.view-part.callee { flex: 1 1 0; align-items: flex-start; }
+.view-part.focus { flex: none; }
+.view-row { display: flex; flex-direction: column; gap: 5px; align-items: inherit; max-width: 100%; }
+.view-row-label { font: 10.5px var(--sans); color: var(--muted); padding: 0 4px 2px; }
+.view-graph-wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; overflow: visible; z-index: 0; }
+.view-graph-wires .wire { stroke-width: 1.3; opacity: 0.55; }
+.view-graph-wires .wire.caller { stroke: var(--violet); stroke-dasharray: 3 3; }
+.view-graph-wires .wire.callee { stroke: var(--blue); }
+.view-node {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+  font: 11.5px var(--mono); padding: 2px 8px; border-radius: 12px; max-width: 100%; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+.view-node:hover { border-color: var(--violet); transform: translateY(-1px); }
+.view-node:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+.view-node .view-module { font-size: 10px; padding: 0 5px; }
+.view-node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.view-node.in-set { background: var(--violet-tint); border-color: var(--violet); }
+.view-node.planned { border-style: dashed; }
+.view-node.lit { border-color: var(--violet); box-shadow: 0 0 0 3px var(--violet-tint); }
+.view-node.focus { font: 600 13px var(--mono); padding: 4px 14px; border: 1.5px solid var(--strong); color: var(--strong); cursor: default; }
+.view-node.focus:hover { transform: none; }
+.view-node.property { font-family: var(--sans); white-space: normal; text-align: left; border-radius: 8px; }
+.view-node.property .view-node-name { white-space: normal; }
+.view-more { font: 11px var(--sans); color: var(--muted); }
+.view-section { font: 600 10.5px var(--sans); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 6px 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-props { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.view-card { display: flex; flex-direction: column; }
+/* the module's rows: nodes too (the arrow keys walk them), drawn as a list */
+.view-node.row {
+  display: flex; gap: 6px; align-items: baseline; text-align: left;
+  border: none; border-radius: 5px; background: transparent;
+  font: 11.5px/1.4 var(--mono); padding: 1px 6px;
+}
+.view-node.row:hover { background: var(--base2); transform: none; }
+.view-node.row.current { background: var(--chrome); color: var(--strong); font-weight: 600; box-shadow: inset 2px 0 0 var(--strong); }
+.view-node.row.in-set { box-shadow: inset 2px 0 0 var(--violet); background: transparent; }
+.view-card-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- a middling window ---- */
+
+@media (max-width: 1350px) {
+  body.view .editor-column { min-width: 380px; }
+}
+
+/* ---- a phone: one column that scrolls -- the focus, its neighbourhood,
+   then the board ---- */
+
+@media (max-width: 700px) {
+  body.view .editor-pane { flex-direction: column; padding: 0 !important; overflow-y: auto; }
+  body.view .editor-column { flex: 0 0 auto; min-width: 0; max-width: none; padding: 44px 10px 0 !important; }
+  body.voice-on.view .focus-bar { left: 8px; width: calc(100% - 16px); }
+  .view-graph { overflow: visible; }
+  .view-map { gap: 20px; }
+  .view-head .view-sig { display: none; }
+  .board-pane { flex: 0 0 82vh; margin: 8px 0 0; border-left: none; border-top: 1px solid var(--border); }
+  body.voice-on .board-hud { top: 10px; }
+  /* the page scrolls: the pill stays on the screen */
+  body.view .voice-layer { position: fixed; }
+}

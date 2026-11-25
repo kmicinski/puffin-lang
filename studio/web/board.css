@@ -1,6 +1,6 @@
-/* The canvas (board.js, docs/VIEW-CANVAS.md): module cards of ML-style
-   signatures, dense on purpose, with live code opened in them and pulled
-   out beside them; one surface, moved by the camera (camera.js). */
+/* The board (board.js, docs/VIEW.md): module cards of ML-style
+   signatures, dense on purpose, and the lane of live code beside them;
+   one surface, moved by the camera (camera.js). */
 
 .board {
   position: absolute;
@@ -16,14 +16,13 @@
 }
 @keyframes board-in { from { opacity: 0; } }
 .board.dropping { box-shadow: inset 0 0 0 2px var(--violet); }
-body.board-on .focus-chip { display: none; }
 /* the canvas (a new visit, or a project with no code) comes first */
 body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board-question { display: none; }
 .board-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
 /* a glide: the camera moving to frame what was just asked for */
 .board-canvas.gliding { transition: transform 0.42s cubic-bezier(0.2, 0.8, 0.2, 1); }
 .board.panning { cursor: grabbing; }
-.board-wires, .board-lens { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.board-wires, .board-lens { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; overflow: visible; }
 .board-lens { z-index: 4; }
 .board-wire { fill: none; stroke: var(--border-strong); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: 0.7; transition: opacity 0.2s; }
 .board.focusing .board-wire, .board.lensing .board-wire { opacity: 0.12; }
@@ -125,19 +124,6 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
   white-space: normal;
   max-width: 540px;
 }
-.board-body {
-  margin: 3px 4px 7px 22px;
-  padding: 7px 9px;
-  background: var(--page);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  font: 11.5px/1.5 var(--mono);
-  white-space: pre;
-  overflow-x: auto;
-  max-height: 360px;
-  animation: board-open 0.18s ease-out;
-}
-@keyframes board-open { from { opacity: 0; transform: translateY(-3px); } }
 .board-more { display: block; width: 100%; text-align: left; padding: 3px 11px 7px 29px; font: 11px var(--sans); }
 .board-effects { padding: 0 11px 7px 29px; color: var(--muted); font: 11px var(--sans); }
 .board-statement { font: 12px/1.45 var(--sans); color: var(--strong); white-space: normal; }
@@ -412,75 +398,91 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board-item.building > .board-item-line { background: linear-gradient(90deg, var(--green-tint), transparent 70%); background-size: 200% 100%; animation: board-building 1.4s ease-in-out infinite; }
 @keyframes board-building { 0% { background-position: 100% 0; } 50% { background-position: 0 0; } 100% { background-position: 100% 0; } }
 
-/* ---- code on the canvas (span-editor.js) ---- */
+/* ---- the lane: the working set, on the board (view.js, fragment.js) ---- */
 
-.span-editor {
-  margin: 3px 6px 8px 22px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  overflow: hidden;
-  background: var(--page);
-  transition: border-color 0.15s, box-shadow 0.15s;
-  animation: board-open 0.18s ease-out;
-}
-.span-editor.editing { border-color: var(--blue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent); }
-.board-card.is-file .span-editor { margin: 6px 8px 8px; }
-/* a card holding code is as wide as its code; its signatures stay as wide as before */
-.board-card:has(.span-editor) { max-width: none; }
-.board-card:has(.span-editor) .board-item-line { max-width: 560px; }
-/* names that are definitions: ⌘-click pulls them out */
-.canvas-ref { text-decoration: underline dotted color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
-.span-editor.ref-hover .canvas-ref:hover, .ref-hover .canvas-ref { cursor: pointer; }
-.board-item.ref-target > .board-item-line, .canvas-frag.ref-target .canvas-frag-head { background: var(--blue-tint, var(--violet-tint)); box-shadow: inset 2px 0 0 var(--blue); }
-
-/* a definition pulled out beside a use */
-.canvas-frag {
+.board-lane {
   position: absolute;
   z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 360px;
+  padding-bottom: 40px;
+}
+.frag {
+  max-width: 840px;
+  min-width: 360px;
   background: var(--surface);
-  border: 1px solid var(--blue);
+  border: 1px solid var(--border-strong);
   border-radius: 8px;
-  box-shadow: 0 6px 24px rgba(7, 54, 66, 0.16);
+  box-shadow: 0 1px 2px rgba(7, 54, 66, 0.06), 0 4px 14px rgba(7, 54, 66, 0.07);
   font: 12px/1.5 var(--mono);
   color: var(--text);
-  transition: left 0.38s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.38s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.25s, transform 0.25s;
+  transition: opacity 0.3s, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s, border-color 0.2s;
 }
-.canvas-frag.arriving { opacity: 0; transform: translateX(-14px) scale(0.98); }
-.canvas-frag-head { display: flex; align-items: center; gap: 6px; padding: 5px 6px 3px 10px; white-space: nowrap; border-radius: 8px 8px 0 0; }
-.canvas-frag-head .board-sig { flex: 1; }
-.canvas-frag-module { font: 11px var(--sans); color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; cursor: pointer; }
-.canvas-frag-module:hover { color: var(--violet); border-color: var(--violet); }
-.canvas-frag .span-editor { margin: 2px 8px 8px; }
-.canvas-frag .board-doc { padding-left: 28px; }
-.board-pulls { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
-.board-pull-wire { fill: none; stroke: var(--blue); stroke-width: 1.6; opacity: 0.75; }
-.board-pull-dot { fill: var(--blue); }
-.flash { animation: canvas-flash 0.9s ease-out; }
-@keyframes canvas-flash { 0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+.frag.arriving { opacity: 0; transform: translateX(-14px) scale(0.98); }
+.frag.editing { border-color: var(--blue); }
+.frag.lit { border-color: var(--violet); box-shadow: 0 0 0 3px var(--violet-tint); opacity: 1; }
+.frag.pinned { border-left: 3px solid var(--violet); }
+/* offered by the attention model: not the author's yet */
+.frag.offered { border-style: dashed; box-shadow: none; opacity: 0.78; background: color-mix(in srgb, var(--surface) 60%, transparent); }
+.frag.offered:hover, .frag.offered.lit { opacity: 1; }
+.frag-head {
+  display: flex; align-items: baseline; gap: 7px;
+  padding: 5px 4px 4px 10px;
+  font: 11.5px var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden;
+  user-select: none;
+}
+.frag.is-full .frag-head { border-bottom: 1px solid var(--border); }
+.frag-kind { font: 12px var(--mono); color: var(--blue); }
+.frag-name { border: none; background: transparent; padding: 0; font: 600 12.5px var(--mono); color: var(--strong); cursor: pointer; }
+.frag-name:hover { color: var(--violet); text-decoration: underline; }
+.frag-module { font: 10.5px var(--sans); color: var(--muted); background: var(--base2); padding: 0 6px; border-radius: 8px; }
+.frag-why { font: 10.5px var(--sans); padding: 0 6px; border-radius: 8px; color: var(--blue); background: var(--blue-tint, var(--base2)); overflow: hidden; text-overflow: ellipsis; max-width: 45%; cursor: help; }
+.frag-why.offered { color: var(--violet); background: var(--violet-tint); }
+.frag-sig { font: 11.5px var(--mono); overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.frag-tools { margin-left: auto; display: inline-flex; opacity: 0.45; transition: opacity 0.2s; flex: none; }
+.frag:hover .frag-tools, .frag.pinned .frag-tools { opacity: 1; }
+.frag-doc { padding: 0 12px 5px 28px; color: var(--muted); font: italic 11px/1.4 var(--sans); white-space: normal; }
+.frag-doc:empty { display: none; }
+.frag-body { display: none; }
+.frag.is-full .frag-body { display: block; }
+.frag-code { overflow: hidden; }
+.frag-code.gone { opacity: 0.35; }
+.flash { animation: board-flash 0.9s ease-out; }
+@keyframes board-flash { 0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--violet) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+.lane-hint { max-width: 420px; font: 12.5px/1.5 var(--sans); color: var(--muted); padding: 12px 14px; border: 1px dashed var(--border-strong); border-radius: 8px; }
+.lane-shelf { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; max-width: 520px; }
+.lane-shelf-label { font: 11px var(--sans); color: var(--muted); margin-right: 2px; }
+.lane-chip { border: 1px dashed var(--border-strong); background: transparent; color: var(--text); font: 11.5px var(--mono); padding: 1px 8px; border-radius: 10px; cursor: pointer; }
+.lane-chip:hover { border-style: solid; border-color: var(--violet); color: var(--violet); }
 
-/* with code pulled out, the rest recedes (still there, still clickable) */
-.board-card.receded { opacity: 0.45; filter: saturate(0.4); }
-.board-card.receded:hover { opacity: 0.9; filter: none; }
-.board-whole.on { color: var(--blue); }
+/* each fragment wired to its row: where the code it shows lives */
+.board-lane-wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; overflow: visible; z-index: 2; }
+.lane-wire { stroke: var(--violet); fill: none; stroke-width: 1.2; opacity: 0.28; transition: opacity 0.3s; }
+.wire-dot.lane-wire { fill: var(--violet); stroke: none; }
+.lane-wire.offered { stroke-dasharray: 3 4; opacity: 0.18; }
+.board.z-mid .lane-wire, .board.z-far .lane-wire { opacity: 0.55; stroke-width: calc(1.3px * var(--unzoom, 1)); }
 
-/* semantic zoom: closer is more detail. Middle distance: signatures, code
-   shown but not to be read; far: the cards' names and their shape. */
-.board.z-mid .board-doc, .board.z-far .board-doc, .board.z-far .board-requires { display: none; }
-.board.z-mid .span-editor { pointer-events: none; }
+/* the rows the working set is about, where they sit */
+.board-item.in-set > .board-item-line { box-shadow: inset 3px 0 0 var(--violet); background: var(--violet-tint); }
+.board-item.offered > .board-item-line { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--violet) 40%, transparent); }
+.board-item.is-focus > .board-item-line { box-shadow: inset 3px 0 0 var(--strong); background: var(--chrome); }
+.board-item.ref-target > .board-item-line { background: var(--violet-tint); box-shadow: inset 3px 0 0 var(--violet); }
+.board-card.unattended { opacity: 0.55; }
+.board-card.unattended:hover { opacity: 1; }
+
+/* semantic zoom: closer is more detail. Middle distance: signatures, the
+   lane's code shown but not to be read; far: names, and code's shape. */
+.board.z-mid .board-doc, .board.z-far .board-doc, .board.z-far .board-requires, .board.z-mid .frag-doc, .board.z-far .frag-doc { display: none; }
+.board.z-mid .frag-code, .board.z-far .frag-code { pointer-events: none; }
+.board.z-mid .frag-code { opacity: 0.7; }
 .board.z-far .board-item-line .board-sig-rest, .board.z-far .board-sig-kw { display: none; }
-.board.z-far .span-editor .monaco-editor { visibility: hidden; }
-.board.z-far .span-editor { background: repeating-linear-gradient(var(--page) 0 9px, var(--border) 9px 11px); }
-/* further out, a card's name is drawn larger, so it stays readable */
+.board.z-far .frag-code .monaco-editor { visibility: hidden; }
+.board.z-far .frag-code { background: repeating-linear-gradient(var(--page) 0 9px, var(--border) 9px 11px); }
+/* further out, names are drawn larger, so they stay readable */
 .board.z-mid .board-card-title, .board.z-far .board-card-title { font-size: calc(13px * var(--unzoom, 1)); }
-.board.z-mid .span-editor { opacity: 0.7; }
-.board.z-far .board-card-meta, .board.z-far .board-tools, .board.z-far .board-add { display: none; }
-.board.z-far .canvas-frag-head .board-sig-name { font-size: calc(12px * var(--unzoom, 1)); }
-.board.z-far .canvas-frag-head .board-sig-rest, .board.z-far .canvas-frag-head .board-sig-kw, .board.z-far .canvas-frag-head button, .board.z-far .canvas-frag-module { display: none; }
-
-/* attention (docs/ATTENTION.md): what the code in focus would want beside it */
-.board-item.att-full > .board-item-line { box-shadow: inset 3px 0 0 var(--green); background: var(--green-tint); }
-.board-item.att-some > .board-item-line { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--green) 45%, transparent); }
-.board-suggest { flex: none; border: 0; background: none; color: var(--green); cursor: pointer; font: 12px var(--mono); padding: 0 3px; }
-.board-suggest:hover { text-shadow: 0 0 6px var(--green); }
-.board-card.unattended { opacity: 0.4; filter: saturate(0.4); }
-.board-card.unattended:hover { opacity: 0.9; filter: none; }
+.board.z-far .frag-name { font-size: calc(12.5px * var(--unzoom, 1)); }
+.board.z-far .board-card-meta, .board.z-far .board-tools, .board.z-far .board-add,
+.board.z-far .frag-sig, .board.z-far .frag-why, .board.z-far .frag-tools, .board.z-far .frag-module { display: none; }
