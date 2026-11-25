@@ -653,6 +653,13 @@ impl Studio {
         out
     }
 
+    /// What the checks know of the program now, file by file, as an agent's
+    /// prompt carries it: `severity: message [file:line]`, at most `limit`.
+    pub fn diagnostic_lines(&self, limit: usize) -> Vec<String> {
+        let files: Vec<String> = self.open.lock().expect("open lock").docs.keys().cloned().collect();
+        files.iter().flat_map(|path| self.diagnostics_of(path)).map(|d| format!("{}: {} [{}:{}]", d.severity, d.message, d.file, d.line)).take(limit).collect()
+    }
+
     /// What the checks keep of `path` goes: it was moved or deleted.
     fn forget_checks(&self, path: &str) {
         self.to_check.lock().expect("check lock").remove(path);

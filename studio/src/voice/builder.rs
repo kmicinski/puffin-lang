@@ -291,12 +291,7 @@ impl Studio {
             let names: Vec<String> = sexp::forms(text).iter().filter_map(|f| f.name.clone()).take(40).collect();
             let _ = writeln!(out, "- {path} ({} lines): {}", text.lines().count(), names.join(" "));
         }
-        let diagnostics: Vec<String> = files
-            .keys()
-            .flat_map(|path| self.diagnostics_of(path))
-            .map(|d| format!("{}: {} [{}:{}]", d.severity, d.message, d.file, d.line))
-            .take(20)
-            .collect();
+        let diagnostics = self.diagnostic_lines(20);
         if !diagnostics.is_empty() {
             let _ = writeln!(out, "Diagnostics now:\n{}", diagnostics.join("\n"));
         }
@@ -557,7 +552,7 @@ impl Studio {
         } else {
             answer["check"] = json!(format!("FAILS the check -- fix it next:\n{}", report.describe()));
         }
-        let warnings: Vec<String> = report.diagnostics.iter().filter(|d| d.severity == "warning").map(|d| format!("{} [{}:{}]", d.message, d.file, d.line)).collect();
+        let warnings = report.warnings();
         if !warnings.is_empty() {
             answer["warnings"] = json!(warnings);
         }

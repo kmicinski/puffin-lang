@@ -162,11 +162,7 @@ impl Studio {
                 }
             }
         }
-        let diagnostics: Vec<String> = files
-            .keys()
-            .flat_map(|path| self.diagnostics_of(path))
-            .map(|d| format!("{}: {} [{}:{}]", d.severity, d.message, d.file, d.line))
-            .collect();
+        let diagnostics = self.diagnostic_lines(usize::MAX);
         if !diagnostics.is_empty() {
             let _ = writeln!(out, "Current diagnostics:\n{}", diagnostics.join("\n"));
         }
@@ -247,7 +243,7 @@ impl Studio {
         Ok(json!({
             "proposed": id,
             "checks": checks,
-            "warnings": report.diagnostics.iter().filter(|d| d.severity == "warning").map(|d| format!("{} [{}:{}]", d.message, d.file, d.line)).collect::<Vec<_>>(),
+            "warnings": report.warnings(),
             "message": "queued for the author to accept or reject; nothing changed yet",
         }))
     }

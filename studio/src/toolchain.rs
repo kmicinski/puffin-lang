@@ -80,6 +80,11 @@ impl Report {
             .join("\n")
     }
 
+    /// The warnings, each as `message [file:line]`.
+    pub fn warnings(&self) -> Vec<String> {
+        self.diagnostics.iter().filter(|d| d.severity == "warning").map(|d| format!("{} [{}:{}]", d.message, d.file, d.line)).collect()
+    }
+
     /// Whether the checker stopped at a typed hole.
     pub fn holed(&self) -> bool {
         self.diagnostics.iter().any(|d| d.severity == "hole")
