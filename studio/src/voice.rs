@@ -1580,7 +1580,8 @@ PLAN MODE is on. Build the program's design, not its code: modules (require/prov
 (define-type, define-type-alias, define-grammar), and for every function a typed signature `(: f (-> A B))` \
 with its body a single typed hole: `(define (f x) ??)`. The check checks everything around the holes, and \
 properties that reach a hole show as open, not failing. Write a body only when the author says to dive in, \
-implement or fill in a definition -- then that one alone. Keep each module's provide list current. When a \
+implement or fill in a definition -- then that one alone. Keep each module's provide list current; a helper \
+nothing outside needs is `(private helper)`, a type whose representation stays home is `(opaque T)`. When a \
 design decision matters and you cannot settle it from what the author said, `ask` (one question, about \
 the definitions it concerns) rather than guessing.\n";
 
