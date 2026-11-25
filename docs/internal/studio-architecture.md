@@ -88,6 +88,89 @@ units**. Conversion happens at the edge -- web.rs (`point`,
 | `board.rs` | The module board: the outline (ML-style signatures), the board's view state, arrangements, the slicer. |
 | `tests.rs` | End-to-end tests over the real compiler and VM (skipped when they are not built; set `PUFFIN_ROOT` to a checkout that has them). |
 
+## The page (studio/web)
+
+Plain ES modules, no build step: the server bundles every file named in
+web.rs's `assets!` list (a new file goes there too) and serves it under
+`/static/`; `PUFFIN_STUDIO_WEB=<dir>` serves a directory's copies instead,
+for editing without rebuilding. Monaco comes from the repository's
+`web/node_modules` (`/vs/...`).
+
+`main.js` makes every panel with a `create*` function, handing each the
+few things it needs (the editor, the files, `send`, the DOM nodes it
+owns, and the other panels it works with), and routes each message from
+the socket by its `t` to a panel's `receive` table: message kinds to
+handlers. What a panel offers the others it returns. Voice mode is the
+one panel made of panels: voice.js makes its own timeline, progress card
+and excursion.
+
+The house helpers, used rather than written again:
+
+- `dom.js`: `el(tag, className, text)` for every element, `button(className,
+  text, onClick, title)`, `nameField(className, placeholder)` for a field
+  the browser must not spell-check, and `debounce(fn, ms)` for "after the
+  typing pauses".
+- `words.js`: what more than one panel says -- `plural(n, noun)`,
+  `timeOfDay(at)`, `dateOf(at)`, a builder run's `turnLabel` and
+  `outcomeWord`.
+- `requests.js`: a question to the studio answered by `seq`
+  (`requests(files).ask(message)` → a promise of the reply).
+- `stored.js`: `recall`, `recallJSON` and `remember` for what the browser
+  keeps between visits (localStorage, which a private window may refuse).
+- `markdown.js`'s `escape` and `highlight` for any HTML made from text.
+- The tokens of Solarized light and dark are defined once, at the top of
+  studio.css, each as `light-dark(light, dark)`; the other style sheets
+  only use them.
+
+| File | Its one responsibility |
+| --- | --- |
+| `index.html` | The page's skeleton: header, editor pane, output pane; loads the style sheets, Monaco's loader and main.js. |
+| `main.js` | Wiring: makes the panels, owns the socket, routes messages, the header's buttons, the check pill, the palette's commands. |
+| `dom.js` | Building elements, buttons and name fields; `debounce`. |
+| `words.js` | Counts, times of day and dates, and the builder's runs, said one way. |
+| `requests.js` | A request answered by `seq`, behind the edits in flight. |
+| `stored.js` | What the browser remembers between visits. |
+| `editor.js` | The program editor: Monaco (or a textarea) behind one small interface, the Puffin language definition and Solarized themes. |
+| `files.js` | The project's files in this tab: the tabs, each file's text and version, the one edit in flight that every `send` waits behind. |
+| `tree.js` | The files as a tree: folders, new / rename / delete typed in place, drag to move, `,open`'s quick open. |
+| `projects.js` | The menu under the project's name: open another project, make a new one. |
+| `lexer.js` | puffincc's token rules: comments, strings, brackets, prefixes; top-level forms and balance. |
+| `sexp.js` | Text as S-expressions, and paredit's operations as pure functions over text and selection. |
+| `paredit.js` | Those operations bound to keys, in Monaco and in textareas; structured typing on or off. |
+| `emacs.js` | Emacs keys and a kill ring in the editor. |
+| `tex.js` | `\lambda` ⌥↵ → λ, in the editor and the prompt. |
+| `repl.js` | The transcript and the prompt: evaluation, the `,` commands, pins and test runs, prompt history. |
+| `trace.js` | A traced run's output as a call tree. |
+| `session.js` | What the live session holds, form by form: the gutter's dots and trace marks, `,session`. |
+| `holes.js` | Typed holes: outlines, goals, F8 between them. |
+| `lint.js` | The observation lint's markers. |
+| `assists.js` | The compiler's assists: the ⌘. menu, the lightbulb, the hover's facts, match completions. |
+| `rename.js` | F2: renaming the name at the cursor through the compiler. |
+| `assist.js` | The assistant at the prompt: ask mode, threads, answers streamed into the transcript with their chips. |
+| `markdown.js` | The assistant's Markdown, as escaped HTML; Puffin code coloured as the editor colours it. |
+| `hunks.js` | Pure: line diffs, hunks, and proposals placed on a file's text. |
+| `inline-diff.js` | Hunks drawn in Monaco: removed lines tinted, added ones as ghost lines. |
+| `proposals.js` | The assistant's proposals reviewed in place: the bar, each change's Accept and Reject, the transcript's chip. |
+| `versions.js` | The shown file's versions: compare and restore. |
+| `history.js` | The project's history from git: every moment, filtered, with diffs and outputs. |
+| `replay.js` | The clock and its slider: the files and transcript as they were at a moment. |
+| `gist.js` | The Gist button: the files as a GitHub gist, from the browser. |
+| `palette.js` | ⌘K: every command and definition, matched by letters in order. |
+| `focus.js` | The focused layout: the editor alone and centered, everything else floating in when used; the empty canvas. |
+| `board.js` | The module board: modules as signature cards, the lens, plan mode. |
+| `voice.js` | Voice mode: listening, the pill, the caption, places found, properties, and the studio's voice events. |
+| `progress.js` | The card over the pill: was it heard, and what the builder is doing. |
+| `timeline.js` | What happened: the voice session's exchanges and builder runs, step by step. |
+| `excursion.js` | An excursion's card: the fragments being explained and the questions about them. |
+| `attention.js` | The attention model: which definitions to show and how much of each (pure; tested in node). |
+| `attention-studio.js` | The socket's messages folded into the attention model's state. |
+| `attention.html` | The attention model's demo page: a project's definitions, what the model would show, its weights. |
+| `studio.css` | The tokens (light and dark), the chrome, the editor pane, the transcript, the panels. |
+| `diff.css` | Proposals and diffs: the bar, the inline hunks, the chips. |
+| `assist.css` | Ask mode, answers, the assists menu. |
+| `voice.css` | Voice mode, the focused layout's floats, the timeline, progress, excursions. |
+| `board.css` | The module board. |
+
 ## How things travel
 
 **An edit.** The tab sends `edit` with the whole text and the version it

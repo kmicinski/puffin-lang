@@ -15,6 +15,8 @@
 //                              "current", "stale", "redefined", "evaluated", "absent"
 
 import { forms } from "./lexer.js";
+import { plural } from "./words.js";
+import { debounce } from "./dom.js";
 
 // A form's key, as the server's form scanner makes it (sexp.rs Form::key).
 export function keyOf(form, index) {
@@ -43,7 +45,6 @@ export function describeState(state) {
 
 export function createSession({ editor, files, traced = () => [], canTrace = () => false }) {
   let view = { files: {}, results: {}, observed: [] };
-  let timer = 0;
 
   function stateOf(file, text, form, index = 0) {
     const key = keyOf(form, index);
@@ -85,10 +86,7 @@ export function createSession({ editor, files, traced = () => [], canTrace = () 
   }
 
   // Typing: the gutter follows shortly after.
-  function changed() {
-    clearTimeout(timer);
-    timer = setTimeout(refresh, 120);
-  }
+  const changed = debounce(refresh, 120);
 
   // `,session`: what the session holds, file by file.
   function listing() {
@@ -107,7 +105,7 @@ export function createSession({ editor, files, traced = () => [], canTrace = () 
     if (traced().length) lines.push(`traced: ${traced().join(", ")}`);
     for (const observed of view.observed) {
       if (lines.length && !lines.includes("observed")) lines.push("observed");
-      lines.push(`  ${observed.function}: ${observed.calls} call${observed.calls === 1 ? "" : "s"}`);
+      lines.push(`  ${observed.function}: ${plural(observed.calls, "call")}`);
     }
     return lines.length ? lines.join("\n") : "the session holds nothing of the program yet: ⌘↵ on a form, or Load file";
   }

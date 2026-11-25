@@ -8,19 +8,15 @@
 // token with only the `gist` scope) is asked for once and kept in this
 // browser's localStorage; a token GitHub rejects is forgotten.
 
+import { recall, remember } from "./stored.js";
+
 const TOKEN_KEY = "puffin-studio.github-gist-token";
 const NEW_TOKEN_URL =
   "https://github.com/settings/tokens/new?scopes=gist&description=Puffin%20Studio%20gists";
 
-function storedToken() {
-  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
-}
-function storeToken(token) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch { /* private window: asked again next time */ }
-}
+// a private window may not keep it: then it is asked for again next time
+const storedToken = () => recall(TOKEN_KEY) || "";
+const storeToken = (token) => remember(TOKEN_KEY, token || null);
 
 function askForToken() {
   const answer = window.prompt(

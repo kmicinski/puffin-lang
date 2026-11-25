@@ -14,13 +14,8 @@
 //   hasTrace(text)
 
 import { highlight } from "./markdown.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
+import { plural } from "./words.js";
 
 // Calls this deep and deeper start closed.
 const OPEN_DEPTH = 3;
@@ -89,18 +84,18 @@ function depthOf(items) {
 }
 
 export function renderTrace(calls) {
-  const box = element("div", "trace");
-  const head = box.appendChild(element("div", "trace-head"));
+  const box = el("div", "trace");
+  const head = box.appendChild(el("div", "trace-head"));
   const total = count(calls);
-  head.append(element("span", "", `trace · ${total} call${total === 1 ? "" : "s"} · ${depthOf(calls)} deep`));
-  const raw = head.appendChild(element("button", "trace-raw", "as text"));
+  head.append(el("span", "", `trace · ${plural(total, "call")} · ${depthOf(calls)} deep`));
+  const raw = head.appendChild(el("button", "trace-raw", "as text"));
   raw.title = "Show the trace as it was printed (Racket's layout), to read or copy";
-  const tree = box.appendChild(element("div", "trace-tree"));
+  const tree = box.appendChild(el("div", "trace-tree"));
   appendItems(tree, calls, 0, { rows: PAGE });
   let text = null;
   raw.addEventListener("click", () => {
     if (!text) {
-      text = box.appendChild(element("pre", "trace-text-view", printed(calls, 0)));
+      text = box.appendChild(el("pre", "trace-text-view", printed(calls, 0)));
       text.hidden = true;
     }
     const showText = text.hidden;
@@ -128,8 +123,8 @@ function appendItems(container, items, depth, budget) {
   if (i < items.length) {
     const rest = items.slice(i);
     const calls = count(rest);
-    const more = container.appendChild(element("button", "trace-more",
-      calls ? `${calls} more call${calls === 1 ? "" : "s"}` : `${rest.length} more line${rest.length === 1 ? "" : "s"}`));
+    const more = container.appendChild(el("button", "trace-more",
+      calls ? plural(calls, "more call") : plural(rest.length, "more line")));
     more.addEventListener("click", () => {
       more.remove();
       appendItems(container, rest, depth, { rows: PAGE });
@@ -139,14 +134,14 @@ function appendItems(container, items, depth, budget) {
 
 function renderItem(item, depth, budget) {
   budget.rows--;
-  if (!item.children) return element("pre", "trace-out", item.text);
-  const node = element("div", "trace-call");
-  const row = node.appendChild(element("div", "trace-row"));
-  const toggle = row.appendChild(element("span", "trace-toggle"));
-  const call = row.appendChild(element("code", "trace-args"));
+  if (!item.children) return el("pre", "trace-out", item.text);
+  const node = el("div", "trace-call");
+  const row = node.appendChild(el("div", "trace-row"));
+  const toggle = row.appendChild(el("span", "trace-toggle"));
+  const call = row.appendChild(el("code", "trace-args"));
   call.innerHTML = highlight(item.call);
   call.title = item.call;
-  const value = row.appendChild(element("code", item.value === null ? "trace-value none" : "trace-value"));
+  const value = row.appendChild(el("code", item.value === null ? "trace-value none" : "trace-value"));
   if (item.value === null) {
     value.textContent = "no return";
     value.title = "This call never returned: the evaluation failed or was interrupted inside it";
@@ -159,8 +154,8 @@ function renderItem(item, depth, budget) {
     node.classList.add("leaf");
     return node;
   }
-  if (nested) row.append(element("span", "trace-count", `${nested} call${nested === 1 ? "" : "s"}`));
-  const children = node.appendChild(element("div", "trace-children"));
+  if (nested) row.append(el("span", "trace-count", plural(nested, "call")));
+  const children = node.appendChild(el("div", "trace-children"));
   let filled = false;
   const open = (on, rows) => {
     node.classList.toggle("open", on);
@@ -191,10 +186,10 @@ function openAll(node, budget) {
 // Program output with its traces drawn as trees, or null when it holds none.
 export function renderOutput(text) {
   if (!hasTrace(text)) return null;
-  const box = element("div", "stream out traced");
+  const box = el("div", "stream out traced");
   for (const part of parseTrace(text)) {
     if (part.calls) box.append(renderTrace(part.calls));
-    else box.append(element("pre", "stream out", part.text));
+    else box.append(el("pre", "stream out", part.text));
   }
   return box;
 }

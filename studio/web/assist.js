@@ -19,6 +19,9 @@
 import { markdown } from "./markdown.js";
 import { balanced } from "./lexer.js";
 import { renderOutput } from "./trace.js";
+import { button, el } from "./dom.js";
+import { plural } from "./words.js";
+import { recall, remember } from "./stored.js";
 
 // The question, when `text` asks for ask mode: `??` and what follows.
 export function asking(text) {
@@ -60,13 +63,6 @@ function comment(line) {
   return [line.trimEnd(), ""];
 }
 
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
-
 // What a tool call did, in a few words.
 function describe(data) {
   const input = data.input ?? {};
@@ -105,15 +101,15 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
   // Ask mode's own strip above the prompt: the scope, the thread this
   // question follows up on, and how to ask. It takes nothing from the
   // prompt's width.
-  const bar = element("div", "ask-bar");
+  const bar = el("div", "ask-bar");
   bar.hidden = true;
   row.prepend(bar);
-  const tag = element("button", "assist-tag");
+  const tag = el("button", "assist-tag");
   tag.type = "button";
-  const fresh = element("button", "assist-tag-clear", "×");
+  const fresh = el("button", "assist-tag-clear", "×");
   fresh.type = "button";
   fresh.title = "Ask a new question instead of following up";
-  const hint = element("span", "ask-hint", "Enter asks · ⇧Enter newline · Esc back to Puffin");
+  const hint = el("span", "ask-hint", "Enter asks · ⇧Enter newline · Esc back to Puffin");
   bar.append(scopeSelect, tag, fresh, hint);
 
   const state = {
@@ -207,9 +203,9 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
   }, { capture: true });
 
   // the scope: remembered, and a selection preferred when there is one
-  try { scopeSelect.value = localStorage.getItem("puffin-studio.scope") || "form"; } catch { /* private mode */ }
+  scopeSelect.value = recall("puffin-studio.scope") || "form";
   scopeSelect.addEventListener("change", () => {
-    try { localStorage.setItem("puffin-studio.scope", scopeSelect.value); } catch { /* private mode */ }
+    remember("puffin-studio.scope", scopeSelect.value);
     prompt.focus();
   });
 
@@ -244,10 +240,10 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       node,
       thread: entry.thread,
       turn: entry.turn,
-      line: node.appendChild(element("div", "line", entry.line)),
-      body: node.appendChild(element("div", "md assist-body")),
-      activity: node.appendChild(element("div", "assist-activity")),
-      foot: node.appendChild(element("div", "assist-foot")),
+      line: node.appendChild(el("div", "line", entry.line)),
+      body: node.appendChild(el("div", "md assist-body")),
+      activity: node.appendChild(el("div", "assist-activity")),
+      foot: node.appendChild(el("div", "assist-foot")),
     };
     node.classList.add("assist");
     if (entry.turn > 0) node.classList.add("follow");
@@ -262,19 +258,19 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     const last = block.turn === turns.length - 1;
     const running = Boolean(thread?.running) && last;
     const done = !running;
-    const was = nearBottom();
+    const was = repl.atBottom();
     const texts = messages.filter((m) => m.role === "assistant").map((m) => m.text);
     const draft = running ? state.drafts.get(block.thread) ?? "" : "";
     // markdown() escapes all of the model's text
     block.body.innerHTML = markdown([...texts, draft].filter(Boolean).join("\n\n"));
     const calls = messages.filter((m) => m.role === "tool").map((m) => m.data ?? {});
     if (calls.length) {
-      const list = element("details", "assist-calls");
+      const list = el("details", "assist-calls");
       const failed = calls.filter((call) => call.status === "error").length;
-      list.append(element("summary", "", `${calls.length} step${calls.length === 1 ? "" : "s"}${failed ? ` · ${failed} refused or failed` : ""}`));
+      list.append(el("summary", "", `${plural(calls.length, "step")}${failed ? ` · ${failed} refused or failed` : ""}`));
       for (const call of calls) {
-        const item = list.appendChild(element("div", `assist-call ${call.status ?? ""}`));
-        item.append(element("span", "mark", call.status === "error" ? "✗" : call.status === "running" ? "…" : "✓"), element("span", "", describe(call)));
+        const item = list.appendChild(el("div", `assist-call ${call.status ?? ""}`));
+        item.append(el("span", "mark", call.status === "error" ? "✗" : call.status === "running" ? "…" : "✓"), el("span", "", describe(call)));
         if (call.result) item.title = call.result;
         // what a trace saw, as the transcript draws the author's
         const tree = call.trace && renderOutput(call.trace);
@@ -287,28 +283,23 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
     const chip = proposed.length && proposalChip(proposed);
     if (chip) block.body.append(chip);
     for (const message of messages.filter((m) => m.role === "error" || m.role === "notice")) {
-      block.body.append(element("div", message.role === "error" ? "error" : "note", message.text));
+      block.body.append(el("div", message.role === "error" ? "error" : "note", message.text));
     }
     block.activity.hidden = done;
     block.activity.textContent = state.phases.get(block.thread) ?? "Asking…";
     block.foot.replaceChildren();
     if (running) {
-      const stop = block.foot.appendChild(element("a", "", "Stop"));
+      const stop = block.foot.appendChild(el("a", "", "Stop"));
       stop.addEventListener("click", () => send({ t: "stop-thread", thread: block.thread }));
     } else {
       const turn = messages.find((m) => m.role === "turn")?.data;
       const parts = [turn?.ms ? `${(turn.ms / 1000).toFixed(1)} s` : "", turn?.cost ? `$${Number(turn.cost).toFixed(3)}` : ""];
-      block.foot.append(element("span", "", parts.filter(Boolean).join(" · ")));
-      const follow = block.foot.appendChild(element("a", "", "Follow up"));
+      block.foot.append(el("span", "", parts.filter(Boolean).join(" · ")));
+      const follow = block.foot.appendChild(el("a", "", "Follow up"));
       follow.addEventListener("click", () => ask({ thread: block.thread }));
     }
-    if (was) repl.scroll?.();
+    if (was) repl.scroll();
   }
-
-  const nearBottom = () => {
-    const t = document.getElementById("transcript");
-    return t.scrollHeight - t.scrollTop - t.clientHeight < 60;
-  };
 
   // An answer's ```repl blocks as chips.
   function chips(block) {
@@ -317,27 +308,25 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       if (lang !== "repl") continue;
       const list = steps(code.querySelector("pre").textContent);
       if (!list.length) continue;
-      const box = element("div", "assist-chips");
+      const box = el("div", "assist-chips");
       for (const step of list) box.append(chip(step));
       code.replaceWith(box);
     }
   }
 
   function chip(step) {
-    const item = element("div", "assist-step");
-    const code = item.appendChild(element("code", "", step.command));
+    const item = el("div", "assist-step");
+    const code = item.appendChild(el("code", "", step.command));
     code.title = "Insert into the prompt to edit";
     code.addEventListener("click", () => insert(step.command));
-    const run = item.appendChild(element("button", "small primary", "Run"));
+    const run = item.appendChild(el("button", "small primary", "Run"));
     run.title = "Run it at the prompt, as typing it would";
     run.addEventListener("click", () => {
       repl.run(step.command);
       item.classList.add("done");
     });
-    const edit = item.appendChild(element("button", "small secondary", "Insert"));
-    edit.title = "Put it in the prompt to edit";
-    edit.addEventListener("click", () => insert(step.command));
-    if (step.note) item.append(element("div", "note", step.note));
+    item.append(button("small secondary", "Insert", () => insert(step.command), "Put it in the prompt to edit"));
+    if (step.note) item.append(el("div", "note", step.note));
     return item;
   }
 
@@ -354,7 +343,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
   // "Ask why" on an evaluation's error.
   repl.hooks.error = (entry, box) => {
     if (!entry || entry.kind !== "eval") return;
-    const why = box.appendChild(element("a", "assist-why", "✦ ask why"));
+    const why = box.appendChild(el("a", "assist-why", "✦ ask why"));
     why.title = "Ask the assistant why this failed";
     why.addEventListener("click", () => ask({ text: `Why did \`${entry.line.split("\n")[0].slice(0, 80)}\` fail, and how do I fix it?` }));
   };
@@ -371,7 +360,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       agent({ thread, kind, text = "", index, entry }) {
         const known = state.threads.get(thread);
         if (kind === "delta") state.drafts.set(thread, (state.drafts.get(thread) ?? "") + text);
-        else if (kind === "phase") state.phases.set(thread, PHASES[text] ?? (text.startsWith("tool ") ? "Working…" : "Working…"));
+        else if (kind === "phase") state.phases.set(thread, PHASES[text] ?? "Working…");
         else if (kind === "entry" && known && entry) {
           known.messages[index] = entry;
           if (entry.role === "assistant") state.drafts.set(thread, "");
@@ -387,7 +376,7 @@ export function initAssist({ prompt, scopeSelect, send, repl, context, proposalC
       },
       asked({ thread, error }) {
         if (error) {
-          repl.local?.("?? …", error, true);
+          repl.local("?? …", error, true);
           return;
         }
         if (state.mode === "ask") state.thread = thread;

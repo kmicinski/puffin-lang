@@ -11,6 +11,8 @@
 //   key       what `reveal` and `next` name it by
 // F7 and Shift+F7 move the cursor to the next and previous hunk.
 
+import { el } from "./dom.js";
+
 export function createInlineDiff({ monaco, editor }, { onMove = () => {} } = {}) {
   const decorations = editor.createDecorationsCollection([]);
   let zones = [];
@@ -65,19 +67,19 @@ export function createInlineDiff({ monaco, editor }, { onMove = () => {} } = {})
 
   function zone({ after, lines, header }, tone) {
     const { fontFamily, fontSize, lineHeight } = editor.getOption(monaco.editor.EditorOption.fontInfo);
-    const dom = element("div", `ip-zone ${tone}`);
+    const dom = el("div", `ip-zone ${tone}`);
     if (header) {
       header.style.height = `${lineHeight + 4}px`;
       dom.append(header);
     }
     for (const { text, from, to } of lines) {
-      const line = dom.appendChild(element("div", "ip-add"));
+      const line = dom.appendChild(el("div", "ip-add"));
       Object.assign(line.style, { fontFamily, fontSize: `${fontSize}px`, lineHeight: `${lineHeight}px`, height: `${lineHeight}px` });
-      if (from) line.append(text.slice(0, from - 1), element("span", "ip-add-chars", text.slice(from - 1, to - 1)), text.slice(to - 1));
+      if (from) line.append(text.slice(0, from - 1), el("span", "ip-add-chars", text.slice(from - 1, to - 1)), text.slice(to - 1));
       else line.textContent = text || " ";
     }
-    const margin = element("div", `ip-zone-margin ${tone}`);
-    lines.forEach(() => { margin.appendChild(element("div", "ip-plus", "+")).style.height = `${lineHeight}px`; });
+    const margin = el("div", `ip-zone-margin ${tone}`);
+    lines.forEach(() => { margin.appendChild(el("div", "ip-plus", "+")).style.height = `${lineHeight}px`; });
     margin.style.lineHeight = `${lineHeight}px`;
     if (header) margin.style.paddingTop = `${lineHeight + 4}px`;
     return {
@@ -126,11 +128,4 @@ export function createInlineDiff({ monaco, editor }, { onMove = () => {} } = {})
     next,
     shown: () => shown,
   };
-}
-
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
 }
