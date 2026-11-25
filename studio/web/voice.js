@@ -444,6 +444,15 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     mic.title = listening ? "Listening — click to stop (or say “stop listening”)" : "Click to talk";
   }
 
+  // What went wrong, by the recognizer's error (the meter's are mapped onto them).
+  const ERRORS = {
+    "not-allowed": "The microphone is blocked: allow it for this site (the icon in the address bar), then click the mic.",
+    "service-not-allowed": "This browser will not run speech recognition here (Safari: turn on Siri / Dictation in System Settings).",
+    "audio-capture": "No microphone was found.",
+    network: "Speech recognition could not reach its service (Chrome sends the audio to Google): check the connection.",
+    "language-not-supported": "Speech recognition does not support this browser's language.",
+  };
+
   // The microphone's level, drawn as a ring around the button, so the
   // author sees the browser hears them before any words come back.
   let meter = null; // { stream, context, frame }
@@ -476,10 +485,8 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
       draw();
     } catch (error) {
       context.close();
-      const why = error?.name === "NotAllowedError" ? "The microphone is blocked: allow it for this site (the icon in the address bar), then click the mic."
-        : error?.name === "NotFoundError" ? "No microphone was found."
-        : `The microphone could not start: ${error?.message ?? error}`;
-      show(why, "bad", 30000);
+      const why = { NotAllowedError: ERRORS["not-allowed"], NotFoundError: ERRORS["audio-capture"] }[error?.name];
+      show(why ?? `The microphone could not start: ${error?.message ?? error}`, "bad", 30000);
     }
   }
   function stopMeter() {
@@ -491,13 +498,6 @@ export function createVoice({ editor, files, send, note, button, stage, layout, 
     mic.style.removeProperty("--level");
   }
 
-  const ERRORS = {
-    "not-allowed": "The microphone is blocked: allow it for this site (the icon in the address bar), then click the mic.",
-    "service-not-allowed": "This browser will not run speech recognition here (Safari: turn on Siri / Dictation in System Settings).",
-    "audio-capture": "No microphone was found.",
-    network: "Speech recognition could not reach its service (Chrome sends the audio to Google): check the connection.",
-    "language-not-supported": "Speech recognition does not support this browser's language.",
-  };
   let failures = 0;
 
   function startListening() {
