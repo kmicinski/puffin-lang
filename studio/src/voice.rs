@@ -20,6 +20,7 @@
 //! `web/voice.js`.
 
 use crate::claude_api::{self, Api};
+use crate::claude_cli::{McpConfig, Run, result_text, tool_name};
 use crate::props::{self, Results};
 use crate::review::{Change, apply};
 use crate::sexp;
@@ -29,11 +30,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
 /// The header naming a voice builder's MCP calls (mcp.rs).
 pub const VOICE_HEADER: &str = "x-studio-voice";
@@ -169,7 +168,7 @@ impl Voice {
         if self.api.is_none() {
             return Some("voice mode needs the Claude API: set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN".to_owned());
         }
-        crate::agent::Agent::unavailable()
+        crate::claude_cli::unavailable()
     }
 }
 
@@ -637,13 +636,6 @@ impl Studio {
     }
 
     async fn build(self: &Arc<Self>, batch: Vec<String>, interrupted: bool) {
-        let config = match self.voice_config() {
-            Ok(path) => path,
-            Err(error) => {
-                self.voice_event("error", json!({ "message": error }));
-                return;
-            }
-        };
         let mut prompt = self.builder_preamble();
         if interrupted {
             prompt.push_str("\nYou were interrupted: the author spoke while you worked. Your edits so far are applied. Take up the new words now; drop anything they make moot.\n");
@@ -652,8 +644,6 @@ impl Studio {
         for line in &batch {
             let _ = writeln!(prompt, "- {line}");
         }
-        let system = crate::knowledge::system_prompt(&self.root, BUILDER);
-        let mut resume = self.voice.state().session.clone();
         let turn = {
             let mut state = self.voice.state();
             state.turn += 1;
@@ -664,76 +654,64 @@ impl Studio {
         let began = Instant::now();
         self.voice_event("turn", json!({ "turn": turn, "instructions": batch, "interrupted": interrupted }));
         self.set_activity(json!({ "state": "starting", "text": crate::agent::title_of(batch.last().map(String::as_str).unwrap_or("")) }));
-        let mut outcome = "done";
+        let outcome = match self.run_builder(prompt).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.voice_event("error", json!({ "message": error }));
+                "failed"
+            }
+        };
+        let touched = std::mem::take(&mut self.voice.state().touched);
+        self.auto_arrange(&touched);
+        self.voice_event("turn-end", json!({ "turn": turn, "ms": began.elapsed().as_millis() as u64, "outcome": outcome }));
+    }
+
+    /// Run the builder's claude on `prompt`, resuming its session; once more
+    /// afresh, with the conversation, when that session cannot be resumed.
+    /// How it ended: done, stopped or interrupted; Err: why it failed.
+    async fn run_builder(self: &Arc<Self>, mut prompt: String) -> Result<&'static str, String> {
+        let config = McpConfig::write(
+            &format!("puffin-studio-voice-{}.json", std::process::id()),
+            self.port(),
+            &self.agent.mcp_token,
+            json!({ "X-Studio-Thread": VOICE_THREAD.to_string(), "X-Studio-Voice": "1" }),
+        )?;
+        let system = crate::knowledge::system_prompt(&self.root, BUILDER);
+        let mut resume = self.voice.state().session.clone();
         loop {
-            let mut args: Vec<String> = vec![
-                "-p".into(), prompt.clone(),
-                "--output-format".into(), "stream-json".into(), "--verbose".into(),
-                "--include-partial-messages".into(),
-                "--model".into(), self.voice.model.clone(),
-                "--effort".into(), self.voice.effort.clone(),
-                "--disable-slash-commands".into(),
-                "--setting-sources".into(), "user".into(),
-                "--mcp-config".into(), config.to_string_lossy().into_owned(), "--strict-mcp-config".into(),
-                "--tools".into(), "".into(),
-                "--allowedTools".into(), format!("mcp__{}", crate::agent::SERVER),
-                "--disallowedTools".into(), "Bash,Write,Edit,NotebookEdit,Skill".into(),
-                "--max-turns".into(), MAX_TURNS.to_string(),
-                "--append-system-prompt".into(), system.clone(),
-                "--exclude-dynamic-system-prompt-sections".into(),
-            ];
-            if let Some(session) = &resume {
-                args.extend(["--resume".to_owned(), session.clone()]);
-            }
-            let mut child = match Command::new("claude")
-                .args(&args)
-                // every tool loaded up front: deferred behind tool search, a
-                // direct call to one fails ("No such tool available")
-                .env("ENABLE_TOOL_SEARCH", "false")
-                .current_dir(&self.directory)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-            {
-                Ok(child) => child,
-                Err(error) => {
-                    self.voice_event("error", json!({ "message": format!("could not start claude: {error}") }));
-                    break;
-                }
+            let run = Run {
+                prompt: &prompt,
+                system: &system,
+                config: &config.path,
+                model: Some(&self.voice.model),
+                effort: &self.voice.effort,
+                max_turns: MAX_TURNS,
+                resume: resume.as_deref(),
+                eager_tools: true,
             };
-            let stdout = child.stdout.take().expect("piped stdout");
-            let mut stderr = child.stderr.take().expect("piped stderr");
-            self.voice.state().child = Some(child);
-            let stderr_text = tokio::spawn(async move {
-                let mut text = String::new();
-                let _ = stderr.read_to_string(&mut text).await;
-                text
-            });
-            let mut lines = BufReader::new(stdout).lines();
             let mut got_result = false;
-            while let Ok(Some(line)) = lines.next_line().await {
-                if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                    got_result |= self.builder_event(&event);
-                }
-            }
-            let child = self.voice.state().child.take();
-            let status = match child {
-                Some(mut child) => child.wait().await.ok(),
-                None => None,
-            };
-            let stderr_text = stderr_text.await.unwrap_or_default();
+            let ended = run
+                .stream(
+                    &self.directory,
+                    |child| self.voice.state().child = Some(child),
+                    || self.voice.state().child.take(),
+                    |event| got_result |= self.builder_event(event),
+                )
+                .await?;
             let (cut, stopped) = {
                 let state = self.voice.state();
                 (state.interrupted, state.stopped)
             };
-            if cut || stopped {
-                outcome = if stopped { "stopped" } else { "interrupted" };
-                break;
+            if stopped {
+                return Ok("stopped");
             }
-            let failed = !got_result && !status.is_some_and(|status| status.success());
-            if failed && resume.is_some() {
+            if cut {
+                return Ok("interrupted");
+            }
+            if got_result || ended.success {
+                return Ok("done");
+            }
+            if resume.is_some() {
                 // a session that cannot be resumed (an interrupted run can
                 // leave one so): start afresh, with the conversation
                 self.voice.state().session = None;
@@ -742,17 +720,8 @@ impl Studio {
                 prompt = format!("(Your earlier conversation could not be resumed. Its last lines:\n{conversation})\n{prompt}");
                 continue;
             }
-            if failed {
-                outcome = "failed";
-                let last = stderr_text.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("no output").to_owned();
-                self.voice_event("error", json!({ "message": format!("the builder stopped: {last}") }));
-            }
-            break;
+            return Err(format!("the builder stopped: {}", ended.last_words().unwrap_or("no output")));
         }
-        let _ = std::fs::remove_file(&config);
-        let touched = std::mem::take(&mut self.voice.state().touched);
-        self.auto_arrange(&touched);
-        self.voice_event("turn-end", json!({ "turn": turn, "ms": began.elapsed().as_millis() as u64, "outcome": outcome }));
     }
 
     /// Show one stream-json event of the builder; whether it was the result.
@@ -788,7 +757,7 @@ impl Studio {
                             }
                         }
                         Some("tool_use") => {
-                            let name = block["name"].as_str().unwrap_or("").rsplit("__").next().unwrap_or("").to_owned();
+                            let name = tool_name(block).to_owned();
                             let input = &block["input"];
                             let what = input["file"].as_str().or(input["name"].as_str()).or(input["query"].as_str()).unwrap_or("");
                             let text = describe_tool(&name, what);
@@ -828,11 +797,7 @@ impl Studio {
                     if matches!(name.as_str(), "say" | "show") {
                         continue;
                     }
-                    let text = match &block["content"] {
-                        Value::String(text) => text.clone(),
-                        Value::Array(parts) => parts.iter().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n"),
-                        _ => String::new(),
-                    };
+                    let text = result_text(block);
                     let error = block["is_error"].as_bool().unwrap_or(false);
                     let (ok, summary) = step_outcome(&name, &text, error);
                     self.voice_event("step-done", json!({ "turn": turn, "id": id, "ok": ok, "summary": summary }));
@@ -852,32 +817,6 @@ impl Studio {
             _ => {}
         }
         false
-    }
-
-    /// The MCP config of a builder run: our `/mcp`, its token, the voice
-    /// header (mode 0600).
-    fn voice_config(&self) -> Result<std::path::PathBuf, String> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let config = json!({ "mcpServers": { crate::agent::SERVER: {
-            "type": "http",
-            "url": format!("http://127.0.0.1:{}/mcp", self.port()),
-            "headers": {
-                "Authorization": format!("Bearer {}", self.agent.mcp_token),
-                "X-Studio-Thread": VOICE_THREAD.to_string(),
-                "X-Studio-Voice": "1",
-            },
-        }}});
-        let path = std::env::temp_dir().join(format!("puffin-studio-voice-{}.json", std::process::id()));
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .and_then(|mut file| file.write_all(config.to_string().as_bytes()))
-            .map_err(|error| format!("cannot write the builder's MCP config: {error}"))?;
-        Ok(path)
     }
 
     /// What every builder run starts with: the files, the diagnostics, the

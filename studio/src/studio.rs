@@ -484,7 +484,7 @@ impl Studio {
             lint,
             traced,
             features,
-            agent_unavailable: Agent::unavailable(),
+            agent_unavailable: crate::claude_cli::unavailable(),
             board: self.board_view(),
         }
     }

@@ -12,7 +12,7 @@
 //!   ops of its thread it builds on, and is refused if that fails. Each
 //!   pending op's acceptance is kept current for the Accept controls.
 
-use crate::agent::{self, Agent};
+use crate::agent;
 use crate::review::{Acceptance, Change, Message, Review, Scope, ScopeKind, Status, apply};
 use crate::sexp;
 use crate::studio::{Entry, Studio};
@@ -48,7 +48,7 @@ impl Studio {
     /// Ask in `thread`, or in a new thread. Returns its id; the run's
     /// progress arrives as agent events.
     pub fn ask(self: &Arc<Self>, thread: Option<u32>, message: String, context: Context) -> Result<u32, String> {
-        if let Some(why) = Agent::unavailable() {
+        if let Some(why) = crate::claude_cli::unavailable() {
             return Err(why);
         }
         let message = message.trim().to_owned();
