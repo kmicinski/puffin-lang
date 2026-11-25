@@ -470,5 +470,7 @@ body.focus-canvas .board, body.focus-canvas .board-hud, body.focus-canvas .board
 .board.z-far .board-item-line .board-sig-rest, .board.z-far .board-sig-kw { display: none; }
 .board.z-far .span-editor .monaco-editor { visibility: hidden; }
 .board.z-far .span-editor { background: repeating-linear-gradient(var(--page) 0 9px, var(--border) 9px 11px); }
-.board.z-far .board-card-title { font-size: 22px; }
+/* further out, a card's name is drawn larger, so it stays readable */
+.board.z-mid .board-card-title, .board.z-far .board-card-title { font-size: calc(13px * var(--unzoom, 1)); }
+.board.z-mid .span-editor { opacity: 0.7; }
 .board.z-far .board-card-meta, .board.z-far .board-tools, .board.z-far .board-add { display: none; }

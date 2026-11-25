@@ -151,9 +151,14 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     viewport: root,
     layer: canvas,
     onChange(z) {
+      const level = z >= NEAR ? "z-near" : z >= FAR ? "z-mid" : "z-far";
+      // a new level of detail changes the cards' heights: what hangs off
+      // them is placed again
+      if (!root.classList.contains(level)) requestAnimationFrame(layoutAfterResize);
       root.classList.toggle("z-near", z >= NEAR);
       root.classList.toggle("z-mid", z < NEAR && z >= FAR);
       root.classList.toggle("z-far", z < FAR);
+      root.style.setProperty("--unzoom", String(Math.min(3, 1 / z)));
       zoomLabel.textContent = `${Math.round(z * 100)}%`;
     },
   });
@@ -1164,16 +1169,22 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
   // or a card showing code: where it would, it moves down below that or
   // right past it, whichever is the shorter way.
   function placePulled() {
+    const compact = root.classList.contains("compact");
     const obstacles = [...canvas.querySelectorAll(".board-card:not([hidden])")].filter((n) => n.querySelector(".span-editor")).map(canvasBox);
     // in the order of their uses down the code, so that wires do not cross
     // (a pulled one's source is placed before it: it was pulled first)
-    const order = (board.pulled ?? []).map((p, i) => ({ p, i, y: useAnchor(p)?.y ?? 0 }));
-    order.sort((a, b) => (a.p.from === b.p.from ? a.y - b.y : a.i - b.i));
+    const pulled = board.pulled ?? [];
+    const group = (p) => pulled.findIndex((q) => q.from === p.from);
+    const order = pulled.map((p) => ({ p, g: group(p), y: useAnchor(p)?.y ?? 0 }));
+    order.sort((a, b) => a.g - b.g || a.y - b.y);
     for (const { p } of order) {
       const node = canvas.querySelector(`.canvas-frag[data-key="${CSS.escape(p.key)}"]`);
       if (!node) continue;
       const source = useAnchor(p);
-      const start = { x: source ? source.right + 64 : GRID.x, y: source ? source.y - 18 : GRID.y };
+      // a narrow window has no room to the right: below the code instead
+      const start = !source ? { x: GRID.x, y: GRID.y }
+        : compact ? { x: source.left, y: source.bottom + 30 }
+        : { x: source.right + 64, y: source.y - 18 };
       let { x, y } = start;
       const w = node.offsetWidth;
       const h = node.offsetHeight;
@@ -1183,7 +1194,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
         const down = { x, y: hit.y + hit.h + 18 };
         const right = { x: hit.x + hit.w + 24, y };
         const far = (spot) => Math.hypot(spot.x - start.x, spot.y - start.y);
-        ({ x, y } = far(down) <= far(right) ? down : right);
+        ({ x, y } = compact || far(down) <= far(right) ? down : right);
       }
       node.style.left = `${x}px`;
       node.style.top = `${y}px`;
@@ -1201,7 +1212,7 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
     const box = canvasBox(host);
     const outer = canvasBox(holder);
     const name = p.use ?? p.key.split("\u001f")[1];
-    return { right: outer.x + outer.w, x: box.x, y: box.y + span.lineTop(span.lineOf(name)) + 9 };
+    return { left: outer.x, right: outer.x + outer.w, bottom: outer.y + outer.h, y: box.y + span.lineTop(span.lineOf(name)) + 9 };
   }
 
   function renderPulls() {
@@ -1211,9 +1222,11 @@ export function createBoard({ editor, files, send, stage, onShow, onEvalAt, onSa
       const from = useAnchor(p);
       if (!node || !from) continue;
       const to = { x: parseFloat(node.style.left), y: parseFloat(node.style.top) + 15 };
-      const bend = Math.max(30, (to.x - from.right) / 2);
-      pullLayer.append(svg("path", { d: `M ${from.right} ${from.y} C ${from.right + bend} ${from.y} ${to.x - bend} ${to.y} ${to.x} ${to.y}`, class: "board-pull-wire" }));
-      pullLayer.append(svg("circle", { cx: from.right, cy: from.y, r: 3.5, class: "board-pull-dot" }));
+      // from the code's right edge, or (pulled below it) its left edge
+      const fromX = to.x > from.right - 1 ? from.right : from.left;
+      const bend = Math.max(30, Math.abs(to.x - fromX) / 2) * (fromX === from.right ? 1 : -1);
+      pullLayer.append(svg("path", { d: `M ${fromX} ${from.y} C ${fromX + bend} ${from.y} ${to.x - bend} ${to.y} ${to.x} ${to.y}`, class: "board-pull-wire" }));
+      pullLayer.append(svg("circle", { cx: fromX, cy: from.y, r: 3.5, class: "board-pull-dot" }));
       pullLayer.append(svg("circle", { cx: to.x, cy: to.y, r: 3.5, class: "board-pull-dot" }));
     }
   }
