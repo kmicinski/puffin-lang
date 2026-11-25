@@ -1,0 +1,514 @@
+[
+ {
+  "effects": 0,
+  "items": [
+   {
+    "doc": "a variable is a symbol",
+    "end_line": 6,
+    "holes": 0,
+    "kind": "alias",
+    "line": 6,
+    "name": "Var",
+    "opaque": false,
+    "sig": "type Var = Sym",
+    "uses": []
+   },
+   {
+    "doc": "programs are their own s-expressions",
+    "end_line": 17,
+    "holes": 0,
+    "kind": "grammar",
+    "line": 9,
+    "name": "Expr",
+    "opaque": false,
+    "sig": "grammar Expr = Int | Sym | (lambda (Sym) Expr) | (let ((Sym Expr)) Expr) | (if0 Expr Expr Expr) | (+ Expr Expr) | (Expr Expr)",
+    "uses": []
+   },
+   {
+    "doc": "the number of nodes: what the fuel bound is measured against",
+    "end_line": 27,
+    "holes": 0,
+    "kind": "fun",
+    "line": 20,
+    "name": "expr-size",
+    "opaque": false,
+    "sig": "val expr-size : Expr -> Int",
+    "uses": [
+     "Expr"
+    ]
+   },
+   {
+    "doc": "the variables a program mentions but does not bind",
+    "end_line": 38,
+    "holes": 0,
+    "kind": "fun",
+    "line": 30,
+    "name": "free-vars",
+    "opaque": false,
+    "sig": "val free-vars : Expr -> List Var",
+    "uses": [
+     "Expr",
+     "Var"
+    ]
+   }
+  ],
+  "path": "lang.puf",
+  "provides": [
+   "Expr",
+   "Var",
+   "expr-size",
+   "free-vars"
+  ],
+  "requires": []
+ },
+ {
+  "effects": 0,
+  "items": [
+   {
+    "doc": "what is left to do once the control is a value",
+    "end_line": 17,
+    "holes": 0,
+    "kind": "type",
+    "line": 10,
+    "name": "Kont",
+    "opaque": false,
+    "sig": "type Kont = Done | Arg of Expr * Env * Kont | Fun of Value * Kont | Let of Var * Expr * Env * Kont | Branch of Expr * Expr * Env * Kont | Add1 of Expr * Env * Kont | Add2 of Value * Kont",
+    "uses": [
+     "Env",
+     "Expr",
+     "Value",
+     "Var"
+    ]
+   },
+   {
+    "doc": "the control is an expression to evaluate or a value to return",
+    "end_line": 22,
+    "holes": 0,
+    "kind": "type",
+    "line": 20,
+    "name": "State",
+    "opaque": false,
+    "sig": "type State = Eval of Expr * Env * Store * Kont | Ret of Value * Store * Kont",
+    "uses": [
+     "Env",
+     "Expr",
+     "Kont",
+     "Store",
+     "Value"
+    ]
+   },
+   {
+    "doc": "how a run ends",
+    "end_line": 27,
+    "holes": 0,
+    "kind": "type",
+    "line": 25,
+    "name": "Outcome",
+    "opaque": false,
+    "sig": "type Outcome = Halted of Value | OutOfFuel",
+    "uses": [
+     "Value"
+    ]
+   },
+   {
+    "doc": "a program's first state",
+    "end_line": 31,
+    "holes": 0,
+    "kind": "fun",
+    "line": 31,
+    "name": "inject",
+    "opaque": false,
+    "sig": "val inject : Expr -> State",
+    "uses": [
+     "empty-env",
+     "empty-store"
+    ]
+   },
+   {
+    "end_line": 37,
+    "holes": 0,
+    "kind": "fun",
+    "line": 34,
+    "name": "final?",
+    "opaque": false,
+    "sig": "val final? : State -> Bool",
+    "uses": []
+   },
+   {
+    "doc": "one transition",
+    "end_line": 44,
+    "holes": 0,
+    "kind": "fun",
+    "line": 41,
+    "name": "step",
+    "opaque": false,
+    "sig": "val step : State -> State",
+    "uses": [
+     "apply-kont",
+     "step-eval"
+    ]
+   },
+   {
+    "doc": "an expression in control: look it up, or push a frame and descend",
+    "end_line": 56,
+    "holes": 0,
+    "kind": "fun",
+    "line": 48,
+    "name": "step-eval",
+    "opaque": false,
+    "sig": "val step-eval : Expr * Env * Store * Kont -> State",
+    "uses": [
+     "env-ref",
+     "store-ref"
+    ]
+   },
+   {
+    "doc": "a value returned to the continuation's top frame",
+    "end_line": 68,
+    "holes": 0,
+    "kind": "fun",
+    "line": 60,
+    "name": "apply-kont",
+    "opaque": false,
+    "sig": "val apply-kont : Kont * Value * Store -> State",
+    "uses": [
+     "add-values",
+     "apply-closure",
+     "bind-and-eval",
+     "zero-value?"
+    ]
+   },
+   {
+    "end_line": 74,
+    "holes": 0,
+    "kind": "fun",
+    "line": 71,
+    "name": "apply-closure",
+    "opaque": false,
+    "sig": "val apply-closure : Value * Value * Store * Kont -> State",
+    "uses": [
+     "bind-and-eval"
+    ]
+   },
+   {
+    "doc": "allocate x, store v there, evaluate the body",
+    "end_line": 80,
+    "holes": 0,
+    "kind": "fun",
+    "line": 78,
+    "name": "bind-and-eval",
+    "opaque": false,
+    "sig": "val bind-and-eval : Var * Value * Expr * Env * Store * Kont -> State",
+    "uses": [
+     "alloc",
+     "env-extend",
+     "store-set"
+    ]
+   },
+   {
+    "doc": "step until final, or until the fuel runs out",
+    "end_line": 84,
+    "holes": 1,
+    "kind": "fun",
+    "line": 84,
+    "name": "run",
+    "opaque": true,
+    "sig": "val run : Expr * Int -> Outcome",
+    "uses": []
+   }
+  ],
+  "path": "machine.puf",
+  "provides": [
+   "State",
+   "Kont",
+   "Outcome",
+   "inject",
+   "step",
+   "run",
+   "final?"
+  ],
+  "requires": [
+   "lang.puf",
+   "store.puf",
+   "prims.puf"
+  ]
+ },
+ {
+  "effects": 1,
+  "items": [
+   {
+    "end_line": 8,
+    "holes": 0,
+    "kind": "val",
+    "line": 5,
+    "name": "examples",
+    "opaque": false,
+    "sig": "val examples",
+    "uses": []
+   },
+   {
+    "doc": "each example's answer, with fuel proportional to its size",
+    "end_line": 11,
+    "holes": 0,
+    "kind": "fun",
+    "line": 11,
+    "name": "answers",
+    "opaque": false,
+    "sig": "val answers : unit -> _",
+    "uses": [
+     "examples",
+     "expr-size",
+     "run"
+    ]
+   }
+  ],
+  "path": "main.puf",
+  "provides": null,
+  "requires": [
+   "lang.puf",
+   "machine.puf"
+  ]
+ },
+ {
+  "effects": 0,
+  "items": [
+   {
+    "doc": "the number inside a value, or an error naming what it was",
+    "end_line": 10,
+    "holes": 0,
+    "kind": "fun",
+    "line": 7,
+    "name": "num-of",
+    "opaque": false,
+    "sig": "val num-of : Value -> Int",
+    "uses": []
+   },
+   {
+    "end_line": 13,
+    "holes": 0,
+    "kind": "fun",
+    "line": 13,
+    "name": "add-values",
+    "opaque": false,
+    "sig": "val add-values : Value * Value -> Value",
+    "uses": [
+     "num-of"
+    ]
+   },
+   {
+    "doc": "if0's test",
+    "end_line": 17,
+    "holes": 1,
+    "kind": "fun",
+    "line": 17,
+    "name": "zero-value?",
+    "opaque": true,
+    "sig": "val zero-value? : Value -> Bool",
+    "uses": []
+   }
+  ],
+  "path": "prims.puf",
+  "provides": [
+   "add-values",
+   "num-of",
+   "zero-value?"
+  ],
+  "requires": [
+   "store.puf"
+  ]
+ },
+ {
+  "effects": 0,
+  "items": [
+   {
+    "end_line": 8,
+    "holes": 0,
+    "kind": "property",
+    "line": 6,
+    "name": "closed-terminates",
+    "opaque": false,
+    "sig": "a closed program without recursion halts within 100 * its size steps",
+    "uses": [
+     "expr-size",
+     "run"
+    ]
+   },
+   {
+    "end_line": 13,
+    "holes": 0,
+    "kind": "property",
+    "line": 11,
+    "name": "step-not-final",
+    "opaque": false,
+    "sig": "step is only taken from states that are not final",
+    "uses": [
+     "final?",
+     "inject"
+    ]
+   }
+  ],
+  "path": "properties.puf",
+  "provides": null,
+  "requires": [
+   "lang.puf",
+   "machine.puf",
+   "prop.puf"
+  ]
+ },
+ {
+  "effects": 0,
+  "items": [
+   {
+    "end_line": 6,
+    "holes": 0,
+    "kind": "alias",
+    "line": 6,
+    "name": "Addr",
+    "opaque": false,
+    "sig": "type Addr = Int",
+    "uses": []
+   },
+   {
+    "doc": "what evaluation produces",
+    "end_line": 11,
+    "holes": 0,
+    "kind": "type",
+    "line": 9,
+    "name": "Value",
+    "opaque": false,
+    "sig": "type Value = Num of Int | Clo of Var * Expr * Env",
+    "uses": [
+     "Env",
+     "Expr",
+     "Var"
+    ]
+   },
+   {
+    "end_line": 13,
+    "holes": 0,
+    "kind": "alias",
+    "line": 13,
+    "name": "Env",
+    "opaque": false,
+    "sig": "type Env = Hash Var Addr",
+    "uses": [
+     "Addr",
+     "Var"
+    ]
+   },
+   {
+    "doc": "the store, and the next address it will hand out",
+    "end_line": 16,
+    "holes": 0,
+    "kind": "type",
+    "line": 16,
+    "name": "Store",
+    "opaque": false,
+    "sig": "type Store = Store of Hash Addr Value * Addr",
+    "uses": [
+     "Addr",
+     "Value"
+    ]
+   },
+   {
+    "end_line": 19,
+    "holes": 0,
+    "kind": "val",
+    "line": 19,
+    "name": "empty-env",
+    "opaque": false,
+    "sig": "val empty-env : Env",
+    "uses": []
+   },
+   {
+    "end_line": 22,
+    "holes": 0,
+    "kind": "val",
+    "line": 22,
+    "name": "empty-store",
+    "opaque": false,
+    "sig": "val empty-store : Store",
+    "uses": [
+     "Store"
+    ]
+   },
+   {
+    "doc": "a fresh address: deterministic, so runs are reproducible",
+    "end_line": 27,
+    "holes": 0,
+    "kind": "fun",
+    "line": 26,
+    "name": "alloc",
+    "opaque": false,
+    "sig": "val alloc : Store -> Addr",
+    "uses": [
+     "Store"
+    ]
+   },
+   {
+    "end_line": 31,
+    "holes": 0,
+    "kind": "fun",
+    "line": 30,
+    "name": "env-ref",
+    "opaque": false,
+    "sig": "val env-ref : Env * Var -> Addr",
+    "uses": []
+   },
+   {
+    "end_line": 34,
+    "holes": 0,
+    "kind": "fun",
+    "line": 34,
+    "name": "env-extend",
+    "opaque": false,
+    "sig": "val env-extend : Env * Var * Addr -> Env",
+    "uses": []
+   },
+   {
+    "end_line": 38,
+    "holes": 0,
+    "kind": "fun",
+    "line": 37,
+    "name": "store-ref",
+    "opaque": false,
+    "sig": "val store-ref : Store * Addr -> Value",
+    "uses": [
+     "Store"
+    ]
+   },
+   {
+    "doc": "write a value; writing at the next address bumps it",
+    "end_line": 43,
+    "holes": 0,
+    "kind": "fun",
+    "line": 42,
+    "name": "store-set",
+    "opaque": false,
+    "sig": "val store-set : Store * Addr * Value -> Store",
+    "uses": [
+     "Store"
+    ]
+   }
+  ],
+  "path": "store.puf",
+  "provides": [
+   "Addr",
+   "Value",
+   "Num",
+   "Clo",
+   "Env",
+   "Store",
+   "empty-env",
+   "empty-store",
+   "alloc",
+   "env-ref",
+   "env-extend",
+   "store-ref",
+   "store-set"
+  ],
+  "requires": [
+   "lang.puf"
+  ]
+ }
+]

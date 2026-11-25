@@ -1,0 +1,17 @@
+;; prims.puf -- the arithmetic the machine does on numbers
+(provide add-values num-of zero-value?)
+(require "store.puf")
+
+;; the number inside a value, or an error naming what it was
+(: num-of (-> Value Int))
+(define (num-of v)
+  (match v
+    [(Num n) n]
+    [_ (error `(not-a-number ,v))]))
+
+(: add-values (-> Value Value Value))
+(define (add-values a b) (Num (+ (num-of a) (num-of b))))
+
+;; if0's test
+(: zero-value? (-> Value Bool))
+(define (zero-value? v) ??)

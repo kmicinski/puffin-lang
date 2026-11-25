@@ -1,0 +1,43 @@
+;; store.puf -- environments map variables to addresses, the store maps
+;; addresses to values. Kept apart so a collector can come later.
+(provide Addr Value Num Clo Env Store empty-env empty-store alloc env-ref env-extend store-ref store-set)
+(require "lang.puf")
+
+(define-type-alias Addr Int)
+
+;; what evaluation produces
+(define-type Value
+  (Num Int)
+  (Clo Var Expr Env))
+
+(define-type-alias Env (Hash Var Addr))
+
+;; the store, and the next address it will hand out
+(define-type Store (Store (Hash Addr Value) Addr))
+
+(: empty-env Env)
+(define empty-env (hash))
+
+(: empty-store Store)
+(define empty-store (Store (hash) 0))
+
+;; a fresh address: deterministic, so runs are reproducible
+(: alloc (-> Store Addr))
+(define (alloc s)
+  (match s [(Store _ next) next]))
+
+(: env-ref (-> Env Var Addr))
+(define (env-ref env x)
+  (if (hash-has-key? env x) (hash-ref env x) (error `(unbound ,x))))
+
+(: env-extend (-> Env Var Addr Env))
+(define (env-extend env x a) (hash-set env x a))
+
+(: store-ref (-> Store Addr Value))
+(define (store-ref s a)
+  (match s [(Store h _) (hash-ref h a)]))
+
+;; write a value; writing at the next address bumps it
+(: store-set (-> Store Addr Value Store))
+(define (store-set s a v)
+  (match s [(Store h next) (Store (hash-set h a v) (if (eq? a next) (+ next 1) next))]))
