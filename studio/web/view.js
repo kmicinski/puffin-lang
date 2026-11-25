@@ -181,13 +181,14 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
   // Narrow the focus pane to the focused definition, with as many lines
   // of the file around it as the room it is given leaves (dimmed: there,
   // not the focus); the whole file when widened.
-  let shownFrom = 0;
+  // the lines the focus pane shows, the dimmed ones around the definition included
+  let shown = { from: 0, to: 0 };
   function narrowFocus() {
     const narrowed = focus?.name && !whole && files.active() === focus.path;
     let span = focused.to(narrowed ? focus.name : null);
     if (narrowed && !span) span = focused.to(null);
     context.clear();
-    if (!narrowed) shownFrom = 0;
+    if (!narrowed) shown = { from: 0, to: 0 };
     else if (span && focused.name()) around(span);
     mainNames.refresh();
     widen(narrowed ? span : null);
@@ -229,8 +230,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     if (below) dim.push(new monaco.Range(span.end + 1, 1, span.end + below, 1));
     context.set(dim.map((range) => ({ range, options: { isWholeLine: true, className: "focus-context", inlineClassName: "focus-context-text" } })));
     // a new place: shown from its top, not where Monaco last scrolled
-    if (start !== shownFrom) requestAnimationFrame(() => main.setScrollTop(0));
-    shownFrom = start;
+    if (start !== shown.from) requestAnimationFrame(() => main.setScrollTop(0));
+    shown = { from: start, to: end };
   }
 
   // The room in the column: the focus gets what its definition needs, at
@@ -333,8 +334,10 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     }
     const span = path === focus.path && focused.name() ? focused.span() : null;
     if (span && span.start <= line && line <= span.end) return;
-    if (name) show({ path, name });
-    else setWhole(true);
+    if (name) return show({ path, name });
+    // a blank line or a comment in sight (a new line after the definition):
+    // the focus stays; out of sight, the file widens to show it
+    if (!(shown.from <= line && line <= shown.to)) setWhole(true);
   });
 
   // The editor showed another file by other means (a chip, the tree): the
