@@ -393,7 +393,7 @@ fn function_or_value(name: &str, parts: &[T], declared: Option<&T>) -> (String, 
 
 /// `type Expr = Num of Int | Add of Expr * Expr`
 fn type_sig(parts: &[T]) -> String {
-    let head = parts.get(1).map(|t| render(t)).unwrap_or_default();
+    let head = parts.get(1).map(render).unwrap_or_default();
     let ctors: Vec<String> = parts[2.min(parts.len())..]
         .iter()
         .map(|c| match c {
@@ -407,7 +407,7 @@ fn type_sig(parts: &[T]) -> String {
 
 /// `grammar Expr = Int | Sym | (+ Expr Expr) | ...`
 fn grammar_sig(parts: &[T]) -> String {
-    let head = parts.get(1).map(|t| render(t)).unwrap_or_default();
+    let head = parts.get(1).map(render).unwrap_or_default();
     let mut prods = Vec::new();
     let mut i = 2;
     while i < parts.len() {
@@ -800,7 +800,7 @@ impl Studio {
                 }
                 // settle: drain what arrives in the next moment
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                while let Ok(_) = events.try_recv() {}
+                while events.try_recv().is_ok() {}
                 let outline = json!(outline(&studio.files()));
                 if last.as_ref() != Some(&outline) {
                     last = Some(outline);
@@ -1069,7 +1069,7 @@ pub fn describe_notes(board: &Value) -> String {
 }
 
 /// The card of `path` on `board`, made (unplaced) if it is not out.
-fn card_mut<'a>(board: &'a mut Value, path: &str) -> &'a mut Value {
+pub(crate) fn card_mut<'a>(board: &'a mut Value, path: &str) -> &'a mut Value {
     if !board["cards"].is_array() {
         board["cards"] = json!([]);
     }

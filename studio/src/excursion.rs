@@ -140,52 +140,11 @@ fn settle(text: &str, from: usize, to: usize) -> Option<(usize, usize)> {
         // the smallest form that starts on that line, at any depth
         let start = sexp::offset_of(text, from, 1);
         let line_end = text[start..].find('\n').map_or(text.len(), |i| start + i);
-        let first = text[start..line_end].find(['(', '[']).map(|i| start + i);
-        if let Some(open) = first
-            && let Some(close) = matching(text, open)
-        {
-            to = text[..close].bytes().filter(|&b| b == b'\n').count() + 1;
+        if let Some((_, close)) = sexp::first_list_in(text, start, line_end) {
+            to = sexp::line_of(text, close);
         }
     }
     Some((from, to.min(from + MAX_LINES - 1)))
-}
-
-/// The offset of the bracket closing the one at `open` (strings and
-/// comments skipped), if it closes.
-fn matching(text: &str, open: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut depth = 0i32;
-    let mut i = open;
-    let mut in_string = false;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if in_string {
-            if b == b'\\' {
-                i += 1;
-            } else if b == b'"' {
-                in_string = false;
-            }
-        } else {
-            match b {
-                b'"' => in_string = true,
-                b';' => {
-                    while i < bytes.len() && bytes[i] != b'\n' {
-                        i += 1;
-                    }
-                }
-                b'(' | b'[' => depth += 1,
-                b')' | b']' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(i);
-                    }
-                }
-                _ => {}
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 impl Studio {
@@ -234,7 +193,7 @@ impl Studio {
             && let Some(text) = files.get(file)
             && let Some(form) = sexp::form_at(text, sexp::offset_of(text, line, 1))
         {
-            let end = text[..form.end].bytes().filter(|&b| b == b'\n').count() + 1;
+            let end = sexp::line_of(text, form.end);
             place = Some((file.clone(), form.line, end.min(form.line + MAX_LINES - 1)));
         }
         let index = self.voice_excursion(|slot| {
@@ -287,12 +246,12 @@ impl Studio {
             }
         }
         let _ = writeln!(user, "\nThe question now: {}", excursion.thread[at].question);
-        let model = std::env::var("PUFFIN_EXPLAIN_MODEL").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| claude_api::EXPLAIN_MODEL.to_owned());
+        let model = crate::setting("PUFFIN_EXPLAIN_MODEL", claude_api::EXPLAIN_MODEL);
         let answer = match self.voice_api() {
             Some(api) => {
                 // the language itself, as the builder has it: a question is
                 // as often about Puffin (`ann`, `_`, define-grammar) as the program
-                let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{EXPLAINER}", crate::knowledge::reference(&self.root));
+                let system = crate::knowledge::system_prompt(&self.root, EXPLAINER);
                 api.structured(&model, "low", &system, &user, schema(), 2500, Duration::from_secs(90)).await
             }
             None => Err("no Claude API credentials".to_owned()),
@@ -419,20 +378,6 @@ mod tests {
 
     #[test]
     fn the_explainer_schema_is_strict() {
-        fn walk(v: &Value) {
-            if v["type"] == "object" {
-                assert_eq!(v["additionalProperties"], json!(false));
-                let props: Vec<&String> = v["properties"].as_object().unwrap().keys().collect();
-                let required: Vec<&str> = v["required"].as_array().unwrap().iter().map(|r| r.as_str().unwrap()).collect();
-                for p in &props {
-                    assert!(required.contains(&p.as_str()), "{p} not required");
-                    walk(&v["properties"][p.as_str()]);
-                }
-            }
-            if v["type"] == "array" {
-                walk(&v["items"]);
-            }
-        }
-        walk(&schema());
+        claude_api::assert_strict(&schema(), "explainer");
     }
 }

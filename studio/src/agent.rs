@@ -7,29 +7,26 @@
 //! Each question is a thread: its own claude session (resumed for
 //! follow-ups) and transcript, and one changeset per turn. The MCP config a
 //! run gets carries a header naming its thread, so the server attributes
-//! its proposals. Progress streams to every tab as `Event::Agent`.
+//! its proposals. Progress streams to every tab as `Event::Agent`. How a
+//! run is started and read is claude_cli.rs; this is what the assistant's
+//! runs are told, and how their stream becomes a transcript.
 
+use crate::claude_cli::{McpConfig, Part, Run, parts, tool_name};
 use crate::knowledge;
 use crate::review::Message;
 use crate::studio::Studio;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 
 /// The header a run's MCP config carries: its thread id.
 pub const THREAD_HEADER: &str = "x-studio-thread";
-/// The MCP server's name, which prefixes its tools: `mcp__puffin__get_file`.
-pub const SERVER: &str = "puffin";
 
-/// How the assistant works. With the reference it makes the system prompt,
-/// which stays the same for every run so that runs share its prompt cache;
-/// what differs per run goes in the message.
+/// How the assistant works: the role in its system prompt
+/// (knowledge::system_prompt).
 const PERSONA: &str = "\
 You are the assistant at the REPL prompt of Puffin Studio, a workbench for the Puffin language \
 (a gradually typed, immutable-by-default Scheme with algebraic data types and pattern matching; \
@@ -91,8 +88,6 @@ expressions you suggest the author run in a ```repl block, one per line (a form 
 lines); each becomes a chip that runs it at the prompt. Show other Puffin in ```puffin \
 blocks. Do not repeat a proposed change as a code block: the author sees it in the editor.";
 
-/// Refused even if a setting would allow them.
-const DENIED: &str = "Bash,Write,Edit,NotebookEdit,Skill";
 /// The steps a turn may take.
 const MAX_TURNS: u32 = 24;
 /// Claude Code's own plumbing, never shown.
@@ -104,7 +99,7 @@ const TRACE_KEPT: usize = 64_000;
 
 pub struct Agent {
     /// The bearer token `/mcp` requires; it never leaves this machine except
-    /// in the 0600 config file a run reads.
+    /// in the 0600 config file a run reads (claude_cli::McpConfig).
     pub mcp_token: String,
     model: Option<String>,
     effort: String,
@@ -135,15 +130,10 @@ impl Agent {
             mcp_token,
             // the CLI's own default model unless the operator picks one
             model: std::env::var("PUFFIN_STUDIO_MODEL").ok().filter(|model| !model.is_empty()),
-            effort: std::env::var("PUFFIN_STUDIO_EFFORT").unwrap_or_else(|_| "medium".to_owned()),
+            effort: crate::setting("PUFFIN_STUDIO_EFFORT", "medium"),
             running: Mutex::new(HashMap::new()),
             stopped: Mutex::new(HashSet::new()),
         }
-    }
-
-    /// Why the assistant cannot run, if it cannot.
-    pub fn unavailable() -> Option<String> {
-        which("claude").is_none().then(|| "no `claude` on PATH: install Claude Code to ask the assistant".to_owned())
     }
 
     pub fn is_running(&self, thread: u32) -> bool {
@@ -156,31 +146,6 @@ impl Agent {
             self.stopped.lock().expect("agent lock").insert(thread);
         }
         killed
-    }
-
-    /// The MCP config for one run (mode 0600): our loopback `/mcp`, the
-    /// bearer token, and the header naming the thread.
-    pub fn write_config(&self, port: u16, thread: u32) -> Result<PathBuf, String> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let config = json!({ "mcpServers": { SERVER: {
-            "type": "http",
-            "url": format!("http://127.0.0.1:{port}/mcp"),
-            "headers": {
-                "Authorization": format!("Bearer {}", self.mcp_token),
-                "X-Studio-Thread": thread.to_string(),
-            },
-        }}});
-        let path = std::env::temp_dir().join(format!("puffin-studio-mcp-{}-{thread}.json", std::process::id()));
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .and_then(|mut file| file.write_all(config.to_string().as_bytes()))
-            .map_err(|error| format!("cannot write the MCP config: {error}"))?;
-        Ok(path)
     }
 }
 
@@ -243,119 +208,69 @@ impl Transcript<'_> {
     }
 }
 
-/// The arguments of one run.
-pub fn arguments(prompt: &str, config: &str, system: &str, effort: &str, model: Option<&str>, resume: Option<&str>) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "-p".into(), prompt.into(),
-        "--output-format".into(), "stream-json".into(), "--verbose".into(),
-        // partial events show "thinking…" and stream the reply as it comes
-        "--include-partial-messages".into(),
-        "--effort".into(), effort.into(),
-        "--disable-slash-commands".into(),
-        // only the operator's own settings: none of the repository's
-        "--setting-sources".into(), "user".into(),
-        "--mcp-config".into(), config.into(), "--strict-mcp-config".into(),
-        // no built-in tools at all: the studio's are the only ones
-        "--tools".into(), "".into(),
-        "--allowedTools".into(), format!("mcp__{SERVER}"),
-        "--disallowedTools".into(), DENIED.into(),
-        "--max-turns".into(), MAX_TURNS.to_string(),
-        "--append-system-prompt".into(), system.into(),
-        // keep the machine's details out of the system prompt, for its cache
-        "--exclude-dynamic-system-prompt-sections".into(),
-    ];
-    if let Some(model) = model {
-        args.extend(["--model".to_owned(), model.to_owned()]);
-    }
-    if let Some(session) = resume {
-        args.extend(["--resume".to_owned(), session.to_owned()]);
-    }
-    args
-}
-
 /// One turn of `thread`: run claude until it finishes, streaming its
 /// progress. `context` leads the message, not the system prompt.
 pub async fn run(studio: Arc<Studio>, thread: u32, message: String, context: String) {
     let transcript = Transcript { studio: &studio, thread };
+    if let Err(error) = turn(&studio, &transcript, &format!("{context}\n{message}")).await {
+        transcript.push("error", &error, Value::Null);
+    }
+    finish(&studio, thread);
+    transcript.event("done", "");
+}
+
+/// Run the turn's claude, resuming the thread's session; once more afresh
+/// when that session cannot be resumed. Err: what went wrong.
+async fn turn(studio: &Studio, transcript: &Transcript<'_>, prompt: &str) -> Result<(), String> {
     let agent = &studio.agent;
-    let config = match agent.write_config(studio.port(), thread) {
-        Ok(path) => path,
-        Err(error) => {
-            transcript.push("error", &error, Value::Null);
-            finish(&studio, thread);
-            transcript.event("done", "");
-            return;
-        }
-    };
-    let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{PERSONA}", knowledge::reference(&studio.root));
+    let thread = transcript.thread;
+    let config = McpConfig::write(
+        &format!("puffin-studio-mcp-{}-{thread}.json", std::process::id()),
+        studio.port(),
+        &agent.mcp_token,
+        json!({ "X-Studio-Thread": thread.to_string() }),
+    )?;
+    let system = knowledge::system_prompt(&studio.root, PERSONA);
     let mut resume = transcript.session();
     loop {
-        let args = arguments(
-            &format!("{context}\n{message}"),
-            &config.to_string_lossy(),
-            &system,
-            &agent.effort,
-            agent.model.as_deref(),
-            resume.as_deref(),
-        );
+        let run = Run {
+            prompt,
+            system: &system,
+            config: &config.path,
+            model: agent.model.as_deref(),
+            effort: &agent.effort,
+            max_turns: MAX_TURNS,
+            resume: resume.as_deref(),
+            eager_tools: false,
+        };
         transcript.event("start", "");
-        let mut child = match Command::new("claude")
-            .args(&args)
-            .current_dir(&studio.directory)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                transcript.push("error", &format!("could not start claude: {error}"), Value::Null);
-                break;
-            }
-        };
-        let stdout = child.stdout.take().expect("piped stdout");
-        let mut stderr = child.stderr.take().expect("piped stderr");
-        agent.running.lock().expect("agent lock").insert(thread, child);
-        let stderr_text = tokio::spawn(async move {
-            let mut text = String::new();
-            let _ = stderr.read_to_string(&mut text).await;
-            text
-        });
-        let mut lines = BufReader::new(stdout).lines();
         let mut stream = Stream { effort: agent.effort.clone(), ..Stream::default() };
-        while let Ok(Some(line)) = lines.next_line().await {
-            if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                stream.read(&event, &transcript);
-            }
-        }
-        let child = agent.running.lock().expect("agent lock").remove(&thread);
-        let status = match child {
-            Some(mut child) => child.wait().await.ok(),
-            None => None,
-        };
-        let stderr_text = stderr_text.await.unwrap_or_default();
+        let ended = run
+            .stream(
+                &studio.directory,
+                |child| {
+                    agent.running.lock().expect("agent lock").insert(thread, child);
+                },
+                || agent.running.lock().expect("agent lock").remove(&thread),
+                |event| stream.read(event, transcript),
+            )
+            .await?;
         if agent.stopped.lock().expect("agent lock").remove(&thread) {
             transcript.push("notice", "stopped", Value::Null);
-            break;
+            return Ok(());
         }
-        let failed = !stream.got_result && !status.is_some_and(|status| status.success());
-        if failed && resume.is_some() {
+        if stream.got_result || ended.success {
+            return Ok(());
+        }
+        if resume.is_some() {
             // a stale session id (its transcript gone) is the usual cause
             transcript.set_session(None);
             resume = None;
             transcript.push("notice", "could not resume the conversation; starting a new one", Value::Null);
             continue;
         }
-        if failed {
-            let last = stderr_text.lines().rev().find(|line| !line.trim().is_empty()).map(|line| format!(": {line}")).unwrap_or_default();
-            transcript.push("error", &format!("claude exited without a result{last}"), Value::Null);
-        }
-        break;
+        return Err(format!("claude exited without a result{}", ended.last_words().map(|line| format!(": {line}")).unwrap_or_default()));
     }
-    let _ = std::fs::remove_file(&config);
-    finish(&studio, thread);
-    transcript.event("done", "");
 }
 
 /// The turn is over: the thread stops running, and the question with its
@@ -420,41 +335,19 @@ struct Stream {
 
 impl Stream {
     fn read(&mut self, event: &Value, out: &Transcript) {
-        if !event["parent_tool_use_id"].is_null() {
-            return;
-        }
-        match event["type"].as_str() {
-            Some("system") if event["subtype"] == "init" => {
-                if let Some(session) = event["session_id"].as_str() {
-                    out.set_session(Some(session.to_owned()));
+        for part in parts(event) {
+            match part {
+                Part::Session(session) => out.set_session(Some(session.to_owned())),
+                Part::Init { model } => self.model = model.to_owned(),
+                Part::Partial(event) => self.partial(event, out),
+                Part::Text(text) => {
+                    self.last_text = text.to_owned();
+                    out.push("assistant", text, Value::Null);
                 }
-                self.model = event["model"].as_str().unwrap_or("").to_owned();
+                Part::ToolUse { id, name, input } => self.call(id, name, input, out),
+                Part::ToolResult { id, text, error } => self.answer(id, &text, error, out),
+                Part::Result(event) => self.result(event, out),
             }
-            Some("stream_event") => self.partial(&event["event"], out),
-            Some("assistant") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    match block["type"].as_str() {
-                        Some("text") => {
-                            let text = block["text"].as_str().unwrap_or("").trim();
-                            if !text.is_empty() {
-                                self.last_text = text.to_owned();
-                                out.push("assistant", text, Value::Null);
-                            }
-                        }
-                        Some("tool_use") => self.call(block, out),
-                        _ => {}
-                    }
-                }
-            }
-            Some("user") => {
-                for block in event["message"]["content"].as_array().into_iter().flatten() {
-                    if block["type"] == "tool_result" {
-                        self.answer(block, out);
-                    }
-                }
-            }
-            Some("result") => self.result(event, out),
-            _ => {}
         }
     }
 
@@ -500,29 +393,21 @@ impl Stream {
         }
     }
 
-    fn call(&mut self, block: &Value, out: &Transcript) {
-        let name = tool_name(block);
+    fn call(&mut self, id: &str, name: &str, input: &Value, out: &Transcript) {
         if HIDDEN_TOOLS.contains(&name) {
             return;
         }
-        let id = block["id"].as_str().unwrap_or("").to_owned();
-        let data = json!({ "id": id, "name": name, "input": clip(&block["input"]), "status": "running" });
+        let data = json!({ "id": id, "name": name, "input": clip(input), "status": "running" });
         let index = out.push("tool", "", data);
-        self.calls.insert(id, index);
+        self.calls.insert(id.to_owned(), index);
     }
 
-    fn answer(&mut self, block: &Value, out: &Transcript) {
-        let text = match &block["content"] {
-            Value::String(text) => text.clone(),
-            Value::Array(parts) => parts.iter().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n"),
-            _ => String::new(),
-        };
-        let error = block["is_error"].as_bool().unwrap_or(false);
-        if let Some(index) = block["tool_use_id"].as_str().and_then(|id| self.calls.get(id)) {
+    fn answer(&mut self, id: &str, text: &str, error: bool, out: &Transcript) {
+        if let Some(index) = self.calls.get(id) {
             out.update(*index, |entry| {
                 entry.data["status"] = json!(if error { "error" } else { "ok" });
                 // a proposal's id, for its chip
-                let value = serde_json::from_str::<Value>(&text).ok();
+                let value = serde_json::from_str::<Value>(text).ok();
                 if let Some(op) = value.as_ref().and_then(|value| value["proposed"].as_u64()) {
                     entry.data["op"] = json!(op);
                 }
@@ -532,16 +417,13 @@ impl Stream {
                 {
                     entry.data["trace"] = json!(crate::toolchain::clip(trace, TRACE_KEPT));
                 }
-                entry.data["result"] = json!(clip_text(&text));
+                entry.data["result"] = json!(clip_text(text));
             });
         }
     }
 
     fn result(&mut self, event: &Value, out: &Transcript) {
         self.got_result = true;
-        if let Some(session) = event["session_id"].as_str() {
-            out.set_session(Some(session.to_owned()));
-        }
         let text = event["result"].as_str().unwrap_or("").trim();
         if event["is_error"].as_bool().unwrap_or(false) {
             let message = match (text, event["subtype"].as_str()) {
@@ -570,12 +452,6 @@ impl Stream {
     }
 }
 
-/// A tool's name without its MCP server's prefix.
-fn tool_name(block: &Value) -> &str {
-    let name = block["name"].as_str().unwrap_or("tool");
-    name.rsplit("__").next().unwrap_or(name)
-}
-
 fn clip(value: &Value) -> Value {
     match value {
         Value::String(text) => json!(clip_text(text)),
@@ -592,30 +468,9 @@ fn clip_text(text: &str) -> String {
     }
 }
 
-fn which(binary: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths).map(|directory| directory.join(binary)).find(|path| path.is_file())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The run may use the studio's tools and nothing else.
-    #[test]
-    fn a_run_has_only_the_studios_tools() {
-        let args = arguments("q", "/tmp/c.json", "sys", "low", Some("opus"), Some("s1"));
-        let after = |flag: &str| args[args.iter().position(|a| a == flag).unwrap() + 1].clone();
-        assert_eq!(after("--allowedTools"), "mcp__puffin");
-        assert_eq!(after("--disallowedTools"), "Bash,Write,Edit,NotebookEdit,Skill");
-        assert_eq!(after("--tools"), "");
-        assert_eq!(after("--mcp-config"), "/tmp/c.json");
-        assert!(args.contains(&"--strict-mcp-config".to_owned()));
-        assert_eq!(after("--resume"), "s1");
-        assert_eq!(after("--model"), "opus");
-        assert_eq!(after("--output-format"), "stream-json");
-    }
 
     #[test]
     fn titles_are_first_lines_cut_short() {

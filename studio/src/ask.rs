@@ -12,7 +12,7 @@
 //!   ops of its thread it builds on, and is refused if that fails. Each
 //!   pending op's acceptance is kept current for the Accept controls.
 
-use crate::agent::{self, Agent};
+use crate::agent;
 use crate::review::{Acceptance, Change, Message, Review, Scope, ScopeKind, Status, apply};
 use crate::sexp;
 use crate::studio::{Entry, Studio};
@@ -48,7 +48,7 @@ impl Studio {
     /// Ask in `thread`, or in a new thread. Returns its id; the run's
     /// progress arrives as agent events.
     pub fn ask(self: &Arc<Self>, thread: Option<u32>, message: String, context: Context) -> Result<u32, String> {
-        if let Some(why) = Agent::unavailable() {
+        if let Some(why) = crate::claude_cli::unavailable() {
             return Err(why);
         }
         let message = message.trim().to_owned();
@@ -162,11 +162,7 @@ impl Studio {
                 }
             }
         }
-        let diagnostics: Vec<String> = files
-            .keys()
-            .flat_map(|path| self.diagnostics_of(path))
-            .map(|d| format!("{}: {} [{}:{}]", d.severity, d.message, d.file, d.line))
-            .collect();
+        let diagnostics = self.diagnostic_lines(usize::MAX);
         if !diagnostics.is_empty() {
             let _ = writeln!(out, "Current diagnostics:\n{}", diagnostics.join("\n"));
         }
@@ -215,7 +211,7 @@ impl Studio {
     /// program as it leaves it passes the check; else refuse it with why.
     pub(crate) async fn propose(&self, thread: u32, change: Change, note: String) -> Result<Value, String> {
         if !change.old.is_empty() || !self.files().contains_key(&change.file) {
-            crate::studio::valid_path(&change.file).map_err(|why| format!("Refused: {why}"))?;
+            crate::studio::files::valid_path(&change.file).map_err(|why| format!("Refused: {why}"))?;
         }
         let files = self.files();
         let (fork, scope) = {
@@ -247,7 +243,7 @@ impl Studio {
         Ok(json!({
             "proposed": id,
             "checks": checks,
-            "warnings": report.diagnostics.iter().filter(|d| d.severity == "warning").map(|d| format!("{} [{}:{}]", d.message, d.file, d.line)).collect::<Vec<_>>(),
+            "warnings": report.warnings(),
             "message": "queued for the author to accept or reject; nothing changed yet",
         }))
     }

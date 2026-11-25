@@ -9,6 +9,7 @@ pub mod board;
 pub mod agent;
 pub mod ask;
 pub mod claude_api;
+pub mod claude_cli;
 pub mod excursion;
 pub mod facts;
 pub mod holes;
@@ -40,6 +41,12 @@ pub fn private_token() -> std::io::Result<String> {
     let mut random = [0_u8; 32];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
     Ok(random.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// The operator's setting `name` from the environment, else `default`
+/// (unset and empty are the same).
+pub fn setting(name: &str, default: &str) -> String {
+    std::env::var(name).ok().filter(|value| !value.is_empty()).unwrap_or_else(|| default.to_owned())
 }
 
 /// The Puffin repository: PUFFIN_ROOT, else the one this crate was built

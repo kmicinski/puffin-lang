@@ -12,7 +12,7 @@
 
 use crate::sexp;
 use crate::studio::Studio;
-use crate::toolchain::{Files, Ran};
+use crate::toolchain::{self, Files, Ran};
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
@@ -73,10 +73,10 @@ impl Results {
 pub fn declared(text: &str) -> Vec<Property> {
     let mut statement_of = std::collections::HashMap::new();
     for line in text.lines() {
-        if let Some(rest) = line.trim_start().strip_prefix(";; @property") {
-            if let Some((name, statement)) = rest.split_once(':') {
-                statement_of.insert(name.trim().to_owned(), statement.trim().to_owned());
-            }
+        if let Some(rest) = line.trim_start().strip_prefix(";; @property")
+            && let Some((name, statement)) = rest.split_once(':')
+        {
+            statement_of.insert(name.trim().to_owned(), statement.trim().to_owned());
         }
     }
     let mut out = Vec::new();
@@ -151,7 +151,7 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
     let mut declared = declared(text);
     // every module's holes become stubs that raise "??", so a property
     // that needs an unwritten definition is open, not a compile error
-    let mut files: Files = files.iter().map(|(path, text)| (path.clone(), sexp::stub_holes(text).0)).collect();
+    let mut files = toolchain::runnable(files);
     files.insert(PROPERTIES.to_owned(), guarded(&files[PROPERTIES]));
     files.insert(HARNESS.to_owned(), HARNESS_TEXT.to_owned());
     let ran = studio.toolchain.build_and_run(&files, PROPERTIES, LIMIT).await;
@@ -201,4 +201,19 @@ pub async fn run(studio: &Studio, files: &Files) -> Results {
         property.status = "not-run".to_owned();
     }
     Results { properties: declared, error: None, ms: ms() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn properties_are_declared_with_their_english() {
+        let text = "(require \"prop.puf\")\n;; @property rev: reversing twice is identity\n(check-property 'rev (for-all (list (gen-list gen-int)) (lambda (xs) #t)))\n(check-example 'one (equal? 1 1))\n";
+        let declared = declared(text);
+        assert_eq!(declared.len(), 2);
+        assert_eq!(declared[0].name, "rev");
+        assert_eq!(declared[0].statement, "reversing twice is identity");
+        assert_eq!(declared[1].name, "one");
+    }
 }

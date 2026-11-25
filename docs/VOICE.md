@@ -60,7 +60,7 @@ A long-running `claude -p` agent (`claude-opus-5-5` by default,
 `PUFFIN_VOICE_MODEL` / `PUFFIN_VOICE_EFFORT` to change), resumed across
 instructions so it keeps the conversation. Its only tools are the
 studio's MCP endpoint, reached with an `X-Studio-Voice` header that gives
-it voice tools (`voice.rs` `tools`):
+it voice tools (`voice/builder.rs` `tools`):
 
 - the assistant's reads and checks (get_file, check, type_at, facts_at,
   evaluate, evaluate_program, trace, search_docs, ...);
@@ -218,7 +218,8 @@ over https (or localhost) for the microphone.
 
 ## 7. Where it touches the rest of the studio
 
-- `studio/src/voice.rs`, `props.rs`, `prop.puf`, `claude_api.rs`, `excursion.rs`;
+- `studio/src/voice.rs` (state, router), `voice/builder.rs`, `voice/places.rs`,
+  `props.rs`, `prop.puf`, `claude_api.rs`, `claude_cli.rs`, `excursion.rs`;
   `studio/web/voice.js`, `voice.css` — all new.
 - `studio.rs`: an `Event::Voice` variant, a `voice` field, and
   `watch_properties` started with the other watchers.
