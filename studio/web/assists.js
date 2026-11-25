@@ -314,7 +314,6 @@ export function createAssists({ editor, files, send, note, facts }) {
     receive: {
       assists: (reply) => asks.answer({ ...reply, error: reply.error ?? null }),
       completions: asks.answer,
-      type: asks.answer,
     },
   };
 }

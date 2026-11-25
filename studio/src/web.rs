@@ -256,7 +256,6 @@ enum Request {
     },
     /// Rename the name at UTF-16 offset `pos` of `file` to `name`.
     Rename { seq: u64, file: String, pos: usize, name: String },
-    TypeAt { seq: u64, file: String, pos: usize },
     /// The facts at UTF-16 offset `pos` of `file`; `full` for the Facts
     /// panel (every parameter's patterns), else for a hover.
     Facts {
@@ -333,7 +332,6 @@ enum Reply<'a> {
     Assists { seq: u64, version: u64, assists: Value, error: Option<String> },
     /// Each { pattern, clause, source } the match still lacks.
     Completions { seq: u64, version: u64, candidates: Value, error: Option<String> },
-    Type { seq: u64, r#type: Value, error: Option<String> },
     Facts { seq: u64, version: u64, facts: Value, error: Option<String> },
     /// A rename's edits (UTF-16 offsets), for `version` of the file, from
     /// byte `pos`; or why there are none.
@@ -609,14 +607,6 @@ fn handle(web: &Arc<Web>, studio: &Arc<Studio>, connection: u64, text: &str, dir
                 let (edits, error) = parts(renamed, json!([]));
                 let note = error.is_none().then(|| importers_note(&files, &file, at)).flatten();
                 let _ = direct.send(json(&Reply::Renamed { seq, version, pos: at, edits, error, note }));
-            });
-        }
-        Request::TypeAt { seq, file, pos } => {
-            tokio::spawn(async move {
-                let Point { files, at, .. } = point(&studio, &file, pos);
-                let answer = studio.toolchain.assist(&files, "type-at", &file, Some(at)).await;
-                let (kind, error) = parts(answer.map(|answer| answer["type"].clone()).map_err(|report| report.describe()), Value::Null);
-                let _ = direct.send(json(&Reply::Type { seq, r#type: kind, error }));
             });
         }
         Request::Facts { seq, file, pos, full } => {
