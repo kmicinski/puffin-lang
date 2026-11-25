@@ -1,0 +1,38 @@
+;; lang.puf -- the language the machine runs: a small call-by-value
+;; lambda calculus with numbers, let, and a conditional.
+(provide Expr Var expr-size free-vars)
+
+;; a variable is a symbol
+(define-type-alias Var Sym)
+
+;; programs are their own s-expressions
+(define-grammar Expr
+  #:keywords (lambda let if0 +)
+  Int
+  Sym
+  (lambda (Sym) Expr)
+  (let ([Sym Expr]) Expr)
+  (if0 Expr Expr Expr)
+  (+ Expr Expr)
+  (Expr Expr))
+
+;; the number of nodes: what the fuel bound is measured against
+(define (expr-size [e : Expr]) : Int
+  (match e
+    [`(lambda (,x) ,b) (+ 1 (expr-size b))]
+    [`(let ([,x ,rhs]) ,b) (+ 1 (+ (expr-size rhs) (expr-size b)))]
+    [`(if0 ,c ,t ,f) (+ 1 (+ (expr-size c) (+ (expr-size t) (expr-size f))))]
+    [`(+ ,a ,b) (+ 1 (+ (expr-size a) (expr-size b)))]
+    [`(,f ,a) (+ 1 (+ (expr-size f) (expr-size a)))]
+    [_ 1]))
+
+;; the variables a program mentions but does not bind
+(define (free-vars [e : Expr]) : (List Var)
+  (match e
+    [(? symbol? x) (list x)]
+    [`(lambda (,x) ,b) (remove x (free-vars b))]
+    [`(let ([,x ,rhs]) ,b) (append (free-vars rhs) (remove x (free-vars b)))]
+    [`(if0 ,c ,t ,f) (append (free-vars c) (append (free-vars t) (free-vars f)))]
+    [`(+ ,a ,b) (append (free-vars a) (free-vars b))]
+    [`(,f ,a) (append (free-vars f) (free-vars a))]
+    [_ '()]))

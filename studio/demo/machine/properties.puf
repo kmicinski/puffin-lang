@@ -1,0 +1,13 @@
+(require "lang.puf")
+(require "machine.puf")
+(require "prop.puf")
+
+;; @property closed-terminates: a closed program without recursion halts within 100 * its size steps
+(check-property 'closed-terminates
+  (for-all (gen-one-of '((+ 1 2) ((lambda (x) x) 5)))
+    (lambda (e) (match (run e (* 100 (expr-size e))) [(Halted _) #t] [_ #f]))))
+
+;; @property step-not-final: step is only taken from states that are not final
+(check-property 'step-not-final
+  (for-all (gen-one-of '((+ 1 2) 7))
+    (lambda (e) (not (final? (inject e))))))

@@ -1,39 +1,43 @@
-;; store.puf -- addresses, environments and the store: where the
-;; machine keeps the values its variables are bound to.
-(require "syntax.puf")
-(provide Addr Env Value NumV Clo Store empty-store alloc store-ref env-lookup env-extend)
+;; store.puf -- environments map variables to addresses, the store maps
+;; addresses to values. Kept apart so a collector can come later.
+(provide Addr Value Num Clo Env Store empty-env empty-store alloc env-ref env-extend store-ref store-set)
+(require "lang.puf")
 
 (define-type-alias Addr Int)
-(define-type-alias Env (List (Pairof Sym Addr)))
 
-;; what a term evaluates to: a number, or a closure over its environment
+;; what evaluation produces
 (define-type Value
-  (NumV Int)
-  (Clo Sym Term Env))
+  (Num Int)
+  (Clo Var Expr Env))
 
-;; the next free address, and every binding made so far
-(define-type Store (Store Addr (List (Pairof Addr Value))))
+(define-type-alias Env (Hash Var Addr))
 
-(define empty-store (Store 0 '()))
+;; the store, and the next address it will hand out
+(define-type Store (Store (Hash Addr Value) Addr))
+
+(: empty-env Env)
+(define empty-env (hash))
+
+(: empty-store Store)
+(define empty-store (Store (hash) 0))
 
 ;; a fresh address: deterministic, so runs are reproducible
-(define (alloc [s : Store] [v : Value]) : (Pairof Addr Store)
-  (match s
-    [(Store next cells) (cons next (Store (+ next 1) (cons (cons next v) cells)))]))
+(: alloc (-> Store Addr))
+(define (alloc s)
+  (match s [(Store _ next) next]))
 
-(define (store-ref [s : Store] [a : Addr]) : Value
-  (match s
-    [(Store _ cells) (cell-ref cells a)]))
+(: env-ref (-> Env Var Addr))
+(define (env-ref env x)
+  (if (hash-has-key? env x) (hash-ref env x) (error `(unbound ,x))))
 
-(define (cell-ref [cells : (List (Pairof Addr Value))] [a : Addr]) : Value
-  (cond [(null? cells) (error "dangling address")]
-        [(eq? (car (car cells)) a) (cdr (car cells))]
-        [else (cell-ref (cdr cells) a)]))
+(: env-extend (-> Env Var Addr Env))
+(define (env-extend env x a) (hash-set env x a))
 
-(define (env-lookup [env : Env] [x : Sym]) : Addr
-  (cond [(null? env) (error (string-append "unbound variable " (symbol->string x)))]
-        [(eq? (car (car env)) x) (cdr (car env))]
-        [else (env-lookup (cdr env) x)]))
+(: store-ref (-> Store Addr Value))
+(define (store-ref s a)
+  (match s [(Store h _) (hash-ref h a)]))
 
-(define (env-extend [env : Env] [x : Sym] [a : Addr]) : Env
-  (cons (cons x a) env))
+;; write a value; writing at the next address bumps it
+(: store-set (-> Store Addr Value Store))
+(define (store-set s a v)
+  (match s [(Store h next) (Store (hash-set h a v) (if (eq? a next) (+ next 1) next))]))
