@@ -27,9 +27,8 @@ pub const THREAD_HEADER: &str = "x-studio-thread";
 /// The MCP server's name, which prefixes its tools: `mcp__puffin__get_file`.
 pub const SERVER: &str = "puffin";
 
-/// How the assistant works. With the reference it makes the system prompt,
-/// which stays the same for every run so that runs share its prompt cache;
-/// what differs per run goes in the message.
+/// How the assistant works: the role in its system prompt
+/// (knowledge::system_prompt).
 const PERSONA: &str = "\
 You are the assistant at the REPL prompt of Puffin Studio, a workbench for the Puffin language \
 (a gradually typed, immutable-by-default Scheme with algebraic data types and pattern matching; \
@@ -135,7 +134,7 @@ impl Agent {
             mcp_token,
             // the CLI's own default model unless the operator picks one
             model: std::env::var("PUFFIN_STUDIO_MODEL").ok().filter(|model| !model.is_empty()),
-            effort: std::env::var("PUFFIN_STUDIO_EFFORT").unwrap_or_else(|_| "medium".to_owned()),
+            effort: crate::setting("PUFFIN_STUDIO_EFFORT", "medium"),
             running: Mutex::new(HashMap::new()),
             stopped: Mutex::new(HashSet::new()),
         }
@@ -287,7 +286,7 @@ pub async fn run(studio: Arc<Studio>, thread: u32, message: String, context: Str
             return;
         }
     };
-    let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{PERSONA}", knowledge::reference(&studio.root));
+    let system = knowledge::system_prompt(&studio.root, PERSONA);
     let mut resume = transcript.session();
     loop {
         let args = arguments(

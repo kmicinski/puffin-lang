@@ -287,12 +287,12 @@ impl Studio {
             }
         }
         let _ = writeln!(user, "\nThe question now: {}", excursion.thread[at].question);
-        let model = std::env::var("PUFFIN_EXPLAIN_MODEL").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| claude_api::EXPLAIN_MODEL.to_owned());
+        let model = crate::setting("PUFFIN_EXPLAIN_MODEL", claude_api::EXPLAIN_MODEL);
         let answer = match self.voice_api() {
             Some(api) => {
                 // the language itself, as the builder has it: a question is
                 // as often about Puffin (`ann`, `_`, define-grammar) as the program
-                let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{EXPLAINER}", crate::knowledge::reference(&self.root));
+                let system = crate::knowledge::system_prompt(&self.root, EXPLAINER);
                 api.structured(&model, "low", &system, &user, schema(), 2500, Duration::from_secs(90)).await
             }
             None => Err("no Claude API credentials".to_owned()),

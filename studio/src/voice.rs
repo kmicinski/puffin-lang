@@ -150,12 +150,11 @@ impl Default for Voice {
 
 impl Voice {
     pub fn new() -> Self {
-        let env = |name: &str, default: &str| std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_owned());
         Self {
             api: Api::from_env(),
             state: Mutex::new(State { activity: json!({ "state": "idle" }), ..State::default() }),
-            model: env("PUFFIN_VOICE_MODEL", claude_api::DEEP_MODEL),
-            effort: env("PUFFIN_VOICE_EFFORT", "medium"),
+            model: crate::setting("PUFFIN_VOICE_MODEL", claude_api::DEEP_MODEL),
+            effort: crate::setting("PUFFIN_VOICE_EFFORT", "medium"),
             changed: Mutex::new(None),
             routing: tokio::sync::Mutex::new(()),
         }
@@ -653,7 +652,7 @@ impl Studio {
         for line in &batch {
             let _ = writeln!(prompt, "- {line}");
         }
-        let system = format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{BUILDER}", crate::knowledge::reference(&self.root));
+        let system = crate::knowledge::system_prompt(&self.root, BUILDER);
         let mut resume = self.voice.state().session.clone();
         let turn = {
             let mut state = self.voice.state();

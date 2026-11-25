@@ -41,6 +41,12 @@ pub fn private_token() -> std::io::Result<String> {
     Ok(random.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// The operator's setting `name` from the environment, else `default`
+/// (unset and empty are the same).
+pub fn setting(name: &str, default: &str) -> String {
+    std::env::var(name).ok().filter(|value| !value.is_empty()).unwrap_or_else(|| default.to_owned())
+}
+
 /// The Puffin repository: PUFFIN_ROOT, else the one this crate was built
 /// in (studio/ is its top-level directory).
 pub fn repository_root() -> PathBuf {

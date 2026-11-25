@@ -34,8 +34,16 @@ fn listing(root: &Path, directory: &Path, extensions: &[&str], recurse: bool) ->
 }
 
 /// The language reference the system prompt carries.
-pub fn reference(root: &Path) -> String {
+fn reference(root: &Path) -> String {
     std::fs::read_to_string(root.join("docs/LANGUAGE.md")).unwrap_or_default()
+}
+
+/// A model's system prompt: the language reference, then its `role`. The
+/// assistant, the voice builder and the excursion guide all know Puffin
+/// this way, and each one's prompt stays the same from run to run, so its
+/// prompt cache holds; what differs per run goes in the message.
+pub fn system_prompt(root: &Path, role: &str) -> String {
+    format!("# The Puffin reference\n\n{}\n\n# Your role\n\n{role}", reference(root))
 }
 
 /// The paragraphs best matching `query`'s words, with file and line.
