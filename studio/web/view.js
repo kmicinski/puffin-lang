@@ -893,7 +893,8 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
 
   // Once the outline is in: what this browser had in focus, else the
   // first screen -- the shown file whole if it is short (a script like
-  // main.puf reads best whole), else its first definition focused.
+  // main.puf reads best whole), else its first definition focused. The
+  // camera starts on the code, unless a question's slice is out.
   function restore() {
     restored = true;
     let kept = null;
@@ -902,6 +903,11 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     shelf = (kept?.shelf ?? []).filter((id) => itemOf(defOf(id)));
     past = (kept?.past ?? []).filter(known);
     at = Math.min(kept?.at ?? past.length - 1, past.length - 1);
+    firstScreen(kept, known);
+    if (!board.state().focus) requestAnimationFrame(() => board.home(false));
+  }
+
+  function firstScreen(kept, known) {
     if (known(kept?.focus) && !kept.whole) return show(kept.focus, { push: false });
     const path = kept?.focus?.path && files.paths().includes(kept.focus.path) ? kept.focus.path : files.active();
     moving = true;
@@ -915,7 +921,6 @@ export function createView({ editor, files, board, stage, onEvalAt }) {
     whole = true;
     narrowFocus();
     render();
-    requestAnimationFrame(() => board.home(false));
   }
 
   // ---- keys ------------------------------------------------------------------------------

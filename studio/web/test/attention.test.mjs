@@ -1,5 +1,5 @@
 // The attention model's tests (docs/ATTENTION.md). Run them with
-//   docker run --rm -u 1000:1000 -v $PWD:/w -w /w node:22-bookworm node --test studio/web/test/
+//   docker run --rm -u 1000:1000 -v $PWD:/w -w /w node:22-bookworm sh -c "node --test studio/web/test/*.test.mjs"
 // The fixture is the outline the studio computes for studio/demo/machine
 // (board.rs `outline`, as the init message carries it).
 

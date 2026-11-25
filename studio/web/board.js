@@ -433,22 +433,25 @@ export function createBoard({ send, stage, onShow }) {
       }
     } else if (focus) {
       // A focus (a question's slice, "just show ..."): only the cards it
-      // names, packed under the question in dependency order. The author's
-      // own layout is untouched and comes back when the focus clears.
-      if (!focusFramed) overview();
-      focusFramed = true;
+      // names, packed in dependency order, framed under the question. The
+      // author's own layout is untouched and comes back when the focus
+      // clears.
       const focused = board.cards.filter((c) => (moduleOf(c.path)?.items ?? []).some((i) => focus.has(keyOf(c.path, i.name))));
       for (const card of board.cards) {
         const node = nodeOf(card.path);
         if (node) node.hidden = !focused.includes(card);
       }
-      const top = (question.hidden ? 0 : question.offsetTop + question.offsetHeight) + 24;
-      const spots = shelves(focused, sizeOf, Math.max(GRID.y, top));
+      const spots = shelves(focused, sizeOf, GRID.y);
       for (const [path, spot] of spots) {
         const node = nodeOf(path);
         node.style.left = `${spot.x}px`;
         node.style.top = `${spot.y}px`;
       }
+      if (!focusFramed) {
+        const under = (question.hidden ? 0 : question.offsetTop + question.offsetHeight) + 16;
+        requestAnimationFrame(() => camera.frame(focused.map((c) => canvasBox(nodeOf(c.path))), { min: 0.3, max: 1, top: under - 36, align: "start" }));
+      }
+      focusFramed = true;
     } else {
       focusFramed = false;
       for (const node of canvas.querySelectorAll(".board-card")) node.hidden = false;
@@ -960,8 +963,9 @@ export function createBoard({ send, stage, onShow }) {
     camera.frame(boxes, { min: 0.2, max: 1, pad: 24, top: TOP() - 24, animate, align: "start" });
   }
 
-  // the room the HUD takes over the top of the board
-  const TOP = () => hud.offsetTop + hud.offsetHeight + 14;
+  // the room the HUD (and a question, when one is out) takes over the top
+  // of the board
+  const TOP = () => Math.max(hud.offsetTop + hud.offsetHeight, question.hidden ? 0 : question.offsetTop + question.offsetHeight) + 14;
 
   // ⌘⇧B, the zoom label: out to the program, or back in to the code
   const toggle = () => (camera.zoom() >= NEAR ? overview() : home());
