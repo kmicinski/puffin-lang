@@ -9,13 +9,9 @@
 // the foot says what the builder is doing now.
 
 import { markdown } from "./markdown.js";
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { button, el } from "./dom.js";
+import { outcomeWord, plural, turnLabel } from "./words.js";
+import { recall, remember } from "./stored.js";
 
 const ICON = {
   edit: "✎", write_file: "✎", delete_file: "✕", add_property: "≡", run_properties: "≡",
@@ -28,15 +24,12 @@ const STORE = "puffin-timeline";
 const seconds = (ms) => (ms < 1000 ? `${ms} ms` : ms < 60000 ? `${Math.round(ms / 100) / 10}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
 
 export function createTimeline({ host, go }) {
-  let collapsed = false;
-  try { collapsed = localStorage.getItem(STORE) === "collapsed"; } catch { /* default */ }
+  let collapsed = recall(STORE) === "collapsed";
 
   const box = el("div", "timeline voice-float");
   const head = el("div", "timeline-head");
   const title = el("span", "timeline-title", "What happened");
-  const fold = el("button", "voice-x", "‹");
-  fold.title = "Hide (say “hide history”)";
-  fold.addEventListener("click", () => setCollapsed(true));
+  const fold = button("voice-x", "‹", () => setCollapsed(true), "Hide (say “hide history”)");
   head.append(title, fold);
   const list = el("div", "timeline-list");
   const live = el("div", "timeline-live");
@@ -69,7 +62,7 @@ export function createTimeline({ host, go }) {
   function setCollapsed(value) {
     if (value) forced = false;
     collapsed = value;
-    try { localStorage.setItem(STORE, value ? "collapsed" : "open"); } catch { /* fine */ }
+    remember(STORE, value ? "collapsed" : "open");
     render();
     if (!value) scroll(true);
   }
@@ -99,8 +92,8 @@ export function createTimeline({ host, go }) {
   function summarize(turn) {
     const { counts } = turn;
     const parts = [];
-    if (counts.edits) parts.push(`${counts.edits} edit${counts.edits === 1 ? "" : "s"}`);
-    if (counts.steps - counts.edits) parts.push(`${counts.steps - counts.edits} step${counts.steps - counts.edits === 1 ? "" : "s"}`);
+    if (counts.edits) parts.push(plural(counts.edits, "edit"));
+    if (counts.steps - counts.edits) parts.push(plural(counts.steps - counts.edits, "step"));
     if (counts.failed) parts.push(`${counts.failed} failed`);
     return parts.join(" · ");
   }
@@ -117,9 +110,7 @@ export function createTimeline({ host, go }) {
     for (const other of turns.values()) if (other.open && other.status.dataset.state !== "running") setOpen(other, false);
     const node = el("div", "timeline-turn open");
     const header = el("button", "timeline-turn-head");
-    const automatic = instructions.length === 1 && instructions[0].startsWith("(Automatic");
-    const label = automatic ? "fixing the failing properties" : instructions.map((i) => i.split("\n")[0]).join(" · ") || "working";
-    header.append(el("span", "timeline-turn-who", "builder"), el("span", "timeline-turn-what", label));
+    header.append(el("span", "timeline-turn-who", "builder"), el("span", "timeline-turn-what", turnLabel(instructions)));
     const status = el("span", "timeline-status running", interrupted ? "redirected" : "working");
     status.dataset.state = "running";
     const summary = el("span", "timeline-summary");
@@ -173,8 +164,7 @@ export function createTimeline({ host, go }) {
     // a navigation's result, as a way back to it
     focus(label, targets, again) {
       if (!exchange) return;
-      const link = el("button", "timeline-focus", `→ ${label}${targets.length > 1 ? ` (${targets.length} places)` : ""}`);
-      link.addEventListener("click", again);
+      const link = button("timeline-focus", `→ ${label}${targets.length > 1 ? ` (${targets.length} places)` : ""}`, again);
       exchange.node.append(link);
       scroll();
     },
@@ -220,9 +210,7 @@ export function createTimeline({ host, go }) {
       }
       step.lines = true;
       step.turn.counts.edits++;
-      const where = el("button", "timeline-where", `${file}:${from}${to > from ? `–${to}` : ""}`);
-      where.title = "Show these lines";
-      where.addEventListener("click", () => go(file, from, to));
+      const where = button("timeline-where", `${file}:${from}${to > from ? `–${to}` : ""}`, () => go(file, from, to), "Show these lines");
       step.line.append(where);
       if (code) {
         const more = el("button", "timeline-more", "▾");
@@ -243,7 +231,7 @@ export function createTimeline({ host, go }) {
       if (!turn) return;
       turn.status.className = `timeline-status ${outcome}`;
       turn.status.dataset.state = outcome;
-      turn.status.textContent = `${{ done: "done", interrupted: "redirected", stopped: "stopped", failed: "failed" }[outcome] ?? outcome} · ${seconds(ms)}`;
+      turn.status.textContent = `${outcomeWord(outcome)} · ${seconds(ms)}`;
       for (const step of steps.values()) {
         if (step.turn === turn && step.row.classList.contains("running")) step.row.classList.replace("running", "cut");
       }

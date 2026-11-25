@@ -8,25 +8,15 @@
 // It is opened and grown by voice ("explain the fix clause", "and what does
 // apply-fn do?"); ✕ or "close the excursion" ends it.
 
-import { markdown } from "./markdown.js";
-
-const el = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
-
-const escape = (text) => text.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+import { escape, markdown } from "./markdown.js";
+import { button, el } from "./dom.js";
 
 export function createExcursion({ host, view, monaco, files, go, close }) {
   const card = el("div", "voice-excursion voice-float");
   card.hidden = true;
   const head = el("div", "voice-card-head");
   const title = el("span", "voice-excursion-title", "Excursion");
-  const x = el("button", "voice-x", "✕");
-  x.title = "Close the excursion (say “close the excursion”)";
-  x.addEventListener("click", () => close());
+  const x = button("voice-x", "✕", () => close(), "Close the excursion (say “close the excursion”)");
   head.append(title, x);
   const body = el("div", "voice-excursion-body");
   const pieces = el("div", "voice-excursion-fragments");

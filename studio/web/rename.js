@@ -11,13 +11,8 @@
 
 import { tokens } from "./lexer.js";
 import { utf16Of } from "./assists.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el, nameField } from "./dom.js";
+import { requests } from "./requests.js";
 
 // The word of `text` at `pos` (or ending at it): { start, end, word }.
 export function nameAt(text, pos) {
@@ -26,24 +21,13 @@ export function nameAt(text, pos) {
 }
 
 export function createRename({ editor, files, send, note }) {
-  const waiting = new Map(); // seq -> resolve
-  let seq = 0;
+  const asks = requests(files);
   let available = false;
-  const box = document.body.appendChild(element("div", "rename-box"));
+  const box = document.body.appendChild(el("div", "rename-box"));
   box.hidden = true;
-  const input = box.appendChild(element("input", "rename-input"));
-  input.spellcheck = false;
-  const said = box.appendChild(element("div", "rename-error"));
+  const input = box.appendChild(nameField("rename-input"));
+  const said = box.appendChild(el("div", "rename-error"));
   let target = null; // { file, start, word }
-
-  function request(file, pos, name) {
-    files.flush();
-    const id = ++seq;
-    return new Promise((resolve) => {
-      waiting.set(id, resolve);
-      files.send({ t: "rename", seq: id, file, pos, name });
-    });
-  }
 
   // F2: the input over the name at the cursor.
   function open() {
@@ -71,7 +55,7 @@ export function createRename({ editor, files, send, note }) {
 
   // Rename at UTF-16 offset `pos` of `file` to `name`; the error, if any.
   async function rename(file, pos, name) {
-    const reply = await request(file, pos, name);
+    const reply = await asks.ask({ t: "rename", file, pos, name });
     if (reply.error) return reply.error;
     if (reply.version !== files.version(file) || !files.synced(file)) return "the text changed while the compiler looked; try again";
     if (files.active() !== file) files.open(file);
@@ -121,10 +105,7 @@ export function createRename({ editor, files, send, note }) {
       editor.setRenameAvailable(available);
     },
     receive: {
-      renamed(reply) {
-        waiting.get(reply.seq)?.(reply);
-        waiting.delete(reply.seq);
-      },
+      renamed: asks.answer,
     },
   };
 }

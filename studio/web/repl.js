@@ -37,17 +37,12 @@
 // tree once its evaluation ends (trace.js).
 
 import { balanced, forms } from "./lexer.js";
-import { highlight } from "./markdown.js";
+import { escape, highlight } from "./markdown.js";
 import { bindTextarea } from "./paredit.js";
 import { bindTexField } from "./tex.js";
 import { renderOutput } from "./trace.js";
-
-const element = (tag, className, text) => {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-};
+import { el } from "./dom.js";
+import { recallJSON, remember } from "./stored.js";
 
 const HELP = `,load FILE           evaluate a whole module in the session (⌘⇧↵ in the editor)
 ,eval FILE:LINE      evaluate the form on LINE, loading first the definitions it needs (⌘↵)
@@ -90,14 +85,14 @@ export function createRepl({ transcript, prompt, send, commands }) {
     lines: [],
     index: 0,
     load() {
-      try { this.lines = JSON.parse(localStorage.getItem(this.key)) ?? []; } catch { this.lines = []; }
+      this.lines = recallJSON(this.key, []);
       this.index = this.lines.length;
     },
     push(line) {
       if (this.lines.at(-1) !== line) this.lines.push(line);
       this.lines = this.lines.slice(-500);
       this.index = this.lines.length;
-      try { localStorage.setItem(this.key, JSON.stringify(this.lines)); } catch { /* private mode */ }
+      remember(this.key, this.lines, { json: true });
     },
   };
   history.load();
@@ -189,9 +184,9 @@ export function createRepl({ transcript, prompt, send, commands }) {
 
   // An entry this tab alone shows.
   function local(line, text, error = false) {
-    const node = transcript.appendChild(element("div", "entry echo"));
-    node.append(element("div", "line", line));
-    node.append(element("pre", error ? "error" : "lines", text));
+    const node = transcript.appendChild(el("div", "entry echo"));
+    node.append(el("div", "line", line));
+    node.append(el("pre", error ? "error" : "lines", text));
     scroll(true);
   }
 
@@ -232,26 +227,26 @@ export function createRepl({ transcript, prompt, send, commands }) {
   function show(entry) {
     entries.set(entry.id, entry);
     const was = atBottom();
-    const node = element("div", `entry ${entry.kind}${entry.origin ? ` ${entry.origin}` : ""}`);
+    const node = el("div", `entry ${entry.kind}${entry.origin ? ` ${entry.origin}` : ""}`);
     if (entry.kind === "ask") {
       transcript.append(node);
       nodes.set(entry.id, { node });
       hooks.renderAsk?.(entry, node);
       return scroll(true);
     }
-    const head = node.appendChild(element("div", "line"));
+    const head = node.appendChild(el("div", "line"));
     if (entry.kind === "eval" && (entry.command || (entry.origin === "buffer" && entry.file))) {
-      const where = head.appendChild(element("span", "where", `${entry.command || entry.file} `));
+      const where = head.appendChild(el("span", "where", `${entry.command || entry.file} `));
       if (entry.command) where.title = "The command this gesture is: typed at the prompt, it does the same";
     }
-    const code = head.appendChild(element("span", "code"));
-    code.innerHTML = entry.kind === "eval" && !entry.line.startsWith(",") ? highlight(entry.line) : escapeText(entry.line);
+    const code = head.appendChild(el("span", "code"));
+    code.innerHTML = entry.kind === "eval" && !entry.line.startsWith(",") ? highlight(entry.line) : escape(entry.line);
     if (entry.kind === "eval") {
       code.title = "Click to put it in the prompt";
       code.addEventListener("click", () => insert(entry.line));
     }
-    if (entry.also?.length) node.append(element("div", "also", `also loaded: ${entry.also.join(", ")}`));
-    const out = node.appendChild(element("div", "out"));
+    if (entry.also?.length) node.append(el("div", "also", `also loaded: ${entry.also.join(", ")}`));
+    const out = node.appendChild(el("div", "out"));
     nodes.set(entry.id, { node, out, head });
     for (const [stream, text] of entry.out ?? []) output(entry.id, stream, text, false);
     if (entry.status) done(entry);
@@ -268,13 +263,13 @@ export function createRepl({ transcript, prompt, send, commands }) {
     if (follow && entry) (entry.out ??= []).push([stream, text]);
     const was = follow && atBottom();
     if (stream === "result") {
-      const result = known.out.appendChild(element("div", "result"));
+      const result = known.out.appendChild(el("div", "result"));
       result.innerHTML = highlight(text);
     } else {
       const last = known.out.lastElementChild;
       if (last?.dataset.stream === stream) last.textContent += text;
       else {
-        const pre = known.out.appendChild(element("pre", `stream ${stream}`, text));
+        const pre = known.out.appendChild(el("pre", `stream ${stream}`, text));
         pre.dataset.stream = stream;
       }
     }
@@ -289,19 +284,19 @@ export function createRepl({ transcript, prompt, send, commands }) {
     const was = atBottom();
     known.node.classList.remove("running");
     known.node.classList.toggle("failed", status !== "ok");
-    if (ms && known.head) known.head.append(element("span", "ms", ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`));
+    if (ms && known.head) known.head.append(el("span", "ms", ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`));
     if (error) {
-      const box = known.node.appendChild(element("pre", `error ${status}`, error));
+      const box = known.node.appendChild(el("pre", `error ${status}`, error));
       hooks.error?.(entry, box);
     }
     if (known.out) treeify(known.out);
     if (entry?.kind === "eval" && status === "ok") offerPin(entry, known);
     if (entry?.kind === "test" && entry.tests) showTests(entry.tests, known.node);
     if (fixes.length) {
-      const chips = known.node.appendChild(element("div", "fix-chips"));
+      const chips = known.node.appendChild(el("div", "fix-chips"));
       for (const fix of fixes) {
         const command = `,eval ${fix.file}:${fix.line}`;
-        const chip = chips.appendChild(element("button", "small fix-chip", `Load ${fix.name} from ${fix.file}`));
+        const chip = chips.appendChild(el("button", "small fix-chip", `Load ${fix.name} from ${fix.file}`));
         chip.title = `${command}: ${fix.name} is defined there and the session lacks it`;
         chip.addEventListener("click", () => {
           run(command);
@@ -325,7 +320,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
     if (!["prompt", "buffer"].includes(entry.origin) || !(entry.out ?? []).some(([stream]) => stream === "result")) return;
     const found = forms(entry.line.trim());
     if (found.length !== 1 || found[0].head?.startsWith("define")) return;
-    const pin = known.head.appendChild(element("button", "pin-action", "pin"));
+    const pin = known.head.appendChild(el("button", "pin-action", "pin"));
     pin.title = `,pin ${entry.id}: keep this result as a check in tests.puf (,test runs them)`;
     pin.addEventListener("click", () => {
       run(`,pin ${entry.id}`);
@@ -336,34 +331,34 @@ export function createRepl({ transcript, prompt, send, commands }) {
 
   // A ,test run: its counts, and each failure linked to its line.
   function showTests(run, node) {
-    const box = node.appendChild(element("div", "test-run"));
-    const counts = box.appendChild(element("div", "test-counts"));
-    counts.append(element("span", "passed", `${run.passed} passed`));
-    if (run.failed) counts.append(element("span", "failed", ` · ${run.failed} failed`));
-    if (run.not_run) counts.append(element("span", "not-run", ` · ${run.not_run} not run`));
+    const box = node.appendChild(el("div", "test-run"));
+    const counts = box.appendChild(el("div", "test-counts"));
+    counts.append(el("span", "passed", `${run.passed} passed`));
+    if (run.failed) counts.append(el("span", "failed", ` · ${run.failed} failed`));
+    if (run.not_run) counts.append(el("span", "not-run", ` · ${run.not_run} not run`));
     if (run.stopped) {
-      counts.append(element("span", "not-run", " · stopped in "));
-      const where = counts.appendChild(element("a", "test-line", `tests.puf:${run.stopped}`));
+      counts.append(el("span", "not-run", " · stopped in "));
+      const where = counts.appendChild(el("a", "test-line", `tests.puf:${run.stopped}`));
       where.title = "Show the check the run stopped in: its expression failed, which ends the program";
       where.addEventListener("click", () => commands.reveal("tests.puf", run.stopped));
     }
     for (const result of run.results) {
-      const row = box.appendChild(element("div", `test-result ${result.ok ? "ok" : "fail"}`));
-      row.append(element("span", "mark", result.ok ? "✓" : "✗"));
-      const code = row.appendChild(element("code", "", result.expression));
+      const row = box.appendChild(el("div", `test-result ${result.ok ? "ok" : "fail"}`));
+      row.append(el("span", "mark", result.ok ? "✓" : "✗"));
+      const code = row.appendChild(el("code", "", result.expression));
       if (result.line) {
-        const where = row.appendChild(element("a", "test-line", `tests.puf:${result.line}`));
+        const where = row.appendChild(el("a", "test-line", `tests.puf:${result.line}`));
         where.title = "Show the check in tests.puf";
         where.addEventListener("click", () => commands.reveal("tests.puf", result.line));
       }
-      if (result.detail) row.append(element("pre", "test-detail", result.detail));
+      if (result.detail) row.append(el("pre", "test-detail", result.detail));
       code.title = result.ok ? "prints as pinned" : "prints otherwise than pinned";
     }
   }
 
   // What an empty transcript says: where to start.
   function welcome() {
-    transcript.append(element("div", "welcome", "Welcome to Puffin — press Run, or type a form here. ⌘↵ in the editor evaluates the form at the cursor; ,help lists the commands."));
+    transcript.append(el("div", "welcome", "Welcome to Puffin — press Run, or type a form here. ⌘↵ in the editor evaluates the form at the cursor; ,help lists the commands."));
   }
 
   function insert(text) {
@@ -380,6 +375,7 @@ export function createRepl({ transcript, prompt, send, commands }) {
     local,
     scroll: () => scroll(true),
     entries: () => [...entries.values()],
+    atBottom,
     nodeOf: (id) => nodes.get(id)?.node,
     receive: {
       init({ transcript: list }) {
@@ -395,8 +391,4 @@ export function createRepl({ transcript, prompt, send, commands }) {
       "entry-done": done,
     },
   };
-}
-
-function escapeText(text) {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]);
 }

@@ -13,6 +13,7 @@
 //   goalAt(file, pos)   the goal of the hole at UTF-16 offset `pos`, or null
 
 import { tokens } from "./lexer.js";
+import { debounce } from "./dom.js";
 
 // The holes of `text`: [{ start, end }] offsets of each `??` word.
 export function holesIn(text) {
@@ -47,7 +48,6 @@ export function bindHoles(monaco, editor) {
 export function createHoles({ editor, files, note, onCount = () => {} }) {
   // file -> { version, items: [{ start, end, pos, line, goal }] } from the studio
   const known = new Map();
-  let timer = 0;
 
   // The studio's goals, when they are for the text shown: by order, as
   // long as the holes are where the studio found them.
@@ -74,10 +74,7 @@ export function createHoles({ editor, files, note, onCount = () => {} }) {
     onCount();
   }
 
-  function changed() {
-    clearTimeout(timer);
-    timer = setTimeout(refresh, 80);
-  }
+  const changed = debounce(refresh, 80);
 
   // Holes per file, as this tab has the texts.
   function count() {
