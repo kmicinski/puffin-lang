@@ -119,6 +119,9 @@ The house helpers, used rather than written again:
 - `stored.js`: `recall`, `recallJSON` and `remember` for what the browser
   keeps between visits (localStorage, which a private window may refuse).
 - `markdown.js`'s `escape` and `highlight` for any HTML made from text.
+- `wires.js`'s `curve` for any wire; `span.js` and `names.js` for any
+  view of a definition (every view of a file is a view of its one Monaco
+  model, editor.js `model` / `fragment`).
 - The tokens of Solarized light and dark are defined once, at the top of
   studio.css, each as `light-dark(light, dark)`; the other style sheets
   only use them.
@@ -157,8 +160,15 @@ The house helpers, used rather than written again:
 | `replay.js` | The clock and its slider: the files and transcript as they were at a moment. |
 | `gist.js` | The Gist button: the files as a GitHub gist, from the browser. |
 | `palette.js` | ⌘K: every command and definition, matched by letters in order. |
-| `focus.js` | The focused layout: the editor alone and centered, everything else floating in when used; the empty canvas. |
-| `board.js` | The module board: modules as signature cards, the lens, plan mode. |
+| `focus.js` | The focused layout: the bar, the output floating in when used; the empty canvas. |
+| `view.js` | The code view (docs/VIEW.md): the focus (the editor narrowed to one definition, the file dimmed around it, its history), the working set and its one attention ranking, the lane's fragments, the wires across the panes, what is told to the model. |
+| `neighbourhood.js` | Under the focus: what uses it, what it uses, its properties and module's rows, as key stops. |
+| `board.js` | The board: module cards and rows (`renderItem`), notes, decisions, questions, plan mode, the HUD, the lens; the lane's place on it; the camera's `home` (the code) and `overview` (the program). |
+| `camera.js` | The board's pan, zoom and pinch, and its glides. |
+| `fragment.js` | One definition as live code on its file's model, sized to it. |
+| `span.js` | A definition's lines; a Monaco view narrowed to them and kept there. |
+| `names.js` | Cross-references in code: marked, ⌘-click, ⌘⇧-click, hover. |
+| `wires.js` | The one curve every "this uses that" wire is drawn with. |
 | `voice.js` | Voice mode: listening, the pill, the caption, places found, properties, and the studio's voice events. |
 | `progress.js` | The card over the pill: was it heard, and what the builder is doing. |
 | `timeline.js` | What happened: the voice session's exchanges and builder runs, step by step. |
@@ -170,7 +180,8 @@ The house helpers, used rather than written again:
 | `diff.css` | Proposals and diffs: the bar, the inline hunks, the chips. |
 | `assist.css` | Ask mode, answers, the assists menu. |
 | `voice.css` | Voice mode, the focused layout's floats, the timeline, progress, excursions. |
-| `board.css` | The module board. |
+| `board.css` | The board and its lane. |
+| `view.css` | The code view's layout: the focus, the neighbourhood, the board beside them. |
 
 ## How things travel
 
@@ -208,26 +219,6 @@ an instruction for the builder, which queues behind or interrupts its run
 (voice/builder.rs `instruct` → `drive` → `build`). The builder's edits land
 at once (`land`), each checked and shown as `Event::Voice`; when a run
 ends the properties run, and failing ones send it back.
-
-## The page's code view
-
-The page (`studio/web/`, plain modules, no build step) is laid out
-around one code view (docs/VIEW.md). Its pieces, so a change lands in
-one place:
-
-| file | holds |
-|---|---|
-| `view.js` | the focus (the main editor narrowed to a definition), the working set and its ranking, the lane's fragments, the wires across the panes, what is told to the attention model |
-| `neighbourhood.js` | under the focus: what uses it, what it uses, its properties and module, as key stops |
-| `board.js` | the board: module cards and rows (`renderItem`), notes, decisions, questions, plan mode, the HUD, the lens; the lane's place on it; the camera's `home` (the code) and `overview` (the program) |
-| `camera.js` | the board's pan and zoom, and its glides |
-| `fragment.js` · `span.js` · `names.js` · `wires.js` | a live view of one definition · a definition's lines and narrowing a view to them · cross-references and ⌘-click · the curves |
-| `attention.js` · `attention-studio.js` | the attention model (docs/ATTENTION.md) and its view of the socket's messages |
-| `editor.js` · `files.js` | one Monaco model per file, any number of views of it; edits from any view to the studio |
-
-The working set and the camera requests are the board's state
-(`board.json`'s `set` and `look`), so `Studio::arrange` can change them
-by voice; the focus and its history are each tab's own.
 
 ## Adding to it
 
